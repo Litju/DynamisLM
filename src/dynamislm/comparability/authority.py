@@ -50,6 +50,10 @@ class ComparabilityAuthority:
             raise ComparabilityAuthorityError("multiple comparability rules match one request")
         rule = matches[0]
         result = rule.evaluate(request)
+        if result.request_id != request.request_id:
+            raise ComparabilityAuthorityError(
+                "rule result request ID does not match the adjudicated request"
+            )
         if result.rule_reference != rule.reference:
             raise ComparabilityAuthorityError(
                 "rule result reference does not match registered rule"

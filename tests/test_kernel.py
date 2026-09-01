@@ -290,7 +290,6 @@ def test_evidence_applicability_is_versionable_without_changing_identity() -> No
         limited.measurement_identity_id == supported.measurement_identity_id == identity.identity_id
     )
     assert limited != supported
-    assert canonical_hash(identity) == canonical_hash(identity)
 
 
 def test_value_origin_and_scientific_role_are_independent_axes() -> None:
@@ -400,6 +399,32 @@ def test_registered_comparability_rule_is_deterministic_authority() -> None:
     assert result.state is ComparabilityState.COMPARABLE
     assert result.decided_by is ComparabilityDecisionSource.DETERMINISTIC_RULE
     assert result.rule_reference == rule_reference
+
+
+def test_registered_rule_cannot_return_a_result_for_another_request() -> None:
+    request = _comparability_request()
+    rule_reference = _reference("comparability-rule", "request-bound", "Request-bound rule")
+
+    def evaluate(candidate: ComparabilityRequest) -> ComparabilityResult:
+        return ComparabilityResult(
+            result_id=InstanceIdentifier("comparability-result", "wrong-request"),
+            request_id=InstanceIdentifier("comparability-request", "different"),
+            state=ComparabilityState.COMPARABLE,
+            reason_codes=(),
+            conditions=(),
+            transformations_required=(),
+            missing_information=(),
+            rule_reference=rule_reference,
+            evidence_references=(),
+            decided_by=ComparabilityDecisionSource.DETERMINISTIC_RULE,
+        )
+
+    authority = ComparabilityAuthority().with_rule(
+        RegisteredComparabilityRule(rule_reference, lambda _: True, evaluate)
+    )
+
+    with pytest.raises(ValueError, match="request ID"):
+        authority.adjudicate(request)
 
 
 def test_structured_refusal_blocks_claim_but_preserves_safe_descriptions() -> None:
