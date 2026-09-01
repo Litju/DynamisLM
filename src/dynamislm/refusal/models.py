@@ -1,0 +1,82 @@
+"""Structured claim-specific refusal results."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from enum import StrEnum
+
+from dynamislm.measurement.identity import InstanceIdentifier, RegistryReference, require_tuple
+from dynamislm.serialization import register_serializable_type
+
+
+def _require_text(value: str, field_name: str) -> None:
+    if not value or not value.strip():
+        raise ValueError(f"{field_name} must not be empty")
+
+
+class RefusalClass(StrEnum):
+    IDENTITY_UNRESOLVED = "IDENTITY_UNRESOLVED"
+    COMPARABILITY_UNESTABLISHED = "COMPARABILITY_UNESTABLISHED"
+    EVIDENCE_SCOPE_UNSUPPORTED = "EVIDENCE_SCOPE_UNSUPPORTED"
+    DATA_ADEQUACY_INSUFFICIENT = "DATA_ADEQUACY_INSUFFICIENT"
+    ANALYSIS_DESIGN_MISMATCH = "ANALYSIS_DESIGN_MISMATCH"
+    UNCERTAINTY_LIMITS_CLAIM = "UNCERTAINTY_LIMITS_CLAIM"
+    CAUSAL_IDENTIFICATION_UNSUPPORTED = "CAUSAL_IDENTIFICATION_UNSUPPORTED"
+    COMPUTATION_NOT_REGISTERED = "COMPUTATION_NOT_REGISTERED"
+
+
+class RefusalReasonCode(StrEnum):
+    COMPARABILITY_NOT_REGISTERED = "COMPARABILITY_NOT_REGISTERED"
+    MISSING_METADATA = "MISSING_METADATA"
+    METRIC_DEFINITION_MISMATCH = "METRIC_DEFINITION_MISMATCH"
+    MEASURAND_MISMATCH = "MEASURAND_MISMATCH"
+    DEVICE_COMPARABILITY_NOT_ESTABLISHED = "DEVICE_COMPARABILITY_NOT_ESTABLISHED"
+    SOFTWARE_PIPELINE_NOT_ESTABLISHED = "SOFTWARE_PIPELINE_NOT_ESTABLISHED"
+    LONGITUDINAL_DATA_INSUFFICIENT = "LONGITUDINAL_DATA_INSUFFICIENT"
+    BETWEEN_WITHIN_MISMATCH = "BETWEEN_WITHIN_MISMATCH"
+    UNCERTAINTY_INADEQUATE = "UNCERTAINTY_INADEQUATE"
+    CAUSAL_DESIGN_UNSUPPORTED = "CAUSAL_DESIGN_UNSUPPORTED"
+    NO_REGISTERED_OPERATION = "NO_REGISTERED_OPERATION"
+
+
+class RefusalStatus(StrEnum):
+    REFUSED = "REFUSED"
+    PARTIALLY_REFUSED = "PARTIALLY_REFUSED"
+
+
+@register_serializable_type
+@dataclass(frozen=True, slots=True)
+class RefusalResult:
+    """Blocks one claim while retaining safe independent descriptions."""
+
+    refusal_id: InstanceIdentifier
+    status: RefusalStatus
+    refusal_class: RefusalClass
+    blocked_claim: str
+    reason_codes: tuple[str, ...]
+    missing_information: tuple[str, ...]
+    what_can_still_be_safely_described: tuple[str, ...]
+    evidence_references: tuple[RegistryReference, ...] = ()
+    observation_ids: tuple[InstanceIdentifier, ...] = ()
+
+    def __post_init__(self) -> None:
+        for field_name, value in (
+            ("reason_codes", self.reason_codes),
+            ("missing_information", self.missing_information),
+            ("what_can_still_be_safely_described", self.what_can_still_be_safely_described),
+            ("evidence_references", self.evidence_references),
+            ("observation_ids", self.observation_ids),
+        ):
+            require_tuple(value, field_name)
+        _require_text(self.blocked_claim, "blocked_claim")
+        for field_name, values in (
+            ("reason_codes", self.reason_codes),
+            ("missing_information", self.missing_information),
+            ("what_can_still_be_safely_described", self.what_can_still_be_safely_described),
+        ):
+            if any(not value.strip() for value in values):
+                raise ValueError(f"{field_name} must not contain empty strings")
+
+    @property
+    def blocks_claim(self) -> bool:
+        return True
