@@ -170,25 +170,33 @@ def _decode_dataclass(value: object, cls: SerializableType) -> object:
     if not isinstance(value, dict):
         raise SerializationError(f"{type_identifier(cls)} must decode from an object")
     marker = value.get("__type__")
+    target_cls = cls
     if marker is not None and marker != type_identifier(cls):
-        raise SerializationError(f"type marker {marker!r} does not match {type_identifier(cls)}")
-    fields = {field.name: field for field in dataclasses.fields(cls)}
+        if not isinstance(marker, str):
+            raise SerializationError("dataclass type marker must be a string")
+        registered = _TYPE_REGISTRY.get(marker)
+        if registered is None or not issubclass(registered, cls):
+            raise SerializationError(
+                f"type marker {marker!r} does not match {type_identifier(cls)}"
+            )
+        target_cls = registered
+    fields = {field.name: field for field in dataclasses.fields(target_cls)}
     unexpected = set(value) - set(fields) - {"__type__"}
     if unexpected:
         raise SerializationError(
-            f"unexpected fields for {type_identifier(cls)}: {sorted(unexpected)}"
+            f"unexpected fields for {type_identifier(target_cls)}: {sorted(unexpected)}"
         )
     if set(fields) - set(value):
         missing = sorted(set(fields) - set(value))
-        raise SerializationError(f"missing fields for {type_identifier(cls)}: {missing}")
-    hints = get_type_hints(cls)
+        raise SerializationError(f"missing fields for {type_identifier(target_cls)}: {missing}")
+    hints = get_type_hints(target_cls)
     kwargs = {
         field.name: _decode_value(value[field.name], hints[field.name]) for field in fields.values()
     }
     try:
-        return cls(**kwargs)
+        return target_cls(**kwargs)
     except (TypeError, ValueError) as exc:
-        raise SerializationError(f"invalid {type_identifier(cls)} payload") from exc
+        raise SerializationError(f"invalid {type_identifier(target_cls)} payload") from exc
 
 
 def _decode_value(value: object, annotation: object) -> object:
@@ -266,10 +274,17 @@ def from_canonical_json[T](serialized: str, cls: type[T]) -> T:
     if envelope.get("serialization_version") != SERIALIZATION_VERSION:
         raise SerializationError("unsupported serialization version")
     expected_type = type_identifier(cls)
-    if envelope.get("type") != expected_type:
-        raise SerializationError(
-            f"canonical type {envelope.get('type')!r} does not match {expected_type!r}"
-        )
+    envelope_type = envelope.get("type")
+    if envelope_type != expected_type:
+        if not isinstance(envelope_type, str):
+            raise SerializationError(
+                f"canonical type {envelope_type!r} does not match {expected_type!r}"
+            )
+        registered = _TYPE_REGISTRY.get(envelope_type)
+        if registered is None or not issubclass(registered, cls):
+            raise SerializationError(
+                f"canonical type {envelope_type!r} does not match {expected_type!r}"
+            )
     if "payload" not in envelope:
         raise SerializationError("canonical JSON envelope has no payload")
     decoded = _decode_dataclass(envelope["payload"], cls)

@@ -173,7 +173,7 @@ class SemanticIdentity:
 
     construct: RegistryReference
     test_family: RegistryReference
-    protocol: RegistryReference
+    protocol: RegistryReference | None
     measurand: RegistryReference
     metric_definition: RegistryReference
 
@@ -183,8 +183,8 @@ class SemanticIdentity:
 class AcquisitionIdentity:
     """Device/raw-artifact/channel identity and material acquisition metadata."""
 
-    device: RegistryReference
-    raw_artifact: InstanceIdentifier
+    device: RegistryReference | None
+    raw_artifact: InstanceIdentifier | None
     sensor_channel: str | None = None
     sampling: SamplingCharacteristics | None = None
     calibration_reference: RegistryReference | None = None
