@@ -164,7 +164,7 @@ class UncertaintyMetadata:
 @register_serializable_type
 @dataclass(frozen=True, slots=True)
 class MeasurementResult:
-    """Observed output and status metadata, separate from measurement identity."""
+    """Observed output with independent origin, explicit roles and status metadata."""
 
     result_id: InstanceIdentifier
     value: ResultValue

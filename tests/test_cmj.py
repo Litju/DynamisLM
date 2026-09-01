@@ -19,6 +19,7 @@ from dynamislm import (
     SourceArtifact,
     StructuredOutputReference,
     UnitReference,
+    ValueOrigin,
     VersionIdentity,
     canonical_hash,
     canonical_json,
@@ -332,6 +333,8 @@ def test_raw_observation_keeps_signal_outside_result_and_preserves_provenance() 
     assert isinstance(value, StructuredOutputReference)
     assert value.artifact_id == observation.provenance.source_artifacts[0].artifact_id
     assert not hasattr(value, "samples")
+    assert observation.result.classification.value_origin is ValueOrigin.DIRECT_MEASUREMENT
+    assert observation.result.classification.scientific_roles == ()
     restored = from_canonical_json(canonical_json(observation), ScientificMeasurementObservation)
     assert restored == observation
 
