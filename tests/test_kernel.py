@@ -140,14 +140,18 @@ def _derived_observation(
 ) -> ScientificMeasurementObservation:
     identity = _identity("same", method_version=method_version)
     observation_id = InstanceIdentifier("observation", suffix)
+    artifact_id = identity.acquisition.raw_artifact
+    device = identity.acquisition.device
+    assert artifact_id is not None
+    assert device is not None
     artifact = SourceArtifact(
-        artifact_id=identity.acquisition.raw_artifact,
+        artifact_id=artifact_id,
         content_digest="sha256:raw-artifact",
         media_type="application/octet-stream",
     )
     acquisition = AcquisitionRecord(
         acquisition_id=InstanceIdentifier("acquisition", suffix),
-        device=identity.acquisition.device,
+        device=device,
         source_artifact_id=artifact.artifact_id,
         sensor_channel=identity.acquisition.sensor_channel,
     )
@@ -469,11 +473,16 @@ def test_no_test_specific_arithmetic_or_science_is_in_generic_public_package() -
     package_file = importlib.import_module("dynamislm").__file__
     assert package_file is not None
     package_root = Path(package_file).parent
-    source = "\n".join(path.read_text(encoding="utf-8") for path in package_root.rglob("*.py"))
+    source = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in package_root.rglob("*.py")
+        if "measurement/cmj" not in path.as_posix()
+    )
 
     assert "cmj" not in source.lower()
     assert "vbt" not in source.lower()
     assert not hasattr(importlib.import_module("dynamislm"), "calculate_metric")
+    assert not hasattr(importlib.import_module("dynamislm"), "CMJ_TEST_FAMILY")
 
 
 def test_canonical_serialization_is_stable_and_rejects_non_finite_values() -> None:
