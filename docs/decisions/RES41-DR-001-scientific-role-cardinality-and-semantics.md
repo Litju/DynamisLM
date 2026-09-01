@@ -1,0 +1,26 @@
+# RES41-DR-001
+
+DECISION_ID=RES41-DR-001
+STATUS=ADOPTED
+QUESTION=How should DynamisLM represent numerical origin independently from zero, one, or multiple scientific/interpretive roles without making source signals or intermediate quantities performance outcomes?
+PROBLEM=The P1A kernel required every MeasurementResult to carry exactly one ScientificRole. `create_cmj_raw_observation()` therefore classified a raw vertical-force source as `DIRECT_MEASUREMENT + PERFORMANCE_OUTCOME`, even though a source signal is not inherently a performance endpoint. The same constraint would misclassify future mechanical/reference quantities.
+CANONICAL_AUTHORITY=
+- `docs/architecture/SCIENTIFIC_CONSTITUTION_V1.md`
+- `docs/architecture/MEASUREMENT_DATA_PROVENANCE_V1.md`
+- `docs/architecture/P1_EXECUTION_CONTRACT.md`
+- `docs/architecture/REASONING_CLAIMS_EVALUATION_V1.md`
+- Linear RES-41 and RES-34 completion evidence
+OPTIONS_CONSIDERED=
+- `ScientificRole | None`: rejected because it represents zero or one role but cannot represent multiple explicit roles.
+- `tuple[ScientificRole, ...]`, including an empty tuple: adopted because it represents zero, one, or multiple immutable role tags without adding a false semantic category.
+- An explicit source/intermediate/no-role enum: rejected because absence of an interpretive role is not itself a scientific role; a catch-all would conceal the distinction the correction is intended to preserve.
+- A second wrapper or separate hierarchy for source/intermediate measurements: rejected as unnecessary for this cardinality correction and speculative before downstream scientific objects exist.
+DECISION=Keep `ValueOrigin` as the independent numerical-origin axis and keep the existing three explicit `ScientificRole` values. Replace singular `ScientificClassification.scientific_role` with `scientific_roles: tuple[ScientificRole, ...]`. Empty means no interpretive role has been assigned. One or more values mean those roles were explicitly assigned by the producing scientific operation or interpretation. Role tags are treated as an unordered set and canonicalized into stable enum-value order; duplicates and non-ScientificRole values are rejected.
+RATIONALE=The representation makes the scientifically correct state ordinary: raw Fz(t) is direct and unassigned; source/reference and derived mechanical quantities can remain unassigned; an explicitly defined performance endpoint can carry `PERFORMANCE_OUTCOME` regardless of whether it is direct, derived or estimated; latent constructs and physiological inferences remain explicit tags. No role is inferred from `ValueOrigin`, and no catch-all role is needed.
+MIGRATION_EFFECT=All existing in-memory constructors pass a one-element tuple where a role was previously supplied. The raw CMJ constructor now passes `scientific_roles=()`. This is an intentional API correction; the obsolete singular field is not retained as a compatibility alias because it would preserve the false exactly-one-role contract. Existing serialized v1 payloads and canonical-signal artifact digests require deliberate re-materialization/re-hashing under v2 before they are accepted; no automatic migration is implemented.
+SERIALIZATION_EFFECT=Canonical serialization is version 2. The wire field changes from `scientific_role` to the array field `scientific_roles`, whose empty array represents no assigned role. Role arrays are emitted in canonical order, so equivalent tag sets have stable JSON and SHA-256 hashes. Because the canonical envelope version participates in `canonical_hash`, version-bound canonical-signal content digests and hash-derived refusal IDs also change across this migration. Version 1 payloads are rejected by the existing strict version gate; no v1 migration reader or backwards-compatibility claim is made.
+ASSUMPTIONS=Scientific roles are annotations/tags rather than an ordered interpretive workflow, so tuple order has no scientific meaning and can be canonicalized. The three existing role values remain sufficient for this correction; future role vocabulary changes require another explicit decision. Empty role assignment is a valid statement of non-interpretation, not missing source data.
+LIMITATIONS=This decision does not define future system-weight, system-mass, net-force, impulse, COM-kinematics or jump-height methods. It does not add role-specific evidence rules, claim adjudication, physiological validity, uncertainty models or an interpretive engine. No RES-35 science is implemented.
+IMPLEMENTATION=`src/dynamislm/measurement/taxonomy.py` changes role cardinality and validation; `src/dynamislm/measurement/result.py` consumes the corrected classification type; `src/dynamislm/measurement/cmj/signal.py` removes the false raw-signal outcome role; `src/dynamislm/serialization.py` sets `SERIALIZATION_VERSION=2`.
+TESTS=`tests/test_kernel.py` covers zero/one/multiple roles, independent origin, explicit performance/latent/physiological roles, deterministic empty-role roundtrip/hash behavior and v1 rejection. `tests/test_cmj.py` verifies raw CMJ Fz remains a direct measurement with no assigned role while preserving the existing source/provenance contract. Existing comparability/refusal, provenance and no-downstream-science tests remain unchanged.
+VERSION=RES41-P1B1-1.0.0

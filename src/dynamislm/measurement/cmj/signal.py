@@ -28,7 +28,7 @@ from dynamislm.measurement.result import (
     MeasurementResult,
     StructuredOutputReference,
 )
-from dynamislm.measurement.taxonomy import ScientificClassification, ScientificRole, ValueOrigin
+from dynamislm.measurement.taxonomy import ScientificClassification, ValueOrigin
 from dynamislm.provenance.models import (
     AcquisitionRecord,
     EvidenceReference,
@@ -213,8 +213,8 @@ def create_cmj_raw_observation(
         ),
         unit=signal.unit,
         classification=ScientificClassification(
-            ValueOrigin.DIRECT_MEASUREMENT,
-            ScientificRole.PERFORMANCE_OUTCOME,
+            value_origin=ValueOrigin.DIRECT_MEASUREMENT,
+            scientific_roles=(),
         ),
     )
     return ScientificMeasurementObservation(

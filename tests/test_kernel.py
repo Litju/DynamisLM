@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import datetime as datetime_module
 import importlib
+import json
 import math
 import subprocess
 import sys
@@ -11,6 +12,7 @@ from pathlib import Path
 import pytest
 
 from dynamislm import (
+    SERIALIZATION_VERSION,
     AcquisitionIdentity,
     AcquisitionRecord,
     ApplicabilityDecision,
@@ -127,7 +129,7 @@ def _result(
         unit=None,
         classification=classification
         or ScientificClassification(
-            ValueOrigin.DIRECT_MEASUREMENT, ScientificRole.PERFORMANCE_OUTCOME
+            ValueOrigin.DIRECT_MEASUREMENT, (ScientificRole.PERFORMANCE_OUTCOME,)
         ),
         quality=MeasurementQuality(),
         uncertainty=UncertaintyMetadata(),
@@ -296,24 +298,130 @@ def test_evidence_applicability_is_versionable_without_changing_identity() -> No
     assert limited != supported
 
 
-def test_value_origin_and_scientific_role_are_independent_axes() -> None:
+def test_value_origin_and_scientific_roles_are_independent_axes() -> None:
     classifications = {
-        ScientificClassification(origin, role) for origin in ValueOrigin for role in ScientificRole
+        ScientificClassification(origin, (role,))
+        for origin in ValueOrigin
+        for role in ScientificRole
     }
 
     assert len(classifications) == len(ValueOrigin) * len(ScientificRole)
     assert (
         ScientificClassification(
-            ValueOrigin.DERIVED_MECHANICAL_QUANTITY, ScientificRole.PERFORMANCE_OUTCOME
+            ValueOrigin.DERIVED_MECHANICAL_QUANTITY, (ScientificRole.PERFORMANCE_OUTCOME,)
         )
         in classifications
     )
     assert (
         ScientificClassification(
-            ValueOrigin.DIRECT_MEASUREMENT, ScientificRole.PHYSIOLOGICAL_INFERENCE
+            ValueOrigin.DIRECT_MEASUREMENT, (ScientificRole.PHYSIOLOGICAL_INFERENCE,)
         )
         in classifications
     )
+
+
+def test_scientific_roles_allow_zero_or_multiple_explicit_tags() -> None:
+    unassigned = ScientificClassification(ValueOrigin.DIRECT_MEASUREMENT, ())
+    multiple = ScientificClassification(
+        ValueOrigin.DERIVED_MECHANICAL_QUANTITY,
+        (ScientificRole.PHYSIOLOGICAL_INFERENCE, ScientificRole.PERFORMANCE_OUTCOME),
+    )
+    reordered = ScientificClassification(
+        ValueOrigin.DERIVED_MECHANICAL_QUANTITY,
+        (ScientificRole.PERFORMANCE_OUTCOME, ScientificRole.PHYSIOLOGICAL_INFERENCE),
+    )
+
+    assert unassigned.scientific_roles == ()
+    assert multiple.scientific_roles == (
+        ScientificRole.PERFORMANCE_OUTCOME,
+        ScientificRole.PHYSIOLOGICAL_INFERENCE,
+    )
+    assert multiple == reordered
+    assert canonical_hash(multiple) == canonical_hash(reordered)
+
+
+def test_scientific_classification_rejects_invalid_role_values() -> None:
+    with pytest.raises(ValueError, match="must be an immutable tuple"):
+        ScientificClassification(
+            ValueOrigin.DIRECT_MEASUREMENT,
+            [  # type: ignore[arg-type]
+                ScientificRole.PERFORMANCE_OUTCOME
+            ],
+        )
+    with pytest.raises(ValueError, match="must not contain duplicates"):
+        ScientificClassification(
+            ValueOrigin.DIRECT_MEASUREMENT,
+            (ScientificRole.PERFORMANCE_OUTCOME, ScientificRole.PERFORMANCE_OUTCOME),
+        )
+    with pytest.raises(ValueError, match="must be a ValueOrigin"):
+        ScientificClassification("DIRECT_MEASUREMENT", ())  # type: ignore[arg-type]
+
+
+def test_value_origin_does_not_infer_scientific_roles() -> None:
+    assert all(
+        ScientificClassification(origin, ()).scientific_roles == () for origin in ValueOrigin
+    )
+
+
+def test_derived_mechanical_quantity_does_not_imply_performance_outcome() -> None:
+    classification = ScientificClassification(ValueOrigin.DERIVED_MECHANICAL_QUANTITY, ())
+
+    assert ScientificRole.PERFORMANCE_OUTCOME not in classification.scientific_roles
+
+
+@pytest.mark.parametrize(
+    "role",
+    (ScientificRole.LATENT_CONSTRUCT_INTERPRETATION, ScientificRole.PHYSIOLOGICAL_INFERENCE),
+)
+def test_interpretive_roles_remain_explicit(role: ScientificRole) -> None:
+    classification = ScientificClassification(ValueOrigin.MODEL_ESTIMATE, (role,))
+
+    assert classification.scientific_roles == (role,)
+
+
+def test_unassigned_roles_roundtrip_and_hash_are_deterministic() -> None:
+    result = _result(
+        "unassigned",
+        classification=ScientificClassification(ValueOrigin.DIRECT_MEASUREMENT, ()),
+    )
+    serialized = canonical_json(result)
+    restored = from_canonical_json(serialized, MeasurementResult)
+
+    assert '"scientific_roles":[]' in serialized
+    assert restored == result
+    assert canonical_json(restored) == serialized
+    assert canonical_hash(restored) == canonical_hash(result)
+
+
+def test_performance_outcome_is_explicitly_assignable_to_a_derived_result() -> None:
+    result = _result(
+        "derived-performance",
+        value=0.42,
+        classification=ScientificClassification(
+            ValueOrigin.DERIVED_MECHANICAL_QUANTITY,
+            (ScientificRole.PERFORMANCE_OUTCOME,),
+        ),
+    )
+
+    assert result.classification.value_origin is ValueOrigin.DERIVED_MECHANICAL_QUANTITY
+    assert result.classification.scientific_roles == (ScientificRole.PERFORMANCE_OUTCOME,)
+
+
+def test_serialization_version_rejects_the_pre_role_cardinality_wire_shape() -> None:
+    result = _result(
+        "versioned-roles",
+        classification=ScientificClassification(ValueOrigin.DIRECT_MEASUREMENT, ()),
+    )
+    envelope = json.loads(canonical_json(result))
+
+    assert SERIALIZATION_VERSION == 2
+    assert envelope["serialization_version"] == SERIALIZATION_VERSION
+    envelope["serialization_version"] = 1
+    classification_wire = envelope["payload"]["classification"]
+    classification_wire["scientific_role"] = "PERFORMANCE_OUTCOME"
+    del classification_wire["scientific_roles"]
+    with pytest.raises(ValueError, match="unsupported serialization version"):
+        from_canonical_json(json.dumps(envelope), MeasurementResult)
 
 
 def test_all_comparability_states_are_explicit_and_roundtrip() -> None:
@@ -522,7 +630,7 @@ def test_tagged_result_variants_are_typed_and_serializable() -> None:
             value=value,
             unit=None,
             classification=ScientificClassification(
-                ValueOrigin.MODEL_ESTIMATE, ScientificRole.LATENT_CONSTRUCT_INTERPRETATION
+                ValueOrigin.MODEL_ESTIMATE, (ScientificRole.LATENT_CONSTRUCT_INTERPRETATION,)
             ),
         )
         assert from_canonical_json(canonical_json(result), MeasurementResult) == result
@@ -534,7 +642,7 @@ def test_clean_environment_import_smoke(tmp_path: Path) -> None:
         [
             sys.executable,
             "-c",
-            "import dynamislm; assert dynamislm.SERIALIZATION_VERSION == 1",
+            "import dynamislm; assert dynamislm.SERIALIZATION_VERSION == 2",
         ],
         cwd=tmp_path,
         env={

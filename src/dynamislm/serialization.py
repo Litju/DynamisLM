@@ -12,7 +12,7 @@ import types
 from collections.abc import Mapping, Sequence
 from typing import Any, TypeAliasType, Union, cast, get_args, get_origin, get_type_hints
 
-SERIALIZATION_VERSION = 1
+SERIALIZATION_VERSION = 2
 SerializableType = type[Any]
 
 
