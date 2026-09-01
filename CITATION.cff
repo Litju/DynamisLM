@@ -1,0 +1,16 @@
+cff-version: 1.2.0
+title: DynamisLM
+message: "If you use DynamisLM, please cite this repository."
+type: software
+authors:
+  - family-names: Rodriguez
+    given-names: Julio
+    affiliation: Independent Researcher
+repository-code: https://github.com/Litju/DynamisLM
+license: AGPL-3.0-only
+version: 0.1.0
+date-released: 2026-09-01
+abstract: >-
+  Research-grade scientific reasoning infrastructure for longitudinal,
+  multi-device athlete-performance measurements, with deterministic Python
+  numerical authority and provenance-aware measurement semantics.

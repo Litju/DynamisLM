@@ -1,0 +1,14 @@
+* text=auto eol=lf
+*.md text
+*.py text
+*.toml text
+*.yaml text
+*.yml text
+*.json text
+*.cff text
+*.csv text
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.pdf binary

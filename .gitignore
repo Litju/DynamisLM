@@ -1,0 +1,58 @@
+# Python environments and caches
+.venv/
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Packaging/build outputs
+build/
+dist/
+*.egg-info/
+
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+*.local
+
+# Research data and transient outputs
+data/
+local-data/
+datasets/
+corpus/
+corpus-shards/
+checkpoints/
+model-weights/
+optimizer-states/
+training-outputs/
+logs/
+tmp/
+artifacts/
+hf-cache/
+.cache/
+
+# Large model/data formats; keep these out of source control even outside the
+# conventional directories above.
+*.safetensors
+*.pt
+*.pth
+*.ckpt
+*.bin
+*.parquet
+*.arrow
+*.h5
+*.hdf5
+*.npy
+*.npz
+
+# Editor and OS files
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db
