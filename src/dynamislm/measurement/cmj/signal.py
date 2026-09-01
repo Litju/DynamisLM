@@ -102,7 +102,7 @@ class RawVerticalForceSignal:
     physical_axis: RegistryReference | None
     reference_frame: RegistryReference | None
     sign_convention: SignConvention | None
-    processing_state: SignalProcessingState
+    processing_state: SignalProcessingState = SignalProcessingState.UNKNOWN
 
     def __post_init__(self) -> None:
         require_tuple(self.samples, "samples")
