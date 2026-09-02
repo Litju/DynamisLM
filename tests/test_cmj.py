@@ -2141,6 +2141,36 @@ def test_res36_thresholds_and_dwell_are_explicit_and_transient_crossing_refuses(
     assert RefusalReasonCode.THRESHOLD_PARAMETER_MISSING in missing_takeoff_threshold.reason_codes
 
 
+def test_res45_registered_event_parameter_domains_are_positive_and_parameterized() -> None:
+    for threshold in (-500.0, 0.0):
+        with pytest.raises(ValueError, match="threshold_n must be positive"):
+            CMJEventDetectorParameters(threshold_n=threshold)
+    valid_absolute = CMJEventDetectorParameters(threshold_n=12.5)
+    assert valid_absolute.threshold_n == 12.5
+
+    for sigma in (-1.0, 0.0):
+        with pytest.raises(ValueError, match="sigma_multiplier must be positive"):
+            CMJEventDetectorParameters(sigma_multiplier=sigma)
+    valid_sigma = CMJEventDetectorParameters(sigma_multiplier=1.25)
+    assert valid_sigma.sigma_multiplier == 1.25
+
+    for field_name in ("threshold_n", "sigma_multiplier"):
+        with pytest.raises(ValueError, match=f"{field_name} must be finite"):
+            CMJEventDetectorParameters(**{field_name: float("nan")})
+        with pytest.raises(ValueError, match=f"{field_name} must be finite"):
+            CMJEventDetectorParameters(**{field_name: float("inf")})
+
+    assert CMJEventDetectorParameters().threshold_n is None
+    assert CMJEventDetectorParameters().sigma_multiplier is None
+    force = _event_input("event-positive-threshold", _event_trace())
+    takeoff = detect_takeoff(
+        force,
+        _absolute_parameters(12.5, CMJThresholdDirection.BELOW_THRESHOLD),
+    )
+    assert isinstance(takeoff, CMJEventOccurrence)
+    assert takeoff.detector_parameters.threshold_n == 12.5
+
+
 def test_res36_multiple_crossings_use_registered_tie_break_and_qc() -> None:
     force = _event_input(
         "event-multiple",

@@ -1,5 +1,6 @@
 DECISION_ID: RES36-DR-001
 STATUS: ADOPTED
+CORRECTION: RES45-DR-002 makes the baseline-SD multiplier domain explicit as finite and strictly positive. The movement-onset decision and method family remain adopted.
 
 QUESTION
 
@@ -15,7 +16,7 @@ or any other CMJ phase or derived quantity.
 SOURCES
 
 - [The effect of three different start thresholds on the kinematics and kinetics of a countermovement jump](https://pubmed.ncbi.nlm.nih.gov/20664368/)
-- [The effect of different movement onset thresholds on countermovement jump performance](https://pmc.ncbi.nlm.nih.gov/articles/PMC9783824/)
+- [Comparison of the Reliability of Four Different Movement Thresholds When Evaluating Vertical Jump Performance](https://pmc.ncbi.nlm.nih.gov/articles/PMC9783824/)
 - [Reliability and magnitude of loaded countermovement jump performance variables: a technical examination of the jump threshold initiation](https://pubmed.ncbi.nlm.nih.gov/31711369/)
 - Owen et al., 2014, [Journal of Strength and Conditioning Research](https://doi.org/10.1519/JSC.0000000000000311)
 
@@ -59,7 +60,7 @@ and search start are explicit parameters rather than hidden defaults.
 PARAMETERS
 
 - `direction = BELOW_THRESHOLD`;
-- `sigma_multiplier` is required and finite, with no project-wide default;
+- `sigma_multiplier` is required, finite, and strictly positive, with no project-wide default; zero is not accepted because it collapses the baseline-SD deviation to the baseline mean rather than applying a positive noise multiplier;
 - exact baseline observation, segment, mean, and standard deviation are
   required;
 - `dwell_samples` is required and sample-count based;
@@ -99,6 +100,17 @@ TESTS
 Synthetic traces cover exact baseline linkage, parameter identity, clean
 onset, no crossing, transient crossings that fail dwell, multiple candidates,
 regular/explicit timebases, and immutable source samples.
+
+MIGRATION_EFFECT
+
+Existing callers that supplied zero or negative `sigma_multiplier` must choose a
+method-valid positive value; no universal value is introduced.
+
+SERIALIZATION_EFFECT
+
+The detector parameter domain is enforced on construction and canonical decode.
+The RES45 global serialization migration to version 3 rejects prior v2
+envelopes; no parameter value is silently reinterpreted.
 
 VERSION
 

@@ -180,8 +180,10 @@ class CMJEventDetectorParameters:
             and self.baseline_standard_deviation_n < 0
         ):
             raise ValueError("baseline_standard_deviation_n must not be negative")
-        if self.sigma_multiplier is not None and self.sigma_multiplier < 0:
-            raise ValueError("sigma_multiplier must not be negative")
+        if self.threshold_n is not None and self.threshold_n <= 0:
+            raise ValueError("threshold_n must be positive")
+        if self.sigma_multiplier is not None and self.sigma_multiplier <= 0:
+            raise ValueError("sigma_multiplier must be positive")
         if self.direction is not None and not isinstance(self.direction, CMJThresholdDirection):
             raise ValueError("direction must be a CMJThresholdDirection")
         if self.dwell_samples is not None:
