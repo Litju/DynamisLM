@@ -175,6 +175,7 @@ class CMJEventDetectorParameters:
         ):
             if value is not None:
                 _require_finite(value, field_name)
+                object.__setattr__(self, field_name, float(value))
         if (
             self.baseline_standard_deviation_n is not None
             and self.baseline_standard_deviation_n < 0

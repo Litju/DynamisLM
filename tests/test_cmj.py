@@ -2175,6 +2175,10 @@ def test_res45_registered_event_parameter_domains_are_positive_and_parameterized
             CMJEventDetectorParameters(sigma_multiplier=sigma)
     valid_sigma = CMJEventDetectorParameters(sigma_multiplier=1.25)
     assert valid_sigma.sigma_multiplier == 1.25
+    integer_parameters = CMJEventDetectorParameters(threshold_n=20, sigma_multiplier=2)
+    float_parameters = CMJEventDetectorParameters(threshold_n=20.0, sigma_multiplier=2.0)
+    assert integer_parameters == float_parameters
+    assert canonical_json(integer_parameters) == canonical_json(float_parameters)
 
     for field_name in ("threshold_n", "sigma_multiplier"):
         with pytest.raises(ValueError, match=f"{field_name} must be finite"):
