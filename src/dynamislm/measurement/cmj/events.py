@@ -857,12 +857,19 @@ def _detect_from_force(
     failure_reason: RefusalReasonCode,
     failure_claim: str,
 ) -> CMJEventOccurrence | RefusalResult:
+    if parameters.direction is None or parameters.dwell_samples is None:
+        return _event_refusal(
+            failure_claim,
+            (RefusalReasonCode.THRESHOLD_PARAMETER_MISSING,),
+            ("explicit detector direction and dwell_samples",),
+            observation_ids=_force_observation_ids(force),
+        )
     runs, any_crossing = _candidate_runs(
         force.signal.samples,
         start_index=search_start_index,
         threshold_n=effective_threshold_n,
-        direction=parameters.direction or CMJThresholdDirection.BELOW_THRESHOLD,
-        dwell_samples=parameters.dwell_samples or 1,
+        direction=parameters.direction,
+        dwell_samples=parameters.dwell_samples,
     )
     observation_ids = _force_observation_ids(force)
     if not runs:
@@ -932,6 +939,13 @@ def detect_movement_onset(
         return baseline_refusal
     if baseline is None or parameters.sigma_multiplier is None:
         return _baseline_refusal(claim, observation_ids, "validated onset baseline and multiplier")
+    if parameters.search_start_index is None:
+        return _event_refusal(
+            claim,
+            (RefusalReasonCode.THRESHOLD_PARAMETER_MISSING,),
+            ("explicit movement-onset search_start_index",),
+            observation_ids=observation_ids,
+        )
     effective_threshold_n = (
         baseline.qc.mean_force_n - parameters.sigma_multiplier * baseline.qc.standard_deviation_n
     )
@@ -941,7 +955,7 @@ def detect_movement_onset(
         method=method,
         parameters=parameters,
         effective_threshold_n=effective_threshold_n,
-        search_start_index=parameters.search_start_index or 0,
+        search_start_index=parameters.search_start_index,
         preceding_event_id=None,
         failure_reason=RefusalReasonCode.THRESHOLD_NOT_CROSSED,
         failure_claim=claim,
