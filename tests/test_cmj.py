@@ -91,6 +91,7 @@ from dynamislm.measurement.cmj import (
     NetVerticalImpulseResult,
     PhysicalSystemMassResult,
     ProcessedVerticalForceSignal,
+    QualifiedZeroVelocityReference,
     RawVerticalForceSignal,
     ReferenceMetadata,
     ReferenceState,
@@ -127,6 +128,7 @@ from dynamislm.measurement.cmj import (
     refusal_for_cmj_comparability,
     refusal_for_cmj_derived_comparability,
     refusal_for_cmj_event_comparability,
+    refusal_for_cmj_mechanics_comparability,
     refusal_for_cmj_validation,
     refuse_unregistered_computation,
     source_artifact_for_signal,
@@ -2464,6 +2466,8 @@ def _mechanics_fixture(
     *,
     timebase: SignalTimebase | None = None,
     external_loading: str = "none",
+    weighing_end_index: int = 2,
+    weighing_selection_parameters: tuple[MetadataEntry, ...] = (),
 ) -> tuple[
     CMJForceInput, TotalSupportedForceResult, SystemWeightResult, CMJMechanicalSystemContract
 ]:
@@ -2480,7 +2484,8 @@ def _mechanics_fixture(
         source_artifact_id=total.source_artifact.artifact_id,
         source_measurement_identity_id=total.observation.identity.identity_id,
         start_index=0,
-        end_index=2,
+        end_index=weighing_end_index,
+        selection_parameters=weighing_selection_parameters,
     )
     weight = estimate_system_weight(total, segment)
     assert isinstance(weight, SystemWeightResult)
@@ -2748,10 +2753,13 @@ def test_res37_mass_provenance_and_standard_gravity_type_are_not_interchangeable
     assert total_b.signal.samples == (1.0, 1.0, 3.0, 3.0)
 
 
-def test_res37_velocity_has_explicit_initial_condition_and_preserves_pre_start_undefinedness() -> (
-    None
-):
-    _, total, weight, contract = _mechanics_fixture("mechanics-velocity", (1.0, 1.0, 3.0, 3.0, 3.0))
+def test_res46_velocity_requires_qualified_zero_reference_and_preserves_pre_start_undefinedness(
+) -> None:
+    _, total, weight, contract = _mechanics_fixture(
+        "mechanics-velocity",
+        (1.0, 1.0, 1.0, 3.0, 3.0),
+        weighing_end_index=3,
+    )
     net = derive_net_vertical_force(total, weight, contract)
     assert isinstance(net, NetVerticalForceResult)
     mass = derive_physical_system_mass(weight, _local_gravity("velocity"))
@@ -2759,25 +2767,200 @@ def test_res37_velocity_has_explicit_initial_condition_and_preserves_pre_start_u
     acceleration = derive_supported_system_com_acceleration(net, mass, contract)
     assert isinstance(acceleration, SupportedSystemComAccelerationResult)
     interval = CMJIntegrationInterval.explicit_sample(acceleration.series.series_id, 2, 4)
-    condition = InitialVelocityCondition.zero_at_sample(acceleration.series.series_id, 2)
+    legacy_condition = InitialVelocityCondition.zero_at_sample(acceleration.series.series_id, 2)
     missing = derive_supported_system_com_velocity(acceleration, interval, None)
     assert isinstance(missing, RefusalResult)
-    assert RefusalReasonCode.INITIAL_CONDITION_UNRESOLVED in missing.reason_codes
+    assert RefusalReasonCode.ZERO_VELOCITY_REFERENCE_REQUIRED in missing.reason_codes
+    arbitrary = derive_supported_system_com_velocity(acceleration, interval, legacy_condition)
+    assert isinstance(arbitrary, RefusalResult)
+    assert RefusalReasonCode.ZERO_VELOCITY_REFERENCE_UNQUALIFIED in arbitrary.reason_codes
+    condition = QualifiedZeroVelocityReference.from_system_weight(weight, 2)
     velocity = derive_supported_system_com_velocity(acceleration, interval, condition)
 
     assert isinstance(velocity, SupportedSystemComVelocityResult)
-    assert velocity.samples == (0.0, 0.002, 0.004)
+    assert velocity.samples == (0.0, 0.001, 0.003)
     assert velocity.series.sample_start_index == 2
     assert velocity.series.source_sample_indices == (2, 3, 4)
     assert velocity.initial_velocity_condition == condition
-    assert acceleration.samples == (0.0, 0.0, 2.0, 2.0, 2.0)
+    assert acceleration.samples == (0.0, 0.0, 0.0, 2.0, 2.0)
+    parameters = {
+        entry.key: entry.value
+        for entry in velocity.observation.identity.processing.method_parameters
+    }
+    assert parameters["zero_velocity_reference"] == canonical_json(condition)
+    assert (
+        velocity.observation.provenance.evidence_references[-1].reference
+        == condition.evidence_decision
+    )
+    assert (
+        condition.source_system_weight_observation_id
+        in velocity.series.source_observation_ids
+    )
+    assert condition.source_artifact_id in velocity.series.source_artifact_ids
+    assert (
+        condition.source_measurement_identity_id
+        in velocity.series.source_measurement_identity_ids
+    )
+
+
+def test_res46_arbitrary_post_movement_zero_cannot_be_physical_velocity_authority() -> None:
+    _, total, weight, contract = _mechanics_fixture(
+        "res46-post-movement",
+        (1.0, 1.0, 3.0, 3.0, 3.0),
+    )
+    net = derive_net_vertical_force(total, weight, contract)
+    assert isinstance(net, NetVerticalForceResult)
+    mass = derive_physical_system_mass(weight, _local_gravity("post-movement"))
+    assert isinstance(mass, PhysicalSystemMassResult)
+    acceleration = derive_supported_system_com_acceleration(net, mass, contract)
+    assert isinstance(acceleration, SupportedSystemComAccelerationResult)
+    interval = CMJIntegrationInterval.explicit_sample(acceleration.series.series_id, 2, 4)
+    arbitrary = InitialVelocityCondition.zero_at_sample(acceleration.series.series_id, 2)
+
+    refused = derive_supported_system_com_velocity(acceleration, interval, arbitrary)
+
+    assert isinstance(refused, RefusalResult)
+    assert RefusalReasonCode.ZERO_VELOCITY_REFERENCE_UNQUALIFIED in refused.reason_codes
+
+
+def test_res46_exact_movement_onset_event_does_not_authorize_zero_velocity() -> None:
+    force = _event_input("res46-event-reference", _event_trace())
+    weight = _event_baseline(force)
+    onset = detect_movement_onset(force, weight, _onset_parameters(weight))
+    assert isinstance(onset, CMJEventOccurrence)
+    total = construct_total_supported_vertical_force(force)
+    assert isinstance(total, TotalSupportedForceResult)
+    contract = _mechanics_contract()
+    net = derive_net_vertical_force(total, weight, contract)
+    assert isinstance(net, NetVerticalForceResult)
+    mass = derive_physical_system_mass(weight, _local_gravity("event-reference"))
+    assert isinstance(mass, PhysicalSystemMassResult)
+    acceleration = derive_supported_system_com_acceleration(net, mass, contract)
+    assert isinstance(acceleration, SupportedSystemComAccelerationResult)
+    interval = CMJIntegrationInterval.explicit_sample(
+        acceleration.series.series_id, onset.sample_index, onset.sample_index
+    )
+    legacy_event_condition = InitialVelocityCondition.zero_at_sample(
+        onset.source_signal_id,
+        onset.sample_index,
+        reference_event=onset,
+    )
+
+    refused = derive_supported_system_com_velocity(
+        acceleration, interval, legacy_event_condition
+    )
+
+    assert isinstance(refused, RefusalResult)
+    assert RefusalReasonCode.ZERO_VELOCITY_REFERENCE_UNQUALIFIED in refused.reason_codes
+
+
+def test_res46_qualified_reference_requires_exact_source_trial_context_and_system() -> None:
+    primary = _mechanics_fixture(
+        "res46-primary",
+        (1.0, 1.0, 1.0, 3.0, 3.0),
+        weighing_end_index=3,
+    )
+    other = _mechanics_fixture(
+        "res46-other",
+        (1.0, 1.0, 1.0, 3.0, 3.0),
+        weighing_end_index=3,
+    )
+    _, total, weight, contract = primary
+    _, other_total, other_weight, _ = other
+    net = derive_net_vertical_force(total, weight, contract)
+    assert isinstance(net, NetVerticalForceResult)
+    mass = derive_physical_system_mass(weight, _local_gravity("source-check"))
+    assert isinstance(mass, PhysicalSystemMassResult)
+    acceleration = derive_supported_system_com_acceleration(net, mass, contract)
+    assert isinstance(acceleration, SupportedSystemComAccelerationResult)
+    interval = CMJIntegrationInterval.explicit_sample(acceleration.series.series_id, 2, 4)
+    other_reference = QualifiedZeroVelocityReference.from_system_weight(other_weight, 2)
+    primary_reference = QualifiedZeroVelocityReference.from_system_weight(weight, 2)
+    wrong_segment_reference = replace(
+        primary_reference,
+        weighing_segment=replace(primary_reference.weighing_segment, end_index=4),
+    )
+
+    wrong_trial = derive_supported_system_com_velocity(acceleration, interval, other_reference)
+    wrong_weight_observation = derive_supported_system_com_velocity(
+        acceleration,
+        interval,
+        replace(
+            primary_reference,
+            source_system_weight_observation_id=other_weight.observation.observation_id,
+        ),
+    )
+    wrong_segment = derive_supported_system_com_velocity(
+        acceleration, interval, wrong_segment_reference
+    )
+    loaded = _mechanics_fixture(
+        "res46-loaded",
+        (101.0, 101.0, 101.0, 103.0, 103.0),
+        external_loading="supported-barbell",
+        weighing_end_index=3,
+    )
+    loaded_reference = QualifiedZeroVelocityReference.from_system_weight(loaded[2], 2)
+    wrong_system = derive_supported_system_com_velocity(acceleration, interval, loaded_reference)
+
+    for refused in (wrong_trial, wrong_weight_observation, wrong_segment, wrong_system):
+        assert isinstance(refused, RefusalResult)
+        assert RefusalReasonCode.ZERO_VELOCITY_SOURCE_MISMATCH in refused.reason_codes
+    assert other_total.signal.signal_id != total.signal.signal_id
+
+
+def test_res46_reference_segment_is_half_open_and_interval_start_is_exact() -> None:
+    _, total, weight, contract = _mechanics_fixture(
+        "res46-boundary",
+        (1.0, 1.0, 1.0, 3.0, 3.0),
+        weighing_end_index=3,
+    )
+    with pytest.raises(ValueError, match="inside the weighing segment"):
+        QualifiedZeroVelocityReference.from_system_weight(weight, weight.segment.end_index)
+
+    net = derive_net_vertical_force(total, weight, contract)
+    assert isinstance(net, NetVerticalForceResult)
+    mass = derive_physical_system_mass(weight, _local_gravity("boundary"))
+    assert isinstance(mass, PhysicalSystemMassResult)
+    acceleration = derive_supported_system_com_acceleration(net, mass, contract)
+    assert isinstance(acceleration, SupportedSystemComAccelerationResult)
+    reference = QualifiedZeroVelocityReference.from_system_weight(weight, 1)
+    interval = CMJIntegrationInterval.explicit_sample(acceleration.series.series_id, 2, 4)
+
+    refused = derive_supported_system_com_velocity(acceleration, interval, reference)
+
+    assert isinstance(refused, RefusalResult)
+    assert RefusalReasonCode.ZERO_VELOCITY_REFERENCE_MISMATCH in refused.reason_codes
+
+
+def test_res46_qualified_start_keeps_existing_trapezoidal_velocity_oracle() -> None:
+    _, total, weight, contract = _mechanics_fixture(
+        "res46-trapezoid-oracle",
+        (1.0, 1.0, 3.0, 3.0, 3.0),
+    )
+    net = derive_net_vertical_force(total, weight, contract)
+    assert isinstance(net, NetVerticalForceResult)
+    mass = derive_physical_system_mass(weight, _local_gravity("trapezoid-oracle"))
+    assert isinstance(mass, PhysicalSystemMassResult)
+    acceleration = derive_supported_system_com_acceleration(net, mass, contract)
+    assert isinstance(acceleration, SupportedSystemComAccelerationResult)
+    interval = CMJIntegrationInterval.explicit_sample(acceleration.series.series_id, 1, 4)
+    reference = QualifiedZeroVelocityReference.from_system_weight(weight, 1)
+
+    velocity = derive_supported_system_com_velocity(acceleration, interval, reference)
+
+    assert isinstance(velocity, SupportedSystemComVelocityResult)
+    assert velocity.samples == pytest.approx((0.0, 0.001, 0.003, 0.005))
+    assert velocity.series.samples == velocity.samples
+    assert "backshift" not in canonical_json(reference)
 
 
 def test_res37_relative_displacement_has_explicit_zero_origin_and_is_not_absolute_com_height() -> (
     None
 ):
     _, total, weight, contract = _mechanics_fixture(
-        "mechanics-displacement", (1.0, 1.0, 3.0, 3.0, 3.0)
+        "mechanics-displacement",
+        (1.0, 1.0, 1.0, 3.0, 3.0),
+        weighing_end_index=3,
     )
     net = derive_net_vertical_force(total, weight, contract)
     assert isinstance(net, NetVerticalForceResult)
@@ -2786,7 +2969,7 @@ def test_res37_relative_displacement_has_explicit_zero_origin_and_is_not_absolut
     acceleration = derive_supported_system_com_acceleration(net, mass, contract)
     assert isinstance(acceleration, SupportedSystemComAccelerationResult)
     interval = CMJIntegrationInterval.explicit_sample(acceleration.series.series_id, 2, 4)
-    condition = InitialVelocityCondition.zero_at_sample(acceleration.series.series_id, 2)
+    condition = QualifiedZeroVelocityReference.from_system_weight(weight, 2)
     velocity = derive_supported_system_com_velocity(acceleration, interval, condition)
     assert isinstance(velocity, SupportedSystemComVelocityResult)
     missing = derive_supported_system_com_relative_vertical_displacement(velocity, None)
@@ -2798,7 +2981,7 @@ def test_res37_relative_displacement_has_explicit_zero_origin_and_is_not_absolut
     displacement = derive_supported_system_com_relative_vertical_displacement(velocity, origin)
 
     assert isinstance(displacement, SupportedSystemComRelativeDisplacementResult)
-    assert displacement.samples == (0.0, 0.000001, 0.000004)
+    assert displacement.samples == pytest.approx((0.0, 0.0000005, 0.0000025))
     assert displacement.series.unit.identifier.stable_id.endswith("unit:meter@1.0.0")
     assert "relative" in origin.coordinate_reference
     assert "anatomical" in origin.coordinate_reference
@@ -2851,7 +3034,9 @@ def test_res37_acceleration_contract_cannot_change_after_net_force_is_derived() 
 
 def test_res37_consistency_impulse_over_mass_equals_velocity_change() -> None:
     _, total, weight, contract = _mechanics_fixture(
-        "mechanics-consistency", (1.0, 1.0, 3.0, 3.0, 3.0)
+        "mechanics-consistency",
+        (1.0, 1.0, 1.0, 3.0, 3.0),
+        weighing_end_index=3,
     )
     net = derive_net_vertical_force(total, weight, contract)
     assert isinstance(net, NetVerticalForceResult)
@@ -2862,10 +3047,11 @@ def test_res37_consistency_impulse_over_mass_equals_velocity_change() -> None:
     acceleration = derive_supported_system_com_acceleration(net, mass, contract)
     assert isinstance(acceleration, SupportedSystemComAccelerationResult)
     velocity_interval = CMJIntegrationInterval.explicit_sample(acceleration.series.series_id, 2, 4)
+    reference = QualifiedZeroVelocityReference.from_system_weight(weight, 2)
     velocity = derive_supported_system_com_velocity(
         acceleration,
         velocity_interval,
-        InitialVelocityCondition.zero_at_sample(acceleration.series.series_id, 2),
+        reference,
     )
     assert isinstance(impulse, NetVerticalImpulseResult)
     assert isinstance(velocity, SupportedSystemComVelocityResult)
@@ -2874,7 +3060,9 @@ def test_res37_consistency_impulse_over_mass_equals_velocity_change() -> None:
 
 def test_res37_mechanics_objects_roundtrip_under_serialization_v3() -> None:
     _, total, weight, contract = _mechanics_fixture(
-        "mechanics-roundtrip", (1.0, 1.0, 3.0, 3.0, 3.0)
+        "mechanics-roundtrip",
+        (1.0, 1.0, 1.0, 3.0, 3.0),
+        weighing_end_index=3,
     )
     net = derive_net_vertical_force(total, weight, contract)
     assert isinstance(net, NetVerticalForceResult)
@@ -2885,10 +3073,11 @@ def test_res37_mechanics_objects_roundtrip_under_serialization_v3() -> None:
     acceleration = derive_supported_system_com_acceleration(net, mass, contract)
     assert isinstance(acceleration, SupportedSystemComAccelerationResult)
     velocity_interval = CMJIntegrationInterval.explicit_sample(acceleration.series.series_id, 2, 4)
+    reference = QualifiedZeroVelocityReference.from_system_weight(weight, 2)
     velocity = derive_supported_system_com_velocity(
         acceleration,
         velocity_interval,
-        InitialVelocityCondition.zero_at_sample(acceleration.series.series_id, 2),
+        reference,
     )
     assert isinstance(velocity, SupportedSystemComVelocityResult)
     displacement = derive_supported_system_com_relative_vertical_displacement(
@@ -2898,7 +3087,17 @@ def test_res37_mechanics_objects_roundtrip_under_serialization_v3() -> None:
         ),
     )
     assert isinstance(displacement, SupportedSystemComRelativeDisplacementResult)
-    values = (contract, impulse_interval, net, impulse, mass, acceleration, velocity, displacement)
+    values = (
+        contract,
+        impulse_interval,
+        reference,
+        net,
+        impulse,
+        mass,
+        acceleration,
+        velocity,
+        displacement,
+    )
 
     for value in values:
         restored = from_canonical_json(canonical_json(value), value.__class__)
@@ -2988,6 +3187,46 @@ def test_res37_downstream_comparability_keeps_upstream_weight_method_identity() 
 
     assert comparison.state is ComparabilityState.BRIDGE_VALIDATION_REQUIRED
     assert ComparabilityReasonCode.METHOD_MISMATCH in comparison.reason_codes
+
+
+def test_res46_comparability_distinguishes_zero_reference_selection_at_same_start() -> None:
+    def build_velocity(suffix: str, selection_label: str) -> SupportedSystemComVelocityResult:
+        _, total, weight, contract = _mechanics_fixture(
+            suffix,
+            (1.0, 1.0, 1.0, 3.0, 3.0),
+            weighing_end_index=3,
+            weighing_selection_parameters=(MetadataEntry("selection_label", selection_label),),
+        )
+        net = derive_net_vertical_force(total, weight, contract)
+        assert isinstance(net, NetVerticalForceResult)
+        mass = derive_physical_system_mass(weight, _local_gravity("comparability"))
+        assert isinstance(mass, PhysicalSystemMassResult)
+        acceleration = derive_supported_system_com_acceleration(net, mass, contract)
+        assert isinstance(acceleration, SupportedSystemComAccelerationResult)
+        interval = CMJIntegrationInterval.explicit_sample(acceleration.series.series_id, 2, 4)
+        reference = QualifiedZeroVelocityReference.from_system_weight(weight, 2)
+        velocity = derive_supported_system_com_velocity(acceleration, interval, reference)
+        assert isinstance(velocity, SupportedSystemComVelocityResult)
+        return velocity
+
+    first = build_velocity("res46-comparable-first", "first")
+    second = build_velocity("res46-comparable-second", "second")
+    comparison = compare_cmj_mechanics(
+        first,
+        second,
+        claim="compare supported-system COM velocity",
+        request_id=InstanceIdentifier("comparability-request", "res46-zero-reference"),
+    )
+
+    assert comparison.state is ComparabilityState.BRIDGE_VALIDATION_REQUIRED
+    assert ComparabilityReasonCode.ZERO_VELOCITY_REFERENCE_MISMATCH in comparison.reason_codes
+    refused = refusal_for_cmj_mechanics_comparability(
+        comparison,
+        blocked_claim="compare supported-system COM velocity",
+        observation_ids=(first.observation.observation_id, second.observation.observation_id),
+    )
+    assert isinstance(refused, RefusalResult)
+    assert RefusalReasonCode.ZERO_VELOCITY_REFERENCE_MISMATCH in refused.reason_codes
 
 
 def test_res37_no_phase_or_jump_height_operation_is_exposed() -> None:
