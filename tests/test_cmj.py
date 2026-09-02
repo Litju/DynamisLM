@@ -6,6 +6,7 @@ from dataclasses import FrozenInstanceError, replace
 import pytest
 
 from dynamislm import (
+    SERIALIZATION_VERSION,
     AcquisitionRecord,
     InstanceIdentifier,
     MeasurementIdentity,
@@ -17,6 +18,7 @@ from dynamislm import (
     ScalarValue,
     ScientificIdentifier,
     ScientificMeasurementObservation,
+    SerializationError,
     SignConvention,
     SourceArtifact,
     StructuredOutputReference,
@@ -45,6 +47,8 @@ from dynamislm.measurement.cmj import (
     CMJ_TEST_FAMILY,
     KILONEWTON,
     NEWTON,
+    RES44_DECISION_MASS_METROLOGY,
+    RES44_SOFTWARE_VERSION,
     STANDARD_GRAVITY,
     AcquisitionArrangement,
     ArtifactStatus,
@@ -73,6 +77,7 @@ from dynamislm.measurement.cmj import (
     ExplicitTimebase,
     GravityReference,
     GravityReferenceType,
+    PhysicalSystemMassResult,
     ProcessedVerticalForceSignal,
     RawVerticalForceSignal,
     ReferenceMetadata,
@@ -80,7 +85,7 @@ from dynamislm.measurement.cmj import (
     RegularTimebase,
     SignalProcessingState,
     SignalTimebase,
-    SystemMassResult,
+    StandardGravityMassEquivalentResult,
     SystemWeightResult,
     TimebaseIdentity,
     TimebaseKind,
@@ -92,7 +97,8 @@ from dynamislm.measurement.cmj import (
     construct_total_supported_vertical_force,
     create_cmj_raw_observation,
     derive_body_mass,
-    derive_system_mass,
+    derive_physical_system_mass,
+    derive_standard_gravity_mass_equivalent,
     detect_landing,
     detect_movement_onset,
     detect_takeoff,
@@ -1273,13 +1279,13 @@ def test_res35_system_mass_requires_explicit_gravity_and_preserves_weight() -> N
     weight = estimate_system_weight(source, segment)
     assert isinstance(weight, SystemWeightResult)
 
-    missing = derive_system_mass(weight)
+    missing = derive_standard_gravity_mass_equivalent(weight)
     assert isinstance(missing, RefusalResult)
     assert RefusalReasonCode.GRAVITY_REFERENCE_MISSING in missing.reason_codes
     assert weight.value_n == 101.0
 
-    mass = derive_system_mass(weight, STANDARD_GRAVITY)
-    assert isinstance(mass, SystemMassResult)
+    mass = derive_standard_gravity_mass_equivalent(weight, STANDARD_GRAVITY)
+    assert isinstance(mass, StandardGravityMassEquivalentResult)
     assert mass.value_kg == pytest.approx(101.0 / 9.80665)
     assert mass.observation.result.unit is not None
     assert mass.observation.result.unit.identifier.key == "kilogram"
@@ -1319,7 +1325,7 @@ def test_res35_system_mass_rejects_forged_weight_processing_lineage() -> None:
     )
     forged_observation = replace(weight.observation, provenance=forged_provenance)
 
-    refused = derive_system_mass(forged_observation, STANDARD_GRAVITY)
+    refused = derive_standard_gravity_mass_equivalent(forged_observation, STANDARD_GRAVITY)
     assert isinstance(refused, RefusalResult)
     assert RefusalReasonCode.PROCESSING_LINEAGE_UNRESOLVED in refused.reason_codes
 
@@ -1342,10 +1348,10 @@ def test_res35_standard_and_local_gravity_are_distinct_and_body_mass_is_refused(
         GravityReferenceType.LOCAL_GRAVITATIONAL_ACCELERATION,
         _reference("gravity-source", "synthetic-local-gravity"),
     )
-    standard_mass = derive_system_mass(weight, STANDARD_GRAVITY)
-    local_mass = derive_system_mass(weight, local)
-    assert isinstance(standard_mass, SystemMassResult)
-    assert isinstance(local_mass, SystemMassResult)
+    standard_mass = derive_standard_gravity_mass_equivalent(weight, STANDARD_GRAVITY)
+    local_mass = derive_physical_system_mass(weight, local)
+    assert isinstance(standard_mass, StandardGravityMassEquivalentResult)
+    assert isinstance(local_mass, PhysicalSystemMassResult)
     assert standard_mass.gravity_reference.reference_type is GravityReferenceType.STANDARD_GRAVITY
     assert (
         local_mass.gravity_reference.reference_type
@@ -1362,6 +1368,158 @@ def test_res35_standard_and_local_gravity_are_distinct_and_body_mass_is_refused(
             GravityReferenceType.STANDARD_GRAVITY,
             STANDARD_GRAVITY.source,
         )
+
+
+def test_res44_mass_paths_require_their_adopted_gravity_semantics() -> None:
+    source = _cmj_input("res44-gravity-semantics")
+    weight = estimate_system_weight(
+        source,
+        WeighingSegment(
+            source.signal.signal_id,
+            source.source_artifact.artifact_id,
+            source.identity.identity_id,
+            0,
+            3,
+        ),
+    )
+    assert isinstance(weight, SystemWeightResult)
+
+    missing_local = derive_physical_system_mass(weight)
+    assert isinstance(missing_local, RefusalResult)
+    assert RefusalReasonCode.GRAVITY_REFERENCE_MISSING in missing_local.reason_codes
+    assert RefusalReasonCode.LOCAL_GRAVITY_REQUIRED in missing_local.reason_codes
+    assert missing_local.observation_ids == (weight.observation.observation_id,)
+    assert weight.value_n == 101.0
+
+    standard_as_physical = derive_physical_system_mass(weight, STANDARD_GRAVITY)
+    assert isinstance(standard_as_physical, RefusalResult)
+    assert RefusalReasonCode.LOCAL_GRAVITY_REQUIRED in standard_as_physical.reason_codes
+    assert RefusalReasonCode.GRAVITY_REFERENCE_MISMATCH in standard_as_physical.reason_codes
+
+    local = GravityReference(
+        9.8,
+        GravityReferenceType.LOCAL_GRAVITATIONAL_ACCELERATION,
+        _reference("gravity-source", "res44-local-gravity"),
+    )
+    standard = derive_standard_gravity_mass_equivalent(weight, STANDARD_GRAVITY)
+    physical = derive_physical_system_mass(weight, local)
+    assert isinstance(standard, StandardGravityMassEquivalentResult)
+    assert isinstance(physical, PhysicalSystemMassResult)
+    assert standard.value_kg == pytest.approx(101.0 / 9.80665)
+    assert physical.value_kg == pytest.approx(101.0 / 9.8)
+    assert standard.observation.result.unit is not None
+    assert physical.observation.result.unit is not None
+    assert standard.observation.result.unit.identifier.key == "kilogram"
+    assert physical.observation.result.unit.identifier.key == "kilogram"
+    assert (
+        standard.observation.identity.semantic.measurand.stable_id
+        != physical.observation.identity.semantic.measurand.stable_id
+    )
+    assert (
+        standard.observation.identity.processing.registered_operation
+        != physical.observation.identity.processing.registered_operation
+    )
+    assert standard.observation.result.classification.scientific_roles == ()
+    assert physical.observation.result.classification.scientific_roles == ()
+    assert "not physical" in (standard.observation.result.quality.note or "")
+    assert "applicable local" in (physical.observation.result.quality.note or "")
+    with pytest.raises(ValueError, match="LOCAL_GRAVITATIONAL_ACCELERATION"):
+        PhysicalSystemMassResult(
+            observation=standard.observation,
+            gravity_reference=STANDARD_GRAVITY,
+            source_system_weight_observation_id=weight.observation.observation_id,
+        )
+    with pytest.raises(ValueError, match="STANDARD_GRAVITY"):
+        StandardGravityMassEquivalentResult(
+            observation=physical.observation,
+            gravity_reference=local,
+            source_system_weight_observation_id=weight.observation.observation_id,
+        )
+
+    missing_standard = derive_standard_gravity_mass_equivalent(weight)
+    assert isinstance(missing_standard, RefusalResult)
+    assert RefusalReasonCode.GRAVITY_REFERENCE_MISSING in missing_standard.reason_codes
+
+    local_as_standard = derive_standard_gravity_mass_equivalent(weight, local)
+    assert isinstance(local_as_standard, RefusalResult)
+    assert RefusalReasonCode.GRAVITY_REFERENCE_MISMATCH in local_as_standard.reason_codes
+
+
+def test_res44_mass_serialization_and_provenance_keep_standard_and_local_distinct() -> None:
+    source = _cmj_input("res44-provenance")
+    weight = estimate_system_weight(
+        source,
+        WeighingSegment(
+            source.signal.signal_id,
+            source.source_artifact.artifact_id,
+            source.identity.identity_id,
+            0,
+            3,
+        ),
+    )
+    assert isinstance(weight, SystemWeightResult)
+    local = GravityReference(
+        9.8,
+        GravityReferenceType.LOCAL_GRAVITATIONAL_ACCELERATION,
+        _reference("gravity-source", "res44-provenance-local"),
+    )
+    standard = derive_standard_gravity_mass_equivalent(weight, STANDARD_GRAVITY)
+    physical = derive_physical_system_mass(weight, local)
+    assert isinstance(standard, StandardGravityMassEquivalentResult)
+    assert isinstance(physical, PhysicalSystemMassResult)
+
+    assert SERIALIZATION_VERSION == 2
+    for value, result_type, gravity in (
+        (standard, StandardGravityMassEquivalentResult, STANDARD_GRAVITY),
+        (physical, PhysicalSystemMassResult, local),
+    ):
+        serialized = canonical_json(value)
+        restored = from_canonical_json(serialized, result_type)
+        assert canonical_json(restored) == serialized
+        assert value.source_system_weight_observation_id == weight.observation.observation_id
+        assert value.gravity_reference == gravity
+        assert value.observation.result.classification.value_origin is (
+            ValueOrigin.DERIVED_MECHANICAL_QUANTITY
+        )
+        assert f"{result_type.__name__}" in serialized
+        run = next(
+            run
+            for run in value.observation.provenance.processing_runs
+            if run.output_observation_id == value.observation.observation_id
+        )
+        parameters = {entry.key: entry.value for entry in run.parameters}
+        assert (
+            parameters["source_weight_observation_id"]
+            == weight.observation.observation_id.qualified
+        )
+        assert parameters["gravity_value_m_per_s2"] == gravity.value_m_per_s2
+        assert parameters["gravity_unit"] == gravity.unit.identifier.stable_id
+        assert parameters["gravity_reference_type"] == gravity.reference_type.value
+        assert parameters["gravity_source"] == gravity.source.stable_id
+        assert run.software_version == RES44_SOFTWARE_VERSION
+        assert gravity.source in value.observation.provenance.metrological_traceability
+        assert any(
+            reference.reference == RES44_DECISION_MASS_METROLOGY
+            for reference in value.observation.provenance.evidence_references
+        )
+        assert any(
+            edge.from_id == gravity.source.stable_id
+            and edge.to_id == run.processing_run_id.qualified
+            and edge.relation is LineageRelation.SUPPORTED_BY
+            for edge in value.observation.provenance.lineage_edges
+        )
+        assert any(
+            edge.from_id == RES44_DECISION_MASS_METROLOGY.stable_id
+            and edge.to_id == run.processing_run_id.qualified
+            and edge.relation is LineageRelation.SUPPORTED_BY
+            for edge in value.observation.provenance.lineage_edges
+        )
+
+    standard_payload_with_old_type = canonical_json(standard).replace(
+        "StandardGravityMassEquivalentResult", "SystemMassResult"
+    )
+    with pytest.raises(SerializationError, match="canonical type"):
+        from_canonical_json(standard_payload_with_old_type, StandardGravityMassEquivalentResult)
 
 
 def test_res35_loaded_protocol_preserves_supported_system_and_refuses_body_mass() -> None:
@@ -1381,8 +1539,8 @@ def test_res35_loaded_protocol_preserves_supported_system_and_refuses_body_mass(
     assert protocol.external_loading is not None
     assert protocol.external_loading.value == "20 kg supported external load"
 
-    mass = derive_system_mass(weight, STANDARD_GRAVITY)
-    assert isinstance(mass, SystemMassResult)
+    mass = derive_standard_gravity_mass_equivalent(weight, STANDARD_GRAVITY)
+    assert isinstance(mass, StandardGravityMassEquivalentResult)
     assert mass.value_kg == pytest.approx(101.0 / 9.80665)
     refusal = derive_body_mass(mass)
     assert isinstance(refusal, RefusalResult)
@@ -1475,11 +1633,11 @@ def test_res35_end_to_end_bilateral_weight_and_mass_preserves_processing_dag() -
     weight = estimate_system_weight(total, segment)
     assert isinstance(weight, SystemWeightResult)
     assert weight.value_n == pytest.approx(702.0)
-    mass = derive_system_mass(weight, STANDARD_GRAVITY)
-    assert isinstance(mass, SystemMassResult)
+    mass = derive_standard_gravity_mass_equivalent(weight, STANDARD_GRAVITY)
+    assert isinstance(mass, StandardGravityMassEquivalentResult)
     assert mass.value_kg == pytest.approx(702.0 / 9.80665)
     restored_total = from_canonical_json(canonical_json(total), TotalSupportedForceResult)
-    restored_mass = from_canonical_json(canonical_json(mass), SystemMassResult)
+    restored_mass = from_canonical_json(canonical_json(mass), StandardGravityMassEquivalentResult)
     assert canonical_json(restored_total) == canonical_json(total)
     assert canonical_json(restored_mass) == canonical_json(mass)
     assert len(mass.observation.provenance.processing_runs) == 3
@@ -1579,8 +1737,8 @@ def test_res35_derived_comparability_distinguishes_gravity_and_segment_identity(
         in different_selection_parameters.reason_codes
     )
 
-    first_mass = derive_system_mass(first_weight, STANDARD_GRAVITY)
-    second_mass = derive_system_mass(
+    first_mass = derive_standard_gravity_mass_equivalent(first_weight, STANDARD_GRAVITY)
+    second_mass = derive_physical_system_mass(
         second_weight,
         GravityReference(
             9.8,
@@ -1588,16 +1746,67 @@ def test_res35_derived_comparability_distinguishes_gravity_and_segment_identity(
             _reference("gravity-source", "comparability-local"),
         ),
     )
-    assert isinstance(first_mass, SystemMassResult)
-    assert isinstance(second_mass, SystemMassResult)
+    assert isinstance(first_mass, StandardGravityMassEquivalentResult)
+    assert isinstance(second_mass, PhysicalSystemMassResult)
     different_gravity = compare_cmj_derived_measurements(
         first_mass,
         second_mass,
         claim="compare system mass",
         request_id=InstanceIdentifier("comparability-request", "system-mass"),
     )
-    assert different_gravity.state is ComparabilityState.BRIDGE_VALIDATION_REQUIRED
+    assert different_gravity.state is ComparabilityState.NOT_COMPARABLE
+    assert ComparabilityReasonCode.MASS_MEASURAND_MISMATCH in different_gravity.reason_codes
     assert ComparabilityReasonCode.GRAVITY_REFERENCE_MISMATCH in different_gravity.reason_codes
+    mass_refusal = refusal_for_cmj_derived_comparability(
+        different_gravity,
+        blocked_claim="compare physical system mass with standard-gravity mass equivalent",
+        observation_ids=(
+            first_mass.observation.observation_id,
+            second_mass.observation.observation_id,
+        ),
+    )
+    assert isinstance(mass_refusal, RefusalResult)
+    assert RefusalReasonCode.MASS_MEASURAND_MISMATCH in mass_refusal.reason_codes
+    assert RefusalReasonCode.GRAVITY_REFERENCE_MISMATCH in mass_refusal.reason_codes
+
+    first_local = derive_physical_system_mass(
+        first_weight,
+        GravityReference(
+            9.8,
+            GravityReferenceType.LOCAL_GRAVITATIONAL_ACCELERATION,
+            _reference("gravity-source", "comparability-local-one"),
+        ),
+    )
+    second_local = derive_physical_system_mass(
+        second_weight,
+        GravityReference(
+            9.81,
+            GravityReferenceType.LOCAL_GRAVITATIONAL_ACCELERATION,
+            _reference("gravity-source", "comparability-local-two"),
+        ),
+    )
+    assert isinstance(first_local, PhysicalSystemMassResult)
+    assert isinstance(second_local, PhysicalSystemMassResult)
+    local_gravity_comparison = compare_cmj_derived_measurements(
+        first_local,
+        second_local,
+        claim="compare physical system mass",
+        request_id=InstanceIdentifier("comparability-request", "local-system-mass"),
+    )
+    assert local_gravity_comparison.state is ComparabilityState.BRIDGE_VALIDATION_REQUIRED
+    assert ComparabilityReasonCode.GRAVITY_REFERENCE_MISMATCH in (
+        local_gravity_comparison.reason_codes
+    )
+    local_gravity_refusal = refusal_for_cmj_derived_comparability(
+        local_gravity_comparison,
+        blocked_claim="compare physical system mass with different local gravity references",
+        observation_ids=(
+            first_local.observation.observation_id,
+            second_local.observation.observation_id,
+        ),
+    )
+    assert isinstance(local_gravity_refusal, RefusalResult)
+    assert RefusalReasonCode.GRAVITY_REFERENCE_MISMATCH in local_gravity_refusal.reason_codes
 
     body_claim = compare_cmj_derived_measurements(
         first_weight,

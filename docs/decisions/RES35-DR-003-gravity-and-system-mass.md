@@ -1,7 +1,8 @@
 # RES35-DR-003
 
 DECISION_ID=RES35-DR-003
-STATUS=ADOPTED
+STATUS=PARTIALLY_SUPERSEDED
+CORRECTION=RES44-DR-001 supersedes only the RES-35 mass identity/derivation branch. The SYSTEM_WEIGHT force, explicit weighing-segment, supported-system, provenance, and BODY_MASS boundary remain adopted. The historical generic SYSTEM_MASS text below is retained for decision history and is not a current implementation contract.
 QUESTION=What explicit gravity contract is required to derive system mass from system weight, and how must the result remain distinct from body mass?
 SCOPE=System-mass derivation from an authorized `SYSTEM_WEIGHT`; no body-mass estimator or external-load subtraction.
 SOURCES=

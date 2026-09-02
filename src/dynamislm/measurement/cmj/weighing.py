@@ -1,4 +1,4 @@
-"""Registered CMJ supported-force, system-weight, and system-mass operations.
+"""Registered CMJ supported-force, system-weight, and mass-derivation operations.
 
 This module intentionally stops at the weighing boundary.  It does not select
 movement events, integrate force, estimate a centre of mass, or emit a body
@@ -47,10 +47,13 @@ from dynamislm.measurement.cmj.registry import (
     CMJ_DERIVED_COMPARABILITY_RULE,
     CMJ_DYNAMISLM_PROCESSING_SYSTEM,
     CMJ_EXPLICIT_WEIGHING_SEGMENT,
+    CMJ_PHYSICAL_SYSTEM_MASS_FROM_WEIGHT,
+    CMJ_PHYSICAL_SYSTEM_MASS_MEASURAND,
+    CMJ_PHYSICAL_SYSTEM_MASS_METRIC,
+    CMJ_STANDARD_GRAVITY_MASS_EQUIVALENT_FROM_WEIGHT,
+    CMJ_STANDARD_GRAVITY_MASS_EQUIVALENT_MEASURAND,
+    CMJ_STANDARD_GRAVITY_MASS_EQUIVALENT_METRIC,
     CMJ_SUPPORTED_SYSTEM_CONSTRUCT,
-    CMJ_SYSTEM_MASS_FROM_WEIGHT,
-    CMJ_SYSTEM_MASS_MEASURAND,
-    CMJ_SYSTEM_MASS_METRIC,
     CMJ_SYSTEM_WEIGHT_MEAN_FORCE,
     CMJ_SYSTEM_WEIGHT_MEASURAND,
     CMJ_SYSTEM_WEIGHT_METRIC,
@@ -61,6 +64,7 @@ from dynamislm.measurement.cmj.registry import (
     KILOGRAM,
     METERS_PER_SECOND_SQUARED,
     NEWTON,
+    RES44_DECISION_MASS_METROLOGY,
     STANDARD_GRAVITY_SOURCE,
 )
 from dynamislm.measurement.cmj.signal import (
@@ -104,6 +108,7 @@ from dynamislm.measurement.result import (
 from dynamislm.measurement.taxonomy import ScientificClassification, ValueOrigin
 from dynamislm.provenance.models import (
     AcquisitionRecord,
+    EvidenceReference,
     LineageEdge,
     LineageRelation,
     ProcessingRun,
@@ -119,6 +124,7 @@ from dynamislm.refusal.models import (
 from dynamislm.serialization import canonical_hash, canonical_json, register_serializable_type
 
 RES35_SOFTWARE_VERSION = "dynamislm-res35-1.0.0"
+RES44_SOFTWARE_VERSION = "dynamislm-res44-1.0.0"
 STANDARD_GRAVITY_VALUE_M_PER_S2 = 9.80665
 
 
@@ -280,7 +286,7 @@ class GravityReferenceType(StrEnum):
 @register_serializable_type
 @dataclass(frozen=True, slots=True)
 class GravityReference:
-    """Explicit gravitational acceleration used by system-mass derivation."""
+    """Explicit gravitational acceleration/reference for one named mass operation."""
 
     value_m_per_s2: float
     reference_type: GravityReferenceType
@@ -322,6 +328,80 @@ STANDARD_GRAVITY = GravityReference(
         description="Conventional standard acceleration of gravity; not a local-gravity estimate.",
     ),
 )
+
+
+def _validate_mass_result_provenance(
+    observation: ScientificMeasurementObservation,
+    gravity: GravityReference,
+    *,
+    operation: RegistryReference,
+    measurand: RegistryReference,
+    source_weight_observation_id: InstanceIdentifier,
+) -> None:
+    """Ensure the wrapper fields agree with the registered derived observation."""
+
+    identity = observation.identity
+    if not isinstance(identity, CMJMeasurementIdentity):
+        raise ValueError("mass result requires a CMJ measurement identity")
+    if source_weight_observation_id.instance_type != "observation":
+        raise ValueError("mass result source must be an observation identifier")
+    parameters = {entry.key: entry.value for entry in identity.processing.method_parameters}
+    expected_parameters = {
+        "operation_id": operation.stable_id,
+        "operation_version": operation.identifier.version,
+        "output_measurand": measurand.stable_id,
+        "source_weight_observation_id": source_weight_observation_id.qualified,
+        "gravity_value_m_per_s2": gravity.value_m_per_s2,
+        "gravity_unit": _unit_id(gravity.unit),
+        "gravity_reference_type": gravity.reference_type.value,
+        "gravity_source": gravity.source.stable_id,
+        "gravity_uncertainty_status": gravity.uncertainty.status.value,
+        "gravity_uncertainty_description": gravity.uncertainty.description or "not provided",
+    }
+    if any(parameters.get(key) != value for key, value in expected_parameters.items()):
+        raise ValueError("mass result wrapper and observation gravity/procedure metadata disagree")
+    matching_runs = tuple(
+        run
+        for run in observation.provenance.processing_runs
+        if run.output_observation_id == observation.observation_id
+        and run.method.stable_id == operation.stable_id
+    )
+    if len(matching_runs) != 1:
+        raise ValueError("mass result requires one matching RES-44 processing run")
+    processing_run = matching_runs[0]
+    if (
+        processing_run.parameters != identity.processing.method_parameters
+        or processing_run.software_version != RES44_SOFTWARE_VERSION
+    ):
+        raise ValueError("mass result processing provenance does not match its identity")
+    if not any(
+        edge.from_id == source_weight_observation_id.qualified
+        and edge.to_id == processing_run.processing_run_id.qualified
+        and edge.relation is LineageRelation.DERIVED_FROM
+        for edge in observation.provenance.lineage_edges
+    ):
+        raise ValueError("mass result is missing exact SYSTEM_WEIGHT lineage")
+    if not any(
+        edge.from_id == gravity.source.stable_id
+        and edge.to_id == processing_run.processing_run_id.qualified
+        and edge.relation is LineageRelation.SUPPORTED_BY
+        for edge in observation.provenance.lineage_edges
+    ):
+        raise ValueError("mass result is missing exact gravity support lineage")
+    if gravity.source not in observation.provenance.metrological_traceability:
+        raise ValueError("mass result is missing exact gravity metrological traceability")
+    if not any(
+        edge.from_id == RES44_DECISION_MASS_METROLOGY.stable_id
+        and edge.to_id == processing_run.processing_run_id.qualified
+        and edge.relation is LineageRelation.SUPPORTED_BY
+        for edge in observation.provenance.lineage_edges
+    ):
+        raise ValueError("mass result is missing RES-44 decision support lineage")
+    if not any(
+        evidence.reference == RES44_DECISION_MASS_METROLOGY
+        for evidence in observation.provenance.evidence_references
+    ):
+        raise ValueError("mass result is missing RES-44 decision evidence")
 
 
 type ForceSignal = RawVerticalForceSignal | ProcessedVerticalForceSignal
@@ -389,24 +469,111 @@ class SystemWeightResult:
 
 @register_serializable_type
 @dataclass(frozen=True, slots=True)
-class SystemMassResult:
-    """A scalar supported-system mass derived under an explicit gravity reference."""
+class PhysicalSystemMassResult:
+    """A scalar supported-system mass derived with applicable local gravity."""
 
     observation: ScientificMeasurementObservation
     gravity_reference: GravityReference
+    source_system_weight_observation_id: InstanceIdentifier
+
+    def __post_init__(self) -> None:
+        identity = self.observation.identity
+        if not isinstance(identity, CMJMeasurementIdentity):
+            raise ValueError("physical-system-mass result requires a CMJ measurement identity")
+        if not self.gravity_reference.is_local:
+            raise ValueError(
+                "physical-system-mass result requires LOCAL_GRAVITATIONAL_ACCELERATION"
+            )
+        if identity.semantic.measurand.stable_id != CMJ_PHYSICAL_SYSTEM_MASS_MEASURAND.stable_id:
+            raise ValueError("physical-system-mass result has the wrong measurand identity")
+        if (
+            identity.semantic.metric_definition.stable_id
+            != CMJ_PHYSICAL_SYSTEM_MASS_METRIC.stable_id
+        ):
+            raise ValueError("physical-system-mass result has the wrong metric identity")
+        if (
+            identity.processing.registered_operation is None
+            or identity.processing.registered_operation.stable_id
+            != CMJ_PHYSICAL_SYSTEM_MASS_FROM_WEIGHT.stable_id
+        ):
+            raise ValueError("physical-system-mass result has the wrong operation identity")
+        _validate_mass_result_provenance(
+            self.observation,
+            self.gravity_reference,
+            operation=CMJ_PHYSICAL_SYSTEM_MASS_FROM_WEIGHT,
+            measurand=CMJ_PHYSICAL_SYSTEM_MASS_MEASURAND,
+            source_weight_observation_id=self.source_system_weight_observation_id,
+        )
+        if self.source_system_weight_observation_id == self.observation.observation_id:
+            raise ValueError("mass result source SYSTEM_WEIGHT must differ from output observation")
 
     @property
     def value_kg(self) -> float:
         value = self.observation.result.value
         if not isinstance(value, ScalarValue) or isinstance(value.value, bool):
-            raise ValueError("system-mass result does not contain a numeric scalar")
+            raise ValueError("physical-system-mass result does not contain a numeric scalar")
+        return float(value.value)
+
+
+@register_serializable_type
+@dataclass(frozen=True, slots=True)
+class StandardGravityMassEquivalentResult:
+    """A scalar ``W/g_n`` reference quantity, not automatically physical mass."""
+
+    observation: ScientificMeasurementObservation
+    gravity_reference: GravityReference
+    source_system_weight_observation_id: InstanceIdentifier
+
+    def __post_init__(self) -> None:
+        identity = self.observation.identity
+        if not isinstance(identity, CMJMeasurementIdentity):
+            raise ValueError(
+                "standard-gravity-mass-equivalent result requires a CMJ measurement identity"
+            )
+        if not self.gravity_reference.is_standard:
+            raise ValueError("standard-gravity-mass-equivalent result requires STANDARD_GRAVITY")
+        if (
+            identity.semantic.measurand.stable_id
+            != CMJ_STANDARD_GRAVITY_MASS_EQUIVALENT_MEASURAND.stable_id
+        ):
+            raise ValueError("standard-gravity-mass-equivalent result has the wrong measurand")
+        if (
+            identity.semantic.metric_definition.stable_id
+            != CMJ_STANDARD_GRAVITY_MASS_EQUIVALENT_METRIC.stable_id
+        ):
+            raise ValueError("standard-gravity-mass-equivalent result has the wrong metric")
+        if (
+            identity.processing.registered_operation is None
+            or identity.processing.registered_operation.stable_id
+            != CMJ_STANDARD_GRAVITY_MASS_EQUIVALENT_FROM_WEIGHT.stable_id
+        ):
+            raise ValueError(
+                "standard-gravity-mass-equivalent result has the wrong operation identity"
+            )
+        _validate_mass_result_provenance(
+            self.observation,
+            self.gravity_reference,
+            operation=CMJ_STANDARD_GRAVITY_MASS_EQUIVALENT_FROM_WEIGHT,
+            measurand=CMJ_STANDARD_GRAVITY_MASS_EQUIVALENT_MEASURAND,
+            source_weight_observation_id=self.source_system_weight_observation_id,
+        )
+        if self.source_system_weight_observation_id == self.observation.observation_id:
+            raise ValueError("mass result source SYSTEM_WEIGHT must differ from output observation")
+
+    @property
+    def value_kg(self) -> float:
+        value = self.observation.result.value
+        if not isinstance(value, ScalarValue) or isinstance(value.value, bool):
+            raise ValueError(
+                "standard-gravity-mass-equivalent result does not contain a numeric scalar"
+            )
         return float(value.value)
 
 
 @register_serializable_type
 @dataclass(frozen=True, slots=True)
 class CMJDerivedComparabilityRequest:
-    """Claim-relative pair request for RES-35 derived observations."""
+    """Claim-relative pair request for RES-44 derived observations."""
 
     request_id: InstanceIdentifier
     left_observation_id: InstanceIdentifier
@@ -483,11 +650,15 @@ def _provenance_with_run(
     output_acquisitions: tuple[AcquisitionRecord, ...] = (),
     produced_artifact_ids: tuple[InstanceIdentifier, ...] = (),
     supported_by: tuple[RegistryReference, ...] = (),
+    evidence_references: tuple[EvidenceReference, ...] = (),
+    metrological_traceability: tuple[RegistryReference, ...] = (),
     recorded_at: datetime_module.datetime | None = None,
 ) -> Provenance:
     artifacts = _append_unique(base.source_artifacts, output_artifacts)
     acquisitions = _append_unique(base.acquisitions, output_acquisitions)
     runs = _append_unique(base.processing_runs, (processing_run,))
+    evidence = _append_unique(base.evidence_references, evidence_references)
+    traceability = _append_unique(base.metrological_traceability, metrological_traceability)
     edges = list(base.lineage_edges)
     for source_observation_id in source_observation_ids:
         edge = LineageEdge(
@@ -554,8 +725,8 @@ def _provenance_with_run(
         acquisitions=acquisitions,
         processing_runs=runs,
         lineage_edges=tuple(edges),
-        evidence_references=base.evidence_references,
-        metrological_traceability=base.metrological_traceability,
+        evidence_references=evidence,
+        metrological_traceability=traceability,
         recorded_at=recorded_at if recorded_at is not None else base.recorded_at,
     )
 
@@ -1061,6 +1232,7 @@ def _derived_identity(
     metric: RegistryReference,
     processing: ProcessingIdentity,
     processing_method: RegistryReference,
+    software_version: str = RES35_SOFTWARE_VERSION,
 ) -> CMJMeasurementIdentity:
     return CMJMeasurementIdentity(
         identity_id=identity_id,
@@ -1070,7 +1242,7 @@ def _derived_identity(
         version=VersionIdentity(
             processing_method=processing_method,
             method_registry_version=CMJ_REGISTRY_VERSION,
-            software_version=RES35_SOFTWARE_VERSION,
+            software_version=software_version,
             hardware_firmware=source.version.hardware_firmware,
         ),
     )
@@ -2031,12 +2203,19 @@ def _weight_input_refusal(
 def _mass_processing_parameters(
     gravity: GravityReference,
     weight_identity: CMJMeasurementIdentity,
+    *,
+    operation: RegistryReference,
+    output_measurand: RegistryReference,
+    source_weight_observation_id: InstanceIdentifier,
 ) -> tuple[MetadataEntry, ...]:
     weight_parameters = {
         entry.key: entry.value for entry in weight_identity.processing.method_parameters
     }
     return (
-        MetadataEntry("operation_version", CMJ_SYSTEM_MASS_FROM_WEIGHT.identifier.version),
+        MetadataEntry("operation_id", operation.stable_id),
+        MetadataEntry("operation_version", operation.identifier.version),
+        MetadataEntry("output_measurand", output_measurand.stable_id),
+        MetadataEntry("source_weight_observation_id", source_weight_observation_id.qualified),
         MetadataEntry(
             "source_weight_operation",
             weight_identity.processing.registered_operation.stable_id
@@ -2110,30 +2289,55 @@ def _source_acquisition_for_weight(
     return matches[0] if len(matches) == 1 else None
 
 
-def derive_system_mass(
+def _derive_mass_observation(
     system_weight: SystemWeightResult | ScientificMeasurementObservation,
     gravity: GravityReference | None = None,
     *,
+    operation: RegistryReference,
+    measurand: RegistryReference,
+    metric: RegistryReference,
+    expected_gravity_type: GravityReferenceType,
+    claim: str,
+    output_prefix: str,
+    result_note: str,
     output_observation_id: InstanceIdentifier | None = None,
     output_result_id: InstanceIdentifier | None = None,
-) -> SystemMassResult | RefusalResult:
-    """Derive supported-system mass from system weight under explicit gravity."""
+) -> tuple[ScientificMeasurementObservation, InstanceIdentifier] | RefusalResult:
+    """Build one explicitly identified mass or mass-equivalent observation."""
 
     weight_observation = _weight_observation(system_weight)
-    claim = "derive system mass"
     weight_refusal = _weight_input_refusal(weight_observation, claim)
     if weight_refusal is not None:
         return weight_refusal
     if gravity is None:
+        reason_codes: tuple[RefusalReasonCode, ...]
+        missing_information: tuple[str, ...]
+        safe_descriptions: tuple[str, ...]
+        if expected_gravity_type is GravityReferenceType.LOCAL_GRAVITATIONAL_ACCELERATION:
+            reason_codes = (
+                RefusalReasonCode.GRAVITY_REFERENCE_MISSING,
+                RefusalReasonCode.LOCAL_GRAVITY_REQUIRED,
+            )
+            missing_information = (
+                "explicit applicable local gravitational acceleration reference/value",
+            )
+            safe_descriptions = (
+                "the valid SYSTEM_WEIGHT observation remains safely describable in N",
+                "no PHYSICAL_SYSTEM_MASS or BODY_MASS value is emitted without local gravity",
+            )
+        else:
+            reason_codes = (RefusalReasonCode.GRAVITY_REFERENCE_MISSING,)
+            missing_information = ("explicit registered STANDARD_GRAVITY reference (g_n)",)
+            safe_descriptions = (
+                "the valid SYSTEM_WEIGHT observation remains safely describable in N",
+                "no STANDARD_GRAVITY_MASS_EQUIVALENT or BODY_MASS value is emitted without g_n",
+            )
         return _refusal(
             claim,
-            (RefusalReasonCode.GRAVITY_REFERENCE_MISSING,),
-            ("explicit standard or supplied local gravitational acceleration reference",),
+            reason_codes,
+            missing_information,
             observation_ids=(weight_observation.observation_id,),
-            safe_descriptions=(
-                "the valid SYSTEM_WEIGHT observation remains safely describable in N",
-                "no SYSTEM_MASS or BODY_MASS value is emitted without gravity",
-            ),
+            safe_descriptions=safe_descriptions,
             refusal_class=RefusalClass.DATA_ADEQUACY_INSUFFICIENT,
         )
     try:
@@ -2142,6 +2346,8 @@ def derive_system_mass(
             raise ValueError("gravity value must be positive")
         if _unit_id(gravity.unit) != _unit_id(METERS_PER_SECOND_SQUARED):
             raise ValueError("gravity unit is not m/s^2")
+        if not isinstance(gravity.reference_type, GravityReferenceType):
+            raise ValueError("gravity reference type is not registered")
     except (TypeError, ValueError) as exc:
         return _refusal(
             claim,
@@ -2150,7 +2356,32 @@ def derive_system_mass(
             observation_ids=(weight_observation.observation_id,),
             safe_descriptions=(
                 "the valid SYSTEM_WEIGHT observation remains safely describable in N",
-                "no SYSTEM_MASS or BODY_MASS value is emitted under invalid gravity metadata",
+                f"no {measurand.display_label} or BODY_MASS value is emitted under invalid "
+                "gravity metadata",
+            ),
+            refusal_class=RefusalClass.DATA_ADEQUACY_INSUFFICIENT,
+        )
+    if gravity.reference_type is not expected_gravity_type:
+        if expected_gravity_type is GravityReferenceType.LOCAL_GRAVITATIONAL_ACCELERATION:
+            reason_codes = (
+                RefusalReasonCode.LOCAL_GRAVITY_REQUIRED,
+                RefusalReasonCode.GRAVITY_REFERENCE_MISMATCH,
+            )
+            missing_information = (
+                "applicable local gravitational acceleration, not STANDARD_GRAVITY",
+            )
+        else:
+            reason_codes = (RefusalReasonCode.GRAVITY_REFERENCE_MISMATCH,)
+            missing_information = ("the registered STANDARD_GRAVITY reference (g_n)",)
+        return _refusal(
+            claim,
+            reason_codes,
+            missing_information,
+            observation_ids=(weight_observation.observation_id,),
+            safe_descriptions=(
+                "the valid SYSTEM_WEIGHT observation remains safely describable in N",
+                f"no {measurand.display_label} value is emitted under the mismatched gravity "
+                "semantics",
             ),
             refusal_class=RefusalClass.DATA_ADEQUACY_INSUFFICIENT,
         )
@@ -2172,7 +2403,8 @@ def derive_system_mass(
             observation_ids=(weight_observation.observation_id,),
             safe_descriptions=(
                 "the valid SYSTEM_WEIGHT observation remains safely describable in N",
-                "no SYSTEM_MASS or BODY_MASS value is emitted from a nonfinite derivation",
+                f"no {measurand.display_label} or BODY_MASS value is emitted from a nonfinite "
+                "derivation",
             ),
             refusal_class=RefusalClass.DATA_ADEQUACY_INSUFFICIENT,
         )
@@ -2208,39 +2440,54 @@ def derive_system_mass(
         )
     digest = canonical_hash(
         {
-            "operation": CMJ_SYSTEM_MASS_FROM_WEIGHT.stable_id,
+            "operation": operation.stable_id,
             "source_observation": weight_observation.observation_id.qualified,
+            "measurand": measurand.stable_id,
             "gravity": gravity,
         }
     ).removeprefix("sha256:")[:24]
     observation_id = output_observation_id or InstanceIdentifier(
-        "observation", f"cmj-system-mass:{digest}"
+        "observation", f"{output_prefix}:{digest}"
     )
-    result_id = output_result_id or InstanceIdentifier("result", f"cmj-system-mass:{digest}")
+    result_id = output_result_id or InstanceIdentifier("result", f"{output_prefix}:{digest}")
     identity_id = ScientificIdentifier(
-        "dynamislm", "measurement-identity", f"cmj-system-mass-{digest}", CMJ_REGISTRY_VERSION
+        "dynamislm", "measurement-identity", f"{output_prefix}-{digest}", CMJ_REGISTRY_VERSION
     )
-    processing_parameters = _mass_processing_parameters(gravity, weight_identity)
+    processing_parameters = _mass_processing_parameters(
+        gravity,
+        weight_identity,
+        operation=operation,
+        output_measurand=measurand,
+        source_weight_observation_id=weight_observation.observation_id,
+    )
     processing = ProcessingIdentity(
-        registered_operation=CMJ_SYSTEM_MASS_FROM_WEIGHT,
+        registered_operation=operation,
         method_parameters=processing_parameters,
         unit=KILOGRAM,
     )
     identity = _derived_identity(
         weight_identity,
         identity_id=identity_id,
-        measurand=CMJ_SYSTEM_MASS_MEASURAND,
-        metric=CMJ_SYSTEM_MASS_METRIC,
+        measurand=measurand,
+        metric=metric,
         processing=processing,
-        processing_method=CMJ_SYSTEM_MASS_FROM_WEIGHT,
+        processing_method=operation,
+        software_version=RES44_SOFTWARE_VERSION,
     )
     processing_run = ProcessingRun(
-        processing_run_id=InstanceIdentifier("processing-run", f"cmj-system-mass:{digest}"),
+        processing_run_id=InstanceIdentifier("processing-run", f"{output_prefix}:{digest}"),
         source_artifact_ids=(source_artifact.artifact_id,),
-        method=CMJ_SYSTEM_MASS_FROM_WEIGHT,
+        method=operation,
         parameters=processing_parameters,
-        software_version=RES35_SOFTWARE_VERSION,
+        software_version=RES44_SOFTWARE_VERSION,
         output_observation_id=observation_id,
+    )
+    evidence_reference = EvidenceReference(
+        reference=RES44_DECISION_MASS_METROLOGY,
+        applicability_note=(
+            "Defines the distinction between physical system mass and the standard-gravity "
+            "mass equivalent for this registered operation."
+        ),
     )
     provenance = _provenance_with_run(
         weight_observation.provenance,
@@ -2248,7 +2495,9 @@ def derive_system_mass(
         output_observation_id=observation_id,
         source_observation_ids=(weight_observation.observation_id,),
         source_acquisition_ids=(source_acquisition.acquisition_id,),
-        supported_by=(gravity.source,),
+        supported_by=(gravity.source, RES44_DECISION_MASS_METROLOGY),
+        evidence_references=(evidence_reference,),
+        metrological_traceability=(gravity.source,),
     )
     result = MeasurementResult(
         result_id=result_id,
@@ -2265,12 +2514,12 @@ def derive_system_mass(
                     (*weight_observation.result.quality.flags, "GRAVITY_REFERENCE_EXPLICIT")
                 )
             ),
-            note="Supported-system mass; body-mass equivalence is not established.",
+            note=result_note,
         ),
         uncertainty=UncertaintyMetadata(
             status=UncertaintyStatus.LIMITED,
             description=(
-                "No RES-35 propagation model for force or gravity uncertainty is registered."
+                "No RES-44 propagation model for force or gravity uncertainty is registered."
             ),
         ),
         status=ResultStatus.VALID,
@@ -2282,17 +2531,97 @@ def derive_system_mass(
         result=result,
         provenance=provenance,
     )
-    return SystemMassResult(observation=observation, gravity_reference=gravity)
+    return observation, weight_observation.observation_id
+
+
+def derive_physical_system_mass(
+    system_weight: SystemWeightResult | ScientificMeasurementObservation,
+    gravity: GravityReference | None = None,
+    *,
+    output_observation_id: InstanceIdentifier | None = None,
+    output_result_id: InstanceIdentifier | None = None,
+) -> PhysicalSystemMassResult | RefusalResult:
+    """Derive physical supported-system mass using explicitly applicable local gravity."""
+
+    derived = _derive_mass_observation(
+        system_weight,
+        gravity,
+        operation=CMJ_PHYSICAL_SYSTEM_MASS_FROM_WEIGHT,
+        measurand=CMJ_PHYSICAL_SYSTEM_MASS_MEASURAND,
+        metric=CMJ_PHYSICAL_SYSTEM_MASS_METRIC,
+        expected_gravity_type=GravityReferenceType.LOCAL_GRAVITATIONAL_ACCELERATION,
+        claim="derive physical system mass",
+        output_prefix="cmj-physical-system-mass",
+        result_note=(
+            "Physical supported-system mass under the supplied applicable local gravitational "
+            "acceleration; body-mass equivalence is not established."
+        ),
+        output_observation_id=output_observation_id,
+        output_result_id=output_result_id,
+    )
+    if isinstance(derived, RefusalResult):
+        return derived
+    observation, source_weight_observation_id = derived
+    if gravity is None:
+        raise AssertionError("validated physical mass derivation requires gravity")
+    return PhysicalSystemMassResult(
+        observation=observation,
+        gravity_reference=gravity,
+        source_system_weight_observation_id=source_weight_observation_id,
+    )
+
+
+def derive_standard_gravity_mass_equivalent(
+    system_weight: SystemWeightResult | ScientificMeasurementObservation,
+    gravity: GravityReference | None = None,
+    *,
+    output_observation_id: InstanceIdentifier | None = None,
+    output_result_id: InstanceIdentifier | None = None,
+) -> StandardGravityMassEquivalentResult | RefusalResult:
+    """Derive the explicit conventional reference quantity ``W/g_n``."""
+
+    derived = _derive_mass_observation(
+        system_weight,
+        gravity,
+        operation=CMJ_STANDARD_GRAVITY_MASS_EQUIVALENT_FROM_WEIGHT,
+        measurand=CMJ_STANDARD_GRAVITY_MASS_EQUIVALENT_MEASURAND,
+        metric=CMJ_STANDARD_GRAVITY_MASS_EQUIVALENT_METRIC,
+        expected_gravity_type=GravityReferenceType.STANDARD_GRAVITY,
+        claim="derive standard-gravity mass equivalent",
+        output_prefix="cmj-standard-gravity-mass-equivalent",
+        result_note=(
+            "Reference quantity W/g_n using conventional standard gravity; it is not physical "
+            "system mass unless a separate standard-weight identity is established, and body-"
+            "mass equivalence is not established."
+        ),
+        output_observation_id=output_observation_id,
+        output_result_id=output_result_id,
+    )
+    if isinstance(derived, RefusalResult):
+        return derived
+    observation, source_weight_observation_id = derived
+    if gravity is None:
+        raise AssertionError("validated standard-gravity equivalent derivation requires gravity")
+    return StandardGravityMassEquivalentResult(
+        observation=observation,
+        gravity_reference=gravity,
+        source_system_weight_observation_id=source_weight_observation_id,
+    )
 
 
 def derive_body_mass(
-    source: SystemMassResult | ScientificMeasurementObservation | None = None,
+    source: (
+        PhysicalSystemMassResult
+        | StandardGravityMassEquivalentResult
+        | ScientificMeasurementObservation
+        | None
+    ) = None,
 ) -> RefusalResult:
-    """Refuse BODY_MASS because RES-35 emits only supported-system quantities."""
+    """Refuse BODY_MASS because RES-44 emits only supported-system quantities."""
 
     observation_ids: tuple[InstanceIdentifier, ...] = ()
     if source is not None:
-        observation = source.observation if isinstance(source, SystemMassResult) else source
+        observation = source.observation if hasattr(source, "observation") else source
         observation_ids = (observation.observation_id,)
     return _refusal(
         "claim body mass from CMJ force-platform system mass",
@@ -2303,14 +2632,20 @@ def derive_body_mass(
         ),
         observation_ids=observation_ids,
         safe_descriptions=(
-            "SYSTEM_WEIGHT and SYSTEM_MASS remain separately describable for the supported system",
+            "SYSTEM_WEIGHT and the selected supported-system mass measurand remain separately "
+            "describable",
             "no external-load value is silently subtracted and no BODY_MASS value is emitted",
         ),
         refusal_class=RefusalClass.COMPUTATION_NOT_REGISTERED,
     )
 
 
-type DerivedMeasurement = SystemWeightResult | SystemMassResult | ScientificMeasurementObservation
+type DerivedMeasurement = (
+    SystemWeightResult
+    | PhysicalSystemMassResult
+    | StandardGravityMassEquivalentResult
+    | ScientificMeasurementObservation
+)
 
 
 def _derived_parts(
@@ -2318,7 +2653,7 @@ def _derived_parts(
 ) -> tuple[ScientificMeasurementObservation, WeighingSegment | None]:
     if isinstance(value, SystemWeightResult):
         return value.observation, value.segment
-    if isinstance(value, SystemMassResult):
+    if isinstance(value, PhysicalSystemMassResult | StandardGravityMassEquivalentResult):
         return value.observation, None
     return value, None
 
@@ -2353,6 +2688,31 @@ def _derived_missing(identity: MeasurementIdentity, side: str) -> tuple[str, ...
         missing.append(f"{prefix}.processing.unit")
     if identity.version.software_version.strip() == "":
         missing.append(f"{prefix}.version.software_version")
+    mass_measurands = {
+        CMJ_PHYSICAL_SYSTEM_MASS_MEASURAND.stable_id,
+        CMJ_STANDARD_GRAVITY_MASS_EQUIVALENT_MEASURAND.stable_id,
+    }
+    mass_operations = {
+        CMJ_PHYSICAL_SYSTEM_MASS_FROM_WEIGHT.stable_id,
+        CMJ_STANDARD_GRAVITY_MASS_EQUIVALENT_FROM_WEIGHT.stable_id,
+    }
+    if semantic.measurand.stable_id in mass_measurands or (
+        processing.registered_operation is not None
+        and processing.registered_operation.stable_id in mass_operations
+    ):
+        parameter_keys = {entry.key for entry in processing.method_parameters}
+        for key in (
+            "operation_id",
+            "operation_version",
+            "output_measurand",
+            "source_weight_observation_id",
+            "gravity_value_m_per_s2",
+            "gravity_unit",
+            "gravity_reference_type",
+            "gravity_source",
+        ):
+            if key not in parameter_keys:
+                missing.append(f"{prefix}.processing.method_parameters.{key}")
     return tuple(missing)
 
 
@@ -2378,7 +2738,17 @@ def _identity_derived_differences(
     if not _same_reference(left.semantic.construct, right.semantic.construct):
         differences.append((ComparabilityReasonCode.SYSTEM_DEFINITION_MISMATCH, "construct"))
     if not _same_reference(left.semantic.measurand, right.semantic.measurand):
-        differences.append((ComparabilityReasonCode.MEASURAND_MISMATCH, "measurand"))
+        mass_measurands = {
+            CMJ_PHYSICAL_SYSTEM_MASS_MEASURAND.stable_id,
+            CMJ_STANDARD_GRAVITY_MASS_EQUIVALENT_MEASURAND.stable_id,
+        }
+        if (
+            left.semantic.measurand.stable_id in mass_measurands
+            and right.semantic.measurand.stable_id in mass_measurands
+        ):
+            differences.append((ComparabilityReasonCode.MASS_MEASURAND_MISMATCH, "measurand"))
+        else:
+            differences.append((ComparabilityReasonCode.MEASURAND_MISMATCH, "measurand"))
     if not _same_reference(left.semantic.metric_definition, right.semantic.metric_definition):
         differences.append((ComparabilityReasonCode.IDENTITY_MISMATCH, "metric_definition"))
     left_acquisition = left.acquisition
@@ -2429,6 +2799,7 @@ def _identity_derived_differences(
             "source_measurement_identity_id",
             "left_source_signal_id",
             "right_source_signal_id",
+            "source_weight_observation_id",
         }
     )
     if _parameter_key(left_processing.method_parameters, ignored_keys=ignored_parameter_keys) != (
@@ -2487,7 +2858,7 @@ def _is_body_mass_claim(claim: str) -> bool:
 def assess_cmj_derived_comparability(
     request: CMJDerivedComparabilityRequest,
 ) -> ComparabilityResult:
-    """Apply the RES-35 claim-relative comparability rule."""
+    """Apply the RES-44 claim-relative comparability rule."""
 
     if _is_body_mass_claim(request.claim):
         return _comparability_result(
@@ -2528,6 +2899,28 @@ def assess_cmj_derived_comparability(
         )
         if left_segment_key != right_segment_key:
             differences.append((ComparabilityReasonCode.WEIGHING_SEGMENT_MISMATCH, "segment"))
+    if any(reason == ComparabilityReasonCode.MASS_MEASURAND_MISMATCH for reason, _ in differences):
+        semantic_reasons = tuple(
+            dict.fromkeys(
+                reason
+                for reason, _ in differences
+                if reason
+                in (
+                    ComparabilityReasonCode.MASS_MEASURAND_MISMATCH,
+                    ComparabilityReasonCode.GRAVITY_REFERENCE_MISMATCH,
+                )
+            )
+        )
+        return _comparability_result(
+            request,
+            state=ComparabilityState.NOT_COMPARABLE,
+            reason_codes=semantic_reasons or (ComparabilityReasonCode.MASS_MEASURAND_MISMATCH,),
+            conditions=(
+                "PHYSICAL_SYSTEM_MASS and STANDARD_GRAVITY_MASS_EQUIVALENT are distinct "
+                "measurands and are not interchangeable solely because both are reported in kg",
+            ),
+            transformations_required=request.requested_transformations,
+        )
     if request.requested_transformations and not differences:
         return _comparability_result(
             request,
@@ -2565,7 +2958,7 @@ def compare_cmj_derived_measurements(
     request_id: InstanceIdentifier,
     requested_transformations: tuple[TransformationRequest, ...] = (),
 ) -> ComparabilityResult:
-    """Compare two system-weight/system-mass observations without flattening identity."""
+    """Compare derived observations without flattening their scientific identity."""
 
     left_observation, left_segment = _derived_parts(left)
     right_observation, right_segment = _derived_parts(right)
@@ -2590,7 +2983,7 @@ def refusal_for_cmj_derived_comparability(
     blocked_claim: str,
     observation_ids: tuple[InstanceIdentifier, ...] = (),
 ) -> RefusalResult | None:
-    """Refuse only an unresolved RES-35 comparison and retain both observations."""
+    """Refuse only an unresolved RES-44 comparison and retain both observations."""
 
     if result.state is ComparabilityState.COMPARABLE:
         return None
@@ -2603,7 +2996,7 @@ def refusal_for_cmj_derived_comparability(
             RefusalReasonCode.BILATERAL_INPUTS_INCOMPATIBLE,
         ),
         ComparabilityReasonCode.GRAVITY_REFERENCE_MISMATCH: (
-            RefusalReasonCode.GRAVITY_REFERENCE_INVALID,
+            RefusalReasonCode.GRAVITY_REFERENCE_MISMATCH,
         ),
         ComparabilityReasonCode.SYSTEM_DEFINITION_MISMATCH: (
             RefusalReasonCode.SYSTEM_DEFINITION_UNRESOLVED,
@@ -2612,6 +3005,9 @@ def refusal_for_cmj_derived_comparability(
             RefusalReasonCode.BODY_MASS_CLAIM_UNSUPPORTED,
         ),
         ComparabilityReasonCode.MEASURAND_MISMATCH: (RefusalReasonCode.MEASURAND_MISMATCH,),
+        ComparabilityReasonCode.MASS_MEASURAND_MISMATCH: (
+            RefusalReasonCode.MASS_MEASURAND_MISMATCH,
+        ),
         ComparabilityReasonCode.AXIS_MISMATCH: (RefusalReasonCode.AXIS_OR_FRAME_MISMATCH,),
         ComparabilityReasonCode.REFERENCE_FRAME_MISMATCH: (
             RefusalReasonCode.AXIS_OR_FRAME_MISMATCH,
@@ -2660,9 +3056,12 @@ def refusal_for_cmj_derived_comparability(
     reason_codes = tuple(mapped_codes)
     if not reason_codes:
         reason_codes = (RefusalReasonCode.COMPARABILITY_NOT_REGISTERED,)
-    missing = result.missing_information or (
-        "registered deterministic RES-35 comparability bridge",
-    )
+    if result.missing_information:
+        missing = result.missing_information
+    elif ComparabilityReasonCode.MASS_MEASURAND_MISMATCH in result.reason_codes:
+        missing = ("a separately authorized mass-measurand conversion or comparison contract",)
+    else:
+        missing = ("registered deterministic RES-44 comparability bridge",)
     body_mass_claim = ComparabilityReasonCode.BODY_MASS_CLAIM_UNSUPPORTED in result.reason_codes
     return _refusal(
         blocked_claim,
@@ -2670,7 +3069,7 @@ def refusal_for_cmj_derived_comparability(
         missing,
         observation_ids=observation_ids,
         safe_descriptions=(
-            "each system-weight/system-mass observation remains independently describable",
+            "each derived observation remains independently describable under its own identity",
             (
                 "no BODY_MASS value or BODY_MASS comparability claim is emitted"
                 if body_mass_claim
@@ -2688,6 +3087,7 @@ def refusal_for_cmj_derived_comparability(
 
 __all__ = [
     "RES35_SOFTWARE_VERSION",
+    "RES44_SOFTWARE_VERSION",
     "STANDARD_GRAVITY",
     "STANDARD_GRAVITY_VALUE_M_PER_S2",
     "CMJDerivedComparabilityRequest",
@@ -2696,8 +3096,9 @@ __all__ = [
     "ForceSignal",
     "GravityReference",
     "GravityReferenceType",
+    "PhysicalSystemMassResult",
     "ProcessedVerticalForceSignal",
-    "SystemMassResult",
+    "StandardGravityMassEquivalentResult",
     "SystemWeightResult",
     "TotalSupportedForceResult",
     "WeighingBaselineQC",
@@ -2706,7 +3107,8 @@ __all__ = [
     "compare_cmj_derived_measurements",
     "construct_total_supported_vertical_force",
     "derive_body_mass",
-    "derive_system_mass",
+    "derive_physical_system_mass",
+    "derive_standard_gravity_mass_equivalent",
     "estimate_system_weight",
     "refusal_for_cmj_derived_comparability",
 ]

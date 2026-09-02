@@ -107,16 +107,37 @@ CMJ_BILATERAL_TOTAL_VERTICAL_FORCE_SUM = _reference(
 CMJ_SYSTEM_WEIGHT_OPERATION = _reference(
     "registered-operation", "cmj-system-weight-v1", "CMJ system weight from weighing segment"
 )
-CMJ_SYSTEM_MASS_FROM_WEIGHT = _reference(
-    "registered-operation", "cmj-system-mass-from-weight-v1", "CMJ system mass from system weight"
+CMJ_PHYSICAL_SYSTEM_MASS_FROM_WEIGHT = _reference(
+    "registered-operation",
+    "cmj-physical-system-mass-from-weight-v1",
+    "CMJ physical system mass from local support force",
+)
+CMJ_STANDARD_GRAVITY_MASS_EQUIVALENT_FROM_WEIGHT = _reference(
+    "registered-operation",
+    "cmj-standard-gravity-mass-equivalent-from-weight-v1",
+    "CMJ standard-gravity mass equivalent from system weight",
 )
 CMJ_TOTAL_SUPPORTED_VERTICAL_FORCE_SCHEMA = _reference(
     "schema", "cmj-total-supported-vertical-force-v1", "CMJ total supported vertical-force series"
 )
 CMJ_SYSTEM_WEIGHT_MEASURAND = _reference("measurand", "cmj-system-weight", "CMJ system weight")
 CMJ_SYSTEM_WEIGHT_METRIC = _reference("metric", "cmj-system-weight", "System weight")
-CMJ_SYSTEM_MASS_MEASURAND = _reference("measurand", "cmj-system-mass", "CMJ system mass")
-CMJ_SYSTEM_MASS_METRIC = _reference("metric", "cmj-system-mass", "System mass")
+CMJ_PHYSICAL_SYSTEM_MASS_MEASURAND = _reference(
+    "measurand", "cmj-physical-system-mass", "CMJ physical system mass"
+)
+CMJ_PHYSICAL_SYSTEM_MASS_METRIC = _reference(
+    "metric", "cmj-physical-system-mass", "Physical system mass"
+)
+CMJ_STANDARD_GRAVITY_MASS_EQUIVALENT_MEASURAND = _reference(
+    "measurand",
+    "cmj-standard-gravity-mass-equivalent",
+    "CMJ standard-gravity mass equivalent",
+)
+CMJ_STANDARD_GRAVITY_MASS_EQUIVALENT_METRIC = _reference(
+    "metric",
+    "cmj-standard-gravity-mass-equivalent",
+    "Standard-gravity mass equivalent",
+)
 CMJ_TOTAL_SUPPORTED_VERTICAL_FORCE_MEASURAND = _reference(
     "measurand", "cmj-total-supported-vertical-force", "CMJ total supported vertical force"
 )
@@ -137,6 +158,23 @@ STANDARD_GRAVITY_SOURCE = RegistryReference(
     reference_ids=(
         "https://www.bipm.org/documents/d/guest/si-brochure-9-pdf",
         "https://www.nist.gov/pml/special-publication-811/nist-guide-si-appendix-b9",
+    ),
+)
+RES44_DECISION_MASS_METROLOGY = RegistryReference(
+    identifier=ScientificIdentifier(
+        "dynamislm",
+        "decision-record",
+        "res44-system-mass-and-standard-gravity-equivalent",
+        CMJ_REGISTRY_VERSION,
+    ),
+    display_label="RES-44 system-mass and standard-gravity-equivalent decision",
+    reference_ids=(
+        "docs/decisions/RES44-DR-001-system-mass-and-standard-gravity-equivalent.md",
+        "https://doi.org/10.59161/AUEZ1291",
+        "https://jcgm.bipm.org/vim/en/2.12.html",
+        "https://www.nist.gov/pml/owm/si-units-mass",
+        "https://nvlpubs.nist.gov/nistpubs/Legacy/SP/nistspecialpublication811e1995.pdf",
+        "https://nvlpubs.nist.gov/nistpubs/Legacy/TN/nbstechnicalnote491.pdf",
     ),
 )
 
