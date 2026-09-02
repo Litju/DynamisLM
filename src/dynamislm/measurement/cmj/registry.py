@@ -222,6 +222,11 @@ CMJ_ZERO_INITIAL_VERTICAL_VELOCITY = _reference(
     "cmj-zero-vertical-velocity-at-explicit-sample-v1",
     "CMJ zero vertical velocity at explicit initial-condition sample",
 )
+CMJ_QUALIFIED_ZERO_VELOCITY_REFERENCE = _reference(
+    "zero-velocity-reference",
+    "cmj-qualified-zero-vertical-velocity-from-weighing-segment-v1",
+    "CMJ qualified zero vertical velocity from an exact weighing segment",
+)
 CMJ_RELATIVE_DISPLACEMENT_ZERO_ORIGIN = _reference(
     "coordinate-origin",
     "cmj-relative-vertical-displacement-zero-at-initial-sample-v1",
@@ -330,6 +335,19 @@ RES37_DECISION_INITIAL_VELOCITY = RegistryReference(
         "docs/decisions/RES37-DR-004-velocity-initial-condition.md",
         "https://pmc.ncbi.nlm.nih.gov/articles/PMC7761544/",
         "https://journals.plos.org/plosone/article?id=10.1371/journal.pone.0265999",
+    ),
+)
+RES46_DECISION_QUALIFIED_ZERO_VELOCITY = RegistryReference(
+    identifier=ScientificIdentifier(
+        "dynamislm", "decision-record", "res46-qualified-zero-velocity", CMJ_REGISTRY_VERSION
+    ),
+    display_label="RES-46 qualified zero-velocity integration-start decision",
+    reference_ids=(
+        "docs/decisions/RES46-DR-001-qualified-zero-velocity-integration-start.md",
+        "https://bura.brunel.ac.uk/handle/2438/1392",
+        "https://pmc.ncbi.nlm.nih.gov/articles/PMC7761544/",
+        "https://journals.plos.org/plosone/article?id=10.1371/journal.pone.0265999",
+        "https://pubmed.ncbi.nlm.nih.gov/20664368/",
     ),
 )
 RES37_DECISION_DISPLACEMENT_REFERENCE = RegistryReference(

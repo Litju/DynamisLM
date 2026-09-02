@@ -35,6 +35,7 @@ from dynamislm.measurement.cmj.registry import (
     CMJ_NET_VERTICAL_IMPULSE_METRIC,
     CMJ_NET_VERTICAL_IMPULSE_OPERATION,
     CMJ_PHYSICAL_SYSTEM_MASS_FROM_WEIGHT,
+    CMJ_QUALIFIED_ZERO_VELOCITY_REFERENCE,
     CMJ_RELATIVE_DISPLACEMENT_ZERO_ORIGIN,
     CMJ_SUPPORTED_SYSTEM_COM_ACCELERATION_MEASURAND,
     CMJ_SUPPORTED_SYSTEM_COM_ACCELERATION_METRIC,
@@ -59,9 +60,9 @@ from dynamislm.measurement.cmj.registry import (
     NEWTON_SECOND,
     RES37_DECISION_DISPLACEMENT_REFERENCE,
     RES37_DECISION_IMPULSE_INTEGRATION,
-    RES37_DECISION_INITIAL_VELOCITY,
     RES37_DECISION_PHYSICAL_MASS_ACCELERATION,
     RES37_DECISION_SUPPORTED_SYSTEM_NET_FORCE,
+    RES46_DECISION_QUALIFIED_ZERO_VELOCITY,
 )
 from dynamislm.measurement.cmj.signal import ExplicitTimebase, RegularTimebase, SignalTimebase
 from dynamislm.measurement.cmj.weighing import (
@@ -70,6 +71,8 @@ from dynamislm.measurement.cmj.weighing import (
     StandardGravityMassEquivalentResult,
     SystemWeightResult,
     TotalSupportedForceResult,
+    WeighingBaselineQC,
+    WeighingSegment,
     _derived_identity,
     _force_semantics_refusal,
     _input_common_refusal,
@@ -77,6 +80,7 @@ from dynamislm.measurement.cmj.weighing import (
     _provenance_with_run,
     _weight_input_refusal,
     construct_total_supported_vertical_force,
+    estimate_system_weight,
 )
 from dynamislm.measurement.identity import (
     InstanceIdentifier,
@@ -292,7 +296,12 @@ class CMJIntegrationInterval:
 @register_serializable_type
 @dataclass(frozen=True, slots=True)
 class InitialVelocityCondition:
-    """Explicit operational initial condition for cumulative velocity."""
+    """Legacy explicit initial condition; never authoritative physical zero velocity.
+
+    The type remains registered so strict serialization can represent and reject
+    historical RES-37 payloads without silently reinterpreting them. The
+    authoritative velocity operation requires QualifiedZeroVelocityReference.
+    """
 
     source_signal_id: InstanceIdentifier
     sample_index: int
@@ -336,6 +345,99 @@ class InitialVelocityCondition:
     @property
     def reference_event_id(self) -> InstanceIdentifier | None:
         return self.reference_event.occurrence_id if self.reference_event is not None else None
+
+
+@register_serializable_type
+@dataclass(frozen=True, slots=True)
+class QualifiedZeroVelocityReference:
+    """Typed RES-46 authority for a zero-velocity integration start.
+
+    The source segment is the exact RES-35 weighing segment used to derive the
+    linked SYSTEM_WEIGHT observation. This object carries identity and method
+    metadata; the velocity operation still verifies that the linkage is present
+    in the acceleration provenance.
+    """
+
+    source_signal_id: InstanceIdentifier
+    source_artifact_id: InstanceIdentifier
+    source_measurement_identity_id: ScientificIdentifier
+    source_system_weight_observation_id: InstanceIdentifier
+    weighing_segment: WeighingSegment
+    sample_index: int
+    weighing_qc: WeighingBaselineQC
+    value_m_per_s: float = 0.0
+    unit: UnitReference = METERS_PER_SECOND
+    method: RegistryReference = CMJ_QUALIFIED_ZERO_VELOCITY_REFERENCE
+    evidence_decision: RegistryReference = RES46_DECISION_QUALIFIED_ZERO_VELOCITY
+
+    def __post_init__(self) -> None:
+        if self.source_signal_id.instance_type != "signal":
+            raise ValueError("qualified zero-velocity source_signal_id must identify a signal")
+        if self.source_artifact_id.instance_type != "artifact":
+            raise ValueError("qualified zero-velocity source_artifact_id must identify an artifact")
+        if self.source_system_weight_observation_id.instance_type != "observation":
+            raise ValueError(
+                "qualified zero-velocity source SYSTEM_WEIGHT must identify an observation"
+            )
+        if not isinstance(self.weighing_segment, WeighingSegment):
+            raise ValueError("qualified zero-velocity reference requires a WeighingSegment")
+        if not isinstance(self.weighing_qc, WeighingBaselineQC):
+            raise ValueError("qualified zero-velocity reference requires weighing baseline QC")
+        if (
+            self.weighing_segment.source_signal_id != self.source_signal_id
+            or self.weighing_segment.source_artifact_id != self.source_artifact_id
+            or self.weighing_segment.source_measurement_identity_id
+            != self.source_measurement_identity_id
+        ):
+            raise ValueError("qualified zero-velocity source linkage must match its segment")
+        if self.weighing_qc.sample_count != self.weighing_segment.sample_count:
+            raise ValueError("qualified zero-velocity QC must describe the exact weighing segment")
+        if type(self.sample_index) is not int or self.sample_index < 0:
+            raise ValueError("qualified zero-velocity sample_index must be nonnegative")
+        if not (
+            self.weighing_segment.start_index <= self.sample_index < self.weighing_segment.end_index
+        ):
+            raise ValueError("qualified zero-velocity sample must lie inside the weighing segment")
+        _finite(self.value_m_per_s, "qualified zero-velocity value")
+        if self.value_m_per_s != 0.0:
+            raise ValueError("qualified zero-velocity value must be exactly zero")
+        if self.unit.identifier.stable_id != METERS_PER_SECOND.identifier.stable_id:
+            raise ValueError("qualified zero-velocity reference requires m/s")
+        if self.method.stable_id != CMJ_QUALIFIED_ZERO_VELOCITY_REFERENCE.stable_id:
+            raise ValueError("qualified zero-velocity method is not registered")
+        if self.evidence_decision.stable_id != RES46_DECISION_QUALIFIED_ZERO_VELOCITY.stable_id:
+            raise ValueError("qualified zero-velocity evidence decision is not registered")
+
+    @property
+    def is_authorized(self) -> bool:
+        """Whether the linked RES-35 baseline has an explicit adjudication."""
+
+        return self.weighing_qc.acceptability_adjudicated
+
+    @classmethod
+    def from_system_weight(
+        cls,
+        system_weight: SystemWeightResult,
+        sample_index: int,
+    ) -> QualifiedZeroVelocityReference:
+        """Derive the reference from one exact RES-35 SYSTEM_WEIGHT result."""
+
+        if not isinstance(system_weight, SystemWeightResult):
+            raise TypeError("qualified zero-velocity reference requires SystemWeightResult")
+        if system_weight.observation.result.quality.flags != system_weight.qc.quality_flags:
+            raise ValueError(
+                "qualified zero-velocity reference requires QC flags linked to the SYSTEM_WEIGHT"
+            )
+        segment = system_weight.segment
+        return cls(
+            source_signal_id=segment.source_signal_id,
+            source_artifact_id=segment.source_artifact_id,
+            source_measurement_identity_id=segment.source_measurement_identity_id,
+            source_system_weight_observation_id=system_weight.observation.observation_id,
+            weighing_segment=segment,
+            sample_index=sample_index,
+            weighing_qc=system_weight.qc,
+        )
 
 
 @register_serializable_type
@@ -413,7 +515,7 @@ class CMJMechanicsSeries:
     system_contract: CMJMechanicalSystemContract
     integration_method: RegistryReference | None = None
     integration_interval: CMJIntegrationInterval | None = None
-    initial_velocity_condition: InitialVelocityCondition | None = None
+    initial_velocity_condition: QualifiedZeroVelocityReference | None = None
     displacement_origin: DisplacementOrigin | None = None
     source_event_ids: tuple[InstanceIdentifier, ...] = ()
 
@@ -521,22 +623,55 @@ class CMJMechanicsSeries:
                 raise ValueError(
                     "velocity series must preserve only its initial velocity condition"
                 )
+            if not isinstance(initial_condition, QualifiedZeroVelocityReference):
+                raise ValueError(
+                    "velocity series must preserve a qualified zero-velocity reference"
+                )
+            if not initial_condition.is_authorized:
+                raise ValueError(
+                    "velocity series requires adjudicated zero-velocity reference authority"
+                )
             if (
-                initial_condition.source_signal_id != interval.source_signal_id
-                or initial_condition.sample_index != interval.start_index
+                initial_condition.source_signal_id not in self.source_signal_ids
+                or initial_condition.source_artifact_id not in self.source_artifact_ids
+                or initial_condition.source_measurement_identity_id
+                not in self.source_measurement_identity_ids
+                or initial_condition.source_system_weight_observation_id
+                not in self.source_observation_ids
             ):
+                raise ValueError("velocity series must preserve exact zero-velocity source linkage")
+            if initial_condition.sample_index != interval.start_index:
                 raise ValueError("velocity initial condition must match interval start")
-            if (
-                initial_condition.reference_event_id is not None
-                and initial_condition.reference_event_id not in self.source_event_ids
-            ):
-                raise ValueError("velocity initial-condition event must be preserved")
         if (
             self.quantity
             is CMJMechanicsQuantity.SUPPORTED_SYSTEM_COM_RELATIVE_VERTICAL_DISPLACEMENT
         ):
-            if self.displacement_origin is None or self.initial_velocity_condition is not None:
-                raise ValueError("displacement series must preserve its displacement origin")
+            initial_condition = self.initial_velocity_condition
+            interval = self.integration_interval
+            if (
+                self.displacement_origin is None
+                or interval is None
+                or not isinstance(initial_condition, QualifiedZeroVelocityReference)
+            ):
+                raise ValueError(
+                    "displacement series must preserve its origin and qualified velocity authority"
+                )
+            if not initial_condition.is_authorized:
+                raise ValueError(
+                    "displacement series requires adjudicated zero-velocity reference authority"
+                )
+            if (
+                initial_condition.source_signal_id not in self.source_signal_ids
+                or initial_condition.source_artifact_id not in self.source_artifact_ids
+                or initial_condition.source_measurement_identity_id
+                not in self.source_measurement_identity_ids
+                or initial_condition.source_system_weight_observation_id
+                not in self.source_observation_ids
+                or initial_condition.sample_index != interval.start_index
+            ):
+                raise ValueError(
+                    "displacement series must preserve exact zero-velocity source linkage"
+                )
             if (
                 self.displacement_origin.source_velocity_series_id != self.source_signal_ids[0]
                 or self.displacement_origin.sample_index != self.sample_start_index
@@ -649,6 +784,17 @@ def _validate_series_observation(
     )
     if len(matching_runs) != 1:
         raise ValueError("mechanics observation must preserve one matching processing run")
+    if matching_runs[0].parameters != identity.processing.method_parameters:
+        raise ValueError("mechanics processing run parameters must match observation identity")
+    if quantity in {
+        CMJMechanicsQuantity.SUPPORTED_SYSTEM_COM_VERTICAL_VELOCITY,
+        CMJMechanicsQuantity.SUPPORTED_SYSTEM_COM_RELATIVE_VERTICAL_DISPLACEMENT,
+    }:
+        parameters = {entry.key: entry.value for entry in identity.processing.method_parameters}
+        if parameters.get("zero_velocity_reference") != canonical_json(
+            series.initial_velocity_condition
+        ):
+            raise ValueError("mechanics observation must preserve its zero-velocity reference")
 
 
 @register_serializable_type
@@ -792,7 +938,7 @@ class SupportedSystemComAccelerationResult:
 class SupportedSystemComVelocityResult:
     observation: ScientificMeasurementObservation
     series: CMJMechanicsSeries
-    initial_velocity_condition: InitialVelocityCondition
+    initial_velocity_condition: QualifiedZeroVelocityReference
 
     def __post_init__(self) -> None:
         _validate_series_observation(
@@ -827,6 +973,26 @@ class SupportedSystemComRelativeDisplacementResult:
         )
         if self.series.displacement_origin != self.displacement_origin:
             raise ValueError("displacement result origin must match its series")
+        parameters = {
+            entry.key: entry.value
+            for entry in self.observation.identity.processing.method_parameters
+        }
+        source_velocity_observation_id = parameters.get("source_velocity_observation_id")
+        source_velocity_runs = tuple(
+            run
+            for run in self.observation.provenance.processing_runs
+            if run.output_entity_id.qualified == source_velocity_observation_id
+        )
+        if (
+            len(source_velocity_runs) != 1
+            or dict((entry.key, entry.value) for entry in source_velocity_runs[0].parameters).get(
+                "zero_velocity_reference"
+            )
+            != canonical_json(self.series.initial_velocity_condition)
+            or parameters.get("source_velocity_initial_condition_semantics")
+            != canonical_json(_condition_key(self.series.initial_velocity_condition))
+        ):
+            raise ValueError("displacement must preserve its upstream velocity authority")
 
     @property
     def samples(self) -> tuple[float, ...]:
@@ -897,7 +1063,7 @@ def _cmj_observation_identity(
 
 def _event_values(
     interval: CMJIntegrationInterval | None = None,
-    condition: InitialVelocityCondition | None = None,
+    condition: QualifiedZeroVelocityReference | InitialVelocityCondition | None = None,
     origin: DisplacementOrigin | None = None,
 ) -> tuple[CMJEventOccurrence, ...]:
     values: list[CMJEventOccurrence] = []
@@ -905,7 +1071,7 @@ def _event_values(
         values.extend(
             event for event in (interval.start_event, interval.end_event) if event is not None
         )
-    if condition is not None and condition.reference_event is not None:
+    if isinstance(condition, InitialVelocityCondition) and condition.reference_event is not None:
         values.append(condition.reference_event)
     if origin is not None and origin.reference_event is not None:
         values.append(origin.reference_event)
@@ -1153,6 +1319,40 @@ def _weight_refusal(
             observation_ids,
             refusal_class=RefusalClass.IDENTITY_UNRESOLVED,
         )
+    if weight.observation.result.quality.flags != weight.qc.quality_flags:
+        return _mechanics_refusal(
+            claim,
+            (RefusalReasonCode.PROCESSING_LINEAGE_UNRESOLVED,),
+            ("SYSTEM_WEIGHT quality flags linked to its baseline QC",),
+            observation_ids,
+            refusal_class=RefusalClass.IDENTITY_UNRESOLVED,
+        )
+    recomputed = estimate_system_weight(force_input, weight.segment)
+    if not isinstance(recomputed, SystemWeightResult):
+        return _mechanics_refusal(
+            claim,
+            (RefusalReasonCode.PROCESSING_LINEAGE_UNRESOLVED,),
+            ("source-recomputed SYSTEM_WEIGHT baseline statistics",),
+            observation_ids,
+            refusal_class=RefusalClass.IDENTITY_UNRESOLVED,
+        )
+    actual_qc = weight.qc
+    expected_qc = recomputed.qc
+    if (
+        weight.value_n != recomputed.value_n
+        or actual_qc.sample_count != expected_qc.sample_count
+        or actual_qc.elapsed_sample_span_s != expected_qc.elapsed_sample_span_s
+        or actual_qc.mean_force_n != expected_qc.mean_force_n
+        or actual_qc.standard_deviation_n != expected_qc.standard_deviation_n
+        or actual_qc.range_n != expected_qc.range_n
+    ):
+        return _mechanics_refusal(
+            claim,
+            (RefusalReasonCode.PROCESSING_LINEAGE_UNRESOLVED,),
+            ("SYSTEM_WEIGHT value and QC recomputed from the exact source segment",),
+            observation_ids,
+            refusal_class=RefusalClass.IDENTITY_UNRESOLVED,
+        )
     return None
 
 
@@ -1262,7 +1462,7 @@ def _processing_parameters(
     frame: RegistryReference,
     sign: SignConvention,
     interval: CMJIntegrationInterval | None = None,
-    initial_condition: InitialVelocityCondition | None = None,
+    initial_condition: QualifiedZeroVelocityReference | InitialVelocityCondition | None = None,
     origin: DisplacementOrigin | None = None,
     extra: tuple[MetadataEntry, ...] = (),
 ) -> tuple[MetadataEntry, ...]:
@@ -1289,9 +1489,7 @@ def _processing_parameters(
         entries.append(MetadataEntry("integration_boundary", interval.interval_semantics))
         entries.append(MetadataEntry("integration_method", interval.integration_method.stable_id))
     if initial_condition is not None:
-        entries.append(
-            MetadataEntry("initial_velocity_condition", canonical_json(initial_condition))
-        )
+        entries.append(MetadataEntry("zero_velocity_reference", canonical_json(initial_condition)))
     if origin is not None:
         entries.append(MetadataEntry("displacement_origin", canonical_json(origin)))
     entries.extend(extra)
@@ -1326,6 +1524,7 @@ def _upstream_processing_semantics(
         "source_event_ids",
         "integration_interval",
         "initial_velocity_condition",
+        "zero_velocity_reference",
         "displacement_origin",
     }
     return tuple(
@@ -1352,7 +1551,7 @@ def _series_output(
     sign: SignConvention,
     system_contract: CMJMechanicalSystemContract,
     integration_interval: CMJIntegrationInterval | None,
-    initial_velocity_condition: InitialVelocityCondition | None,
+    initial_velocity_condition: QualifiedZeroVelocityReference | None,
     displacement_origin: DisplacementOrigin | None,
     extra_parameters: tuple[MetadataEntry, ...],
     evidence: RegistryReference,
@@ -1494,7 +1693,9 @@ def _series_output(
         output_artifacts=(output_artifact,),
         produced_artifact_ids=(artifact_id,),
         supported_by=(evidence, CMJ_MECHANICS_SYSTEM_CONTRACT),
-        evidence_references=(EvidenceReference(evidence, "targeted RES-37 mechanics decision"),),
+        evidence_references=(
+            EvidenceReference(evidence, "registered mechanics authority for this output"),
+        ),
         recorded_at=source_context.observed_at,
     )
     observation = ScientificMeasurementObservation(
@@ -1797,6 +1998,15 @@ def derive_net_vertical_force(
         MetadataEntry(
             "system_weight_selection_method", system_weight.segment.selection_method.stable_id
         ),
+        MetadataEntry(
+            "system_weight_segment",
+            canonical_json(system_weight.segment),
+        ),
+        MetadataEntry("system_weight_qc", canonical_json(system_weight.qc)),
+        MetadataEntry(
+            "system_weight_quality_flags",
+            canonical_json(system_weight.observation.result.quality.flags),
+        ),
         MetadataEntry("system_weight_start_index", system_weight.segment.start_index),
         MetadataEntry("system_weight_end_index", system_weight.segment.end_index),
     )
@@ -2050,12 +2260,112 @@ def derive_supported_system_com_acceleration(
     )
 
 
+def _qualified_zero_velocity_reference_refusal(
+    acceleration: SupportedSystemComAccelerationResult,
+    interval: CMJIntegrationInterval,
+    reference: object,
+    claim: str,
+) -> RefusalResult | None:
+    observation_ids = acceleration.series.source_observation_ids
+    if not isinstance(reference, QualifiedZeroVelocityReference):
+        return _mechanics_refusal(
+            claim,
+            (
+                RefusalReasonCode.ZERO_VELOCITY_REFERENCE_UNQUALIFIED,
+                RefusalReasonCode.INITIAL_CONDITION_UNRESOLVED,
+            ),
+            (
+                "QualifiedZeroVelocityReference derived from the exact compatible "
+                "RES-35 SystemWeightResult",
+            ),
+            observation_ids,
+            refusal_class=RefusalClass.IDENTITY_UNRESOLVED,
+        )
+    if not reference.is_authorized:
+        return _mechanics_refusal(
+            claim,
+            (
+                RefusalReasonCode.ZERO_VELOCITY_REFERENCE_UNQUALIFIED,
+                RefusalReasonCode.INITIAL_CONDITION_UNRESOLVED,
+            ),
+            (
+                "explicit RES-35 weighing-baseline acceptability adjudication for the "
+                "qualified zero-velocity reference",
+            ),
+            observation_ids,
+            refusal_class=RefusalClass.IDENTITY_UNRESOLVED,
+        )
+    observation_ids = _unique((*observation_ids, reference.source_system_weight_observation_id))
+    acceleration_parameters = {
+        entry.key: entry.value
+        for entry in acceleration.observation.identity.processing.method_parameters
+    }
+    if (
+        reference.source_system_weight_observation_id
+        != acceleration.source_system_weight_observation_id
+        or reference.source_system_weight_observation_id
+        not in acceleration.series.source_observation_ids
+        or reference.source_signal_id not in acceleration.series.source_signal_ids
+        or reference.source_artifact_id not in acceleration.series.source_artifact_ids
+        or reference.source_measurement_identity_id
+        not in acceleration.series.source_measurement_identity_ids
+        or reference.weighing_segment.end_index > acceleration.series.source_sample_count
+        or acceleration_parameters.get("source_net_force_system_weight_segment")
+        != canonical_json(reference.weighing_segment)
+        or acceleration_parameters.get("source_net_force_system_weight_qc")
+        != canonical_json(reference.weighing_qc)
+        or acceleration_parameters.get("source_net_force_system_weight_quality_flags")
+        != canonical_json(reference.weighing_qc.quality_flags)
+    ):
+        return _mechanics_refusal(
+            claim,
+            (
+                RefusalReasonCode.ZERO_VELOCITY_SOURCE_MISMATCH,
+                RefusalReasonCode.INITIAL_CONDITION_UNRESOLVED,
+            ),
+            (
+                "qualified reference from the exact source signal, artifact, measurement "
+                "identity, trial/context, and SYSTEM_WEIGHT observation",
+            ),
+            observation_ids,
+            refusal_class=RefusalClass.IDENTITY_UNRESOLVED,
+        )
+    if interval.source_signal_id not in (
+        acceleration.series.series_id,
+        reference.source_signal_id,
+    ):
+        return _mechanics_refusal(
+            claim,
+            (
+                RefusalReasonCode.ZERO_VELOCITY_SOURCE_MISMATCH,
+                RefusalReasonCode.INITIAL_CONDITION_UNRESOLVED,
+            ),
+            ("integration interval source linked to the qualified reference source",),
+            observation_ids,
+            refusal_class=RefusalClass.IDENTITY_UNRESOLVED,
+        )
+    if reference.sample_index != interval.start_index:
+        return _mechanics_refusal(
+            claim,
+            (
+                RefusalReasonCode.ZERO_VELOCITY_REFERENCE_MISMATCH,
+                RefusalReasonCode.INITIAL_CONDITION_UNRESOLVED,
+            ),
+            ("qualified zero-velocity sample equal to the inclusive integration start",),
+            observation_ids,
+            refusal_class=RefusalClass.IDENTITY_UNRESOLVED,
+        )
+    return None
+
+
 def derive_supported_system_com_velocity(
     acceleration: SupportedSystemComAccelerationResult,
     interval: CMJIntegrationInterval | None = None,
-    initial_velocity_condition: InitialVelocityCondition | None = None,
+    initial_velocity_condition: QualifiedZeroVelocityReference
+    | InitialVelocityCondition
+    | None = None,
 ) -> SupportedSystemComVelocityResult | RefusalResult:
-    """Integrate acceleration from an explicit zero-velocity initial condition."""
+    """Integrate acceleration from an exact qualified zero-velocity reference."""
 
     claim = "derive supported-system COM vertical velocity"
     if not isinstance(acceleration, SupportedSystemComAccelerationResult):
@@ -2079,21 +2389,23 @@ def derive_supported_system_com_velocity(
     if initial_velocity_condition is None:
         return _mechanics_refusal(
             claim,
-            (RefusalReasonCode.INITIAL_CONDITION_UNRESOLVED,),
-            ("explicit zero initial vertical velocity condition",),
+            (
+                RefusalReasonCode.ZERO_VELOCITY_REFERENCE_REQUIRED,
+                RefusalReasonCode.INITIAL_CONDITION_UNRESOLVED,
+            ),
+            ("explicit QualifiedZeroVelocityReference",),
             acceleration.series.source_observation_ids,
         )
-    if (
-        initial_velocity_condition.source_signal_id != interval.source_signal_id
-        or initial_velocity_condition.sample_index != interval.start_index
-    ):
-        return _mechanics_refusal(
-            claim,
-            (RefusalReasonCode.INITIAL_CONDITION_UNRESOLVED,),
-            ("initial condition attached to the interval source and start sample",),
-            acceleration.series.source_observation_ids,
-            refusal_class=RefusalClass.IDENTITY_UNRESOLVED,
-        )
+    reference_refusal = _qualified_zero_velocity_reference_refusal(
+        acceleration,
+        interval,
+        initial_velocity_condition,
+        claim,
+    )
+    if reference_refusal is not None:
+        return reference_refusal
+    if not isinstance(initial_velocity_condition, QualifiedZeroVelocityReference):
+        raise AssertionError("validated velocity reference must be qualified")
     values = _cumulative_integral(
         acceleration.series,
         interval.start_index,
@@ -2132,7 +2444,7 @@ def derive_supported_system_com_velocity(
         initial_velocity_condition=initial_velocity_condition,
         displacement_origin=None,
         extra_parameters=extra,
-        evidence=RES37_DECISION_INITIAL_VELOCITY,
+        evidence=RES46_DECISION_QUALIFIED_ZERO_VELOCITY,
         additional_source_observation_ids=acceleration.series.source_observation_ids,
         additional_source_identity_ids=acceleration.series.source_measurement_identity_ids,
     )
@@ -2219,7 +2531,7 @@ def derive_supported_system_com_relative_vertical_displacement(
         sign=velocity.series.sign_convention,
         system_contract=velocity.system_contract,
         integration_interval=velocity.series.integration_interval,
-        initial_velocity_condition=None,
+        initial_velocity_condition=velocity.initial_velocity_condition,
         displacement_origin=origin,
         extra_parameters=extra,
         evidence=RES37_DECISION_DISPLACEMENT_REFERENCE,
@@ -2283,9 +2595,25 @@ def _interval_key(interval: CMJIntegrationInterval | None) -> object:
     )
 
 
-def _condition_key(condition: InitialVelocityCondition | None) -> object:
+def _condition_key(
+    condition: QualifiedZeroVelocityReference | InitialVelocityCondition | None,
+) -> object:
     if condition is None:
         return None
+    if isinstance(condition, QualifiedZeroVelocityReference):
+        segment = condition.weighing_segment
+        return (
+            condition.method.stable_id,
+            condition.evidence_decision.stable_id,
+            condition.sample_index,
+            condition.value_m_per_s,
+            condition.unit.identifier.stable_id,
+            segment.selection_method.stable_id,
+            segment.start_index,
+            segment.end_index,
+            tuple((entry.key, entry.value) for entry in segment.selection_parameters),
+            canonical_json(condition.weighing_qc),
+        )
     return (
         condition.method.stable_id,
         condition.sample_index,
@@ -2319,6 +2647,17 @@ def _parameter_key(
         "source_net_force_observation_id",
         "source_net_force_series_id",
         "source_system_weight_observation_id",
+        "system_weight_segment",
+        "source_net_force_system_weight_segment",
+        "system_weight_qc",
+        "source_net_force_system_weight_qc",
+        "source_net_force_system_weight_quality_flags",
+        "source_acceleration_source_net_force_system_weight_segment",
+        "source_acceleration_source_net_force_system_weight_qc",
+        "source_acceleration_source_net_force_system_weight_quality_flags",
+        "source_velocity_source_acceleration_source_net_force_system_weight_segment",
+        "source_velocity_source_acceleration_source_net_force_system_weight_qc",
+        "source_velocity_source_acceleration_source_net_force_system_weight_quality_flags",
         "physical_mass_observation_id",
         "source_acceleration_observation_id",
         "source_acceleration_series_id",
@@ -2326,6 +2665,7 @@ def _parameter_key(
         "source_velocity_series_id",
         "integration_interval",
         "initial_velocity_condition",
+        "zero_velocity_reference",
         "displacement_origin",
     }
     return tuple(
@@ -2445,7 +2785,12 @@ def _series_differences(
     if _condition_key(left.initial_velocity_condition) != _condition_key(
         right.initial_velocity_condition
     ):
-        differences.append((ComparabilityReasonCode.METHOD_MISMATCH, "initial condition"))
+        differences.append(
+            (
+                ComparabilityReasonCode.ZERO_VELOCITY_REFERENCE_MISMATCH,
+                "zero-velocity reference",
+            )
+        )
     if _origin_key(left.displacement_origin) != _origin_key(right.displacement_origin):
         differences.append((ComparabilityReasonCode.METHOD_MISMATCH, "displacement origin"))
     return tuple(differences)
@@ -2564,6 +2909,9 @@ def refusal_for_cmj_mechanics_comparability(
         ComparabilityReasonCode.METHOD_MISMATCH: (
             RefusalReasonCode.INTEGRATION_METHOD_NOT_REGISTERED
         ),
+        ComparabilityReasonCode.ZERO_VELOCITY_REFERENCE_MISMATCH: (
+            RefusalReasonCode.ZERO_VELOCITY_REFERENCE_MISMATCH
+        ),
         ComparabilityReasonCode.PROTOCOL_MISMATCH: (RefusalReasonCode.PROTOCOL_IDENTITY_MISMATCH),
         ComparabilityReasonCode.SIGN_CONVENTION_MISMATCH: (
             RefusalReasonCode.SIGN_CONVENTION_MISMATCH
@@ -2627,6 +2975,7 @@ __all__ = [
     "MechanicalSystemContract",
     "NetVerticalForceResult",
     "NetVerticalImpulseResult",
+    "QualifiedZeroVelocityReference",
     "SupportedSystemComAccelerationResult",
     "SupportedSystemComRelativeDisplacementResult",
     "SupportedSystemComVelocityResult",

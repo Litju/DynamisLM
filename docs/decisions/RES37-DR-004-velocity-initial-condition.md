@@ -1,9 +1,10 @@
 # RES37-DR-004
 
 DECISION_ID=RES37-DR-004
-STATUS=ADOPTED
+STATUS=SUPERSEDED_BY_RES46
 QUESTION=What initial condition and output support make supported-system COM velocity authoritative without asserting unobserved pre-start values?
 SCOPE=RES-37 acceleration-to-velocity cumulative integration.
+SUPERSEDED_BY=RES46-DR-001
 
 SOURCES=
 - `docs/decisions/RES36-DR-001-movement-onset.md`
@@ -16,18 +17,18 @@ APPLICABILITY=Valid supported-system acceleration and an explicit initial-condit
 OPTIONS_CONSIDERED=
 - silently set every pre-start array value to zero: rejected because it asserts unintegrated values;
 - use an undocumented physical onset instant: rejected because RES-36 onset is an operational sample reference;
-- require `v_z=0` at an explicit caller-supplied sample and emit a sliced series beginning there: adopted;
+- require `v_z=0` at an explicit caller-supplied sample and emit a sliced series beginning there: superseded because an index does not establish physical zero velocity;
 - reset velocity before each event or correct accumulated error: rejected as unregistered drift correction.
 
-DECISION=Register `CMJ_ZERO_INITIAL_VERTICAL_VELOCITY` as the V1 initial-condition method. The condition is `v_z(t_start)=0 m/s` at an explicit sample, optionally linked to the exact RES-36 movement-onset event. The event/sample is an operational reference, not a claim that the threshold sample is the exact physical onset of nonzero velocity. The velocity series begins at that sample and contains only cumulative values supported by the integration interval; no pre-start values are emitted.
+DECISION=The historical RES-37 arbitrary-sample initial-condition contract is not authoritative. Under RES-46, authoritative velocity requires the distinct registered `QualifiedZeroVelocityReference` derived from the exact RES-35 `SystemWeightResult` weighing segment with explicitly adjudicated baseline QC linked to the source observation. The reference sample must lie inside that half-open segment and equal the inclusive integration interval start. A default descriptive or movement-containing non-adjudicated segment is refused. The RES-36 movement-onset event is not a zero-velocity authority, and no optional event-linked velocity path is registered in V1. The velocity series still begins at the qualified sample and contains only cumulative values supported by the integration interval; no pre-start values are emitted.
 
 EQUATIONS=`v_z(t_start)=0`; then `v_z(t_i)=v_z(t_{i-1})+0.5*(a_z[i-1]+a_z[i])*(t_i-t_{i-1})`.
 
-INPUTS=Supported-system acceleration; explicit inclusive interval whose start equals the initial-condition sample; `InitialVelocityCondition`; optional exact event occurrence.
+INPUTS=Supported-system acceleration; explicit inclusive interval whose start equals the qualified reference sample; `QualifiedZeroVelocityReference` derived from the exact compatible RES-35 `SystemWeightResult`.
 
-ASSUMPTIONS=The zero initial condition is authorized as a force-platform quiet/pre-movement operational reference. The supplied event, when present, is sample-attached under RES-36.
+ASSUMPTIONS=RES-46 adopts the exact RES-35 weighing segment plus explicit acceptability adjudication as a protocol-defined pre-movement reference identity. The adjudication is not a universal threshold and descriptive RES-35 QC alone does not prove physiological stillness.
 
-INITIAL_CONDITIONS=Value 0.0 m/s; sample index and source signal mandatory; method, assumption text, and optional event ID serialized.
+INITIAL_CONDITIONS=Value 0.0 m/s; exact source signal, artifact, measurement identity, SYSTEM_WEIGHT observation, weighing segment, linked baseline QC/adjudication, method/evidence reference, and sample index are serialized in `QualifiedZeroVelocityReference`. Free-form assumption text, an unadjudicated segment, and an optional event cannot authorize the physical operation.
 
 BOUNDARY_SEMANTICS=First output sample is the initial-condition sample with exactly the supplied value. Integration uses adjacent recorded acceleration samples through the inclusive interval end.
 
@@ -39,10 +40,10 @@ FRAME_SIGN=Same registered vertical frame and upward-positive sign as accelerati
 
 LIMITATIONS=No physical onset interpolation, no pre-start zero fill, no takeoff-velocity jump-height estimator, no drift correction, and no claim that threshold onset is an exact physical velocity transition.
 
-REGISTRY_OBJECTS_AFFECTED=`CMJ_SUPPORTED_SYSTEM_COM_VELOCITY_OPERATION`, velocity measurand/metric, `CMJ_ZERO_INITIAL_VERTICAL_VELOCITY`.
+REGISTRY_OBJECTS_AFFECTED=`CMJ_SUPPORTED_SYSTEM_COM_VELOCITY_OPERATION`, velocity measurand/metric, legacy `CMJ_ZERO_INITIAL_VERTICAL_VELOCITY`, and `CMJ_QUALIFIED_ZERO_VELOCITY_REFERENCE`.
 
-IMPLEMENTATION=`src/dynamislm/measurement/cmj/mechanics.py`; source-index mapping preserves the original timebase and provenance records the initial condition and event reference.
+IMPLEMENTATION=`src/dynamislm/measurement/cmj/mechanics.py`; source-index mapping preserves the original timebase and provenance records the qualified reference. See RES46-DR-001 for the current authority model.
 
-TESTS=Missing/misaligned initial condition refusals; exact constant acceleration; sliced support with no pre-start samples; regular and irregular timebases; optional RES-36 event linkage; serialization and consistency identity.
+TESTS=Historical arbitrary-sample and optional event-linked paths are not authoritative and must refuse; RES-46 tests the qualified reference, exact source/segment linkage, provenance, comparability, serialization, and unchanged trapezoidal/constant-acceleration arithmetic. Existing regular and irregular timebase integration tests remain applicable; no backshift test is claimed.
 
-VERSION=RES37-P1E-1.0.0
+VERSION=RES37-P1E-1.1.0

@@ -25,7 +25,7 @@ EQUATIONS=`d_z(t_start)=0 m`; then `d_z(t_i)=d_z(t_{i-1})+0.5*(v_z[i-1]+v_z[i])*
 
 INPUTS=Supported-system COM velocity; explicit zero-origin object linked to the velocity series and start sample.
 
-ASSUMPTIONS=Velocity is already valid under RES37-DR-004. The relative coordinate is sufficient for V1 and does not encode anatomical height.
+ASSUMPTIONS=Velocity is already valid under the RES-46 qualified zero-velocity integration-start contract (RES46-DR-001 and the corrected RES37-DR-004). The relative coordinate is sufficient for V1 and does not encode anatomical height.
 
 INITIAL_CONDITIONS=Displacement value 0.0 m at the velocity series start; no endpoint constraint.
 
