@@ -407,16 +407,16 @@ def test_performance_outcome_is_explicitly_assignable_to_a_derived_result() -> N
     assert result.classification.scientific_roles == (ScientificRole.PERFORMANCE_OUTCOME,)
 
 
-def test_serialization_version_rejects_the_pre_role_cardinality_wire_shape() -> None:
+def test_serialization_version_rejects_the_prior_role_cardinality_wire_shape() -> None:
     result = _result(
         "versioned-roles",
         classification=ScientificClassification(ValueOrigin.DIRECT_MEASUREMENT, ()),
     )
     envelope = json.loads(canonical_json(result))
 
-    assert SERIALIZATION_VERSION == 2
+    assert SERIALIZATION_VERSION == 3
     assert envelope["serialization_version"] == SERIALIZATION_VERSION
-    envelope["serialization_version"] = 1
+    envelope["serialization_version"] = 2
     classification_wire = envelope["payload"]["classification"]
     classification_wire["scientific_role"] = "PERFORMANCE_OUTCOME"
     del classification_wire["scientific_roles"]
@@ -642,7 +642,7 @@ def test_clean_environment_import_smoke(tmp_path: Path) -> None:
         [
             sys.executable,
             "-c",
-            "import dynamislm; assert dynamislm.SERIALIZATION_VERSION == 2",
+            "import dynamislm; assert dynamislm.SERIALIZATION_VERSION == 3",
         ],
         cwd=tmp_path,
         env={

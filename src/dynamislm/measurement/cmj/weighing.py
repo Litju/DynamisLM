@@ -245,7 +245,7 @@ class WeighingBaselineQC:
     """Descriptive within-window values; no universal accept/reject threshold."""
 
     sample_count: int
-    duration_s: float
+    elapsed_sample_span_s: float
     mean_force_n: float
     standard_deviation_n: float
     range_n: float
@@ -257,14 +257,20 @@ class WeighingBaselineQC:
         if self.sample_count < 2:
             raise ValueError("sample_count must be at least two")
         for field_name, value in (
-            ("duration_s", self.duration_s),
+            ("elapsed_sample_span_s", self.elapsed_sample_span_s),
             ("mean_force_n", self.mean_force_n),
             ("standard_deviation_n", self.standard_deviation_n),
             ("range_n", self.range_n),
         ):
             _finite(value, field_name)
-        if self.duration_s < 0 or self.standard_deviation_n < 0 or self.range_n < 0:
-            raise ValueError("duration, standard deviation, and range must not be negative")
+        if (
+            self.elapsed_sample_span_s < 0
+            or self.standard_deviation_n < 0
+            or self.range_n < 0
+        ):
+            raise ValueError(
+                "elapsed sample span, standard deviation, and range must not be negative"
+            )
         if not isinstance(self.acceptability_adjudicated, bool):
             raise ValueError("acceptability_adjudicated must be boolean")
 
@@ -1820,10 +1826,10 @@ def _segment_refusal(
     )
 
 
-def _segment_duration(signal: ForceSignal, start: int, end: int) -> float:
+def _elapsed_sample_span(signal: ForceSignal, start: int, end: int) -> float:
     timebase = signal.timebase
     if isinstance(timebase, RegularTimebase):
-        return (end - start) / timebase.sample_rate_hz
+        return (end - start - 1) / timebase.sample_rate_hz
     if isinstance(timebase, ExplicitTimebase):
         return timebase.times_s[end - 1] - timebase.times_s[start]
     raise ValueError("weighing signal must have a registered timebase")
@@ -1931,7 +1937,7 @@ def estimate_system_weight(
     try:
         mean_force = math.fsum(selected) / len(selected)
         standard_deviation = stdev(selected)
-        duration = _segment_duration(
+        elapsed_sample_span = _elapsed_sample_span(
             force_input.signal,
             segment.start_index,
             segment.end_index,
@@ -1939,7 +1945,7 @@ def estimate_system_weight(
         range_force = max(selected) - min(selected)
         qc = WeighingBaselineQC(
             sample_count=len(selected),
-            duration_s=duration,
+            elapsed_sample_span_s=elapsed_sample_span,
             mean_force_n=mean_force,
             standard_deviation_n=standard_deviation,
             range_n=range_force,

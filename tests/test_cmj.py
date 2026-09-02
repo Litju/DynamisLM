@@ -1234,7 +1234,7 @@ def test_res35_weighing_segment_is_separate_from_mean_estimator_and_qc_is_descri
     assert isinstance(result, SystemWeightResult)
     assert result.observation.result.value == ScalarValue(101.5)
     assert result.qc.sample_count == 2
-    assert result.qc.duration_s == pytest.approx(0.002)
+    assert result.qc.elapsed_sample_span_s == pytest.approx(0.001)
     assert result.qc.standard_deviation_n == pytest.approx(0.7071067811865476)
     assert result.qc.range_n == 1.0
     assert result.qc.acceptability_adjudicated is False
@@ -1265,6 +1265,90 @@ def test_res35_weighing_segment_is_separate_from_mean_estimator_and_qc_is_descri
     )
     assert isinstance(too_few, RefusalResult)
     assert RefusalReasonCode.INSUFFICIENT_WEIGHING_SAMPLES in too_few.reason_codes
+
+
+def test_res45_weighing_uses_elapsed_sample_span_for_regular_and_explicit_support() -> None:
+    regular_source = _rebind_raw_input(
+        _cmj_input("elapsed-span-regular"),
+        suffix="elapsed-span-regular-two",
+        samples=(100.0, 101.0),
+        timebase=RegularTimebase(1000.0, start_time_s=42.0),
+    )
+    explicit_source = _rebind_raw_input(
+        _cmj_input("elapsed-span-explicit"),
+        suffix="elapsed-span-explicit-two",
+        samples=(100.0, 101.0),
+        timebase=ExplicitTimebase((42.0, 42.001)),
+    )
+    regular_two = estimate_system_weight(
+        regular_source,
+        WeighingSegment(
+            regular_source.signal.signal_id,
+            regular_source.source_artifact.artifact_id,
+            regular_source.identity.identity_id,
+            0,
+            2,
+        ),
+    )
+    explicit_two = estimate_system_weight(
+        explicit_source,
+        WeighingSegment(
+            explicit_source.signal.signal_id,
+            explicit_source.source_artifact.artifact_id,
+            explicit_source.identity.identity_id,
+            0,
+            2,
+        ),
+    )
+    assert isinstance(regular_two, SystemWeightResult)
+    assert isinstance(explicit_two, SystemWeightResult)
+    assert regular_two.qc.elapsed_sample_span_s == pytest.approx(0.001)
+    assert explicit_two.qc.elapsed_sample_span_s == pytest.approx(0.001)
+    assert regular_two.value_n == explicit_two.value_n == pytest.approx(100.5)
+
+    regular_three = _rebind_raw_input(
+        _cmj_input("elapsed-span-regular-three"),
+        suffix="elapsed-span-regular-three-rebound",
+        samples=(100.0, 101.0, 102.0),
+        timebase=RegularTimebase(1000.0, start_time_s=42.0),
+    )
+    explicit_three = _rebind_raw_input(
+        _cmj_input("elapsed-span-explicit-three"),
+        suffix="elapsed-span-explicit-three-rebound",
+        samples=(100.0, 101.0, 102.0),
+        timebase=ExplicitTimebase((42.0, 42.001, 42.002)),
+    )
+    irregular = _rebind_raw_input(
+        _cmj_input("elapsed-span-irregular"),
+        suffix="elapsed-span-irregular-rebound",
+        samples=(100.0, 101.0, 102.0),
+        timebase=ExplicitTimebase((42.0, 42.001, 42.004)),
+    )
+
+    def weighing(source: CMJForceInput) -> SystemWeightResult:
+        result = estimate_system_weight(
+            source,
+            WeighingSegment(
+                source.signal.signal_id,
+                source.source_artifact.artifact_id,
+                source.identity.identity_id,
+                0,
+                3,
+            ),
+        )
+        assert isinstance(result, SystemWeightResult)
+        return result
+
+    regular_three_result = weighing(regular_three)
+    explicit_three_result = weighing(explicit_three)
+    irregular_result = weighing(irregular)
+    assert regular_three_result.qc.elapsed_sample_span_s == pytest.approx(0.002)
+    assert explicit_three_result.qc.elapsed_sample_span_s == pytest.approx(0.002)
+    assert irregular_result.qc.elapsed_sample_span_s == pytest.approx(0.004)
+    assert regular_three_result.value_n == explicit_three_result.value_n == pytest.approx(101.0)
+    qc_json = canonical_json(regular_three_result.qc)
+    assert '"elapsed_sample_span_s":0.002' in qc_json
+    assert "duration_s" not in qc_json
 
 
 def test_res35_system_mass_requires_explicit_gravity_and_preserves_weight() -> None:
@@ -1468,7 +1552,7 @@ def test_res44_mass_serialization_and_provenance_keep_standard_and_local_distinc
     assert isinstance(standard, StandardGravityMassEquivalentResult)
     assert isinstance(physical, PhysicalSystemMassResult)
 
-    assert SERIALIZATION_VERSION == 2
+    assert SERIALIZATION_VERSION == 3
     for value, result_type, gravity in (
         (standard, StandardGravityMassEquivalentResult, STANDARD_GRAVITY),
         (physical, PhysicalSystemMassResult, local),
@@ -1547,7 +1631,7 @@ def test_res35_loaded_protocol_preserves_supported_system_and_refuses_body_mass(
     assert RefusalReasonCode.BODY_MASS_CLAIM_UNSUPPORTED in refusal.reason_codes
 
 
-def test_res35_new_contracts_round_trip_under_serialization_v2() -> None:
+def test_res35_new_contracts_round_trip_under_serialization_v3() -> None:
     source = _cmj_input("serialization-res35")
     weight = estimate_system_weight(
         source,
@@ -1611,7 +1695,7 @@ def test_res35_explicit_segment_uses_exact_half_open_sample_boundaries() -> None
     result = estimate_system_weight(explicit, segment)
     assert isinstance(result, SystemWeightResult)
     assert result.value_n == pytest.approx(101.5)
-    assert result.qc.duration_s == pytest.approx(0.3)
+    assert result.qc.elapsed_sample_span_s == pytest.approx(0.3)
     assert result.qc.sample_count == 2
 
 
