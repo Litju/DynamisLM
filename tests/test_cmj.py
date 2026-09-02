@@ -9,10 +9,12 @@ from dynamislm import (
     AcquisitionRecord,
     InstanceIdentifier,
     MeasurementIdentity,
+    MetadataEntry,
     ObservationContext,
     ProcessingIdentity,
     RegistryReference,
     SamplingCharacteristics,
+    ScalarValue,
     ScientificIdentifier,
     ScientificMeasurementObservation,
     SignConvention,
@@ -30,9 +32,13 @@ from dynamislm.comparability import (
     ComparabilityState,
 )
 from dynamislm.measurement.cmj import (
+    CMJ_BILATERAL_TOTAL_VERTICAL_FORCE_SUM,
+    CMJ_SYSTEM_WEIGHT_MEAN_FORCE,
+    CMJ_SYSTEM_WEIGHT_OPERATION,
     CMJ_TEST_FAMILY,
     KILONEWTON,
     NEWTON,
+    STANDARD_GRAVITY,
     AcquisitionArrangement,
     ArtifactStatus,
     ChannelRole,
@@ -40,6 +46,7 @@ from dynamislm.measurement.cmj import (
     CMJChannelIdentity,
     CMJComparabilityRequest,
     CMJComputation,
+    CMJForceInput,
     CMJMeasurementIdentity,
     CMJProtocolAttribute,
     CMJProtocolIdentity,
@@ -50,25 +57,38 @@ from dynamislm.measurement.cmj import (
     CombinationLineage,
     CombinationLineageKind,
     ExplicitTimebase,
+    GravityReference,
+    GravityReferenceType,
+    ProcessedVerticalForceSignal,
     RawVerticalForceSignal,
     ReferenceMetadata,
     ReferenceState,
     RegularTimebase,
     SignalProcessingState,
     SignalTimebase,
+    SystemMassResult,
+    SystemWeightResult,
     TimebaseIdentity,
     TimebaseKind,
+    TotalSupportedForceResult,
+    WeighingSegment,
     assess_cmj_acquisition_comparability,
+    compare_cmj_derived_measurements,
+    construct_total_supported_vertical_force,
     create_cmj_raw_observation,
+    derive_body_mass,
+    derive_system_mass,
+    estimate_system_weight,
     refusal_for_cmj_comparability,
+    refusal_for_cmj_derived_comparability,
     refusal_for_cmj_validation,
     refuse_unregistered_computation,
     source_artifact_for_signal,
     validate_cmj_acquisition,
     validate_raw_vertical_force_signal,
 )
-from dynamislm.provenance import LineageRelation, Provenance
-from dynamislm.refusal import RefusalClass, RefusalReasonCode, RefusalStatus
+from dynamislm.provenance import LineageEdge, LineageRelation, Provenance
+from dynamislm.refusal import RefusalClass, RefusalReasonCode, RefusalResult, RefusalStatus
 
 UTC = datetime_module.UTC
 
@@ -80,11 +100,11 @@ def _reference(object_type: str, key: str, label: str | None = None) -> Registry
     )
 
 
-def _protocol() -> CMJProtocolIdentity:
+def _protocol(*, external_loading: str = "none") -> CMJProtocolIdentity:
     return CMJProtocolIdentity(
         reference=_reference("protocol", "cmj-standard", "Synthetic CMJ protocol"),
         arm_use_constraint=CMJProtocolAttribute("arm_use", "restricted"),
-        external_loading=CMJProtocolAttribute("external_load", "none"),
+        external_loading=CMJProtocolAttribute("external_load", external_loading),
         movement_instruction=CMJProtocolAttribute("instruction", "synthetic fixture"),
         start_posture=CMJProtocolAttribute("start_posture", "upright"),
     )
@@ -97,6 +117,7 @@ def _fixture(
     arrangement: AcquisitionArrangement = AcquisitionArrangement.BILATERAL_SEPARATE,
     processing_state: SignalProcessingState = SignalProcessingState.RAW_ACQUIRED,
     protocol_present: bool = True,
+    external_loading: str = "none",
     axis_key: str = "vertical",
     frame_key: str = "platform",
     sign_key: str = "upward-positive",
@@ -108,7 +129,7 @@ def _fixture(
     zeroing_state: ReferenceState = ReferenceState.NOT_PROVIDED,
     combination_lineage: CombinationLineage | None = None,
 ) -> tuple[CMJMeasurementIdentity, RawVerticalForceSignal, CMJSourceArtifact]:
-    protocol = _protocol() if protocol_present else None
+    protocol = _protocol(external_loading=external_loading) if protocol_present else None
     protocol_reference = protocol.reference if protocol is not None else None
     semantic = CMJSemanticIdentity(
         construct=_reference("construct", "force-platform-vertical-force"),
@@ -669,3 +690,831 @@ def test_p1b_public_surface_has_no_downstream_cmj_modules_or_operations() -> Non
     assert not hasattr(cmj, "calculate_impulse")
     assert not hasattr(cmj, "detect_movement_onset")
     assert not hasattr(cmj, "estimate_jump_height")
+
+
+def _cmj_input(
+    suffix: str,
+    *,
+    arrangement: AcquisitionArrangement = AcquisitionArrangement.SINGLE_PLATFORM,
+    context: ObservationContext | None = None,
+    observation_suffix: str | None = None,
+    external_loading: str = "none",
+) -> CMJForceInput:
+    identity, signal, artifact = _fixture(
+        suffix,
+        arrangement=arrangement,
+        external_loading=external_loading,
+    )
+    observation_id = observation_suffix or suffix
+    observation = create_cmj_raw_observation(
+        observation_id=InstanceIdentifier("observation", observation_id),
+        result_id=InstanceIdentifier("result", observation_id),
+        context=context or _context(suffix),
+        identity=identity,
+        signal=signal,
+        source_artifact=artifact,
+        acquisition=_acquisition_record(identity, signal, artifact),
+        recorded_at=datetime_module.datetime(2026, 1, 1, 12, 1, tzinfo=UTC),
+    )
+    return CMJForceInput(
+        observation=observation,
+        identity=identity,
+        signal=signal,
+        source_artifact=artifact,
+        acquisition=_acquisition_record(identity, signal, artifact),
+    )
+
+
+def _bilateral_inputs() -> tuple[CMJForceInput, CMJForceInput]:
+    context = _context("bilateral")
+    left = _cmj_input(
+        "bilateral-left",
+        arrangement=AcquisitionArrangement.BILATERAL_SEPARATE,
+        context=context,
+        observation_suffix="bilateral-left",
+    )
+    right_identity, right_raw_signal, right_artifact = _fixture(
+        "bilateral-right",
+        arrangement=AcquisitionArrangement.BILATERAL_SEPARATE,
+    )
+    right_identity = replace(
+        right_identity,
+        identity_id=ScientificIdentifier(
+            "synthetic", "measurement-identity", "cmj-bilateral-right", "1.0.0"
+        ),
+        acquisition=replace(
+            right_identity.acquisition,
+            channel=CMJChannelIdentity("right", ChannelRole.RIGHT_FORCE_PLATFORM),
+            sensor_channel="right",
+        ),
+    )
+    right_signal = replace(
+        right_raw_signal,
+        acquisition_identity_id=right_identity.identity_id,
+        channel_id="right",
+        samples=(400.0, 401.0, 402.0),
+    )
+    right_artifact = source_artifact_for_signal(right_signal)
+    right_observation = create_cmj_raw_observation(
+        observation_id=InstanceIdentifier("observation", "bilateral-right"),
+        result_id=InstanceIdentifier("result", "bilateral-right"),
+        context=context,
+        identity=right_identity,
+        signal=right_signal,
+        source_artifact=right_artifact,
+        acquisition=_acquisition_record(right_identity, right_signal, right_artifact),
+        recorded_at=datetime_module.datetime(2026, 1, 1, 12, 1, tzinfo=UTC),
+    )
+    assert isinstance(left.signal, RawVerticalForceSignal)
+    left_signal = replace(left.signal, samples=(300.0, 301.0, 302.0))
+    left_artifact = source_artifact_for_signal(left_signal)
+    left_identity = replace(
+        left.identity,
+        acquisition=replace(left.identity.acquisition, raw_artifact=left_artifact.artifact_id),
+    )
+    left_signal = replace(
+        left_signal,
+        acquisition_identity_id=left_identity.identity_id,
+        source_artifact_id=left_artifact.artifact_id,
+    )
+    left_observation = create_cmj_raw_observation(
+        observation_id=InstanceIdentifier("observation", "bilateral-left"),
+        result_id=InstanceIdentifier("result", "bilateral-left"),
+        context=context,
+        identity=left_identity,
+        signal=left_signal,
+        source_artifact=left_artifact,
+        acquisition=_acquisition_record(left_identity, left_signal, left_artifact),
+        recorded_at=datetime_module.datetime(2026, 1, 1, 12, 1, tzinfo=UTC),
+    )
+    return (
+        CMJForceInput(
+            observation=left_observation,
+            identity=left_identity,
+            signal=left_signal,
+            source_artifact=left_artifact,
+            acquisition=_acquisition_record(left_identity, left_signal, left_artifact),
+        ),
+        CMJForceInput(
+            observation=right_observation,
+            identity=right_identity,
+            signal=right_signal,
+            source_artifact=right_artifact,
+            acquisition=_acquisition_record(right_identity, right_signal, right_artifact),
+        ),
+    )
+
+
+def _rebind_raw_input(
+    source: CMJForceInput,
+    *,
+    suffix: str,
+    unit: UnitReference | None = None,
+    axis: RegistryReference | None = None,
+    frame: RegistryReference | None = None,
+    sign: SignConvention | None = None,
+    timebase: SignalTimebase | None = None,
+    clock_reference: RegistryReference | None = None,
+    samples: tuple[float, ...] | None = None,
+) -> CMJForceInput:
+    assert isinstance(source.signal, RawVerticalForceSignal)
+    raw_signal = replace(
+        source.signal,
+        unit=unit if unit is not None else source.signal.unit,
+        physical_axis=axis if axis is not None else source.signal.physical_axis,
+        reference_frame=frame if frame is not None else source.signal.reference_frame,
+        sign_convention=sign if sign is not None else source.signal.sign_convention,
+        timebase=timebase if timebase is not None else source.signal.timebase,
+        samples=samples if samples is not None else source.signal.samples,
+    )
+    artifact = source_artifact_for_signal(raw_signal)
+    raw_identity = replace(
+        source.identity,
+        acquisition=replace(
+            source.identity.acquisition,
+            raw_artifact=artifact.artifact_id,
+            sampling=SamplingCharacteristics(
+                (
+                    raw_signal.timebase.sample_rate_hz
+                    if isinstance(raw_signal.timebase, RegularTimebase)
+                    else None
+                ),
+                (
+                    source.identity.acquisition.sampling.channels
+                    if source.identity.acquisition.sampling is not None
+                    else ((raw_signal.channel_id,) if raw_signal.channel_id is not None else ())
+                ),
+                (
+                    source.identity.acquisition.sampling.sample_format
+                    if source.identity.acquisition.sampling is not None
+                    else None
+                ),
+            ),
+            unit=raw_signal.unit,
+            physical_axis=raw_signal.physical_axis,
+            reference_frame=raw_signal.reference_frame,
+            sign_convention=raw_signal.sign_convention,
+            timebase=(
+                TimebaseIdentity(
+                    TimebaseKind.REGULAR,
+                    raw_signal.timebase.sample_rate_hz,
+                    clock_reference=clock_reference,
+                )
+                if isinstance(raw_signal.timebase, RegularTimebase)
+                else TimebaseIdentity(
+                    TimebaseKind.EXPLICIT,
+                    None,
+                    clock_reference=clock_reference,
+                )
+            ),
+        ),
+    )
+    raw_signal = replace(
+        raw_signal,
+        acquisition_identity_id=raw_identity.identity_id,
+        source_artifact_id=artifact.artifact_id,
+    )
+    acquisition = _acquisition_record(raw_identity, raw_signal, artifact)
+    observation = create_cmj_raw_observation(
+        observation_id=InstanceIdentifier("observation", suffix),
+        result_id=InstanceIdentifier("result", suffix),
+        context=source.observation.context,
+        identity=raw_identity,
+        signal=raw_signal,
+        source_artifact=artifact,
+        acquisition=acquisition,
+    )
+    return CMJForceInput(
+        observation=observation,
+        identity=raw_identity,
+        signal=raw_signal,
+        source_artifact=artifact,
+        acquisition=acquisition,
+    )
+
+
+def test_res35_bilateral_sum_is_explicit_processed_and_two_source() -> None:
+    left, right = _bilateral_inputs()
+    original_left = left.signal.samples
+    result = construct_total_supported_vertical_force(left, right)
+
+    assert isinstance(result, TotalSupportedForceResult)
+    assert isinstance(result.signal, ProcessedVerticalForceSignal)
+    assert result.signal.samples == (700.0, 702.0, 704.0)
+    assert result.signal.processing_state is SignalProcessingState.SYSTEM_PROCESSED
+    assert result.signal.source_signal_ids == (left.signal.signal_id, right.signal.signal_id)
+    assert result.signal.source_artifact_ids == (
+        left.source_artifact.artifact_id,
+        right.source_artifact.artifact_id,
+    )
+    assert left.signal.samples == original_left
+    assert (
+        result.observation.result.classification.value_origin
+        is ValueOrigin.DERIVED_MECHANICAL_QUANTITY
+    )
+    assert result.observation.result.classification.scientific_roles == ()
+    processing = result.observation.provenance.processing_runs[-1]
+    assert processing.method == CMJ_BILATERAL_TOTAL_VERTICAL_FORCE_SUM
+    assert processing.source_artifact_ids == (
+        left.source_artifact.artifact_id,
+        right.source_artifact.artifact_id,
+    )
+    assert (
+        result.observation.provenance.lineage_edges.count(
+            LineageEdge(
+                left.observation.observation_id.qualified,
+                processing.processing_run_id.qualified,
+                LineageRelation.DERIVED_FROM,
+            )
+        )
+        == 1
+    )
+
+
+def test_res35_processed_total_cannot_be_relabelled_as_bilateral_source() -> None:
+    left, right = _bilateral_inputs()
+    total = construct_total_supported_vertical_force(left, right)
+    assert isinstance(total, TotalSupportedForceResult)
+    assert isinstance(total.signal, ProcessedVerticalForceSignal)
+    assert isinstance(total.observation.identity, CMJMeasurementIdentity)
+
+    forged_acquisition = replace(
+        total.observation.identity.acquisition,
+        arrangement=AcquisitionArrangement.BILATERAL_SEPARATE,
+        sensor_channel="left",
+        channel=CMJChannelIdentity("left", ChannelRole.LEFT_FORCE_PLATFORM),
+        available_channels=(
+            CMJChannelIdentity("left", ChannelRole.LEFT_FORCE_PLATFORM),
+            CMJChannelIdentity("right", ChannelRole.RIGHT_FORCE_PLATFORM),
+        ),
+        combination_lineage=None,
+    )
+    forged_identity = replace(total.observation.identity, acquisition=forged_acquisition)
+    forged_signal = replace(total.signal, channel_id="left")
+    forged_acquisition_record = replace(total.acquisition, sensor_channel="left")
+    forged_observation = replace(total.observation, identity=forged_identity)
+    forged = CMJForceInput(
+        observation=forged_observation,
+        identity=forged_identity,
+        signal=forged_signal,
+        source_artifact=total.source_artifact,
+        acquisition=forged_acquisition_record,
+    )
+
+    refused = construct_total_supported_vertical_force(forged, right)
+    assert isinstance(refused, RefusalResult)
+    assert RefusalReasonCode.BILATERAL_INPUTS_INCOMPATIBLE in refused.reason_codes
+    assert RefusalReasonCode.PROCESSING_LINEAGE_UNRESOLVED in refused.reason_codes
+
+
+def test_res35_force_paths_and_bilateral_prerequisites_are_not_implicit() -> None:
+    single = _cmj_input("single-path")
+    single_result = construct_total_supported_vertical_force(single)
+    assert isinstance(single_result, TotalSupportedForceResult)
+    assert single_result.signal is single.signal
+
+    precombined = _cmj_input(
+        "precombined-path", arrangement=AcquisitionArrangement.BILATERAL_PRECOMBINED
+    )
+    precombined_result = construct_total_supported_vertical_force(precombined)
+    assert isinstance(precombined_result, TotalSupportedForceResult)
+    assert precombined_result.signal is precombined.signal
+
+    separate = _cmj_input("separate-missing", arrangement=AcquisitionArrangement.BILATERAL_SEPARATE)
+    refused = construct_total_supported_vertical_force(separate)
+    assert isinstance(refused, RefusalResult)
+    assert RefusalReasonCode.BILATERAL_INPUTS_REQUIRED in refused.reason_codes
+
+
+def test_res35_bilateral_incompatible_timebase_and_sample_support_refuse() -> None:
+    left, right = _bilateral_inputs()
+    assert isinstance(right.signal, RawVerticalForceSignal)
+    mismatched_timebase_signal = replace(
+        right.signal,
+        timebase=RegularTimebase(500.0),
+    )
+    mismatched_timebase_artifact = source_artifact_for_signal(mismatched_timebase_signal)
+    mismatched_timebase_identity = replace(
+        right.identity,
+        acquisition=replace(
+            right.identity.acquisition,
+            raw_artifact=mismatched_timebase_artifact.artifact_id,
+            timebase=TimebaseIdentity(TimebaseKind.REGULAR, 500.0),
+        ),
+    )
+    mismatched_timebase_signal = replace(
+        mismatched_timebase_signal,
+        acquisition_identity_id=mismatched_timebase_identity.identity_id,
+        source_artifact_id=mismatched_timebase_artifact.artifact_id,
+    )
+    mismatched_timebase_observation = create_cmj_raw_observation(
+        observation_id=InstanceIdentifier("observation", "bilateral-timebase"),
+        result_id=InstanceIdentifier("result", "bilateral-timebase"),
+        context=left.observation.context,
+        identity=mismatched_timebase_identity,
+        signal=mismatched_timebase_signal,
+        source_artifact=mismatched_timebase_artifact,
+        acquisition=_acquisition_record(
+            mismatched_timebase_identity,
+            mismatched_timebase_signal,
+            mismatched_timebase_artifact,
+        ),
+    )
+    mismatched_timebase = CMJForceInput(
+        observation=mismatched_timebase_observation,
+        identity=mismatched_timebase_identity,
+        signal=mismatched_timebase_signal,
+        source_artifact=mismatched_timebase_artifact,
+        acquisition=_acquisition_record(
+            mismatched_timebase_identity,
+            mismatched_timebase_signal,
+            mismatched_timebase_artifact,
+        ),
+    )
+    refused_timebase = construct_total_supported_vertical_force(left, mismatched_timebase)
+    assert isinstance(refused_timebase, RefusalResult)
+    assert RefusalReasonCode.TIMEBASE_NOT_SYNCHRONIZED in refused_timebase.reason_codes
+
+    mismatched_clock = _rebind_raw_input(
+        right,
+        suffix="bilateral-clock",
+        clock_reference=_reference("clock", "right-clock"),
+    )
+    refused_clock = construct_total_supported_vertical_force(left, mismatched_clock)
+    assert isinstance(refused_clock, RefusalResult)
+    assert RefusalReasonCode.TIMEBASE_NOT_SYNCHRONIZED in refused_clock.reason_codes
+
+    shorter_signal = replace(right.signal, samples=(400.0, 401.0))
+    shorter_artifact = source_artifact_for_signal(shorter_signal)
+    shorter_identity = replace(
+        right.identity,
+        acquisition=replace(right.identity.acquisition, raw_artifact=shorter_artifact.artifact_id),
+    )
+    shorter_signal = replace(
+        shorter_signal,
+        acquisition_identity_id=shorter_identity.identity_id,
+        source_artifact_id=shorter_artifact.artifact_id,
+    )
+    shorter_observation = create_cmj_raw_observation(
+        observation_id=InstanceIdentifier("observation", "bilateral-shorter"),
+        result_id=InstanceIdentifier("result", "bilateral-shorter"),
+        context=left.observation.context,
+        identity=shorter_identity,
+        signal=shorter_signal,
+        source_artifact=shorter_artifact,
+        acquisition=_acquisition_record(shorter_identity, shorter_signal, shorter_artifact),
+    )
+    refused_support = construct_total_supported_vertical_force(
+        left,
+        CMJForceInput(
+            observation=shorter_observation,
+            identity=shorter_identity,
+            signal=shorter_signal,
+            source_artifact=shorter_artifact,
+            acquisition=_acquisition_record(shorter_identity, shorter_signal, shorter_artifact),
+        ),
+    )
+    assert isinstance(refused_support, RefusalResult)
+    assert RefusalReasonCode.SAMPLE_SUPPORT_MISMATCH in refused_support.reason_codes
+
+
+def test_res35_weighing_segment_is_separate_from_mean_estimator_and_qc_is_descriptive() -> None:
+    source = _cmj_input("weighing")
+    segment = WeighingSegment(
+        source_signal_id=source.signal.signal_id,
+        source_artifact_id=source.source_artifact.artifact_id,
+        source_measurement_identity_id=source.identity.identity_id,
+        start_index=1,
+        end_index=3,
+    )
+    result = estimate_system_weight(source, segment)
+
+    assert isinstance(result, SystemWeightResult)
+    assert result.observation.result.value == ScalarValue(101.5)
+    assert result.qc.sample_count == 2
+    assert result.qc.duration_s == pytest.approx(0.002)
+    assert result.qc.standard_deviation_n == pytest.approx(0.7071067811865476)
+    assert result.qc.range_n == 1.0
+    assert result.qc.acceptability_adjudicated is False
+    assert result.qc.quality_flags == ("QC_DESCRIBED", "QC_ACCEPTABILITY_NOT_ADJUDICATED")
+    assert result.observation.identity.processing.estimator == CMJ_SYSTEM_WEIGHT_MEAN_FORCE
+    assert (
+        result.observation.identity.processing.registered_operation == CMJ_SYSTEM_WEIGHT_OPERATION
+    )
+    assert result.observation.result.classification.scientific_roles == ()
+    assert (
+        ValueOrigin.DERIVED_MECHANICAL_QUANTITY
+        is result.observation.result.classification.value_origin
+    )
+    assert source.signal.samples == (100.0, 101.0, 102.0)
+
+    missing = estimate_system_weight(source, None)
+    assert isinstance(missing, RefusalResult)
+    assert RefusalReasonCode.WEIGHING_SEGMENT_MISSING in missing.reason_codes
+    too_few = estimate_system_weight(
+        source,
+        WeighingSegment(
+            source.signal.signal_id,
+            source.source_artifact.artifact_id,
+            source.identity.identity_id,
+            0,
+            1,
+        ),
+    )
+    assert isinstance(too_few, RefusalResult)
+    assert RefusalReasonCode.INSUFFICIENT_WEIGHING_SAMPLES in too_few.reason_codes
+
+
+def test_res35_system_mass_requires_explicit_gravity_and_preserves_weight() -> None:
+    source = _cmj_input("mass")
+    segment = WeighingSegment(
+        source.signal.signal_id,
+        source.source_artifact.artifact_id,
+        source.identity.identity_id,
+        0,
+        3,
+    )
+    weight = estimate_system_weight(source, segment)
+    assert isinstance(weight, SystemWeightResult)
+
+    missing = derive_system_mass(weight)
+    assert isinstance(missing, RefusalResult)
+    assert RefusalReasonCode.GRAVITY_REFERENCE_MISSING in missing.reason_codes
+    assert weight.value_n == 101.0
+
+    mass = derive_system_mass(weight, STANDARD_GRAVITY)
+    assert isinstance(mass, SystemMassResult)
+    assert mass.value_kg == pytest.approx(101.0 / 9.80665)
+    assert mass.observation.result.unit is not None
+    assert mass.observation.result.unit.identifier.key == "kilogram"
+    assert (
+        mass.observation.result.classification.value_origin
+        is ValueOrigin.DERIVED_MECHANICAL_QUANTITY
+    )
+    assert mass.observation.result.classification.scientific_roles == ()
+    assert "9.81" not in canonical_json(mass)
+    assert mass.observation.provenance.lineage_edges[
+        -2
+    ].relation is LineageRelation.SUPPORTED_BY or any(
+        edge.relation is LineageRelation.SUPPORTED_BY
+        for edge in mass.observation.provenance.lineage_edges
+    )
+
+
+def test_res35_system_mass_rejects_forged_weight_processing_lineage() -> None:
+    source = _cmj_input("mass-lineage")
+    segment = WeighingSegment(
+        source.signal.signal_id,
+        source.source_artifact.artifact_id,
+        source.identity.identity_id,
+        0,
+        3,
+    )
+    weight = estimate_system_weight(source, segment)
+    assert isinstance(weight, SystemWeightResult)
+    assert len(weight.observation.provenance.processing_runs) == 1
+    forged_run = replace(
+        weight.observation.provenance.processing_runs[0],
+        method=CMJ_BILATERAL_TOTAL_VERTICAL_FORCE_SUM,
+    )
+    forged_provenance = replace(
+        weight.observation.provenance,
+        processing_runs=(forged_run,),
+    )
+    forged_observation = replace(weight.observation, provenance=forged_provenance)
+
+    refused = derive_system_mass(forged_observation, STANDARD_GRAVITY)
+    assert isinstance(refused, RefusalResult)
+    assert RefusalReasonCode.PROCESSING_LINEAGE_UNRESOLVED in refused.reason_codes
+
+
+def test_res35_standard_and_local_gravity_are_distinct_and_body_mass_is_refused() -> None:
+    source = _cmj_input("gravity-distinction")
+    weight = estimate_system_weight(
+        source,
+        WeighingSegment(
+            source.signal.signal_id,
+            source.source_artifact.artifact_id,
+            source.identity.identity_id,
+            0,
+            3,
+        ),
+    )
+    assert isinstance(weight, SystemWeightResult)
+    local = GravityReference(
+        9.8,
+        GravityReferenceType.LOCAL_GRAVITATIONAL_ACCELERATION,
+        _reference("gravity-source", "synthetic-local-gravity"),
+    )
+    standard_mass = derive_system_mass(weight, STANDARD_GRAVITY)
+    local_mass = derive_system_mass(weight, local)
+    assert isinstance(standard_mass, SystemMassResult)
+    assert isinstance(local_mass, SystemMassResult)
+    assert standard_mass.gravity_reference.reference_type is GravityReferenceType.STANDARD_GRAVITY
+    assert (
+        local_mass.gravity_reference.reference_type
+        is GravityReferenceType.LOCAL_GRAVITATIONAL_ACCELERATION
+    )
+    refusal = derive_body_mass(local_mass)
+    assert isinstance(refusal, RefusalResult)
+    assert refusal.refusal_class is RefusalClass.COMPUTATION_NOT_REGISTERED
+    assert RefusalReasonCode.BODY_MASS_CLAIM_UNSUPPORTED in refusal.reason_codes
+    assert refusal.observation_ids == (local_mass.observation.observation_id,)
+    with pytest.raises(ValueError, match="STANDARD_GRAVITY"):
+        GravityReference(
+            9.8,
+            GravityReferenceType.STANDARD_GRAVITY,
+            STANDARD_GRAVITY.source,
+        )
+
+
+def test_res35_loaded_protocol_preserves_supported_system_and_refuses_body_mass() -> None:
+    loaded = _cmj_input("loaded", external_loading="20 kg supported external load")
+    segment = WeighingSegment(
+        loaded.signal.signal_id,
+        loaded.source_artifact.artifact_id,
+        loaded.identity.identity_id,
+        0,
+        3,
+    )
+    weight = estimate_system_weight(loaded, segment)
+    assert isinstance(weight, SystemWeightResult)
+    assert isinstance(weight.observation.identity, CMJMeasurementIdentity)
+    protocol = weight.observation.identity.semantic.protocol_identity
+    assert protocol is not None
+    assert protocol.external_loading is not None
+    assert protocol.external_loading.value == "20 kg supported external load"
+
+    mass = derive_system_mass(weight, STANDARD_GRAVITY)
+    assert isinstance(mass, SystemMassResult)
+    assert mass.value_kg == pytest.approx(101.0 / 9.80665)
+    refusal = derive_body_mass(mass)
+    assert isinstance(refusal, RefusalResult)
+    assert RefusalReasonCode.BODY_MASS_CLAIM_UNSUPPORTED in refusal.reason_codes
+
+
+def test_res35_new_contracts_round_trip_under_serialization_v2() -> None:
+    source = _cmj_input("serialization-res35")
+    weight = estimate_system_weight(
+        source,
+        WeighingSegment(
+            source.signal.signal_id,
+            source.source_artifact.artifact_id,
+            source.identity.identity_id,
+            0,
+            3,
+        ),
+    )
+    assert isinstance(weight, SystemWeightResult)
+    restored_weight = from_canonical_json(canonical_json(weight), SystemWeightResult)
+    restored_gravity = from_canonical_json(canonical_json(STANDARD_GRAVITY), GravityReference)
+    assert canonical_json(restored_weight) == canonical_json(weight)
+    assert canonical_json(restored_gravity) == canonical_json(STANDARD_GRAVITY)
+
+
+def test_res35_unit_axis_and_sign_contracts_refuse_without_hidden_harmonization() -> None:
+    left, right = _bilateral_inputs()
+    unit_mismatch = _rebind_raw_input(right, suffix="unit-mismatch", unit=KILONEWTON)
+    unit_refusal = construct_total_supported_vertical_force(left, unit_mismatch)
+    assert isinstance(unit_refusal, RefusalResult)
+    assert RefusalReasonCode.FORCE_UNIT_TRANSFORMATION_REQUIRED in unit_refusal.reason_codes
+
+    axis_mismatch = _rebind_raw_input(
+        right,
+        suffix="axis-mismatch",
+        axis=_reference("axis", "horizontal", "Horizontal axis"),
+    )
+    axis_refusal = construct_total_supported_vertical_force(left, axis_mismatch)
+    assert isinstance(axis_refusal, RefusalResult)
+    assert RefusalReasonCode.SIGN_OR_FRAME_UNRESOLVED in axis_refusal.reason_codes
+
+    sign_mismatch = _rebind_raw_input(
+        right,
+        suffix="sign-mismatch",
+        sign=SignConvention(_reference("sign-convention", "alternate-upward"), "upward"),
+    )
+    sign_refusal = construct_total_supported_vertical_force(left, sign_mismatch)
+    assert isinstance(sign_refusal, RefusalResult)
+    assert RefusalReasonCode.BILATERAL_INPUTS_INCOMPATIBLE in sign_refusal.reason_codes
+    assert RefusalReasonCode.SIGN_OR_FRAME_UNRESOLVED in sign_refusal.reason_codes
+
+
+def test_res35_explicit_segment_uses_exact_half_open_sample_boundaries() -> None:
+    source = _cmj_input("explicit-segment")
+    explicit = _rebind_raw_input(
+        source,
+        suffix="explicit-segment-rebound",
+        timebase=ExplicitTimebase((10.0, 10.1, 10.4)),
+    )
+    assert isinstance(explicit.signal, RawVerticalForceSignal)
+    segment = WeighingSegment(
+        explicit.signal.signal_id,
+        explicit.source_artifact.artifact_id,
+        explicit.identity.identity_id,
+        1,
+        3,
+    )
+    result = estimate_system_weight(explicit, segment)
+    assert isinstance(result, SystemWeightResult)
+    assert result.value_n == pytest.approx(101.5)
+    assert result.qc.duration_s == pytest.approx(0.3)
+    assert result.qc.sample_count == 2
+
+
+def test_res35_end_to_end_bilateral_weight_and_mass_preserves_processing_dag() -> None:
+    left, right = _bilateral_inputs()
+    total = construct_total_supported_vertical_force(left, right)
+    assert isinstance(total, TotalSupportedForceResult)
+    assert isinstance(total.signal, ProcessedVerticalForceSignal)
+    reverse_total = construct_total_supported_vertical_force(right, left)
+    assert isinstance(reverse_total, TotalSupportedForceResult)
+    assert canonical_json(reverse_total) == canonical_json(total)
+    segment = WeighingSegment(
+        total.signal.signal_id,
+        total.source_artifact.artifact_id,
+        total.observation.identity.identity_id,
+        0,
+        3,
+    )
+    weight = estimate_system_weight(total, segment)
+    assert isinstance(weight, SystemWeightResult)
+    assert weight.value_n == pytest.approx(702.0)
+    mass = derive_system_mass(weight, STANDARD_GRAVITY)
+    assert isinstance(mass, SystemMassResult)
+    assert mass.value_kg == pytest.approx(702.0 / 9.80665)
+    restored_total = from_canonical_json(canonical_json(total), TotalSupportedForceResult)
+    restored_mass = from_canonical_json(canonical_json(mass), SystemMassResult)
+    assert canonical_json(restored_total) == canonical_json(total)
+    assert canonical_json(restored_mass) == canonical_json(mass)
+    assert len(mass.observation.provenance.processing_runs) == 3
+    assert (
+        sum(
+            edge.relation is LineageRelation.PRODUCED
+            and edge.to_id == mass.observation.observation_id.qualified
+            for edge in mass.observation.provenance.lineage_edges
+        )
+        == 1
+    )
+
+
+def test_res35_incomplete_source_provenance_refuses_before_force_processing() -> None:
+    source = _cmj_input("incomplete-provenance")
+    incomplete_observation = replace(
+        source.observation,
+        provenance=replace(source.observation.provenance, lineage_edges=()),
+    )
+    incomplete = replace(source, observation=incomplete_observation)
+
+    refused = construct_total_supported_vertical_force(incomplete)
+    assert isinstance(refused, RefusalResult)
+    assert RefusalReasonCode.PROCESSING_LINEAGE_UNRESOLVED in refused.reason_codes
+
+
+def test_res35_derived_comparability_distinguishes_gravity_and_segment_identity() -> None:
+    first_source = _cmj_input("comparability-one")
+    second_source = _cmj_input("comparability-two")
+    first_segment = WeighingSegment(
+        first_source.signal.signal_id,
+        first_source.source_artifact.artifact_id,
+        first_source.identity.identity_id,
+        0,
+        3,
+    )
+    second_segment = WeighingSegment(
+        second_source.signal.signal_id,
+        second_source.source_artifact.artifact_id,
+        second_source.identity.identity_id,
+        0,
+        3,
+    )
+    first_weight = estimate_system_weight(first_source, first_segment)
+    second_weight = estimate_system_weight(second_source, second_segment)
+    assert isinstance(first_weight, SystemWeightResult)
+    assert isinstance(second_weight, SystemWeightResult)
+    comparable = compare_cmj_derived_measurements(
+        first_weight,
+        second_weight,
+        claim="compare system weight",
+        request_id=InstanceIdentifier("comparability-request", "system-weight"),
+    )
+    assert comparable.state is ComparabilityState.COMPARABLE
+
+    alternate_weight = estimate_system_weight(
+        second_source,
+        WeighingSegment(
+            second_source.signal.signal_id,
+            second_source.source_artifact.artifact_id,
+            second_source.identity.identity_id,
+            1,
+            3,
+        ),
+    )
+    assert isinstance(alternate_weight, SystemWeightResult)
+    different_segment = compare_cmj_derived_measurements(
+        first_weight,
+        alternate_weight,
+        claim="compare system weight with different weighing segment",
+        request_id=InstanceIdentifier("comparability-request", "system-weight-segment"),
+    )
+    assert different_segment.state is ComparabilityState.BRIDGE_VALIDATION_REQUIRED
+    assert ComparabilityReasonCode.WEIGHING_SEGMENT_MISMATCH in different_segment.reason_codes
+
+    parameter_weight = estimate_system_weight(
+        second_source,
+        WeighingSegment(
+            second_source.signal.signal_id,
+            second_source.source_artifact.artifact_id,
+            second_source.identity.identity_id,
+            0,
+            3,
+            selection_parameters=(MetadataEntry("window_label", "operator-supplied"),),
+        ),
+    )
+    assert isinstance(parameter_weight, SystemWeightResult)
+    different_selection_parameters = compare_cmj_derived_measurements(
+        first_weight,
+        parameter_weight,
+        claim="compare system weight with different selection parameters",
+        request_id=InstanceIdentifier("comparability-request", "selection-parameters"),
+    )
+    assert different_selection_parameters.state is ComparabilityState.BRIDGE_VALIDATION_REQUIRED
+    assert (
+        ComparabilityReasonCode.WEIGHING_SEGMENT_MISMATCH
+        in different_selection_parameters.reason_codes
+    )
+
+    first_mass = derive_system_mass(first_weight, STANDARD_GRAVITY)
+    second_mass = derive_system_mass(
+        second_weight,
+        GravityReference(
+            9.8,
+            GravityReferenceType.LOCAL_GRAVITATIONAL_ACCELERATION,
+            _reference("gravity-source", "comparability-local"),
+        ),
+    )
+    assert isinstance(first_mass, SystemMassResult)
+    assert isinstance(second_mass, SystemMassResult)
+    different_gravity = compare_cmj_derived_measurements(
+        first_mass,
+        second_mass,
+        claim="compare system mass",
+        request_id=InstanceIdentifier("comparability-request", "system-mass"),
+    )
+    assert different_gravity.state is ComparabilityState.BRIDGE_VALIDATION_REQUIRED
+    assert ComparabilityReasonCode.GRAVITY_REFERENCE_MISMATCH in different_gravity.reason_codes
+
+    body_claim = compare_cmj_derived_measurements(
+        first_weight,
+        second_weight,
+        claim="compare body mass",
+        request_id=InstanceIdentifier("comparability-request", "body-mass"),
+    )
+    assert body_claim.state is ComparabilityState.NOT_COMPARABLE
+    assert ComparabilityReasonCode.BODY_MASS_CLAIM_UNSUPPORTED in body_claim.reason_codes
+    body_refusal = refusal_for_cmj_derived_comparability(
+        body_claim,
+        blocked_claim="compare body mass",
+        observation_ids=(
+            first_weight.observation.observation_id,
+            second_weight.observation.observation_id,
+        ),
+    )
+    assert isinstance(body_refusal, RefusalResult)
+    assert body_refusal.refusal_class is RefusalClass.COMPUTATION_NOT_REGISTERED
+    assert RefusalReasonCode.BODY_MASS_CLAIM_UNSUPPORTED in body_refusal.reason_codes
+
+
+def test_res35_derived_comparability_detects_sampling_and_clock_differences() -> None:
+    first_source = _cmj_input("comparability-sampling-one")
+    second_source = _rebind_raw_input(
+        _cmj_input("comparability-sampling-two"),
+        suffix="comparability-sampling-two-rebound",
+        timebase=RegularTimebase(500.0),
+    )
+    first_segment = WeighingSegment(
+        first_source.signal.signal_id,
+        first_source.source_artifact.artifact_id,
+        first_source.identity.identity_id,
+        0,
+        3,
+    )
+    second_segment = WeighingSegment(
+        second_source.signal.signal_id,
+        second_source.source_artifact.artifact_id,
+        second_source.identity.identity_id,
+        0,
+        3,
+    )
+    first_weight = estimate_system_weight(first_source, first_segment)
+    second_weight = estimate_system_weight(second_source, second_segment)
+    assert isinstance(first_weight, SystemWeightResult)
+    assert isinstance(second_weight, SystemWeightResult)
+
+    comparison = compare_cmj_derived_measurements(
+        first_weight,
+        second_weight,
+        claim="compare system weight",
+        request_id=InstanceIdentifier("comparability-request", "sampling"),
+    )
+    assert comparison.state is ComparabilityState.BRIDGE_VALIDATION_REQUIRED
+    assert ComparabilityReasonCode.SAMPLE_OR_TIMEBASE_MISMATCH in comparison.reason_codes
