@@ -707,17 +707,22 @@ def _provenance_with_run(
         if edge not in edges:
             edges.append(edge)
     for output_artifact in output_artifacts:
-        edge = LineageEdge(
-            output_artifact.artifact_id.qualified,
-            next(
-                acquisition.acquisition_id.qualified
+        output_acquisition = next(
+            (
+                acquisition
                 for acquisition in output_acquisitions
                 if acquisition.source_artifact_id == output_artifact.artifact_id
             ),
-            LineageRelation.ACQUIRED_AS,
+            None,
         )
-        if edge not in edges:
-            edges.append(edge)
+        if output_acquisition is not None:
+            edge = LineageEdge(
+                output_artifact.artifact_id.qualified,
+                output_acquisition.acquisition_id.qualified,
+                LineageRelation.ACQUIRED_AS,
+            )
+            if edge not in edges:
+                edges.append(edge)
     for artifact_id in produced_artifact_ids:
         edge = LineageEdge(
             processing_run.processing_run_id.qualified,

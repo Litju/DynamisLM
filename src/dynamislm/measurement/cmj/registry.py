@@ -1,4 +1,4 @@
-"""Small, explicit CMJ registry surface for the P1B/P1C/P1D contracts."""
+"""Small, explicit CMJ registry surface for the P1B-P1E contracts."""
 
 from __future__ import annotations
 
@@ -24,6 +24,9 @@ CMJ_DERIVED_COMPARABILITY_RULE = _reference(
 )
 CMJ_EVENT_COMPARABILITY_RULE = _reference(
     "comparability-rule", "cmj-event-v1", "CMJ event comparability"
+)
+CMJ_MECHANICS_COMPARABILITY_RULE = _reference(
+    "comparability-rule", "cmj-mechanics-v1", "CMJ mechanics comparability"
 )
 
 CMJ_MOVEMENT_ONSET_EVENT_DEFINITION_REF = _reference(
@@ -117,6 +120,113 @@ CMJ_STANDARD_GRAVITY_MASS_EQUIVALENT_FROM_WEIGHT = _reference(
     "cmj-standard-gravity-mass-equivalent-from-weight-v1",
     "CMJ standard-gravity mass equivalent from system weight",
 )
+CMJ_MECHANICS_SYSTEM_CONTRACT = _reference(
+    "schema", "cmj-mechanics-system-contract-v1", "CMJ mechanics system contract"
+)
+CMJ_FORCE_PLATFORM_PLUS_GRAVITY_EXTERNAL_FORCE_MODEL = _reference(
+    "external-force-model",
+    "cmj-force-platform-plus-gravity-v1",
+    "CMJ force platform plus gravity external-force model",
+)
+CMJ_TRAPEZOIDAL_INTEGRATION_METHOD = _reference(
+    "integration-method",
+    "cmj-sample-attached-trapezoidal-v1",
+    "CMJ sample-attached cumulative trapezoidal integration",
+)
+CMJ_INCLUSIVE_SAMPLE_INTEGRATION_BOUNDARY = _reference(
+    "integration-boundary",
+    "cmj-inclusive-endpoint-samples-v1",
+    "CMJ inclusive endpoint-sample integration boundary",
+)
+CMJ_NET_VERTICAL_FORCE_OPERATION = _reference(
+    "registered-operation",
+    "cmj-net-vertical-force-from-total-force-and-system-weight-v1",
+    "CMJ net vertical force from total supported force and SYSTEM_WEIGHT",
+)
+CMJ_NET_VERTICAL_FORCE_SCHEMA = _reference(
+    "schema", "cmj-net-vertical-force-series-v1", "CMJ net vertical-force series"
+)
+CMJ_NET_VERTICAL_FORCE_MEASURAND = _reference(
+    "measurand", "cmj-net-vertical-force", "CMJ net vertical force"
+)
+CMJ_NET_VERTICAL_FORCE_METRIC = _reference("metric", "cmj-net-vertical-force", "Net vertical force")
+CMJ_NET_VERTICAL_IMPULSE_OPERATION = _reference(
+    "registered-operation",
+    "cmj-net-vertical-impulse-v1",
+    "CMJ scalar net vertical impulse",
+)
+CMJ_NET_VERTICAL_IMPULSE_MEASURAND = _reference(
+    "measurand", "cmj-net-vertical-impulse", "CMJ net vertical impulse"
+)
+CMJ_NET_VERTICAL_IMPULSE_METRIC = _reference(
+    "metric", "cmj-net-vertical-impulse", "Net vertical impulse"
+)
+CMJ_SUPPORTED_SYSTEM_COM_ACCELERATION_OPERATION = _reference(
+    "registered-operation",
+    "cmj-supported-system-com-vertical-acceleration-v1",
+    "CMJ supported-system COM vertical acceleration",
+)
+CMJ_SUPPORTED_SYSTEM_COM_ACCELERATION_MEASURAND = _reference(
+    "measurand",
+    "cmj-supported-system-com-vertical-acceleration",
+    "CMJ supported-system COM vertical acceleration",
+)
+CMJ_SUPPORTED_SYSTEM_COM_ACCELERATION_METRIC = _reference(
+    "metric",
+    "cmj-supported-system-com-vertical-acceleration",
+    "Supported-system COM vertical acceleration",
+)
+CMJ_SUPPORTED_SYSTEM_COM_ACCELERATION_SCHEMA = _reference(
+    "schema",
+    "cmj-supported-system-com-vertical-acceleration-series-v1",
+    "CMJ supported-system COM vertical acceleration series",
+)
+CMJ_SUPPORTED_SYSTEM_COM_VELOCITY_OPERATION = _reference(
+    "registered-operation",
+    "cmj-supported-system-com-vertical-velocity-v1",
+    "CMJ supported-system COM vertical velocity",
+)
+CMJ_SUPPORTED_SYSTEM_COM_VELOCITY_MEASURAND = _reference(
+    "measurand", "cmj-supported-system-com-vertical-velocity", "CMJ supported-system COM velocity"
+)
+CMJ_SUPPORTED_SYSTEM_COM_VELOCITY_METRIC = _reference(
+    "metric", "cmj-supported-system-com-vertical-velocity", "Supported-system COM vertical velocity"
+)
+CMJ_SUPPORTED_SYSTEM_COM_VELOCITY_SCHEMA = _reference(
+    "schema",
+    "cmj-supported-system-com-vertical-velocity-series-v1",
+    "CMJ supported-system COM vertical velocity series",
+)
+CMJ_SUPPORTED_SYSTEM_COM_RELATIVE_DISPLACEMENT_OPERATION = _reference(
+    "registered-operation",
+    "cmj-supported-system-com-relative-vertical-displacement-v1",
+    "CMJ supported-system COM relative vertical displacement",
+)
+CMJ_SUPPORTED_SYSTEM_COM_RELATIVE_DISPLACEMENT_MEASURAND = _reference(
+    "measurand",
+    "cmj-supported-system-com-relative-vertical-displacement",
+    "CMJ supported-system COM relative vertical displacement",
+)
+CMJ_SUPPORTED_SYSTEM_COM_RELATIVE_DISPLACEMENT_METRIC = _reference(
+    "metric",
+    "cmj-supported-system-com-relative-vertical-displacement",
+    "Supported-system COM relative vertical displacement",
+)
+CMJ_SUPPORTED_SYSTEM_COM_RELATIVE_DISPLACEMENT_SCHEMA = _reference(
+    "schema",
+    "cmj-supported-system-com-relative-vertical-displacement-series-v1",
+    "CMJ supported-system COM relative vertical displacement series",
+)
+CMJ_ZERO_INITIAL_VERTICAL_VELOCITY = _reference(
+    "initial-condition",
+    "cmj-zero-vertical-velocity-at-explicit-sample-v1",
+    "CMJ zero vertical velocity at explicit initial-condition sample",
+)
+CMJ_RELATIVE_DISPLACEMENT_ZERO_ORIGIN = _reference(
+    "coordinate-origin",
+    "cmj-relative-vertical-displacement-zero-at-initial-sample-v1",
+    "CMJ relative vertical displacement zero at initial sample",
+)
 CMJ_TOTAL_SUPPORTED_VERTICAL_FORCE_SCHEMA = _reference(
     "schema", "cmj-total-supported-vertical-force-v1", "CMJ total supported vertical-force series"
 )
@@ -177,6 +287,62 @@ RES44_DECISION_MASS_METROLOGY = RegistryReference(
         "https://nvlpubs.nist.gov/nistpubs/Legacy/TN/nbstechnicalnote491.pdf",
     ),
 )
+RES37_DECISION_SUPPORTED_SYSTEM_NET_FORCE = RegistryReference(
+    identifier=ScientificIdentifier(
+        "dynamislm", "decision-record", "res37-supported-system-net-force", CMJ_REGISTRY_VERSION
+    ),
+    display_label="RES-37 supported-system net-force decision",
+    reference_ids=(
+        "docs/decisions/RES37-DR-001-supported-system-net-force.md",
+        "https://journals.plos.org/plosone/article?id=10.1371/journal.pone.0265999",
+        "https://pmc.ncbi.nlm.nih.gov/articles/PMC7761544/",
+    ),
+)
+RES37_DECISION_IMPULSE_INTEGRATION = RegistryReference(
+    identifier=ScientificIdentifier(
+        "dynamislm", "decision-record", "res37-impulse-and-integration", CMJ_REGISTRY_VERSION
+    ),
+    display_label="RES-37 impulse and integration decision",
+    reference_ids=(
+        "docs/decisions/RES37-DR-002-impulse-and-integration-semantics.md",
+        "https://bura.brunel.ac.uk/handle/2438/1392",
+        "http://dx.doi.org/10.1119/1.1397460",
+        "https://journals.plos.org/plosone/article?id=10.1371/journal.pone.0265999",
+    ),
+)
+RES37_DECISION_PHYSICAL_MASS_ACCELERATION = RegistryReference(
+    identifier=ScientificIdentifier(
+        "dynamislm", "decision-record", "res37-physical-mass-acceleration", CMJ_REGISTRY_VERSION
+    ),
+    display_label="RES-37 physical mass and acceleration decision",
+    reference_ids=(
+        "docs/decisions/RES37-DR-003-physical-acceleration-and-mass-contract.md",
+        "docs/decisions/RES44-DR-001-system-mass-and-standard-gravity-equivalent.md",
+        "https://journals.plos.org/plosone/article?id=10.1371/journal.pone.0265999",
+    ),
+)
+RES37_DECISION_INITIAL_VELOCITY = RegistryReference(
+    identifier=ScientificIdentifier(
+        "dynamislm", "decision-record", "res37-initial-velocity", CMJ_REGISTRY_VERSION
+    ),
+    display_label="RES-37 initial velocity decision",
+    reference_ids=(
+        "docs/decisions/RES37-DR-004-velocity-initial-condition.md",
+        "https://pmc.ncbi.nlm.nih.gov/articles/PMC7761544/",
+        "https://journals.plos.org/plosone/article?id=10.1371/journal.pone.0265999",
+    ),
+)
+RES37_DECISION_DISPLACEMENT_REFERENCE = RegistryReference(
+    identifier=ScientificIdentifier(
+        "dynamislm", "decision-record", "res37-displacement-reference", CMJ_REGISTRY_VERSION
+    ),
+    display_label="RES-37 relative displacement reference decision",
+    reference_ids=(
+        "docs/decisions/RES37-DR-005-relative-displacement-reference.md",
+        "https://journals.plos.org/plosone/article?id=10.1371/journal.pone.0265999",
+        "https://pmc.ncbi.nlm.nih.gov/articles/PMC7761544/",
+    ),
+)
 
 NEWTON = UnitReference(
     ScientificIdentifier("dynamislm", "unit", "newton", CMJ_REGISTRY_VERSION), "N"
@@ -196,6 +362,25 @@ KILOGRAM = UnitReference(
 METERS_PER_SECOND_SQUARED = UnitReference(
     ScientificIdentifier("dynamislm", "unit", "meter-per-second-squared", CMJ_REGISTRY_VERSION),
     "m/s^2",
+)
+METERS_PER_SECOND = UnitReference(
+    ScientificIdentifier("dynamislm", "unit", "meter-per-second", CMJ_REGISTRY_VERSION),
+    "m/s",
+)
+METER = UnitReference(
+    ScientificIdentifier("dynamislm", "unit", "meter", CMJ_REGISTRY_VERSION),
+    "m",
+)
+NEWTON_SECOND = UnitReference(
+    ScientificIdentifier("dynamislm", "unit", "newton-second", CMJ_REGISTRY_VERSION),
+    "N·s",
+)
+# Short aliases retain readable operation names without creating additional
+# registry identities.
+CMJ_SUPPORTED_SYSTEM_COM_ACCELERATION = CMJ_SUPPORTED_SYSTEM_COM_ACCELERATION_OPERATION
+CMJ_SUPPORTED_SYSTEM_COM_VELOCITY = CMJ_SUPPORTED_SYSTEM_COM_VELOCITY_OPERATION
+CMJ_SUPPORTED_SYSTEM_COM_RELATIVE_VERTICAL_DISPLACEMENT = (
+    CMJ_SUPPORTED_SYSTEM_COM_RELATIVE_DISPLACEMENT_OPERATION
 )
 REGISTERED_FORCE_UNITS = (NEWTON, KILONEWTON, POUND_FORCE, KILOGRAM_FORCE)
 
