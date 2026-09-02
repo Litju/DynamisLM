@@ -246,7 +246,7 @@ class WeighingSegment:
 @register_serializable_type
 @dataclass(frozen=True, slots=True)
 class WeighingBaselineQC:
-    """Descriptive within-window values; no universal accept/reject threshold."""
+    """Descriptive first-to-last span and within-window values; no universal threshold."""
 
     sample_count: int
     elapsed_sample_span_s: float
@@ -326,6 +326,10 @@ class GravityReference:
         elif self.source.stable_id == STANDARD_GRAVITY_SOURCE.stable_id:
             raise ValueError(
                 "LOCAL_GRAVITATIONAL_ACCELERATION must not use the standard-gravity source"
+            )
+        elif self.uncertainty.description == STANDARD_GRAVITY_STATUS_DESCRIPTION:
+            raise ValueError(
+                "LOCAL_GRAVITATIONAL_ACCELERATION must not use standard exact-conventional metadata"
             )
 
     @property

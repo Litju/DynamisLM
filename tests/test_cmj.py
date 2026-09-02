@@ -1468,6 +1468,13 @@ def test_res35_standard_and_local_gravity_are_distinct_and_body_mass_is_refused(
             GravityReferenceType.LOCAL_GRAVITATIONAL_ACCELERATION,
             STANDARD_GRAVITY.source,
         )
+    with pytest.raises(ValueError, match="exact-conventional metadata"):
+        GravityReference(
+            9.8,
+            GravityReferenceType.LOCAL_GRAVITATIONAL_ACCELERATION,
+            _reference("gravity-source", "local-with-standard-status"),
+            uncertainty=STANDARD_GRAVITY.uncertainty,
+        )
     with pytest.raises(ValueError, match="STANDARD_GRAVITY"):
         GravityReference(
             9.8,
@@ -2180,11 +2187,14 @@ def test_res45_registered_event_parameter_domains_are_positive_and_parameterized
     assert integer_parameters == float_parameters
     assert canonical_json(integer_parameters) == canonical_json(float_parameters)
 
-    for field_name in ("threshold_n", "sigma_multiplier"):
-        with pytest.raises(ValueError, match=f"{field_name} must be finite"):
-            CMJEventDetectorParameters(**{field_name: float("nan")})
-        with pytest.raises(ValueError, match=f"{field_name} must be finite"):
-            CMJEventDetectorParameters(**{field_name: float("inf")})
+    with pytest.raises(ValueError, match="threshold_n must be finite"):
+        CMJEventDetectorParameters(threshold_n=float("nan"))
+    with pytest.raises(ValueError, match="threshold_n must be finite"):
+        CMJEventDetectorParameters(threshold_n=float("inf"))
+    with pytest.raises(ValueError, match="sigma_multiplier must be finite"):
+        CMJEventDetectorParameters(sigma_multiplier=float("nan"))
+    with pytest.raises(ValueError, match="sigma_multiplier must be finite"):
+        CMJEventDetectorParameters(sigma_multiplier=float("inf"))
 
     assert CMJEventDetectorParameters().threshold_n is None
     assert CMJEventDetectorParameters().sigma_multiplier is None
