@@ -221,6 +221,8 @@ class CMJEventOccurrence:
     preceding_event_id: InstanceIdentifier | None = None
 
     def __post_init__(self) -> None:
+        if self.occurrence_id.instance_type != "event-occurrence":
+            raise ValueError("event occurrence ID must have instance_type event-occurrence")
         if self.detector_method.event_definition != self.definition:
             raise ValueError("event occurrence definition must match detector method definition")
         if self.decision_reference != self.detector_method.decision_reference:
@@ -244,7 +246,7 @@ class CMJEventOccurrence:
         matching_runs = tuple(
             run
             for run in self.provenance.processing_runs
-            if run.output_observation_id == self.occurrence_id
+            if run.output_entity_id == self.occurrence_id
         )
         if len(matching_runs) != 1:
             raise ValueError("event occurrence must have exactly one output processing run")
@@ -760,7 +762,7 @@ def _event_provenance(
         method=method.reference,
         parameters=processing_parameters,
         software_version=RES36_SOFTWARE_VERSION,
-        output_observation_id=occurrence_id,
+        output_entity_id=occurrence_id,
     )
     evidence_reference = EvidenceReference(
         reference=method.decision_reference,
@@ -774,7 +776,7 @@ def _event_provenance(
     return _provenance_with_run(
         base,
         processing_run=processing_run,
-        output_observation_id=occurrence_id,
+        output_entity_id=occurrence_id,
         source_observation_ids=source_observation_ids,
         source_acquisition_ids=source_acquisition_ids,
         supported_by=(method.decision_reference, RES36_DECISION_EVENT_SEMANTICS),

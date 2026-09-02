@@ -6,7 +6,7 @@ import json
 import math
 import subprocess
 import sys
-from dataclasses import FrozenInstanceError, fields
+from dataclasses import FrozenInstanceError, fields, replace
 from pathlib import Path
 
 import pytest
@@ -163,7 +163,7 @@ def _derived_observation(
         method=identity.version.processing_method,
         parameters=(MetadataEntry("algorithm_version", method_version),),
         software_version="0.1.0",
-        output_observation_id=observation_id,
+        output_entity_id=observation_id,
     )
     return create_derived_observation(
         observation_id=observation_id,
@@ -237,9 +237,38 @@ def test_reprocessing_same_raw_artifact_creates_distinct_observations() -> None:
     assert first.identity != second.identity
     assert first.observation_id != second.observation_id
     assert first.provenance.processing_runs[0].method != second.provenance.processing_runs[0].method
-    assert first.provenance.processing_runs[0].output_observation_id == first.observation_id
-    assert second.provenance.processing_runs[0].output_observation_id == second.observation_id
+    assert first.provenance.processing_runs[0].output_entity_id == first.observation_id
+    assert second.provenance.processing_runs[0].output_entity_id == second.observation_id
     assert canonical_hash(first) != canonical_hash(second)
+
+
+def test_processing_run_output_entity_contract_is_typed_and_versioned() -> None:
+    observation = _derived_observation("output-entity")
+    run = observation.provenance.processing_runs[0]
+
+    assert run.output_entity_id == observation.observation_id
+    assert run.output_entity_id.instance_type == "observation"
+    serialized = canonical_json(run)
+    assert '"output_entity_id"' in serialized
+    assert '"output_observation_id"' not in serialized
+
+    envelope = json.loads(serialized)
+    envelope["serialization_version"] = 2
+    envelope["payload"]["output_observation_id"] = envelope["payload"].pop("output_entity_id")
+    with pytest.raises(ValueError, match="unsupported serialization version"):
+        from_canonical_json(json.dumps(envelope), ProcessingRun)
+
+
+def test_provenance_rejects_forged_processing_output_entity_linkage() -> None:
+    observation = _derived_observation("forged-output")
+    run = observation.provenance.processing_runs[0]
+    forged_run = replace(
+        run,
+        output_entity_id=InstanceIdentifier("observation", "not-the-produced-observation"),
+    )
+
+    with pytest.raises(ValueError, match="output entity"):
+        replace(observation.provenance, processing_runs=(forged_run,))
 
 
 def test_reprocessing_cannot_overwrite_prior_provenance() -> None:
