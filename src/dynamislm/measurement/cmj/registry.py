@@ -1,4 +1,4 @@
-"""Small, explicit CMJ registry surface for the P1B acquisition contract."""
+"""Small, explicit CMJ registry surface for the P1B/P1C contracts."""
 
 from __future__ import annotations
 
@@ -19,6 +19,56 @@ CMJ_RAW_VERTICAL_FORCE_SIGNAL_SCHEMA = _reference(
 CMJ_ACQUISITION_COMPARABILITY_RULE = _reference(
     "comparability-rule", "cmj-acquisition-identity-v1", "CMJ acquisition identity comparability"
 )
+CMJ_DERIVED_COMPARABILITY_RULE = _reference(
+    "comparability-rule", "cmj-derived-measurement-v1", "CMJ derived-measurement comparability"
+)
+
+CMJ_EXPLICIT_WEIGHING_SEGMENT = _reference(
+    "selection-method", "cmj-explicit-weighing-segment-v1", "CMJ explicit weighing segment"
+)
+CMJ_SYSTEM_WEIGHT_MEAN_FORCE = _reference(
+    "estimator", "cmj-system-weight-mean-force-v1", "CMJ system weight mean force estimator"
+)
+CMJ_BILATERAL_TOTAL_VERTICAL_FORCE_SUM = _reference(
+    "registered-operation",
+    "cmj-bilateral-total-vertical-force-sum-v1",
+    "CMJ bilateral total vertical-force sum",
+)
+CMJ_SYSTEM_WEIGHT_OPERATION = _reference(
+    "registered-operation", "cmj-system-weight-v1", "CMJ system weight from weighing segment"
+)
+CMJ_SYSTEM_MASS_FROM_WEIGHT = _reference(
+    "registered-operation", "cmj-system-mass-from-weight-v1", "CMJ system mass from system weight"
+)
+CMJ_TOTAL_SUPPORTED_VERTICAL_FORCE_SCHEMA = _reference(
+    "schema", "cmj-total-supported-vertical-force-v1", "CMJ total supported vertical-force series"
+)
+CMJ_SYSTEM_WEIGHT_MEASURAND = _reference("measurand", "cmj-system-weight", "CMJ system weight")
+CMJ_SYSTEM_WEIGHT_METRIC = _reference("metric", "cmj-system-weight", "System weight")
+CMJ_SYSTEM_MASS_MEASURAND = _reference("measurand", "cmj-system-mass", "CMJ system mass")
+CMJ_SYSTEM_MASS_METRIC = _reference("metric", "cmj-system-mass", "System mass")
+CMJ_TOTAL_SUPPORTED_VERTICAL_FORCE_MEASURAND = _reference(
+    "measurand", "cmj-total-supported-vertical-force", "CMJ total supported vertical force"
+)
+CMJ_TOTAL_SUPPORTED_VERTICAL_FORCE_METRIC = _reference(
+    "metric", "cmj-total-supported-vertical-force", "Total supported vertical force"
+)
+CMJ_DYNAMISLM_PROCESSING_SYSTEM = _reference(
+    "processing-system", "dynamislm-res35", "DynamisLM RES-35 processing system"
+)
+CMJ_SUPPORTED_SYSTEM_CONSTRUCT = _reference(
+    "construct", "cmj-supported-system", "CMJ supported physical system"
+)
+STANDARD_GRAVITY_SOURCE = RegistryReference(
+    identifier=ScientificIdentifier(
+        "dynamislm", "reference-source", "standard-acceleration-of-gravity", CMJ_REGISTRY_VERSION
+    ),
+    display_label="BIPM/NIST conventional standard acceleration of gravity",
+    reference_ids=(
+        "https://www.bipm.org/documents/d/guest/si-brochure-9-pdf",
+        "https://www.nist.gov/pml/special-publication-811/nist-guide-si-appendix-b9",
+    ),
+)
 
 NEWTON = UnitReference(
     ScientificIdentifier("dynamislm", "unit", "newton", CMJ_REGISTRY_VERSION), "N"
@@ -31,6 +81,13 @@ POUND_FORCE = UnitReference(
 )
 KILOGRAM_FORCE = UnitReference(
     ScientificIdentifier("dynamislm", "unit", "kilogram-force", CMJ_REGISTRY_VERSION), "kgf"
+)
+KILOGRAM = UnitReference(
+    ScientificIdentifier("dynamislm", "unit", "kilogram", CMJ_REGISTRY_VERSION), "kg"
+)
+METERS_PER_SECOND_SQUARED = UnitReference(
+    ScientificIdentifier("dynamislm", "unit", "meter-per-second-squared", CMJ_REGISTRY_VERSION),
+    "m/s^2",
 )
 REGISTERED_FORCE_UNITS = (NEWTON, KILONEWTON, POUND_FORCE, KILOGRAM_FORCE)
 
