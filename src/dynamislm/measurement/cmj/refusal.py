@@ -1,4 +1,4 @@
-"""CMJ acquisition and event refusals that preserve safe descriptions."""
+"""CMJ acquisition and downstream refusals that preserve safe descriptions."""
 
 from __future__ import annotations
 
@@ -26,6 +26,7 @@ from dynamislm.serialization import canonical_hash
 
 class CMJComputation(StrEnum):
     BODY_SYSTEM_MASS = "BODY_SYSTEM_MASS"
+    # Retained as a v3 wire value; RES-37 uses the registered impulse operation.
     IMPULSE = "IMPULSE"
     JUMP_HEIGHT = "JUMP_HEIGHT"
 
@@ -131,12 +132,12 @@ def refuse_unregistered_computation(
     *,
     observation_ids: tuple[InstanceIdentifier, ...] = (),
 ) -> RefusalResult:
-    """Return a refusal for downstream CMJ science not registered in P1B."""
+    """Return a refusal for downstream CMJ science outside registered operations."""
 
     requested = CMJComputation(computation)
     labels = {
         CMJComputation.BODY_SYSTEM_MASS: "body/system mass",
-        CMJComputation.IMPULSE: "impulse",
+        CMJComputation.IMPULSE: "legacy unregistered impulse request",
         CMJComputation.JUMP_HEIGHT: "jump height",
     }
     label = labels[requested]
