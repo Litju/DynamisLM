@@ -251,6 +251,10 @@ def test_processing_run_output_entity_contract_is_typed_and_versioned() -> None:
     serialized = canonical_json(run)
     assert '"output_entity_id"' in serialized
     assert '"output_observation_id"' not in serialized
+    restored = from_canonical_json(serialized, ProcessingRun)
+    assert restored == run
+    assert canonical_json(restored) == serialized
+    assert canonical_hash(restored) == canonical_hash(run)
 
     envelope = json.loads(serialized)
     envelope["serialization_version"] = 2
