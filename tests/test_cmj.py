@@ -2753,7 +2753,7 @@ def test_res37_mass_provenance_and_standard_gravity_type_are_not_interchangeable
     assert total_b.signal.samples == (1.0, 1.0, 3.0, 3.0)
 
 
-def test_res46_velocity_requires_qualified_zero_reference_and_preserves_pre_start_undefinedness() -> (
+def test_res46_velocity_requires_qualified_reference_and_preserves_pre_start_undefinedness() -> (
     None
 ):
     _, total, weight, contract = _mechanics_fixture(
