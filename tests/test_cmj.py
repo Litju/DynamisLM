@@ -11,6 +11,7 @@ from dynamislm import (
     AcquisitionRecord,
     InstanceIdentifier,
     MeasurementIdentity,
+    MeasurementQuality,
     MetadataEntry,
     ObservationContext,
     ProcessingIdentity,
@@ -2490,6 +2491,20 @@ def _mechanics_fixture(
     )
     weight = estimate_system_weight(total, segment)
     assert isinstance(weight, SystemWeightResult)
+    adjudicated_qc = replace(weight.qc, acceptability_adjudicated=True)
+    adjudicated_result = replace(
+        weight.observation.result,
+        quality=MeasurementQuality(
+            status=weight.observation.result.quality.status,
+            flags=adjudicated_qc.quality_flags,
+            note="Protocol-level weighing-segment acceptability was explicitly adjudicated.",
+        ),
+    )
+    weight = replace(
+        weight,
+        observation=replace(weight.observation, result=adjudicated_result),
+        qc=adjudicated_qc,
+    )
     return (
         source,
         total,
@@ -2821,6 +2836,30 @@ def test_res46_arbitrary_post_movement_zero_cannot_be_physical_velocity_authorit
     assert RefusalReasonCode.ZERO_VELOCITY_REFERENCE_UNQUALIFIED in refused.reason_codes
 
 
+def test_res46_unadjudicated_movement_segment_cannot_qualify_zero_velocity() -> None:
+    _, total, adjudicated_weight, contract = _mechanics_fixture(
+        "res46-movement-segment",
+        (1.0, 1.0, 3.0, 3.0, 3.0),
+        weighing_end_index=5,
+    )
+    unadjudicated_weight = estimate_system_weight(total, adjudicated_weight.segment)
+    assert isinstance(unadjudicated_weight, SystemWeightResult)
+    assert unadjudicated_weight.qc.acceptability_adjudicated is False
+    net = derive_net_vertical_force(total, unadjudicated_weight, contract)
+    assert isinstance(net, NetVerticalForceResult)
+    mass = derive_physical_system_mass(unadjudicated_weight, _local_gravity("movement-segment"))
+    assert isinstance(mass, PhysicalSystemMassResult)
+    acceleration = derive_supported_system_com_acceleration(net, mass, contract)
+    assert isinstance(acceleration, SupportedSystemComAccelerationResult)
+    interval = CMJIntegrationInterval.explicit_sample(acceleration.series.series_id, 2, 4)
+    reference = QualifiedZeroVelocityReference.from_system_weight(unadjudicated_weight, 2)
+
+    refused = derive_supported_system_com_velocity(acceleration, interval, reference)
+
+    assert isinstance(refused, RefusalResult)
+    assert RefusalReasonCode.ZERO_VELOCITY_REFERENCE_UNQUALIFIED in refused.reason_codes
+
+
 def test_res46_exact_movement_onset_event_does_not_authorize_zero_velocity() -> None:
     force = _event_input("res46-event-reference", _event_trace())
     weight = _event_baseline(force)
@@ -2874,7 +2913,11 @@ def test_res46_qualified_reference_requires_exact_source_trial_context_and_syste
     primary_reference = QualifiedZeroVelocityReference.from_system_weight(weight, 2)
     wrong_segment_reference = replace(
         primary_reference,
-        weighing_segment=replace(primary_reference.weighing_segment, end_index=4),
+        weighing_segment=replace(
+            primary_reference.weighing_segment,
+            start_index=1,
+            end_index=4,
+        ),
     )
 
     wrong_trial = derive_supported_system_com_velocity(acceleration, interval, other_reference)
@@ -2979,9 +3022,19 @@ def test_res37_relative_displacement_has_explicit_zero_origin_and_is_not_absolut
     assert isinstance(displacement, SupportedSystemComRelativeDisplacementResult)
     assert displacement.samples == pytest.approx((0.0, 0.0000005, 0.0000025))
     assert displacement.series.unit.identifier.stable_id.endswith("unit:meter@1.0.0")
+    assert displacement.series.initial_velocity_condition == condition
     assert "relative" in origin.coordinate_reference
     assert "anatomical" in origin.coordinate_reference
     assert "ABSOLUTE_COM_POSITION" not in canonical_json(displacement)
+    with pytest.raises(ValueError, match="qualified velocity authority"):
+        replace(displacement.series, initial_velocity_condition=None)
+    with pytest.raises(ValueError, match="qualified velocity authority"):
+        replace(
+            displacement.series,
+            initial_velocity_condition=InitialVelocityCondition.zero_at_sample(  # type: ignore[arg-type]
+                velocity.series.series_id, 2
+            ),
+        )
 
 
 def test_res37_loaded_system_rejects_unresolved_force_model() -> None:

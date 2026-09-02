@@ -71,6 +71,7 @@ from dynamislm.measurement.cmj.weighing import (
     StandardGravityMassEquivalentResult,
     SystemWeightResult,
     TotalSupportedForceResult,
+    WeighingBaselineQC,
     WeighingSegment,
     _derived_identity,
     _force_semantics_refusal,
@@ -362,6 +363,7 @@ class QualifiedZeroVelocityReference:
     source_system_weight_observation_id: InstanceIdentifier
     weighing_segment: WeighingSegment
     sample_index: int
+    weighing_qc: WeighingBaselineQC
     value_m_per_s: float = 0.0
     unit: UnitReference = METERS_PER_SECOND
     method: RegistryReference = CMJ_QUALIFIED_ZERO_VELOCITY_REFERENCE
@@ -378,6 +380,8 @@ class QualifiedZeroVelocityReference:
             )
         if not isinstance(self.weighing_segment, WeighingSegment):
             raise ValueError("qualified zero-velocity reference requires a WeighingSegment")
+        if not isinstance(self.weighing_qc, WeighingBaselineQC):
+            raise ValueError("qualified zero-velocity reference requires weighing baseline QC")
         if (
             self.weighing_segment.source_signal_id != self.source_signal_id
             or self.weighing_segment.source_artifact_id != self.source_artifact_id
@@ -385,6 +389,8 @@ class QualifiedZeroVelocityReference:
             != self.source_measurement_identity_id
         ):
             raise ValueError("qualified zero-velocity source linkage must match its segment")
+        if self.weighing_qc.sample_count != self.weighing_segment.sample_count:
+            raise ValueError("qualified zero-velocity QC must describe the exact weighing segment")
         if type(self.sample_index) is not int or self.sample_index < 0:
             raise ValueError("qualified zero-velocity sample_index must be nonnegative")
         if not (
@@ -401,6 +407,12 @@ class QualifiedZeroVelocityReference:
         if self.evidence_decision.stable_id != RES46_DECISION_QUALIFIED_ZERO_VELOCITY.stable_id:
             raise ValueError("qualified zero-velocity evidence decision is not registered")
 
+    @property
+    def is_authorized(self) -> bool:
+        """Whether the linked RES-35 baseline has an explicit adjudication."""
+
+        return self.weighing_qc.acceptability_adjudicated
+
     @classmethod
     def from_system_weight(
         cls,
@@ -411,6 +423,10 @@ class QualifiedZeroVelocityReference:
 
         if not isinstance(system_weight, SystemWeightResult):
             raise TypeError("qualified zero-velocity reference requires SystemWeightResult")
+        if system_weight.observation.result.quality.flags != system_weight.qc.quality_flags:
+            raise ValueError(
+                "qualified zero-velocity reference requires QC flags linked to the SYSTEM_WEIGHT"
+            )
         segment = system_weight.segment
         return cls(
             source_signal_id=segment.source_signal_id,
@@ -419,6 +435,7 @@ class QualifiedZeroVelocityReference:
             source_system_weight_observation_id=system_weight.observation.observation_id,
             weighing_segment=segment,
             sample_index=sample_index,
+            weighing_qc=system_weight.qc,
         )
 
 
@@ -609,6 +626,10 @@ class CMJMechanicsSeries:
                 raise ValueError(
                     "velocity series must preserve a qualified zero-velocity reference"
                 )
+            if not initial_condition.is_authorized:
+                raise ValueError(
+                    "velocity series requires adjudicated zero-velocity reference authority"
+                )
             if (
                 initial_condition.source_signal_id not in self.source_signal_ids
                 or initial_condition.source_artifact_id not in self.source_artifact_ids
@@ -624,8 +645,32 @@ class CMJMechanicsSeries:
             self.quantity
             is CMJMechanicsQuantity.SUPPORTED_SYSTEM_COM_RELATIVE_VERTICAL_DISPLACEMENT
         ):
-            if self.displacement_origin is None or self.initial_velocity_condition is not None:
-                raise ValueError("displacement series must preserve its displacement origin")
+            initial_condition = self.initial_velocity_condition
+            interval = self.integration_interval
+            if (
+                self.displacement_origin is None
+                or interval is None
+                or not isinstance(initial_condition, QualifiedZeroVelocityReference)
+            ):
+                raise ValueError(
+                    "displacement series must preserve its origin and qualified velocity authority"
+                )
+            if not initial_condition.is_authorized:
+                raise ValueError(
+                    "displacement series requires adjudicated zero-velocity reference authority"
+                )
+            if (
+                initial_condition.source_signal_id not in self.source_signal_ids
+                or initial_condition.source_artifact_id not in self.source_artifact_ids
+                or initial_condition.source_measurement_identity_id
+                not in self.source_measurement_identity_ids
+                or initial_condition.source_system_weight_observation_id
+                not in self.source_observation_ids
+                or initial_condition.sample_index != interval.start_index
+            ):
+                raise ValueError(
+                    "displacement series must preserve exact zero-velocity source linkage"
+                )
             if (
                 self.displacement_origin.source_velocity_series_id != self.source_signal_ids[0]
                 or self.displacement_origin.sample_index != self.sample_start_index
@@ -1891,6 +1936,11 @@ def derive_net_vertical_force(
             "system_weight_segment",
             canonical_json(system_weight.segment),
         ),
+        MetadataEntry("system_weight_qc", canonical_json(system_weight.qc)),
+        MetadataEntry(
+            "system_weight_quality_flags",
+            canonical_json(system_weight.observation.result.quality.flags),
+        ),
         MetadataEntry("system_weight_start_index", system_weight.segment.start_index),
         MetadataEntry("system_weight_end_index", system_weight.segment.end_index),
     )
@@ -2165,6 +2215,20 @@ def _qualified_zero_velocity_reference_refusal(
             observation_ids,
             refusal_class=RefusalClass.IDENTITY_UNRESOLVED,
         )
+    if not reference.is_authorized:
+        return _mechanics_refusal(
+            claim,
+            (
+                RefusalReasonCode.ZERO_VELOCITY_REFERENCE_UNQUALIFIED,
+                RefusalReasonCode.INITIAL_CONDITION_UNRESOLVED,
+            ),
+            (
+                "explicit RES-35 weighing-baseline acceptability adjudication for the "
+                "qualified zero-velocity reference",
+            ),
+            observation_ids,
+            refusal_class=RefusalClass.IDENTITY_UNRESOLVED,
+        )
     observation_ids = _unique((*observation_ids, reference.source_system_weight_observation_id))
     acceleration_parameters = {
         entry.key: entry.value
@@ -2182,6 +2246,10 @@ def _qualified_zero_velocity_reference_refusal(
         or reference.weighing_segment.end_index > acceleration.series.source_sample_count
         or acceleration_parameters.get("source_net_force_system_weight_segment")
         != canonical_json(reference.weighing_segment)
+        or acceleration_parameters.get("source_net_force_system_weight_qc")
+        != canonical_json(reference.weighing_qc)
+        or acceleration_parameters.get("source_net_force_system_weight_quality_flags")
+        != canonical_json(reference.weighing_qc.quality_flags)
     ):
         return _mechanics_refusal(
             claim,
@@ -2397,7 +2465,7 @@ def derive_supported_system_com_relative_vertical_displacement(
         sign=velocity.series.sign_convention,
         system_contract=velocity.system_contract,
         integration_interval=velocity.series.integration_interval,
-        initial_velocity_condition=None,
+        initial_velocity_condition=velocity.initial_velocity_condition,
         displacement_origin=origin,
         extra_parameters=extra,
         evidence=RES37_DECISION_DISPLACEMENT_REFERENCE,
@@ -2478,6 +2546,7 @@ def _condition_key(
             segment.start_index,
             segment.end_index,
             tuple((entry.key, entry.value) for entry in segment.selection_parameters),
+            canonical_json(condition.weighing_qc),
         )
     return (
         condition.method.stable_id,
@@ -2514,8 +2583,15 @@ def _parameter_key(
         "source_system_weight_observation_id",
         "system_weight_segment",
         "source_net_force_system_weight_segment",
+        "system_weight_qc",
+        "source_net_force_system_weight_qc",
+        "source_net_force_system_weight_quality_flags",
         "source_acceleration_source_net_force_system_weight_segment",
+        "source_acceleration_source_net_force_system_weight_qc",
+        "source_acceleration_source_net_force_system_weight_quality_flags",
         "source_velocity_source_acceleration_source_net_force_system_weight_segment",
+        "source_velocity_source_acceleration_source_net_force_system_weight_qc",
+        "source_velocity_source_acceleration_source_net_force_system_weight_quality_flags",
         "physical_mass_observation_id",
         "source_acceleration_observation_id",
         "source_acceleration_series_id",
