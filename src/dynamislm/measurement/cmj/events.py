@@ -1210,12 +1210,9 @@ def _event_parameter_key(parameters: CMJEventDetectorParameters) -> tuple[object
 
 def _timebase_key(timebase: SignalTimebase) -> tuple[object, ...]:
     if isinstance(timebase, RegularTimebase):
-        return ("REGULAR", timebase.sample_rate_hz)
+        return ("REGULAR", timebase.sample_rate_hz, timebase.start_time_s)
     if isinstance(timebase, ExplicitTimebase):
-        if not timebase.times_s:
-            return ("EXPLICIT", ())
-        origin = timebase.times_s[0]
-        return ("EXPLICIT", tuple(time - origin for time in timebase.times_s))
+        return ("EXPLICIT", timebase.times_s)
     return ("UNKNOWN",)
 
 
