@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime as datetime_module
+import json
 from dataclasses import FrozenInstanceError, replace
 
 import pytest
@@ -3099,6 +3100,35 @@ def test_res37_mechanics_objects_roundtrip_under_serialization_v3() -> None:
         assert restored == value
         assert canonical_json(restored) == canonical_json(value)
     assert SERIALIZATION_VERSION == 3
+
+
+def test_res46_legacy_velocity_payload_is_not_reinterpreted_under_v3() -> None:
+    _, total, weight, contract = _mechanics_fixture(
+        "res46-legacy-wire",
+        (1.0, 1.0, 1.0, 3.0, 3.0),
+        weighing_end_index=3,
+    )
+    net = derive_net_vertical_force(total, weight, contract)
+    assert isinstance(net, NetVerticalForceResult)
+    mass = derive_physical_system_mass(weight, _local_gravity("legacy-wire"))
+    assert isinstance(mass, PhysicalSystemMassResult)
+    acceleration = derive_supported_system_com_acceleration(net, mass, contract)
+    assert isinstance(acceleration, SupportedSystemComAccelerationResult)
+    interval = CMJIntegrationInterval.explicit_sample(acceleration.series.series_id, 2, 4)
+    reference = QualifiedZeroVelocityReference.from_system_weight(weight, 2)
+    velocity = derive_supported_system_com_velocity(acceleration, interval, reference)
+    assert isinstance(velocity, SupportedSystemComVelocityResult)
+    legacy = InitialVelocityCondition.zero_at_sample(acceleration.series.series_id, 2)
+    legacy_payload = json.loads(canonical_json(legacy))["payload"]
+    envelope = json.loads(canonical_json(velocity))
+    envelope["payload"]["series"]["initial_velocity_condition"] = legacy_payload
+    envelope["payload"]["initial_velocity_condition"] = legacy_payload
+
+    with pytest.raises(SerializationError):
+        from_canonical_json(
+            json.dumps(envelope, ensure_ascii=False, separators=(",", ":"), sort_keys=True),
+            SupportedSystemComVelocityResult,
+        )
 
 
 def test_res37_mechanics_comparability_keeps_method_and_timebase_identity() -> None:
