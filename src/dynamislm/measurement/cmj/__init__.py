@@ -46,7 +46,6 @@ from dynamislm.measurement.cmj.events import (
     detect_landing,
     detect_movement_onset,
     detect_takeoff,
-    refusal_for_cmj_event_comparability,
     validate_cmj_event_order,
 )
 from dynamislm.measurement.cmj.identity import (
@@ -60,6 +59,7 @@ from dynamislm.measurement.cmj.identity import (
 from dynamislm.measurement.cmj.refusal import (
     CMJComputation,
     refusal_for_cmj_comparability,
+    refusal_for_cmj_event_comparability,
     refusal_for_cmj_validation,
     refuse_unregistered_computation,
 )

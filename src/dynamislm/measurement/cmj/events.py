@@ -249,14 +249,6 @@ class CMJEventOccurrence:
         if matching_runs[0].method != self.detector_method.reference:
             raise ValueError("event occurrence processing run method must match detector method")
 
-    @property
-    def event_definition(self) -> CMJEventDefinition:
-        return self.definition
-
-    @property
-    def event_method(self) -> CMJEventDetectorMethod:
-        return self.detector_method
-
 
 @register_serializable_type
 @dataclass(frozen=True, slots=True)
@@ -268,7 +260,6 @@ class CMJEventComparabilityRequest:
     right_event_id: InstanceIdentifier
     claim: str
     requested_transformations: tuple[TransformationRequest, ...] = ()
-    material_dimensions: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if not self.claim.strip():
@@ -276,9 +267,6 @@ class CMJEventComparabilityRequest:
         if self.left_event_id == self.right_event_id:
             raise ValueError("event comparability requires two distinct occurrences")
         require_tuple(self.requested_transformations, "requested_transformations")
-        require_tuple(self.material_dimensions, "material_dimensions")
-        if any(not item.strip() for item in self.material_dimensions):
-            raise ValueError("material dimensions must not contain empty strings")
 
 
 CMJ_MOVEMENT_ONSET_EVENT_DEFINITION = CMJEventDefinition(
@@ -1419,19 +1407,6 @@ def compare_cmj_events(
     )
 
 
-def refusal_for_cmj_event_comparability(
-    result: ComparabilityResult,
-    *,
-    blocked_claim: str,
-    observation_ids: tuple[InstanceIdentifier, ...] = (),
-) -> RefusalResult | None:
-    """Map an event comparison limitation to the existing refusal architecture."""
-
-    from dynamislm.measurement.cmj.refusal import refusal_for_cmj_event_comparability as _refuse
-
-    return _refuse(result, blocked_claim=blocked_claim, observation_ids=observation_ids)
-
-
 __all__ = [
     "CMJ_LANDING_ABSOLUTE_FORCE_METHOD",
     "CMJ_LANDING_CONTACT_REGAIN_EVENT_DEFINITION",
@@ -1456,6 +1431,5 @@ __all__ = [
     "detect_landing",
     "detect_movement_onset",
     "detect_takeoff",
-    "refusal_for_cmj_event_comparability",
     "validate_cmj_event_order",
 ]
