@@ -208,6 +208,7 @@ class CMJEventOccurrence:
     source_timebase: SignalTimebase
     detector_method: CMJEventDetectorMethod
     detector_parameters: CMJEventDetectorParameters
+    source_sample_count: int
     sample_index: int
     event_time_s: float
     effective_threshold_n: float
@@ -222,7 +223,15 @@ class CMJEventOccurrence:
             raise ValueError("event occurrence definition must match detector method definition")
         if self.decision_reference != self.detector_method.decision_reference:
             raise ValueError("event occurrence decision reference must match detector method")
+        if isinstance(self.source_sample_count, bool) or not isinstance(
+            self.source_sample_count, int
+        ):
+            raise ValueError("source_sample_count must be an integer")
+        if self.source_sample_count < 1:
+            raise ValueError("source_sample_count must be positive")
         _require_nonnegative_index(self.sample_index, "sample_index")
+        if self.sample_index >= self.source_sample_count:
+            raise ValueError("sample_index must be inside source sample support")
         _require_finite(self.event_time_s, "event_time_s")
         _require_finite(self.effective_threshold_n, "effective_threshold_n")
         if not isinstance(self.status, CMJEventOccurrenceStatus):
@@ -834,6 +843,7 @@ def _make_occurrence(
         source_timebase=timebase,
         detector_method=method,
         detector_parameters=parameters,
+        source_sample_count=len(force.signal.samples),
         sample_index=sample_index,
         event_time_s=event_time_s,
         effective_threshold_n=effective_threshold_n,
