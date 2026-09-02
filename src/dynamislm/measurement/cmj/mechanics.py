@@ -388,9 +388,7 @@ class QualifiedZeroVelocityReference:
         if type(self.sample_index) is not int or self.sample_index < 0:
             raise ValueError("qualified zero-velocity sample_index must be nonnegative")
         if not (
-            self.weighing_segment.start_index
-            <= self.sample_index
-            < self.weighing_segment.end_index
+            self.weighing_segment.start_index <= self.sample_index < self.weighing_segment.end_index
         ):
             raise ValueError("qualified zero-velocity sample must lie inside the weighing segment")
         _finite(self.value_m_per_s, "qualified zero-velocity value")
@@ -1380,9 +1378,7 @@ def _processing_parameters(
         entries.append(MetadataEntry("integration_boundary", interval.interval_semantics))
         entries.append(MetadataEntry("integration_method", interval.integration_method.stable_id))
     if initial_condition is not None:
-        entries.append(
-            MetadataEntry("zero_velocity_reference", canonical_json(initial_condition))
-        )
+        entries.append(MetadataEntry("zero_velocity_reference", canonical_json(initial_condition)))
     if origin is not None:
         entries.append(MetadataEntry("displacement_origin", canonical_json(origin)))
     entries.extend(extra)
@@ -2169,9 +2165,7 @@ def _qualified_zero_velocity_reference_refusal(
             observation_ids,
             refusal_class=RefusalClass.IDENTITY_UNRESOLVED,
         )
-    observation_ids = _unique(
-        (*observation_ids, reference.source_system_weight_observation_id)
-    )
+    observation_ids = _unique((*observation_ids, reference.source_system_weight_observation_id))
     acceleration_parameters = {
         entry.key: entry.value
         for entry in acceleration.observation.identity.processing.method_parameters

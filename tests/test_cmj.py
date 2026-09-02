@@ -2753,8 +2753,9 @@ def test_res37_mass_provenance_and_standard_gravity_type_are_not_interchangeable
     assert total_b.signal.samples == (1.0, 1.0, 3.0, 3.0)
 
 
-def test_res46_velocity_requires_qualified_zero_reference_and_preserves_pre_start_undefinedness(
-) -> None:
+def test_res46_velocity_requires_qualified_zero_reference_and_preserves_pre_start_undefinedness() -> (
+    None
+):
     _, total, weight, contract = _mechanics_fixture(
         "mechanics-velocity",
         (1.0, 1.0, 1.0, 3.0, 3.0),
@@ -2792,14 +2793,10 @@ def test_res46_velocity_requires_qualified_zero_reference_and_preserves_pre_star
         velocity.observation.provenance.evidence_references[-1].reference
         == condition.evidence_decision
     )
-    assert (
-        condition.source_system_weight_observation_id
-        in velocity.series.source_observation_ids
-    )
+    assert condition.source_system_weight_observation_id in velocity.series.source_observation_ids
     assert condition.source_artifact_id in velocity.series.source_artifact_ids
     assert (
-        condition.source_measurement_identity_id
-        in velocity.series.source_measurement_identity_ids
+        condition.source_measurement_identity_id in velocity.series.source_measurement_identity_ids
     )
 
 
@@ -2846,9 +2843,7 @@ def test_res46_exact_movement_onset_event_does_not_authorize_zero_velocity() -> 
         reference_event=onset,
     )
 
-    refused = derive_supported_system_com_velocity(
-        acceleration, interval, legacy_event_condition
-    )
+    refused = derive_supported_system_com_velocity(acceleration, interval, legacy_event_condition)
 
     assert isinstance(refused, RefusalResult)
     assert RefusalReasonCode.ZERO_VELOCITY_REFERENCE_UNQUALIFIED in refused.reason_codes
