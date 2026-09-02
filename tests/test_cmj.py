@@ -2860,6 +2860,21 @@ def test_res46_unadjudicated_movement_segment_cannot_qualify_zero_velocity() -> 
     assert RefusalReasonCode.ZERO_VELOCITY_REFERENCE_UNQUALIFIED in refused.reason_codes
 
 
+def test_res46_source_recomputed_qc_rejects_forged_zero_velocity_evidence() -> None:
+    _, total, weight, contract = _mechanics_fixture(
+        "res46-forged-qc",
+        (1.0, 1.0, 1.0, 3.0, 3.0),
+        weighing_end_index=3,
+    )
+    forged_qc = replace(weight.qc, mean_force_n=weight.qc.mean_force_n + 1.0)
+    forged_weight = replace(weight, qc=forged_qc)
+
+    refused = derive_net_vertical_force(total, forged_weight, contract)
+
+    assert isinstance(refused, RefusalResult)
+    assert RefusalReasonCode.PROCESSING_LINEAGE_UNRESOLVED in refused.reason_codes
+
+
 def test_res46_exact_movement_onset_event_does_not_authorize_zero_velocity() -> None:
     force = _event_input("res46-event-reference", _event_trace())
     weight = _event_baseline(force)
@@ -3034,6 +3049,21 @@ def test_res37_relative_displacement_has_explicit_zero_origin_and_is_not_absolut
             initial_velocity_condition=InitialVelocityCondition.zero_at_sample(  # type: ignore[arg-type]
                 velocity.series.series_id, 2
             ),
+        )
+    forged_reference = replace(
+        condition,
+        weighing_segment=replace(
+            condition.weighing_segment,
+            start_index=1,
+            end_index=4,
+        ),
+    )
+    forged_series = replace(displacement.series, initial_velocity_condition=forged_reference)
+    with pytest.raises(ValueError, match="zero-velocity reference"):
+        SupportedSystemComRelativeDisplacementResult(
+            observation=displacement.observation,
+            series=forged_series,
+            displacement_origin=origin,
         )
 
 

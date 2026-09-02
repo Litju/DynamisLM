@@ -80,6 +80,7 @@ from dynamislm.measurement.cmj.weighing import (
     _provenance_with_run,
     _weight_input_refusal,
     construct_total_supported_vertical_force,
+    estimate_system_weight,
 )
 from dynamislm.measurement.identity import (
     InstanceIdentifier,
@@ -783,6 +784,17 @@ def _validate_series_observation(
     )
     if len(matching_runs) != 1:
         raise ValueError("mechanics observation must preserve one matching processing run")
+    if matching_runs[0].parameters != identity.processing.method_parameters:
+        raise ValueError("mechanics processing run parameters must match observation identity")
+    if quantity in {
+        CMJMechanicsQuantity.SUPPORTED_SYSTEM_COM_VERTICAL_VELOCITY,
+        CMJMechanicsQuantity.SUPPORTED_SYSTEM_COM_RELATIVE_VERTICAL_DISPLACEMENT,
+    }:
+        parameters = {entry.key: entry.value for entry in identity.processing.method_parameters}
+        if parameters.get("zero_velocity_reference") != canonical_json(
+            series.initial_velocity_condition
+        ):
+            raise ValueError("mechanics observation must preserve its zero-velocity reference")
 
 
 @register_serializable_type
@@ -961,6 +973,26 @@ class SupportedSystemComRelativeDisplacementResult:
         )
         if self.series.displacement_origin != self.displacement_origin:
             raise ValueError("displacement result origin must match its series")
+        parameters = {
+            entry.key: entry.value
+            for entry in self.observation.identity.processing.method_parameters
+        }
+        source_velocity_observation_id = parameters.get("source_velocity_observation_id")
+        source_velocity_runs = tuple(
+            run
+            for run in self.observation.provenance.processing_runs
+            if run.output_entity_id.qualified == source_velocity_observation_id
+        )
+        if (
+            len(source_velocity_runs) != 1
+            or dict((entry.key, entry.value) for entry in source_velocity_runs[0].parameters).get(
+                "zero_velocity_reference"
+            )
+            != canonical_json(self.series.initial_velocity_condition)
+            or parameters.get("source_velocity_initial_condition_semantics")
+            != canonical_json(_condition_key(self.series.initial_velocity_condition))
+        ):
+            raise ValueError("displacement must preserve its upstream velocity authority")
 
     @property
     def samples(self) -> tuple[float, ...]:
@@ -1284,6 +1316,40 @@ def _weight_refusal(
                 "SYSTEM_WEIGHT from the exact total-force signal, artifact, identity, "
                 "context, and protocol",
             ),
+            observation_ids,
+            refusal_class=RefusalClass.IDENTITY_UNRESOLVED,
+        )
+    if weight.observation.result.quality.flags != weight.qc.quality_flags:
+        return _mechanics_refusal(
+            claim,
+            (RefusalReasonCode.PROCESSING_LINEAGE_UNRESOLVED,),
+            ("SYSTEM_WEIGHT quality flags linked to its baseline QC",),
+            observation_ids,
+            refusal_class=RefusalClass.IDENTITY_UNRESOLVED,
+        )
+    recomputed = estimate_system_weight(force_input, weight.segment)
+    if not isinstance(recomputed, SystemWeightResult):
+        return _mechanics_refusal(
+            claim,
+            (RefusalReasonCode.PROCESSING_LINEAGE_UNRESOLVED,),
+            ("source-recomputed SYSTEM_WEIGHT baseline statistics",),
+            observation_ids,
+            refusal_class=RefusalClass.IDENTITY_UNRESOLVED,
+        )
+    actual_qc = weight.qc
+    expected_qc = recomputed.qc
+    if (
+        weight.value_n != recomputed.value_n
+        or actual_qc.sample_count != expected_qc.sample_count
+        or actual_qc.elapsed_sample_span_s != expected_qc.elapsed_sample_span_s
+        or actual_qc.mean_force_n != expected_qc.mean_force_n
+        or actual_qc.standard_deviation_n != expected_qc.standard_deviation_n
+        or actual_qc.range_n != expected_qc.range_n
+    ):
+        return _mechanics_refusal(
+            claim,
+            (RefusalReasonCode.PROCESSING_LINEAGE_UNRESOLVED,),
+            ("SYSTEM_WEIGHT value and QC recomputed from the exact source segment",),
             observation_ids,
             refusal_class=RefusalClass.IDENTITY_UNRESOLVED,
         )
