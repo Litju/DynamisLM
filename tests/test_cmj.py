@@ -22,6 +22,8 @@ from dynamislm import (
     SignConvention,
     SourceArtifact,
     StructuredOutputReference,
+    UncertaintyMetadata,
+    UncertaintyStatus,
     UnitReference,
     ValueOrigin,
     VersionIdentity,
@@ -1446,6 +1448,26 @@ def test_res35_standard_and_local_gravity_are_distinct_and_body_mass_is_refused(
     assert refusal.refusal_class is RefusalClass.COMPUTATION_NOT_REGISTERED
     assert RefusalReasonCode.BODY_MASS_CLAIM_UNSUPPORTED in refusal.reason_codes
     assert refusal.observation_ids == (local_mass.observation.observation_id,)
+    assert STANDARD_GRAVITY.value_m_per_s2 == 9.80665
+    assert STANDARD_GRAVITY.uncertainty.status is UncertaintyStatus.NOT_APPLICABLE
+    assert STANDARD_GRAVITY.uncertainty.description is not None
+    assert "Conventional exact/reference" in STANDARD_GRAVITY.uncertainty.description
+    assert "not a local measurement" in STANDARD_GRAVITY.uncertainty.description
+    assert "not an unassessed empirical estimate" in STANDARD_GRAVITY.uncertainty.description
+    assert local.uncertainty.status is UncertaintyStatus.NOT_ASSESSED
+    with pytest.raises(ValueError, match="NOT_APPLICABLE"):
+        GravityReference(
+            9.80665,
+            GravityReferenceType.STANDARD_GRAVITY,
+            STANDARD_GRAVITY.source,
+            uncertainty=UncertaintyMetadata(),
+        )
+    with pytest.raises(ValueError, match="standard-gravity source"):
+        GravityReference(
+            9.8,
+            GravityReferenceType.LOCAL_GRAVITATIONAL_ACCELERATION,
+            STANDARD_GRAVITY.source,
+        )
     with pytest.raises(ValueError, match="STANDARD_GRAVITY"):
         GravityReference(
             9.8,
@@ -1569,7 +1591,7 @@ def test_res44_mass_serialization_and_provenance_keep_standard_and_local_distinc
         run = next(
             run
             for run in value.observation.provenance.processing_runs
-            if run.output_observation_id == value.observation.observation_id
+            if run.output_entity_id == value.observation.observation_id
         )
         parameters = {entry.key: entry.value for entry in run.parameters}
         assert (
@@ -2284,6 +2306,8 @@ def test_res36_occurrence_provenance_and_canonical_serialization_are_complete() 
     assert onset.detector_method.decision_reference in {
         evidence.reference for evidence in onset.provenance.evidence_references
     }
+    assert onset.provenance.processing_runs[-1].output_entity_id == onset.occurrence_id
+    assert onset.provenance.processing_runs[-1].output_entity_id.instance_type == "event-occurrence"
     assert any(
         edge.relation is LineageRelation.SUPPORTED_BY for edge in onset.provenance.lineage_edges
     )
@@ -2330,11 +2354,25 @@ def test_res36_method_and_parameter_mismatches_remain_non_comparable() -> None:
     alternate_run = replace(
         first.provenance.processing_runs[-1],
         method=alternate_method.reference,
-        output_observation_id=alternate_id,
+        output_entity_id=alternate_id,
+    )
+    alternate_edges = tuple(
+        replace(
+            edge,
+            to_id=alternate_id.qualified,
+        )
+        if (
+            edge.from_id == alternate_run.processing_run_id.qualified
+            and edge.to_id == first.occurrence_id.qualified
+            and edge.relation is LineageRelation.PRODUCED
+        )
+        else edge
+        for edge in first.provenance.lineage_edges
     )
     alternate_provenance = replace(
         first.provenance,
         processing_runs=(*first.provenance.processing_runs[:-1], alternate_run),
+        lineage_edges=alternate_edges,
     )
     alternate = replace(
         first,

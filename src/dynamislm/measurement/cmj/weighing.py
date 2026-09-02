@@ -126,6 +126,10 @@ from dynamislm.serialization import canonical_hash, canonical_json, register_ser
 RES35_SOFTWARE_VERSION = "dynamislm-res35-1.0.0"
 RES44_SOFTWARE_VERSION = "dynamislm-res44-1.0.0"
 STANDARD_GRAVITY_VALUE_M_PER_S2 = 9.80665
+STANDARD_GRAVITY_STATUS_DESCRIPTION = (
+    "Conventional exact/reference value g_n = 9.80665 m/s^2; "
+    "not a local measurement and not an unassessed empirical estimate."
+)
 
 
 def _require_text(value: str, field_name: str) -> None:
@@ -263,11 +267,7 @@ class WeighingBaselineQC:
             ("range_n", self.range_n),
         ):
             _finite(value, field_name)
-        if (
-            self.elapsed_sample_span_s < 0
-            or self.standard_deviation_n < 0
-            or self.range_n < 0
-        ):
+        if self.elapsed_sample_span_s < 0 or self.standard_deviation_n < 0 or self.range_n < 0:
             raise ValueError(
                 "elapsed sample span, standard deviation, and range must not be negative"
             )
@@ -315,6 +315,18 @@ class GravityReference:
             raise ValueError(
                 "STANDARD_GRAVITY must use the registered conventional value and source"
             )
+        if self.reference_type is GravityReferenceType.STANDARD_GRAVITY:
+            if (
+                self.uncertainty.status is not UncertaintyStatus.NOT_APPLICABLE
+                or self.uncertainty.description != STANDARD_GRAVITY_STATUS_DESCRIPTION
+            ):
+                raise ValueError(
+                    "STANDARD_GRAVITY must use NOT_APPLICABLE exact-conventional metadata"
+                )
+        elif self.source.stable_id == STANDARD_GRAVITY_SOURCE.stable_id:
+            raise ValueError(
+                "LOCAL_GRAVITATIONAL_ACCELERATION must not use the standard-gravity source"
+            )
 
     @property
     def is_standard(self) -> bool:
@@ -330,8 +342,8 @@ STANDARD_GRAVITY = GravityReference(
     reference_type=GravityReferenceType.STANDARD_GRAVITY,
     source=STANDARD_GRAVITY_SOURCE,
     uncertainty=UncertaintyMetadata(
-        status=UncertaintyStatus.NOT_ASSESSED,
-        description="Conventional standard acceleration of gravity; not a local-gravity estimate.",
+        status=UncertaintyStatus.NOT_APPLICABLE,
+        description=STANDARD_GRAVITY_STATUS_DESCRIPTION,
     ),
 )
 
