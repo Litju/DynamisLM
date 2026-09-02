@@ -6,7 +6,7 @@ import json
 import math
 import subprocess
 import sys
-from dataclasses import FrozenInstanceError, fields
+from dataclasses import FrozenInstanceError, fields, replace
 from pathlib import Path
 
 import pytest
@@ -163,7 +163,7 @@ def _derived_observation(
         method=identity.version.processing_method,
         parameters=(MetadataEntry("algorithm_version", method_version),),
         software_version="0.1.0",
-        output_observation_id=observation_id,
+        output_entity_id=observation_id,
     )
     return create_derived_observation(
         observation_id=observation_id,
@@ -237,9 +237,42 @@ def test_reprocessing_same_raw_artifact_creates_distinct_observations() -> None:
     assert first.identity != second.identity
     assert first.observation_id != second.observation_id
     assert first.provenance.processing_runs[0].method != second.provenance.processing_runs[0].method
-    assert first.provenance.processing_runs[0].output_observation_id == first.observation_id
-    assert second.provenance.processing_runs[0].output_observation_id == second.observation_id
+    assert first.provenance.processing_runs[0].output_entity_id == first.observation_id
+    assert second.provenance.processing_runs[0].output_entity_id == second.observation_id
     assert canonical_hash(first) != canonical_hash(second)
+
+
+def test_processing_run_output_entity_contract_is_typed_and_versioned() -> None:
+    observation = _derived_observation("output-entity")
+    run = observation.provenance.processing_runs[0]
+
+    assert run.output_entity_id == observation.observation_id
+    assert run.output_entity_id.instance_type == "observation"
+    serialized = canonical_json(run)
+    assert '"output_entity_id"' in serialized
+    assert '"output_observation_id"' not in serialized
+    restored = from_canonical_json(serialized, ProcessingRun)
+    assert restored == run
+    assert canonical_json(restored) == serialized
+    assert canonical_hash(restored) == canonical_hash(run)
+
+    envelope = json.loads(serialized)
+    envelope["serialization_version"] = 2
+    envelope["payload"]["output_observation_id"] = envelope["payload"].pop("output_entity_id")
+    with pytest.raises(ValueError, match="unsupported serialization version"):
+        from_canonical_json(json.dumps(envelope), ProcessingRun)
+
+
+def test_provenance_rejects_forged_processing_output_entity_linkage() -> None:
+    observation = _derived_observation("forged-output")
+    run = observation.provenance.processing_runs[0]
+    forged_run = replace(
+        run,
+        output_entity_id=InstanceIdentifier("observation", "not-the-produced-observation"),
+    )
+
+    with pytest.raises(ValueError, match="output entity"):
+        replace(observation.provenance, processing_runs=(forged_run,))
 
 
 def test_reprocessing_cannot_overwrite_prior_provenance() -> None:
@@ -407,16 +440,16 @@ def test_performance_outcome_is_explicitly_assignable_to_a_derived_result() -> N
     assert result.classification.scientific_roles == (ScientificRole.PERFORMANCE_OUTCOME,)
 
 
-def test_serialization_version_rejects_the_pre_role_cardinality_wire_shape() -> None:
+def test_serialization_version_rejects_the_prior_role_cardinality_wire_shape() -> None:
     result = _result(
         "versioned-roles",
         classification=ScientificClassification(ValueOrigin.DIRECT_MEASUREMENT, ()),
     )
     envelope = json.loads(canonical_json(result))
 
-    assert SERIALIZATION_VERSION == 2
+    assert SERIALIZATION_VERSION == 3
     assert envelope["serialization_version"] == SERIALIZATION_VERSION
-    envelope["serialization_version"] = 1
+    envelope["serialization_version"] = 2
     classification_wire = envelope["payload"]["classification"]
     classification_wire["scientific_role"] = "PERFORMANCE_OUTCOME"
     del classification_wire["scientific_roles"]
@@ -642,7 +675,7 @@ def test_clean_environment_import_smoke(tmp_path: Path) -> None:
         [
             sys.executable,
             "-c",
-            "import dynamislm; assert dynamislm.SERIALIZATION_VERSION == 2",
+            "import dynamislm; assert dynamislm.SERIALIZATION_VERSION == 3",
         ],
         cwd=tmp_path,
         env={

@@ -126,6 +126,10 @@ from dynamislm.serialization import canonical_hash, canonical_json, register_ser
 RES35_SOFTWARE_VERSION = "dynamislm-res35-1.0.0"
 RES44_SOFTWARE_VERSION = "dynamislm-res44-1.0.0"
 STANDARD_GRAVITY_VALUE_M_PER_S2 = 9.80665
+STANDARD_GRAVITY_STATUS_DESCRIPTION = (
+    "Conventional exact/reference value g_n = 9.80665 m/s^2; "
+    "not a local measurement and not an unassessed empirical estimate."
+)
 
 
 def _require_text(value: str, field_name: str) -> None:
@@ -242,10 +246,10 @@ class WeighingSegment:
 @register_serializable_type
 @dataclass(frozen=True, slots=True)
 class WeighingBaselineQC:
-    """Descriptive within-window values; no universal accept/reject threshold."""
+    """Descriptive first-to-last span and within-window values; no universal threshold."""
 
     sample_count: int
-    duration_s: float
+    elapsed_sample_span_s: float
     mean_force_n: float
     standard_deviation_n: float
     range_n: float
@@ -257,14 +261,16 @@ class WeighingBaselineQC:
         if self.sample_count < 2:
             raise ValueError("sample_count must be at least two")
         for field_name, value in (
-            ("duration_s", self.duration_s),
+            ("elapsed_sample_span_s", self.elapsed_sample_span_s),
             ("mean_force_n", self.mean_force_n),
             ("standard_deviation_n", self.standard_deviation_n),
             ("range_n", self.range_n),
         ):
             _finite(value, field_name)
-        if self.duration_s < 0 or self.standard_deviation_n < 0 or self.range_n < 0:
-            raise ValueError("duration, standard deviation, and range must not be negative")
+        if self.elapsed_sample_span_s < 0 or self.standard_deviation_n < 0 or self.range_n < 0:
+            raise ValueError(
+                "elapsed sample span, standard deviation, and range must not be negative"
+            )
         if not isinstance(self.acceptability_adjudicated, bool):
             raise ValueError("acceptability_adjudicated must be boolean")
 
@@ -309,6 +315,22 @@ class GravityReference:
             raise ValueError(
                 "STANDARD_GRAVITY must use the registered conventional value and source"
             )
+        if self.reference_type is GravityReferenceType.STANDARD_GRAVITY:
+            if (
+                self.uncertainty.status is not UncertaintyStatus.NOT_APPLICABLE
+                or self.uncertainty.description != STANDARD_GRAVITY_STATUS_DESCRIPTION
+            ):
+                raise ValueError(
+                    "STANDARD_GRAVITY must use NOT_APPLICABLE exact-conventional metadata"
+                )
+        elif self.source.stable_id == STANDARD_GRAVITY_SOURCE.stable_id:
+            raise ValueError(
+                "LOCAL_GRAVITATIONAL_ACCELERATION must not use the standard-gravity source"
+            )
+        elif self.uncertainty.description == STANDARD_GRAVITY_STATUS_DESCRIPTION:
+            raise ValueError(
+                "LOCAL_GRAVITATIONAL_ACCELERATION must not use standard exact-conventional metadata"
+            )
 
     @property
     def is_standard(self) -> bool:
@@ -324,8 +346,8 @@ STANDARD_GRAVITY = GravityReference(
     reference_type=GravityReferenceType.STANDARD_GRAVITY,
     source=STANDARD_GRAVITY_SOURCE,
     uncertainty=UncertaintyMetadata(
-        status=UncertaintyStatus.NOT_ASSESSED,
-        description="Conventional standard acceleration of gravity; not a local-gravity estimate.",
+        status=UncertaintyStatus.NOT_APPLICABLE,
+        description=STANDARD_GRAVITY_STATUS_DESCRIPTION,
     ),
 )
 
@@ -363,7 +385,7 @@ def _validate_mass_result_provenance(
     matching_runs = tuple(
         run
         for run in observation.provenance.processing_runs
-        if run.output_observation_id == observation.observation_id
+        if run.output_entity_id == observation.observation_id
         and run.method.stable_id == operation.stable_id
     )
     if len(matching_runs) != 1:
@@ -643,7 +665,7 @@ def _provenance_with_run(
     base: Provenance,
     *,
     processing_run: ProcessingRun,
-    output_observation_id: InstanceIdentifier,
+    output_entity_id: InstanceIdentifier,
     source_observation_ids: tuple[InstanceIdentifier, ...],
     source_acquisition_ids: tuple[InstanceIdentifier, ...],
     output_artifacts: tuple[SourceArtifact, ...] = (),
@@ -714,13 +736,13 @@ def _provenance_with_run(
             edges.append(edge)
     output_edge = LineageEdge(
         processing_run.processing_run_id.qualified,
-        output_observation_id.qualified,
+        output_entity_id.qualified,
         LineageRelation.PRODUCED,
     )
     if output_edge not in edges:
         edges.append(output_edge)
     return Provenance(
-        provenance_id=InstanceIdentifier("provenance", output_observation_id.value),
+        provenance_id=InstanceIdentifier("provenance", output_entity_id.value),
         source_artifacts=artifacts,
         acquisitions=acquisitions,
         processing_runs=runs,
@@ -901,7 +923,7 @@ def _input_common_refusal(input_value: CMJForceInput, claim: str) -> RefusalResu
             )
     else:
         has_processed_observation = any(
-            run.output_observation_id == observation_id
+            run.output_entity_id == observation_id
             and any(
                 edge.from_id == run.processing_run_id.qualified
                 and edge.to_id == observation_id.qualified
@@ -1322,7 +1344,7 @@ def _build_processed_total_force(
     left: CMJForceInput,
     right: CMJForceInput,
     *,
-    output_observation_id: InstanceIdentifier | None,
+    output_entity_id: InstanceIdentifier | None,
     output_signal_id: InstanceIdentifier | None,
     output_artifact_id: InstanceIdentifier | None,
 ) -> TotalSupportedForceResult:
@@ -1339,7 +1361,7 @@ def _build_processed_total_force(
         *ordered,
         operation=CMJ_BILATERAL_TOTAL_VERTICAL_FORCE_SUM,
     )
-    observation_id = output_observation_id or InstanceIdentifier(
+    observation_id = output_entity_id or InstanceIdentifier(
         "observation", f"cmj-total-force:{digest}"
     )
     signal_id = output_signal_id or InstanceIdentifier("signal", f"cmj-total-force:{digest}")
@@ -1437,7 +1459,7 @@ def _build_processed_total_force(
         method=CMJ_BILATERAL_TOTAL_VERTICAL_FORCE_SUM,
         parameters=output_processing.method_parameters,
         software_version=RES35_SOFTWARE_VERSION,
-        output_observation_id=observation_id,
+        output_entity_id=observation_id,
     )
     base_provenance = _merge_provenance(
         first.observation.provenance,
@@ -1446,7 +1468,7 @@ def _build_processed_total_force(
     provenance = _provenance_with_run(
         base_provenance,
         processing_run=processing_run,
-        output_observation_id=observation_id,
+        output_entity_id=observation_id,
         source_observation_ids=_input_observation_ids(first, second),
         source_acquisition_ids=(
             first.acquisition.acquisition_id,
@@ -1505,7 +1527,7 @@ def construct_total_supported_vertical_force(
     source: CMJForceInput,
     counterpart: CMJForceInput | None = None,
     *,
-    output_observation_id: InstanceIdentifier | None = None,
+    output_entity_id: InstanceIdentifier | None = None,
     output_signal_id: InstanceIdentifier | None = None,
     output_artifact_id: InstanceIdentifier | None = None,
 ) -> TotalSupportedForceResult | RefusalResult:
@@ -1597,7 +1619,7 @@ def construct_total_supported_vertical_force(
         source,
         counterpart,
         claim=claim,
-        output_observation_id=output_observation_id,
+        output_entity_id=output_entity_id,
         output_signal_id=output_signal_id,
         output_artifact_id=output_artifact_id,
     )
@@ -1608,7 +1630,7 @@ def _validate_bilateral_pair(
     counterpart: CMJForceInput,
     *,
     claim: str,
-    output_observation_id: InstanceIdentifier | None,
+    output_entity_id: InstanceIdentifier | None,
     output_signal_id: InstanceIdentifier | None,
     output_artifact_id: InstanceIdentifier | None,
 ) -> TotalSupportedForceResult | RefusalResult:
@@ -1781,7 +1803,7 @@ def _validate_bilateral_pair(
         return _build_processed_total_force(
             left_or_right,
             counterpart,
-            output_observation_id=output_observation_id,
+            output_entity_id=output_entity_id,
             output_signal_id=output_signal_id,
             output_artifact_id=output_artifact_id,
         )
@@ -1820,10 +1842,10 @@ def _segment_refusal(
     )
 
 
-def _segment_duration(signal: ForceSignal, start: int, end: int) -> float:
+def _elapsed_sample_span(signal: ForceSignal, start: int, end: int) -> float:
     timebase = signal.timebase
     if isinstance(timebase, RegularTimebase):
-        return (end - start) / timebase.sample_rate_hz
+        return (end - start - 1) / timebase.sample_rate_hz
     if isinstance(timebase, ExplicitTimebase):
         return timebase.times_s[end - 1] - timebase.times_s[start]
     raise ValueError("weighing signal must have a registered timebase")
@@ -1859,7 +1881,7 @@ def estimate_system_weight(
     force: CMJForceInput | TotalSupportedForceResult,
     segment: WeighingSegment | None = None,
     *,
-    output_observation_id: InstanceIdentifier | None = None,
+    output_entity_id: InstanceIdentifier | None = None,
     output_result_id: InstanceIdentifier | None = None,
 ) -> SystemWeightResult | RefusalResult:
     """Estimate supported-system weight as mean force over an explicit segment."""
@@ -1931,7 +1953,7 @@ def estimate_system_weight(
     try:
         mean_force = math.fsum(selected) / len(selected)
         standard_deviation = stdev(selected)
-        duration = _segment_duration(
+        elapsed_sample_span = _elapsed_sample_span(
             force_input.signal,
             segment.start_index,
             segment.end_index,
@@ -1939,7 +1961,7 @@ def estimate_system_weight(
         range_force = max(selected) - min(selected)
         qc = WeighingBaselineQC(
             sample_count=len(selected),
-            duration_s=duration,
+            elapsed_sample_span_s=elapsed_sample_span,
             mean_force_n=mean_force,
             standard_deviation_n=standard_deviation,
             range_n=range_force,
@@ -1958,7 +1980,7 @@ def estimate_system_weight(
             "segment": segment,
         }
     ).removeprefix("sha256:")[:24]
-    observation_id = output_observation_id or InstanceIdentifier(
+    observation_id = output_entity_id or InstanceIdentifier(
         "observation", f"cmj-system-weight:{digest}"
     )
     result_id = output_result_id or InstanceIdentifier("result", f"cmj-system-weight:{digest}")
@@ -1987,12 +2009,12 @@ def estimate_system_weight(
         method=CMJ_SYSTEM_WEIGHT_OPERATION,
         parameters=processing_parameters,
         software_version=RES35_SOFTWARE_VERSION,
-        output_observation_id=observation_id,
+        output_entity_id=observation_id,
     )
     provenance = _provenance_with_run(
         force_input.observation.provenance,
         processing_run=processing_run,
-        output_observation_id=observation_id,
+        output_entity_id=observation_id,
         source_observation_ids=(force_input.observation.observation_id,),
         source_acquisition_ids=(force_input.acquisition.acquisition_id,),
     )
@@ -2128,7 +2150,7 @@ def _weight_input_refusal(
     matching_runs = tuple(
         run
         for run in observation.provenance.processing_runs
-        if run.output_observation_id == observation.observation_id
+        if run.output_entity_id == observation.observation_id
         and run.source_artifact_ids == (raw_artifact_id,)
         and run.method.stable_id == CMJ_SYSTEM_WEIGHT_OPERATION.stable_id
         and run.parameters == identity.processing.method_parameters
@@ -2300,7 +2322,7 @@ def _derive_mass_observation(
     claim: str,
     output_prefix: str,
     result_note: str,
-    output_observation_id: InstanceIdentifier | None = None,
+    output_entity_id: InstanceIdentifier | None = None,
     output_result_id: InstanceIdentifier | None = None,
 ) -> tuple[ScientificMeasurementObservation, InstanceIdentifier] | RefusalResult:
     """Build one explicitly identified mass or mass-equivalent observation."""
@@ -2446,7 +2468,7 @@ def _derive_mass_observation(
             "gravity": gravity,
         }
     ).removeprefix("sha256:")[:24]
-    observation_id = output_observation_id or InstanceIdentifier(
+    observation_id = output_entity_id or InstanceIdentifier(
         "observation", f"{output_prefix}:{digest}"
     )
     result_id = output_result_id or InstanceIdentifier("result", f"{output_prefix}:{digest}")
@@ -2480,7 +2502,7 @@ def _derive_mass_observation(
         method=operation,
         parameters=processing_parameters,
         software_version=RES44_SOFTWARE_VERSION,
-        output_observation_id=observation_id,
+        output_entity_id=observation_id,
     )
     evidence_reference = EvidenceReference(
         reference=RES44_DECISION_MASS_METROLOGY,
@@ -2492,7 +2514,7 @@ def _derive_mass_observation(
     provenance = _provenance_with_run(
         weight_observation.provenance,
         processing_run=processing_run,
-        output_observation_id=observation_id,
+        output_entity_id=observation_id,
         source_observation_ids=(weight_observation.observation_id,),
         source_acquisition_ids=(source_acquisition.acquisition_id,),
         supported_by=(gravity.source, RES44_DECISION_MASS_METROLOGY),
@@ -2538,7 +2560,7 @@ def derive_physical_system_mass(
     system_weight: SystemWeightResult | ScientificMeasurementObservation,
     gravity: GravityReference | None = None,
     *,
-    output_observation_id: InstanceIdentifier | None = None,
+    output_entity_id: InstanceIdentifier | None = None,
     output_result_id: InstanceIdentifier | None = None,
 ) -> PhysicalSystemMassResult | RefusalResult:
     """Derive physical supported-system mass using explicitly applicable local gravity."""
@@ -2556,7 +2578,7 @@ def derive_physical_system_mass(
             "Physical supported-system mass under the supplied applicable local gravitational "
             "acceleration; body-mass equivalence is not established."
         ),
-        output_observation_id=output_observation_id,
+        output_entity_id=output_entity_id,
         output_result_id=output_result_id,
     )
     if isinstance(derived, RefusalResult):
@@ -2575,7 +2597,7 @@ def derive_standard_gravity_mass_equivalent(
     system_weight: SystemWeightResult | ScientificMeasurementObservation,
     gravity: GravityReference | None = None,
     *,
-    output_observation_id: InstanceIdentifier | None = None,
+    output_entity_id: InstanceIdentifier | None = None,
     output_result_id: InstanceIdentifier | None = None,
 ) -> StandardGravityMassEquivalentResult | RefusalResult:
     """Derive the explicit conventional reference quantity ``W/g_n``."""
@@ -2594,7 +2616,7 @@ def derive_standard_gravity_mass_equivalent(
             "system mass unless a separate standard-weight identity is established, and body-"
             "mass equivalence is not established."
         ),
-        output_observation_id=output_observation_id,
+        output_entity_id=output_entity_id,
         output_result_id=output_result_id,
     )
     if isinstance(derived, RefusalResult):

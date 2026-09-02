@@ -1,5 +1,6 @@
 DECISION_ID: RES36-DR-003
 STATUS: ADOPTED
+CORRECTION: RES45-DR-002 makes the absolute contact threshold domain explicit as finite and strictly positive. The landing/contact-regain decision and parameterized method family remain adopted.
 
 QUESTION
 
@@ -50,7 +51,7 @@ the no-landing outcome explicit.
 
 PARAMETERS
 
-- `threshold_n` is required and finite;
+- `threshold_n` is required, finite, and strictly positive; zero and negative values are outside the absolute contact-threshold method domain;
 - `direction = ABOVE_THRESHOLD`;
 - `dwell_samples` is required and sample-count based;
 - search origin is derived only from the validated takeoff occurrence;
@@ -88,6 +89,17 @@ TESTS
 Synthetic traces cover valid landing, no landing while preserving onset/
 takeoff, transient contact spikes, multiple candidates, explicit timestamps,
 invalid takeoff order, provenance, comparability, and canonical round-trip.
+
+MIGRATION_EFFECT
+
+Existing callers that supplied zero or negative `threshold_n` must choose a
+method-valid positive value; no universal threshold value is introduced.
+
+SERIALIZATION_EFFECT
+
+The detector parameter domain is enforced on construction and canonical decode.
+The RES45 global serialization migration to version 3 rejects prior v2
+envelopes; no threshold value is silently reinterpreted.
 
 VERSION
 

@@ -63,6 +63,12 @@ class ScientificMeasurementObservation:
     result: MeasurementResult
     provenance: Provenance
 
+    def __post_init__(self) -> None:
+        if self.observation_id.instance_type != "observation":
+            raise ValueError(
+                "scientific measurement observation ID must have instance_type observation"
+            )
+
 
 def create_derived_observation(
     *,
@@ -82,8 +88,10 @@ def create_derived_observation(
     parameter set must be represented by another processing run and observation.
     """
 
-    if processing_run.output_observation_id != observation_id:
-        raise ValueError("processing run output must equal the new observation ID")
+    if observation_id.instance_type != "observation":
+        raise ValueError("derived observation ID must have instance_type observation")
+    if processing_run.output_entity_id != observation_id:
+        raise ValueError("processing run output entity must equal the new observation ID")
     if source_artifact.artifact_id not in processing_run.source_artifact_ids:
         raise ValueError("processing run must reference the source artifact")
     if acquisition.source_artifact_id != source_artifact.artifact_id:

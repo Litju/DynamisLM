@@ -22,6 +22,8 @@ from dynamislm import (
     SignConvention,
     SourceArtifact,
     StructuredOutputReference,
+    UncertaintyMetadata,
+    UncertaintyStatus,
     UnitReference,
     ValueOrigin,
     VersionIdentity,
@@ -1234,7 +1236,7 @@ def test_res35_weighing_segment_is_separate_from_mean_estimator_and_qc_is_descri
     assert isinstance(result, SystemWeightResult)
     assert result.observation.result.value == ScalarValue(101.5)
     assert result.qc.sample_count == 2
-    assert result.qc.duration_s == pytest.approx(0.002)
+    assert result.qc.elapsed_sample_span_s == pytest.approx(0.001)
     assert result.qc.standard_deviation_n == pytest.approx(0.7071067811865476)
     assert result.qc.range_n == 1.0
     assert result.qc.acceptability_adjudicated is False
@@ -1265,6 +1267,90 @@ def test_res35_weighing_segment_is_separate_from_mean_estimator_and_qc_is_descri
     )
     assert isinstance(too_few, RefusalResult)
     assert RefusalReasonCode.INSUFFICIENT_WEIGHING_SAMPLES in too_few.reason_codes
+
+
+def test_res45_weighing_uses_elapsed_sample_span_for_regular_and_explicit_support() -> None:
+    regular_source = _rebind_raw_input(
+        _cmj_input("elapsed-span-regular"),
+        suffix="elapsed-span-regular-two",
+        samples=(100.0, 101.0),
+        timebase=RegularTimebase(1000.0, start_time_s=42.0),
+    )
+    explicit_source = _rebind_raw_input(
+        _cmj_input("elapsed-span-explicit"),
+        suffix="elapsed-span-explicit-two",
+        samples=(100.0, 101.0),
+        timebase=ExplicitTimebase((42.0, 42.001)),
+    )
+    regular_two = estimate_system_weight(
+        regular_source,
+        WeighingSegment(
+            regular_source.signal.signal_id,
+            regular_source.source_artifact.artifact_id,
+            regular_source.identity.identity_id,
+            0,
+            2,
+        ),
+    )
+    explicit_two = estimate_system_weight(
+        explicit_source,
+        WeighingSegment(
+            explicit_source.signal.signal_id,
+            explicit_source.source_artifact.artifact_id,
+            explicit_source.identity.identity_id,
+            0,
+            2,
+        ),
+    )
+    assert isinstance(regular_two, SystemWeightResult)
+    assert isinstance(explicit_two, SystemWeightResult)
+    assert regular_two.qc.elapsed_sample_span_s == pytest.approx(0.001)
+    assert explicit_two.qc.elapsed_sample_span_s == pytest.approx(0.001)
+    assert regular_two.value_n == explicit_two.value_n == pytest.approx(100.5)
+
+    regular_three = _rebind_raw_input(
+        _cmj_input("elapsed-span-regular-three"),
+        suffix="elapsed-span-regular-three-rebound",
+        samples=(100.0, 101.0, 102.0),
+        timebase=RegularTimebase(1000.0, start_time_s=42.0),
+    )
+    explicit_three = _rebind_raw_input(
+        _cmj_input("elapsed-span-explicit-three"),
+        suffix="elapsed-span-explicit-three-rebound",
+        samples=(100.0, 101.0, 102.0),
+        timebase=ExplicitTimebase((42.0, 42.001, 42.002)),
+    )
+    irregular = _rebind_raw_input(
+        _cmj_input("elapsed-span-irregular"),
+        suffix="elapsed-span-irregular-rebound",
+        samples=(100.0, 101.0, 102.0),
+        timebase=ExplicitTimebase((42.0, 42.001, 42.004)),
+    )
+
+    def weighing(source: CMJForceInput) -> SystemWeightResult:
+        result = estimate_system_weight(
+            source,
+            WeighingSegment(
+                source.signal.signal_id,
+                source.source_artifact.artifact_id,
+                source.identity.identity_id,
+                0,
+                3,
+            ),
+        )
+        assert isinstance(result, SystemWeightResult)
+        return result
+
+    regular_three_result = weighing(regular_three)
+    explicit_three_result = weighing(explicit_three)
+    irregular_result = weighing(irregular)
+    assert regular_three_result.qc.elapsed_sample_span_s == pytest.approx(0.002)
+    assert explicit_three_result.qc.elapsed_sample_span_s == pytest.approx(0.002)
+    assert irregular_result.qc.elapsed_sample_span_s == pytest.approx(0.004)
+    assert regular_three_result.value_n == explicit_three_result.value_n == pytest.approx(101.0)
+    qc_json = canonical_json(regular_three_result.qc)
+    assert '"elapsed_sample_span_s":0.002' in qc_json
+    assert "duration_s" not in qc_json
 
 
 def test_res35_system_mass_requires_explicit_gravity_and_preserves_weight() -> None:
@@ -1362,6 +1448,33 @@ def test_res35_standard_and_local_gravity_are_distinct_and_body_mass_is_refused(
     assert refusal.refusal_class is RefusalClass.COMPUTATION_NOT_REGISTERED
     assert RefusalReasonCode.BODY_MASS_CLAIM_UNSUPPORTED in refusal.reason_codes
     assert refusal.observation_ids == (local_mass.observation.observation_id,)
+    assert STANDARD_GRAVITY.value_m_per_s2 == 9.80665
+    assert STANDARD_GRAVITY.uncertainty.status is UncertaintyStatus.NOT_APPLICABLE
+    assert STANDARD_GRAVITY.uncertainty.description is not None
+    assert "Conventional exact/reference" in STANDARD_GRAVITY.uncertainty.description
+    assert "not a local measurement" in STANDARD_GRAVITY.uncertainty.description
+    assert "not an unassessed empirical estimate" in STANDARD_GRAVITY.uncertainty.description
+    assert local.uncertainty.status is UncertaintyStatus.NOT_ASSESSED
+    with pytest.raises(ValueError, match="NOT_APPLICABLE"):
+        GravityReference(
+            9.80665,
+            GravityReferenceType.STANDARD_GRAVITY,
+            STANDARD_GRAVITY.source,
+            uncertainty=UncertaintyMetadata(),
+        )
+    with pytest.raises(ValueError, match="standard-gravity source"):
+        GravityReference(
+            9.8,
+            GravityReferenceType.LOCAL_GRAVITATIONAL_ACCELERATION,
+            STANDARD_GRAVITY.source,
+        )
+    with pytest.raises(ValueError, match="exact-conventional metadata"):
+        GravityReference(
+            9.8,
+            GravityReferenceType.LOCAL_GRAVITATIONAL_ACCELERATION,
+            _reference("gravity-source", "local-with-standard-status"),
+            uncertainty=STANDARD_GRAVITY.uncertainty,
+        )
     with pytest.raises(ValueError, match="STANDARD_GRAVITY"):
         GravityReference(
             9.8,
@@ -1468,7 +1581,7 @@ def test_res44_mass_serialization_and_provenance_keep_standard_and_local_distinc
     assert isinstance(standard, StandardGravityMassEquivalentResult)
     assert isinstance(physical, PhysicalSystemMassResult)
 
-    assert SERIALIZATION_VERSION == 2
+    assert SERIALIZATION_VERSION == 3
     for value, result_type, gravity in (
         (standard, StandardGravityMassEquivalentResult, STANDARD_GRAVITY),
         (physical, PhysicalSystemMassResult, local),
@@ -1485,7 +1598,7 @@ def test_res44_mass_serialization_and_provenance_keep_standard_and_local_distinc
         run = next(
             run
             for run in value.observation.provenance.processing_runs
-            if run.output_observation_id == value.observation.observation_id
+            if run.output_entity_id == value.observation.observation_id
         )
         parameters = {entry.key: entry.value for entry in run.parameters}
         assert (
@@ -1547,7 +1660,7 @@ def test_res35_loaded_protocol_preserves_supported_system_and_refuses_body_mass(
     assert RefusalReasonCode.BODY_MASS_CLAIM_UNSUPPORTED in refusal.reason_codes
 
 
-def test_res35_new_contracts_round_trip_under_serialization_v2() -> None:
+def test_res35_new_contracts_round_trip_under_serialization_v3() -> None:
     source = _cmj_input("serialization-res35")
     weight = estimate_system_weight(
         source,
@@ -1611,7 +1724,7 @@ def test_res35_explicit_segment_uses_exact_half_open_sample_boundaries() -> None
     result = estimate_system_weight(explicit, segment)
     assert isinstance(result, SystemWeightResult)
     assert result.value_n == pytest.approx(101.5)
-    assert result.qc.duration_s == pytest.approx(0.3)
+    assert result.qc.elapsed_sample_span_s == pytest.approx(0.3)
     assert result.qc.sample_count == 2
 
 
@@ -2057,6 +2170,43 @@ def test_res36_thresholds_and_dwell_are_explicit_and_transient_crossing_refuses(
     assert RefusalReasonCode.THRESHOLD_PARAMETER_MISSING in missing_takeoff_threshold.reason_codes
 
 
+def test_res45_registered_event_parameter_domains_are_positive_and_parameterized() -> None:
+    for threshold in (-500.0, 0.0):
+        with pytest.raises(ValueError, match="threshold_n must be positive"):
+            CMJEventDetectorParameters(threshold_n=threshold)
+    valid_absolute = CMJEventDetectorParameters(threshold_n=12.5)
+    assert valid_absolute.threshold_n == 12.5
+
+    for sigma in (-1.0, 0.0):
+        with pytest.raises(ValueError, match="sigma_multiplier must be positive"):
+            CMJEventDetectorParameters(sigma_multiplier=sigma)
+    valid_sigma = CMJEventDetectorParameters(sigma_multiplier=1.25)
+    assert valid_sigma.sigma_multiplier == 1.25
+    integer_parameters = CMJEventDetectorParameters(threshold_n=20, sigma_multiplier=2)
+    float_parameters = CMJEventDetectorParameters(threshold_n=20.0, sigma_multiplier=2.0)
+    assert integer_parameters == float_parameters
+    assert canonical_json(integer_parameters) == canonical_json(float_parameters)
+
+    with pytest.raises(ValueError, match="threshold_n must be finite"):
+        CMJEventDetectorParameters(threshold_n=float("nan"))
+    with pytest.raises(ValueError, match="threshold_n must be finite"):
+        CMJEventDetectorParameters(threshold_n=float("inf"))
+    with pytest.raises(ValueError, match="sigma_multiplier must be finite"):
+        CMJEventDetectorParameters(sigma_multiplier=float("nan"))
+    with pytest.raises(ValueError, match="sigma_multiplier must be finite"):
+        CMJEventDetectorParameters(sigma_multiplier=float("inf"))
+
+    assert CMJEventDetectorParameters().threshold_n is None
+    assert CMJEventDetectorParameters().sigma_multiplier is None
+    force = _event_input("event-positive-threshold", _event_trace())
+    takeoff = detect_takeoff(
+        force,
+        _absolute_parameters(12.5, CMJThresholdDirection.BELOW_THRESHOLD),
+    )
+    assert isinstance(takeoff, CMJEventOccurrence)
+    assert takeoff.detector_parameters.threshold_n == 12.5
+
+
 def test_res36_multiple_crossings_use_registered_tie_break_and_qc() -> None:
     force = _event_input(
         "event-multiple",
@@ -2170,6 +2320,8 @@ def test_res36_occurrence_provenance_and_canonical_serialization_are_complete() 
     assert onset.detector_method.decision_reference in {
         evidence.reference for evidence in onset.provenance.evidence_references
     }
+    assert onset.provenance.processing_runs[-1].output_entity_id == onset.occurrence_id
+    assert onset.provenance.processing_runs[-1].output_entity_id.instance_type == "event-occurrence"
     assert any(
         edge.relation is LineageRelation.SUPPORTED_BY for edge in onset.provenance.lineage_edges
     )
@@ -2216,11 +2368,25 @@ def test_res36_method_and_parameter_mismatches_remain_non_comparable() -> None:
     alternate_run = replace(
         first.provenance.processing_runs[-1],
         method=alternate_method.reference,
-        output_observation_id=alternate_id,
+        output_entity_id=alternate_id,
+    )
+    alternate_edges = tuple(
+        replace(
+            edge,
+            to_id=alternate_id.qualified,
+        )
+        if (
+            edge.from_id == alternate_run.processing_run_id.qualified
+            and edge.to_id == first.occurrence_id.qualified
+            and edge.relation is LineageRelation.PRODUCED
+        )
+        else edge
+        for edge in first.provenance.lineage_edges
     )
     alternate_provenance = replace(
         first.provenance,
         processing_runs=(*first.provenance.processing_runs[:-1], alternate_run),
+        lineage_edges=alternate_edges,
     )
     alternate = replace(
         first,

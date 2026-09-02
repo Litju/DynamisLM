@@ -66,7 +66,7 @@ class ProcessingRun:
     method: RegistryReference
     parameters: tuple[MetadataEntry, ...]
     software_version: str
-    output_observation_id: InstanceIdentifier
+    output_entity_id: InstanceIdentifier
 
     def __post_init__(self) -> None:
         if not self.source_artifact_ids:
@@ -74,6 +74,8 @@ class ProcessingRun:
         require_tuple(self.source_artifact_ids, "source_artifact_ids")
         require_tuple(self.parameters, "parameters")
         _require_text(self.software_version, "software_version")
+        if not isinstance(self.output_entity_id, InstanceIdentifier):
+            raise ValueError("output_entity_id must be an InstanceIdentifier")
 
 
 @register_serializable_type
@@ -137,3 +139,15 @@ class Provenance:
         for edge in self.lineage_edges:
             if edge.relation is LineageRelation.PROCESSED_AS and edge.to_id not in processing_ids:
                 raise ValueError("processed-as lineage edge must target a processing run")
+        for run in self.processing_runs:
+            output_edges = tuple(
+                edge
+                for edge in self.lineage_edges
+                if edge.from_id == run.processing_run_id.qualified
+                and edge.to_id == run.output_entity_id.qualified
+                and edge.relation is LineageRelation.PRODUCED
+            )
+            if len(output_edges) != 1:
+                raise ValueError(
+                    "processing run must have exactly one PRODUCED edge to its output entity"
+                )
