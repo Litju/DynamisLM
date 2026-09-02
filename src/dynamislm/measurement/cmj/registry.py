@@ -1,4 +1,4 @@
-"""Small, explicit CMJ registry surface for the P1B/P1C contracts."""
+"""Small, explicit CMJ registry surface for the P1B/P1C/P1D contracts."""
 
 from __future__ import annotations
 
@@ -21,6 +21,76 @@ CMJ_ACQUISITION_COMPARABILITY_RULE = _reference(
 )
 CMJ_DERIVED_COMPARABILITY_RULE = _reference(
     "comparability-rule", "cmj-derived-measurement-v1", "CMJ derived-measurement comparability"
+)
+CMJ_EVENT_COMPARABILITY_RULE = _reference(
+    "comparability-rule", "cmj-event-v1", "CMJ event comparability"
+)
+
+CMJ_MOVEMENT_ONSET_EVENT_DEFINITION_REF = _reference(
+    "event-definition", "cmj-movement-onset", "CMJ movement onset"
+)
+CMJ_TAKEOFF_CONTACT_LOSS_EVENT_DEFINITION_REF = _reference(
+    "event-definition", "cmj-takeoff-contact-loss", "CMJ takeoff/contact loss"
+)
+CMJ_LANDING_CONTACT_REGAIN_EVENT_DEFINITION_REF = _reference(
+    "event-definition", "cmj-landing-contact-regain", "CMJ landing/contact regain"
+)
+CMJ_MOVEMENT_ONSET_BASELINE_SD_METHOD_REF = _reference(
+    "event-method", "cmj-movement-onset-baseline-sd", "CMJ baseline-SD movement-onset detector"
+)
+CMJ_TAKEOFF_ABSOLUTE_FORCE_METHOD_REF = _reference(
+    "event-method", "cmj-takeoff-absolute-force", "CMJ absolute-force takeoff detector"
+)
+CMJ_LANDING_ABSOLUTE_FORCE_METHOD_REF = _reference(
+    "event-method", "cmj-landing-absolute-force", "CMJ absolute-force landing detector"
+)
+
+RES36_DECISION_MOVEMENT_ONSET = RegistryReference(
+    identifier=ScientificIdentifier(
+        "dynamislm", "decision-record", "res36-movement-onset", CMJ_REGISTRY_VERSION
+    ),
+    display_label="RES-36 movement-onset decision",
+    reference_ids=(
+        "docs/decisions/RES36-DR-001-movement-onset.md",
+        "https://pubmed.ncbi.nlm.nih.gov/20664368/",
+        "https://pmc.ncbi.nlm.nih.gov/articles/PMC9783824/",
+        "https://pubmed.ncbi.nlm.nih.gov/31711369/",
+        "https://doi.org/10.1519/JSC.0000000000000311",
+    ),
+)
+RES36_DECISION_TAKEOFF = RegistryReference(
+    identifier=ScientificIdentifier(
+        "dynamislm", "decision-record", "res36-takeoff-contact-loss", CMJ_REGISTRY_VERSION
+    ),
+    display_label="RES-36 takeoff/contact-loss decision",
+    reference_ids=(
+        "docs/decisions/RES36-DR-002-takeoff-contact-loss.md",
+        "https://pubmed.ncbi.nlm.nih.gov/38863789/",
+        "https://pmc.ncbi.nlm.nih.gov/articles/PMC9865236/",
+    ),
+)
+RES36_DECISION_LANDING = RegistryReference(
+    identifier=ScientificIdentifier(
+        "dynamislm", "decision-record", "res36-landing-contact-regain", CMJ_REGISTRY_VERSION
+    ),
+    display_label="RES-36 landing/contact-regain decision",
+    reference_ids=(
+        "docs/decisions/RES36-DR-003-landing-contact-regain.md",
+        "https://pmc.ncbi.nlm.nih.gov/articles/PMC9865236/",
+        "https://pubmed.ncbi.nlm.nih.gov/38863789/",
+    ),
+)
+RES36_DECISION_EVENT_SEMANTICS = RegistryReference(
+    identifier=ScientificIdentifier(
+        "dynamislm", "decision-record", "res36-event-semantics", CMJ_REGISTRY_VERSION
+    ),
+    display_label="RES-36 event index/time/comparability decision",
+    reference_ids=(
+        "docs/decisions/RES36-DR-004-event-index-time-and-comparability.md",
+        "https://pmc.ncbi.nlm.nih.gov/articles/PMC9865236/",
+        "https://pmc.ncbi.nlm.nih.gov/articles/PMC9783824/",
+        "https://pubmed.ncbi.nlm.nih.gov/38863789/",
+    ),
 )
 
 CMJ_EXPLICIT_WEIGHING_SEGMENT = _reference(

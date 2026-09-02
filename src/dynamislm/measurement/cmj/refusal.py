@@ -1,4 +1,4 @@
-"""CMJ acquisition refusals that preserve safe independent descriptions."""
+"""CMJ acquisition and event refusals that preserve safe descriptions."""
 
 from __future__ import annotations
 
@@ -26,7 +26,6 @@ from dynamislm.serialization import canonical_hash
 
 class CMJComputation(StrEnum):
     BODY_SYSTEM_MASS = "BODY_SYSTEM_MASS"
-    MOVEMENT_ONSET = "MOVEMENT_ONSET"
     IMPULSE = "IMPULSE"
     JUMP_HEIGHT = "JUMP_HEIGHT"
 
@@ -137,7 +136,6 @@ def refuse_unregistered_computation(
     requested = CMJComputation(computation)
     labels = {
         CMJComputation.BODY_SYSTEM_MASS: "body/system mass",
-        CMJComputation.MOVEMENT_ONSET: "movement onset",
         CMJComputation.IMPULSE: "impulse",
         CMJComputation.JUMP_HEIGHT: "jump height",
     }
@@ -221,9 +219,53 @@ def _comparability_reason(reason_code: str) -> str:
         ),
         ComparabilityReasonCode.UNKNOWN_PROVENANCE: RefusalReasonCode.SOURCE_ARTIFACT_UNVERIFIED,
         ComparabilityReasonCode.TRANSFORMATION_REQUIRED: RefusalReasonCode.TRANSFORMATION_REQUIRED,
+        ComparabilityReasonCode.EVENT_DEFINITION_MISMATCH: (
+            RefusalReasonCode.EVENT_DEFINITION_MISMATCH
+        ),
+        ComparabilityReasonCode.EVENT_METHOD_MISMATCH: RefusalReasonCode.EVENT_METHOD_MISMATCH,
+        ComparabilityReasonCode.EVENT_PARAMETER_MISMATCH: (
+            RefusalReasonCode.EVENT_PARAMETER_MISMATCH
+        ),
+        ComparabilityReasonCode.SOURCE_PROCESSING_MISMATCH: (
+            RefusalReasonCode.SOURCE_PROCESSING_MISMATCH
+        ),
     }
     try:
         normalized = ComparabilityReasonCode(reason_code)
     except ValueError:
         return RefusalReasonCode.COMPARABILITY_NOT_REGISTERED
     return mapping.get(normalized, RefusalReasonCode.COMPARABILITY_NOT_REGISTERED)
+
+
+def refusal_for_cmj_event_comparability(
+    result: ComparabilityResult,
+    *,
+    blocked_claim: str,
+    observation_ids: tuple[InstanceIdentifier, ...] = (),
+) -> RefusalResult | None:
+    """Refuse an event comparison without flattening its event identities."""
+
+    if result.state is ComparabilityState.COMPARABLE:
+        return None
+    reason_codes = tuple(
+        dict.fromkeys(_comparability_reason(reason_code) for reason_code in result.reason_codes)
+    )
+    missing_information = result.missing_information or (
+        "registered deterministic event comparability bridge or missing metadata",
+    )
+    return RefusalResult(
+        refusal_id=InstanceIdentifier(
+            "refusal", f"cmj-event-comparability:{result.result_id.value}"
+        ),
+        status=RefusalStatus.PARTIALLY_REFUSED if observation_ids else RefusalStatus.REFUSED,
+        refusal_class=RefusalClass.COMPARABILITY_UNESTABLISHED,
+        blocked_claim=blocked_claim,
+        reason_codes=reason_codes,
+        missing_information=missing_information,
+        what_can_still_be_safely_described=(
+            "each event occurrence remains independently describable under its own definition",
+            "the event comparison is blocked until the stated method, parameter, or source "
+            "identity issue is resolved",
+        ),
+        observation_ids=observation_ids,
+    )
