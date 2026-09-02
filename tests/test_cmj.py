@@ -33,8 +33,15 @@ from dynamislm.comparability import (
 )
 from dynamislm.measurement.cmj import (
     CMJ_BILATERAL_TOTAL_VERTICAL_FORCE_SUM,
+    CMJ_EVENT_COMPARABILITY_RULE,
+    CMJ_LANDING_ABSOLUTE_FORCE_METHOD,
+    CMJ_LANDING_CONTACT_REGAIN_EVENT_DEFINITION,
+    CMJ_MOVEMENT_ONSET_BASELINE_SD_METHOD,
+    CMJ_MOVEMENT_ONSET_EVENT_DEFINITION,
     CMJ_SYSTEM_WEIGHT_MEAN_FORCE,
     CMJ_SYSTEM_WEIGHT_OPERATION,
+    CMJ_TAKEOFF_ABSOLUTE_FORCE_METHOD,
+    CMJ_TAKEOFF_CONTACT_LOSS_EVENT_DEFINITION,
     CMJ_TEST_FAMILY,
     KILONEWTON,
     NEWTON,
@@ -46,12 +53,19 @@ from dynamislm.measurement.cmj import (
     CMJChannelIdentity,
     CMJComparabilityRequest,
     CMJComputation,
+    CMJEventDetectorMethod,
+    CMJEventDetectorParameters,
+    CMJEventLabel,
+    CMJEventOccurrence,
+    CMJEventQCCode,
+    CMJEventThresholdFamily,
     CMJForceInput,
     CMJMeasurementIdentity,
     CMJProtocolAttribute,
     CMJProtocolIdentity,
     CMJSemanticIdentity,
     CMJSourceArtifact,
+    CMJThresholdDirection,
     CMJValidationCode,
     CMJValidationResult,
     CombinationLineage,
@@ -74,17 +88,23 @@ from dynamislm.measurement.cmj import (
     WeighingSegment,
     assess_cmj_acquisition_comparability,
     compare_cmj_derived_measurements,
+    compare_cmj_events,
     construct_total_supported_vertical_force,
     create_cmj_raw_observation,
     derive_body_mass,
     derive_system_mass,
+    detect_landing,
+    detect_movement_onset,
+    detect_takeoff,
     estimate_system_weight,
     refusal_for_cmj_comparability,
     refusal_for_cmj_derived_comparability,
+    refusal_for_cmj_event_comparability,
     refusal_for_cmj_validation,
     refuse_unregistered_computation,
     source_artifact_for_signal,
     validate_cmj_acquisition,
+    validate_cmj_event_order,
     validate_raw_vertical_force_signal,
 )
 from dynamislm.provenance import LineageEdge, LineageRelation, Provenance
@@ -683,13 +703,15 @@ def test_deterministic_serialization_and_hash_are_stable_after_roundtrip() -> No
     assert canonical_hash(restored_artifact) == canonical_hash(artifact)
 
 
-def test_p1b_public_surface_has_no_downstream_cmj_modules_or_operations() -> None:
+def test_p1d_public_surface_stops_at_core_events() -> None:
     import dynamislm.measurement.cmj as cmj
 
     assert not hasattr(cmj, "calculate_body_mass")
     assert not hasattr(cmj, "calculate_impulse")
-    assert not hasattr(cmj, "detect_movement_onset")
     assert not hasattr(cmj, "estimate_jump_height")
+    assert hasattr(cmj, "detect_movement_onset")
+    assert hasattr(cmj, "detect_takeoff")
+    assert hasattr(cmj, "detect_landing")
 
 
 def _cmj_input(
@@ -722,6 +744,120 @@ def _cmj_input(
         signal=signal,
         source_artifact=artifact,
         acquisition=_acquisition_record(identity, signal, artifact),
+    )
+
+
+def _event_input(
+    suffix: str,
+    samples: tuple[float, ...],
+    *,
+    timebase: SignalTimebase | None = None,
+) -> CMJForceInput:
+    timebase_kind = (
+        TimebaseKind.EXPLICIT if isinstance(timebase, ExplicitTimebase) else TimebaseKind.REGULAR
+    )
+    identity, signal, artifact = _fixture(
+        suffix,
+        arrangement=AcquisitionArrangement.SINGLE_PLATFORM,
+        timebase_kind=timebase_kind,
+        declared_sample_rate=1000.0 if timebase_kind is TimebaseKind.REGULAR else None,
+    )
+    event_signal = replace(
+        signal,
+        samples=samples,
+        timebase=timebase or RegularTimebase(1000.0),
+    )
+    event_artifact = source_artifact_for_signal(event_signal)
+    event_observation = create_cmj_raw_observation(
+        observation_id=InstanceIdentifier("observation", suffix),
+        result_id=InstanceIdentifier("result", suffix),
+        context=_context(suffix),
+        identity=identity,
+        signal=event_signal,
+        source_artifact=event_artifact,
+        acquisition=_acquisition_record(identity, event_signal, event_artifact),
+        recorded_at=datetime_module.datetime(2026, 1, 1, 12, 1, tzinfo=UTC),
+    )
+    return CMJForceInput(
+        observation=event_observation,
+        identity=identity,
+        signal=event_signal,
+        source_artifact=event_artifact,
+        acquisition=_acquisition_record(identity, event_signal, event_artifact),
+    )
+
+
+def _event_trace() -> tuple[float, ...]:
+    return (
+        100.0,
+        101.0,
+        99.0,
+        100.0,
+        100.0,
+        95.0,
+        95.0,
+        100.0,
+        100.0,
+        100.0,
+        5.0,
+        5.0,
+        0.0,
+        0.0,
+        0.0,
+        100.0,
+        101.0,
+        102.0,
+        102.0,
+        100.0,
+        100.0,
+    )
+
+
+def _event_baseline(
+    force: CMJForceInput,
+) -> SystemWeightResult:
+    segment = WeighingSegment(
+        source_signal_id=force.signal.signal_id,
+        source_artifact_id=force.source_artifact.artifact_id,
+        source_measurement_identity_id=force.identity.identity_id,
+        start_index=0,
+        end_index=5,
+    )
+    baseline = estimate_system_weight(force, segment)
+    assert isinstance(baseline, SystemWeightResult)
+    return baseline
+
+
+def _onset_parameters(
+    baseline: SystemWeightResult,
+    *,
+    search_start_index: int = 5,
+    dwell_samples: int = 2,
+) -> CMJEventDetectorParameters:
+    return CMJEventDetectorParameters(
+        baseline_observation_id=baseline.observation.observation_id,
+        baseline_segment=baseline.segment,
+        baseline_mean_force_n=baseline.qc.mean_force_n,
+        baseline_standard_deviation_n=baseline.qc.standard_deviation_n,
+        sigma_multiplier=1.0,
+        direction=CMJThresholdDirection.BELOW_THRESHOLD,
+        dwell_samples=dwell_samples,
+        search_start_index=search_start_index,
+    )
+
+
+def _absolute_parameters(
+    threshold_n: float,
+    direction: CMJThresholdDirection,
+    *,
+    dwell_samples: int = 2,
+    search_start_index: int | None = 9,
+) -> CMJEventDetectorParameters:
+    return CMJEventDetectorParameters(
+        threshold_n=threshold_n,
+        direction=direction,
+        dwell_samples=dwell_samples,
+        search_start_index=search_start_index,
     )
 
 
@@ -1518,3 +1654,393 @@ def test_res35_derived_comparability_detects_sampling_and_clock_differences() ->
     )
     assert comparison.state is ComparabilityState.BRIDGE_VALIDATION_REQUIRED
     assert ComparabilityReasonCode.SAMPLE_OR_TIMEBASE_MISMATCH in comparison.reason_codes
+
+
+def test_res36_event_definition_occurrence_and_method_parameter_identity_are_distinct() -> None:
+    force = _event_input("event-identity", _event_trace())
+    baseline = _event_baseline(force)
+    parameters = _onset_parameters(baseline)
+    onset = detect_movement_onset(force, baseline, parameters)
+
+    assert isinstance(onset, CMJEventOccurrence)
+    assert onset.definition is CMJ_MOVEMENT_ONSET_EVENT_DEFINITION
+    assert onset.definition.reference.identifier.object_type == "event-definition"
+    assert onset.occurrence_id.instance_type == "event-occurrence"
+    assert onset.detector_method is CMJ_MOVEMENT_ONSET_BASELINE_SD_METHOD
+    assert onset.detector_method.reference.identifier.object_type == "event-method"
+    assert parameters.__class__.__name__ != onset.detector_method.__class__.__name__
+    assert parameters != replace(parameters, sigma_multiplier=2.0)
+    assert onset.detector_method.threshold_family is CMJEventThresholdFamily.BASELINE_SD_DEVIATION
+    assert CMJEventDetectorParameters().threshold_n is None
+
+
+def test_res36_clean_events_use_exact_index_time_and_ordering() -> None:
+    force = _event_input(
+        "event-clean",
+        _event_trace(),
+        timebase=RegularTimebase(sample_rate_hz=1000.0, start_time_s=10.0),
+    )
+    baseline = _event_baseline(force)
+    onset = detect_movement_onset(force, baseline, _onset_parameters(baseline))
+    assert isinstance(onset, CMJEventOccurrence)
+    assert onset.definition.label is CMJEventLabel.MOVEMENT_ONSET
+    takeoff = detect_takeoff(
+        force,
+        _absolute_parameters(20.0, CMJThresholdDirection.BELOW_THRESHOLD),
+        onset=onset,
+    )
+    assert isinstance(takeoff, CMJEventOccurrence)
+    assert takeoff.detector_method is CMJ_TAKEOFF_ABSOLUTE_FORCE_METHOD
+    assert takeoff.definition is CMJ_TAKEOFF_CONTACT_LOSS_EVENT_DEFINITION
+    landing = detect_landing(
+        force,
+        takeoff,
+        _absolute_parameters(
+            20.0,
+            CMJThresholdDirection.ABOVE_THRESHOLD,
+            search_start_index=None,
+        ),
+    )
+    assert isinstance(landing, CMJEventOccurrence)
+    assert landing.definition is CMJ_LANDING_CONTACT_REGAIN_EVENT_DEFINITION
+    assert landing.detector_method is CMJ_LANDING_ABSOLUTE_FORCE_METHOD
+
+    assert onset.sample_index == 5
+    assert onset.event_time_s == pytest.approx(10.005)
+    assert CMJEventQCCode.EVENT_NEAR_SIGNAL_BOUNDARY in onset.qc_codes
+    assert takeoff.sample_index == 10
+    assert takeoff.event_time_s == pytest.approx(10.01)
+    assert landing.sample_index == 15
+    assert landing.event_time_s == pytest.approx(10.015)
+    assert takeoff.preceding_event_id == onset.occurrence_id
+    assert landing.preceding_event_id == takeoff.occurrence_id
+    assert validate_cmj_event_order((onset, takeoff, landing)) is None
+    assert force.signal.samples == _event_trace()
+
+
+def test_res36_explicit_irregular_timebase_is_indexed_without_interpolation() -> None:
+    times = ExplicitTimebase(
+        (
+            100.0,
+            100.001,
+            100.003,
+            100.006,
+            100.010,
+            100.015,
+            100.021,
+            100.028,
+            100.036,
+            100.045,
+            100.055,
+            100.066,
+            100.078,
+            100.091,
+            100.105,
+            100.120,
+            100.136,
+            100.153,
+            100.171,
+            100.190,
+            100.210,
+        )
+    )
+    force = _event_input("event-explicit-time", _event_trace(), timebase=times)
+    baseline = _event_baseline(force)
+    onset = detect_movement_onset(force, baseline, _onset_parameters(baseline))
+    assert isinstance(onset, CMJEventOccurrence)
+    takeoff = detect_takeoff(
+        force,
+        _absolute_parameters(20.0, CMJThresholdDirection.BELOW_THRESHOLD),
+        onset=onset,
+    )
+    assert isinstance(takeoff, CMJEventOccurrence)
+    landing = detect_landing(
+        force,
+        takeoff,
+        _absolute_parameters(
+            20.0,
+            CMJThresholdDirection.ABOVE_THRESHOLD,
+            search_start_index=None,
+        ),
+    )
+    assert isinstance(landing, CMJEventOccurrence)
+
+    assert onset.event_time_s == times.times_s[onset.sample_index]
+    assert takeoff.event_time_s == times.times_s[takeoff.sample_index]
+    assert landing.event_time_s == times.times_s[landing.sample_index]
+    assert landing.event_time_s != pytest.approx(
+        (times.times_s[landing.sample_index - 1] + times.times_s[landing.sample_index]) / 2
+    )
+
+
+def test_res36_baseline_sd_uses_exact_authorized_res35_inputs() -> None:
+    force = _event_input("event-baseline-exact", _event_trace())
+    baseline = _event_baseline(force)
+    valid = detect_movement_onset(force, baseline, _onset_parameters(baseline))
+    assert isinstance(valid, CMJEventOccurrence)
+
+    altered_mean = replace(
+        _onset_parameters(baseline),
+        baseline_mean_force_n=baseline.qc.mean_force_n + 1.0,
+    )
+    refusal = detect_movement_onset(force, baseline, altered_mean)
+    assert isinstance(refusal, RefusalResult)
+    assert RefusalReasonCode.BASELINE_QC_REQUIRED in refusal.reason_codes
+
+    missing_baseline = detect_movement_onset(
+        force,
+        None,
+        CMJEventDetectorParameters(
+            direction=CMJThresholdDirection.BELOW_THRESHOLD,
+            dwell_samples=2,
+            search_start_index=5,
+        ),
+    )
+    assert isinstance(missing_baseline, RefusalResult)
+    assert RefusalReasonCode.BASELINE_REQUIRED in missing_baseline.reason_codes
+
+
+def test_res36_thresholds_and_dwell_are_explicit_and_transient_crossing_refuses() -> None:
+    force = _event_input(
+        "event-dwell",
+        (100.0, 101.0, 99.0, 100.0, 100.0, 95.0, 100.0, 100.0, 100.0),
+    )
+    baseline = _event_baseline(force)
+    transient = detect_movement_onset(force, baseline, _onset_parameters(baseline))
+    assert isinstance(transient, RefusalResult)
+    assert RefusalReasonCode.INSUFFICIENT_DWELL in transient.reason_codes
+
+    no_crossing_force = _event_input(
+        "event-no-crossing",
+        (100.0, 101.0, 99.0, 100.0, 100.0, 100.0, 100.0, 100.0),
+    )
+    no_crossing_baseline = _event_baseline(no_crossing_force)
+    no_crossing = detect_movement_onset(
+        no_crossing_force,
+        no_crossing_baseline,
+        _onset_parameters(no_crossing_baseline),
+    )
+    assert isinstance(no_crossing, RefusalResult)
+    assert RefusalReasonCode.THRESHOLD_NOT_CROSSED in no_crossing.reason_codes
+
+    equality_force = _event_input(
+        "event-threshold-equality",
+        (100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0),
+    )
+    equality_baseline = _event_baseline(equality_force)
+    equality = detect_movement_onset(
+        equality_force,
+        equality_baseline,
+        _onset_parameters(equality_baseline, search_start_index=5),
+    )
+    assert isinstance(equality, RefusalResult)
+    assert RefusalReasonCode.THRESHOLD_NOT_CROSSED in equality.reason_codes
+
+    missing_takeoff_threshold = detect_takeoff(
+        force,
+        CMJEventDetectorParameters(
+            direction=CMJThresholdDirection.BELOW_THRESHOLD,
+            dwell_samples=2,
+            search_start_index=5,
+        ),
+    )
+    assert isinstance(missing_takeoff_threshold, RefusalResult)
+    assert RefusalReasonCode.THRESHOLD_PARAMETER_MISSING in missing_takeoff_threshold.reason_codes
+
+
+def test_res36_multiple_crossings_use_registered_tie_break_and_qc() -> None:
+    force = _event_input(
+        "event-multiple",
+        (100.0, 101.0, 99.0, 100.0, 100.0, 95.0, 95.0, 100.0, 95.0, 95.0, 100.0, 100.0),
+    )
+    baseline = _event_baseline(force)
+    onset = detect_movement_onset(force, baseline, _onset_parameters(baseline))
+
+    assert isinstance(onset, CMJEventOccurrence)
+    assert onset.sample_index == 5
+    assert CMJEventQCCode.MULTIPLE_CANDIDATE_CROSSINGS in onset.qc_codes
+
+
+def test_res36_takeoff_and_landing_failures_do_not_repair_or_erase_prior_events() -> None:
+    force = _event_input(
+        "event-no-landing",
+        (100.0, 101.0, 99.0, 100.0, 100.0, 100.0, 100.0, 100.0, 0.0, 0.0, 0.0, 0.0),
+    )
+    onset = detect_movement_onset(
+        force,
+        _event_baseline(force),
+        _onset_parameters(_event_baseline(force), search_start_index=8),
+    )
+    assert isinstance(onset, CMJEventOccurrence)
+
+    takeoff = detect_takeoff(
+        force,
+        _absolute_parameters(20.0, CMJThresholdDirection.BELOW_THRESHOLD, search_start_index=9),
+        onset=onset,
+    )
+    assert isinstance(takeoff, CMJEventOccurrence)
+    landing = detect_landing(
+        force,
+        takeoff,
+        _absolute_parameters(
+            20.0,
+            CMJThresholdDirection.ABOVE_THRESHOLD,
+            search_start_index=None,
+        ),
+    )
+    assert isinstance(landing, RefusalResult)
+    assert RefusalReasonCode.LANDING_NOT_FOUND in landing.reason_codes
+    assert takeoff.sample_index == 9
+
+
+def test_res36_invalid_order_is_refused_without_shifting_events() -> None:
+    force = _event_input("event-order", _event_trace())
+    baseline = _event_baseline(force)
+    onset = detect_movement_onset(force, baseline, _onset_parameters(baseline))
+    assert isinstance(onset, CMJEventOccurrence)
+    takeoff = detect_takeoff(
+        force,
+        _absolute_parameters(20.0, CMJThresholdDirection.BELOW_THRESHOLD),
+        onset=onset,
+    )
+    assert isinstance(takeoff, CMJEventOccurrence)
+    invalid_takeoff = replace(
+        takeoff,
+        sample_index=onset.sample_index,
+        event_time_s=onset.event_time_s,
+    )
+    refusal = validate_cmj_event_order((onset, invalid_takeoff))
+    assert isinstance(refusal, RefusalResult)
+    assert RefusalReasonCode.EVENT_ORDER_INVALID in refusal.reason_codes
+    assert invalid_takeoff.sample_index == onset.sample_index
+
+
+def test_res36_total_supported_force_is_not_summed_twice() -> None:
+    left, right = _bilateral_inputs()
+    total = construct_total_supported_vertical_force(left, right)
+    assert isinstance(total, TotalSupportedForceResult)
+    assert total.signal.samples == (700.0, 702.0, 704.0)
+
+    event = detect_takeoff(
+        total,
+        _absolute_parameters(
+            750.0,
+            CMJThresholdDirection.BELOW_THRESHOLD,
+            dwell_samples=1,
+            search_start_index=0,
+        ),
+    )
+    assert isinstance(event, CMJEventOccurrence)
+    assert event.sample_index == 0
+    assert left.signal.samples == (300.0, 301.0, 302.0)
+    assert right.signal.samples == (400.0, 401.0, 402.0)
+    separate_refusal = detect_takeoff(
+        left,
+        _absolute_parameters(
+            750.0,
+            CMJThresholdDirection.BELOW_THRESHOLD,
+            dwell_samples=1,
+            search_start_index=0,
+        ),
+    )
+    assert isinstance(separate_refusal, RefusalResult)
+    assert RefusalReasonCode.BILATERAL_INPUTS_REQUIRED in separate_refusal.reason_codes
+
+
+def test_res36_occurrence_provenance_and_canonical_serialization_are_complete() -> None:
+    force = _event_input("event-serialization", _event_trace())
+    baseline = _event_baseline(force)
+    onset = detect_movement_onset(force, baseline, _onset_parameters(baseline))
+    assert isinstance(onset, CMJEventOccurrence)
+    event_json = canonical_json(onset)
+    restored = from_canonical_json(event_json, CMJEventOccurrence)
+
+    assert restored == onset
+    assert canonical_json(restored) == event_json
+    assert onset.provenance.processing_runs[-1].method == onset.detector_method.reference
+    assert onset.detector_method.decision_reference in {
+        evidence.reference for evidence in onset.provenance.evidence_references
+    }
+    assert any(
+        edge.relation is LineageRelation.SUPPORTED_BY for edge in onset.provenance.lineage_edges
+    )
+    assert onset.provenance.processing_runs[-1].parameters
+
+
+def test_res36_method_and_parameter_mismatches_remain_non_comparable() -> None:
+    force = _event_input("event-comparison", _event_trace())
+    baseline = _event_baseline(force)
+    parameters = _onset_parameters(baseline)
+    first = detect_movement_onset(force, baseline, parameters)
+    second = detect_movement_onset(
+        force,
+        baseline,
+        replace(parameters, sigma_multiplier=2.0),
+    )
+    assert isinstance(first, CMJEventOccurrence)
+    assert isinstance(second, CMJEventOccurrence)
+
+    parameter_comparison = compare_cmj_events(
+        first,
+        second,
+        claim="compare movement-onset events",
+        request_id=InstanceIdentifier("comparability-request", "event-parameters"),
+    )
+    assert parameter_comparison.state is ComparabilityState.BRIDGE_VALIDATION_REQUIRED
+    assert parameter_comparison.rule_reference == CMJ_EVENT_COMPARABILITY_RULE
+    assert ComparabilityReasonCode.EVENT_PARAMETER_MISMATCH in parameter_comparison.reason_codes
+    parameter_refusal = refusal_for_cmj_event_comparability(
+        parameter_comparison,
+        blocked_claim="compare movement-onset events",
+        observation_ids=(first.source_observation_id, second.source_observation_id),
+    )
+    assert isinstance(parameter_refusal, RefusalResult)
+    assert RefusalReasonCode.EVENT_PARAMETER_MISMATCH in parameter_refusal.reason_codes
+
+    alternate_method = CMJEventDetectorMethod(
+        reference=_reference("event-method", "alternate-onset"),
+        event_definition=CMJ_MOVEMENT_ONSET_EVENT_DEFINITION,
+        threshold_family=CMJEventThresholdFamily.BASELINE_SD_DEVIATION,
+        decision_reference=_reference("decision-record", "alternate-onset"),
+    )
+    alternate_id = InstanceIdentifier("event-occurrence", "alternate-onset")
+    alternate_run = replace(
+        first.provenance.processing_runs[-1],
+        method=alternate_method.reference,
+        output_observation_id=alternate_id,
+    )
+    alternate_provenance = replace(
+        first.provenance,
+        processing_runs=(*first.provenance.processing_runs[:-1], alternate_run),
+    )
+    alternate = replace(
+        first,
+        occurrence_id=alternate_id,
+        detector_method=alternate_method,
+        decision_reference=alternate_method.decision_reference,
+        provenance=alternate_provenance,
+    )
+    method_comparison = compare_cmj_events(
+        first,
+        alternate,
+        claim="compare movement-onset events",
+        request_id=InstanceIdentifier("comparability-request", "event-method"),
+    )
+    assert method_comparison.state is ComparabilityState.BRIDGE_VALIDATION_REQUIRED
+    assert ComparabilityReasonCode.EVENT_METHOD_MISMATCH in method_comparison.reason_codes
+
+
+def test_res36_no_system_mass_or_downstream_phase_authority_is_added() -> None:
+    import inspect
+
+    import dynamislm.measurement.cmj.events as events
+
+    source = inspect.getsource(events)
+    assert "SystemMassResult" not in source
+    assert "derive_system_mass" not in source
+    assert "STANDARD_GRAVITY" not in source
+    assert not hasattr(events, "calculate_net_force")
+    assert not hasattr(events, "calculate_impulse")
+    assert not hasattr(events, "calculate_jump_height")
+    assert not hasattr(events, "detect_braking_phase")
+    assert not hasattr(events, "detect_propulsive_phase")
