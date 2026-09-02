@@ -1,7 +1,8 @@
 # RES35-DR-004
 
 DECISION_ID=RES35-DR-004
-STATUS=ADOPTED
+STATUS=PARTIALLY_SUPERSEDED
+CORRECTION=RES44-DR-001 supersedes the historical generic SYSTEM_MASS comparability wording. RES-44 now treats PHYSICAL_SYSTEM_MASS and STANDARD_GRAVITY_MASS_EQUIVALENT as distinct measurands, with no automatic interchangeability; the RES-35 SYSTEM_WEIGHT and general claim-relative comparability rules remain adopted.
 QUESTION=When may RES-35 system-weight and system-mass observations be compared, and how should an unsupported comparison or body-mass interpretation be refused?
 SCOPE=Claim-relative comparability of RES-35 derived observations and the boundary between supported-system quantities and BODY_MASS; no device bridge, biological reliability claim, or event-dependent comparison.
 SOURCES=
