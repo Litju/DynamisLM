@@ -595,7 +595,8 @@ class CMJPhaseOccurrence:
             for item in self.source_velocity_source_measurement_identity_ids
         ):
             raise ValueError(
-                "source_velocity_source_measurement_identity_ids must identify measurement identities"
+                "source_velocity_source_measurement_identity_ids must identify "
+                "measurement identities"
             )
         if self.source_velocity_integration_interval.source_signal_id not in (
             self.source_velocity_source_signal_ids
