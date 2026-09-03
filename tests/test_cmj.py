@@ -3343,7 +3343,7 @@ def test_res46_comparability_distinguishes_zero_reference_selection_at_same_star
     assert RefusalReasonCode.ZERO_VELOCITY_REFERENCE_MISMATCH in refused.reason_codes
 
 
-def test_res37_no_phase_or_jump_height_operation_is_exposed() -> None:
+def test_res37_public_surface_stops_before_unregistered_phase_metrics() -> None:
     import dynamislm.measurement.cmj as cmj
 
     assert set(CMJMechanicsQuantity) == {
@@ -3355,3 +3355,6 @@ def test_res37_no_phase_or_jump_height_operation_is_exposed() -> None:
     assert not hasattr(cmj, "estimate_jump_height")
     assert not hasattr(cmj, "detect_braking_phase")
     assert not hasattr(cmj, "detect_propulsive_phase")
+    assert hasattr(cmj, "construct_cmj_phase_occurrences")
+    assert not hasattr(cmj, "calculate_cmj_phase_power")
+    assert not hasattr(cmj, "calculate_cmj_phase_rfd")
