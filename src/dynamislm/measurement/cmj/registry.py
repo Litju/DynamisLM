@@ -347,6 +347,8 @@ RES46_DECISION_QUALIFIED_ZERO_VELOCITY = RegistryReference(
         "https://bura.brunel.ac.uk/handle/2438/1392",
         "https://pmc.ncbi.nlm.nih.gov/articles/PMC7761544/",
         "https://journals.plos.org/plosone/article?id=10.1371/journal.pone.0265999",
+        # PMID 20664368 is Meylan, Nosaka, Green & Cronin (2011); the source URL
+        # and its applicability to the existing decision remain unchanged.
         "https://pubmed.ncbi.nlm.nih.gov/20664368/",
     ),
 )
