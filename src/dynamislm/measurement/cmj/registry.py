@@ -461,6 +461,23 @@ RES38_DECISION_COM_DISPLACEMENT = RegistryReference(
     display_label="RES-38 COM-displacement estimator decision",
     reference_ids=("docs/decisions/RES38-DR-004-com-displacement-estimator-decision.md",),
 )
+RES47_DECISION_FLIGHT_TIME_BALLISTIC_APPLICABILITY = RegistryReference(
+    identifier=ScientificIdentifier(
+        "dynamislm",
+        "decision-record",
+        "res47-flight-time-ballistic-applicability",
+        CMJ_REGISTRY_VERSION,
+    ),
+    display_label="RES-47 flight-time ballistic system applicability decision",
+    reference_ids=(
+        "docs/decisions/RES47-DR-001-flight-time-ballistic-system-applicability.md",
+        "docs/decisions/RES37-DR-001-supported-system-net-force.md",
+        "https://bura.brunel.ac.uk/handle/2438/1392",
+        "https://journals.plos.org/plosone/article?id=10.1371/journal.pone.0265999",
+        "https://pmc.ncbi.nlm.nih.gov/articles/PMC10115716/",
+        "https://pmc.ncbi.nlm.nih.gov/articles/PMC11561012/",
+    ),
+)
 RES37_DECISION_DISPLACEMENT_REFERENCE = RegistryReference(
     identifier=ScientificIdentifier(
         "dynamislm", "decision-record", "res37-displacement-reference", CMJ_REGISTRY_VERSION
