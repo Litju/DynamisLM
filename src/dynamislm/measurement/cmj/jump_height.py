@@ -803,6 +803,7 @@ def refusal_for_cmj_jump_height_comparability(
         ComparabilityReasonCode.SOURCE_PROCESSING_MISMATCH: (
             RefusalReasonCode.SOURCE_PROCESSING_MISMATCH
         ),
+        ComparabilityReasonCode.PROTOCOL_MISMATCH: RefusalReasonCode.PROTOCOL_IDENTITY_MISMATCH,
     }
     reason_codes: list[RefusalReasonCode] = []
     for value in result.reason_codes:
@@ -1100,16 +1101,6 @@ def _processing_parameters(
             if parameters.system_contract is not None
             else "not_applicable",
         ),
-        *(
-            (
-                MetadataEntry(
-                    "ballistic_applicability_decision",
-                    RES47_DECISION_FLIGHT_TIME_BALLISTIC_APPLICABILITY.stable_id,
-                ),
-            )
-            if method.family is JumpHeightEstimatorFamily.FLIGHT_TIME
-            else ()
-        ),
         MetadataEntry("event_time_semantics", "recorded event_time_s difference; no interpolation"),
         MetadataEntry("filtering", "none"),
         MetadataEntry("interpolation", "none"),
@@ -1344,12 +1335,6 @@ def _assert_output_identity(
             raise ValueError(f"jump-height output has unregistered {key} state")
     if parameter_map.get("standard_gravity_substitution") is not False:
         raise ValueError("jump-height output must not substitute standard gravity")
-    if (
-        method.family is JumpHeightEstimatorFamily.FLIGHT_TIME
-        and parameter_map.get("ballistic_applicability_decision")
-        != RES47_DECISION_FLIGHT_TIME_BALLISTIC_APPLICABILITY.stable_id
-    ):
-        raise ValueError("flight-time output must preserve RES-47 applicability identity")
     if observation.result.unit != METER or not isinstance(observation.result.value, ScalarValue):
         raise ValueError("jump-height output must be a scalar in metres")
     if isinstance(observation.result.value.value, bool):
@@ -1448,11 +1433,20 @@ _NON_BALLISTIC_FLIGHT_LOADING_MARKERS = (
     "detached",
     "transfer",
     "changing",
+    "change",
     "composition",
     "unsupported",
     "resistance",
+    "not attached",
+    "notattached",
+    "not stable",
+    "notstable",
+    "unstable",
+    "release",
+    "released",
+    "variable",
 )
-_UNRESOLVED_FLIGHT_LOADING_MARKERS = ("unknown", "unresolved")
+_UNRESOLVED_FLIGHT_LOADING_MARKERS = ("unknown", "unresolved", "missing", "unloaded")
 
 
 def _normalized_flight_loading(value: object) -> str | None:
@@ -1469,20 +1463,20 @@ def _flight_external_loading_state(
         return None, RefusalReasonCode.EXTERNAL_FORCE_MODEL_UNRESOLVED
     if normalized in _UNLOADED_FLIGHT_LOADING_VALUES:
         return False, None
+    if "no external load" in normalized or "no external loading" in normalized:
+        return None, RefusalReasonCode.EXTERNAL_FORCE_MODEL_UNRESOLVED
     if any(marker in normalized for marker in _NON_BALLISTIC_FLIGHT_LOADING_MARKERS):
         return None, RefusalReasonCode.BALLISTIC_ASSUMPTION_UNSUPPORTED
     if any(marker in normalized for marker in _UNRESOLVED_FLIGHT_LOADING_MARKERS):
         return None, RefusalReasonCode.EXTERNAL_FORCE_MODEL_UNRESOLVED
+    loading_terms = set(normalized.split()) & {"load", "barbell", "weight", "implement"}
     if (
         normalized == "supported"
-        or normalized.startswith("supported ")
         or "supported external load" in normalized
         or "attached external load" in normalized
         or "external load attached" in normalized
-        or (
-            normalized.startswith("attached ")
-            and any(term in normalized for term in ("load", "barbell", "weight", "implement"))
-        )
+        or (normalized.startswith("supported ") and bool(loading_terms))
+        or ("attached" in normalized and bool(loading_terms))
     ):
         return True, None
     return None, RefusalReasonCode.EXTERNAL_FORCE_MODEL_UNRESOLVED
@@ -1939,6 +1933,7 @@ def _jump_refusal(
         missing_information=missing_information,
         what_can_still_be_safely_described=(
             "each valid event or mechanics result remains independently describable",
+            "recorded event-time differences remain descriptive temporal quantities",
             "no unqualified generic jump-height or athlete-COM claim is emitted",
         ),
         observation_ids=observation_ids,
