@@ -860,13 +860,6 @@ def _phase_definition_for_reference(reference: RegistryReference) -> CMJPhaseDef
     )
 
 
-def _phase_definition_for_label(label: CMJPhaseLabel) -> CMJPhaseDefinition:
-    for definition in CMJ_PHASE_DEFINITIONS:
-        if definition.label is label:
-            return definition
-    raise ValueError("phase label is not registered in V1")
-
-
 def _finite(value: float, field_name: str) -> None:
     if isinstance(value, bool) or not isinstance(value, int | float) or not math.isfinite(value):
         raise ValueError(f"{field_name} must be finite")
