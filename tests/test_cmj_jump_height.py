@@ -14,6 +14,7 @@ from dynamislm import (
     ScalarValue,
     ScientificRole,
     SerializationError,
+    TransformationRequest,
     ValueOrigin,
     canonical_hash,
     canonical_json,
@@ -41,6 +42,7 @@ from dynamislm.measurement.cmj import (
     CMJEventOccurrence,
     CMJForceInput,
     CMJIntegrationInterval,
+    CMJJumpHeightComparabilityRequest,
     CMJJumpHeightResult,
     CMJMeasurementIdentity,
     CMJMechanicalSystemContract,
@@ -301,6 +303,18 @@ def test_registry_has_one_shared_estimand_and_distinct_methods() -> None:
 
 
 def test_flight_time_v1_is_historical_and_v2_has_distinct_scientific_identity() -> None:
+    assert (
+        CMJ_FLIGHT_TIME_JUMP_HEIGHT_METHOD_V1.reference.stable_id
+        == "dynamislm:estimator:cmj-flight-time-ballistic-jump-height-v1@1.0.0"
+    )
+    assert (
+        CMJ_FLIGHT_TIME_JUMP_HEIGHT_METHOD_V1.operation.stable_id
+        == "dynamislm:registered-operation:cmj-flight-time-ballistic-jump-height-v1@1.0.0"
+    )
+    assert CMJ_FLIGHT_TIME_JUMP_HEIGHT_METHOD_V1.equation == ("h = g_local * flight_time_s^2 / 8")
+    assert "not automatically anatomical athlete COM jump height" in (
+        CMJ_FLIGHT_TIME_JUMP_HEIGHT_METHOD_V1.claim_ceiling
+    )
     assert CMJ_FLIGHT_TIME_JUMP_HEIGHT_METHOD_V1.reference != (
         CMJ_FLIGHT_TIME_JUMP_HEIGHT_METHOD_V2.reference
     )
@@ -313,6 +327,8 @@ def test_flight_time_v1_is_historical_and_v2_has_distinct_scientific_identity() 
     assert CMJ_FLIGHT_TIME_JUMP_HEIGHT_METHOD_V1.operation.identifier.version != (
         CMJ_FLIGHT_TIME_JUMP_HEIGHT_METHOD_V2.operation.identifier.version
     )
+    assert CMJ_FLIGHT_TIME_JUMP_HEIGHT_METHOD_V2.reference.identifier.version == "2.0.0"
+    assert CMJ_FLIGHT_TIME_JUMP_HEIGHT_METHOD_V2.operation.identifier.version == "2.0.0"
     assert CMJ_FLIGHT_TIME_JUMP_HEIGHT_METHOD_V1.assumptions == (
         CMJ_BALLISTIC_VERTICAL_MOTION_ASSUMPTION,
         CMJ_TAKEOFF_LANDING_HEIGHT_EQUIVALENCE_ASSUMPTION,
@@ -429,6 +445,11 @@ def test_flight_time_preserves_event_and_source_provenance() -> None:
     )
     assert any(
         evidence.reference == RES48_DECISION_FLIGHT_TIME_V2_LOADING_AUTHORITY
+        for evidence in result.observation.provenance.evidence_references
+    )
+    assert any(
+        evidence.reference == RES48_DECISION_FLIGHT_TIME_V2_LOADING_AUTHORITY
+        and evidence.applicability_note == "registered RES-48 V2 estimator method"
         for evidence in result.observation.provenance.evidence_references
     )
     metadata = {
@@ -743,6 +764,35 @@ def test_flight_applicability_requires_exact_trial_measurement_protocol_and_cont
     )
 
 
+def test_flight_time_rejects_event_identity_mutation_with_the_same_identity_id() -> None:
+    result, takeoff, landing, force = _flight_fixture("event-identity-source")
+    _, _, other_force = _flight_events("event-identity-other", external_loading="supported-barbell")
+    assert isinstance(result.parameters, FlightTimeV2EstimatorParameters)
+    applicability = result.parameters.ballistic_applicability
+    assert applicability is not None
+    assert other_force.identity.semantic.protocol_identity is not None
+    forged_identity = replace(
+        landing.source_measurement_identity,
+        semantic=replace(
+            landing.source_measurement_identity.semantic,
+            protocol=other_force.identity.semantic.protocol,
+            protocol_identity=other_force.identity.semantic.protocol_identity,
+        ),
+    )
+    forged_landing = replace(landing, source_measurement_identity=forged_identity)
+
+    refusal = estimate_flight_time_jump_height(
+        takeoff,
+        forged_landing,
+        _local_gravity("event-identity-source"),
+        source_observation=force.observation,
+        ballistic_applicability=applicability,
+    )
+
+    assert isinstance(refusal, RefusalResult)
+    assert RefusalReasonCode.EVENT_SOURCE_MISMATCH in refusal.reason_codes
+
+
 def test_flight_time_refuses_missing_protocol_applicability_without_erasing_events() -> None:
     takeoff, landing, force = _flight_events("flight-protocol-missing")
     missing_identity = replace(
@@ -925,6 +975,19 @@ def test_flight_time_result_roundtrips_deterministically_under_v3() -> None:
     assert canonical_hash(restored) == canonical_hash(result)
 
 
+def test_v2_payload_requires_exact_source_provenance() -> None:
+    result, _, _, _ = _flight_fixture("v2-provenance-required", gravity_suffix="v2-provenance-g")
+    payload = json.loads(canonical_json(result))
+    provenance = payload["payload"]["observation"]["provenance"]
+    provenance["source_artifacts"] = []
+    provenance["acquisitions"] = []
+    provenance["lineage_edges"] = []
+    encoded = json.dumps(payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+
+    with pytest.raises(SerializationError, match="invalid|source|lineage|acquisition"):
+        from_canonical_json(encoded, CMJJumpHeightResult)
+
+
 def test_historical_pre_res47_v1_fixture_roundtrips_as_v1() -> None:
     result, _, _, _ = _flight_fixture("historical-v1", gravity_suffix="historical-v1-g")
     historical = _historical_v1_result(result)
@@ -958,6 +1021,26 @@ def test_transitional_res47_v1_identity_with_v2_semantics_is_rejected() -> None:
     transitional = json.dumps(payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
 
     with pytest.raises(SerializationError, match="invalid|historical|transitional"):
+        from_canonical_json(transitional, CMJJumpHeightResult)
+
+
+def test_v1_payload_with_v2_assumption_metadata_is_rejected() -> None:
+    result, _, _, _ = _flight_fixture("v1-metadata-transition", gravity_suffix="v1-metadata-g")
+    historical = _historical_v1_result(result)
+    payload = json.loads(canonical_json(historical))
+    v2_assumptions = canonical_json(CMJ_FLIGHT_TIME_JUMP_HEIGHT_METHOD_V2.assumptions)
+    observation = payload["payload"]["observation"]
+    for entry in observation["identity"]["processing"]["method_parameters"]:
+        if entry["key"] == "assumptions":
+            entry["value"] = v2_assumptions
+    for run in observation["provenance"]["processing_runs"]:
+        if run["output_entity_id"] == observation["observation_id"]:
+            for entry in run["parameters"]:
+                if entry["key"] == "assumptions":
+                    entry["value"] = v2_assumptions
+    transitional = json.dumps(payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+
+    with pytest.raises(SerializationError, match="invalid|assumptions"):
         from_canonical_json(transitional, CMJJumpHeightResult)
 
 
@@ -1067,6 +1150,25 @@ def test_same_method_comparability_ignores_trial_instance_ids() -> None:
         )
         is None
     )
+
+
+def test_explicit_comparability_transformation_is_not_ignored() -> None:
+    left, _, _, _ = _flight_fixture("transformation-left", gravity_suffix="transformation-g")
+    right, _, _, _ = _flight_fixture("transformation-right", gravity_suffix="transformation-g")
+    transformation = TransformationRequest(operation=left.method.operation)
+    comparison = assess_cmj_jump_height_comparability(
+        CMJJumpHeightComparabilityRequest(
+            request_id=InstanceIdentifier("comparability-request", "jump-transformation"),
+            left=left,
+            right=right,
+            claim="compare transformed estimator-qualified flight-time heights",
+            requested_transformations=(transformation,),
+        )
+    )
+
+    assert comparison.state is ComparabilityState.REQUIRES_TRANSFORMATION
+    assert comparison.reason_codes == ("TRANSFORMATION_REQUIRED",)
+    assert comparison.transformations_required == (transformation,)
 
 
 def test_cross_estimator_same_numeric_value_requires_bridge_validation() -> None:

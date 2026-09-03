@@ -111,6 +111,15 @@ from dynamislm.serialization import canonical_hash, canonical_json, register_ser
 RES38_SOFTWARE_VERSION = "dynamislm-res38-1.0.0"
 RES48_SOFTWARE_VERSION = "dynamislm-res48-1.0.0"
 _UNCERTAINTY_NOTE = "RES-38 model-estimate uncertainty is not assessed."
+_V2_APPLICABILITY_METADATA_KEYS = (
+    "ballistic_applicability",
+    "ballistic_loading_state",
+    "ballistic_loading_state_reference",
+    "ballistic_applicability_decision",
+    "ballistic_applicability_source_binding",
+    "source_protocol_identity",
+    "protocol_external_loading",
+)
 
 
 class JumpHeightEstimatorFamily(StrEnum):
@@ -290,6 +299,8 @@ class FlightBallisticApplicability:
             == identity.identity_id
             == takeoff_event.source_measurement_identity.identity_id
             == landing_event.source_measurement_identity.identity_id
+            and takeoff_event.source_measurement_identity == identity
+            and landing_event.source_measurement_identity == identity
             and self.source_protocol_identity == protocol_identity
         )
 
@@ -303,6 +314,9 @@ class FlightBallisticApplicability:
 
         identity = output_observation.identity
         if not isinstance(identity, CMJMeasurementIdentity):
+            return False
+        event_identity = takeoff_event.source_measurement_identity
+        if not isinstance(event_identity, CMJMeasurementIdentity):
             return False
         return (
             self.source_observation_id == takeoff_event.source_observation_id
@@ -318,6 +332,9 @@ class FlightBallisticApplicability:
             and self.source_measurement_identity_id
             == takeoff_event.source_measurement_identity.identity_id
             == landing_event.source_measurement_identity.identity_id
+            and takeoff_event.source_measurement_identity
+            == landing_event.source_measurement_identity
+            and self.source_protocol_identity == event_identity.semantic.protocol_identity
             and self.source_protocol_identity == identity.semantic.protocol_identity
         )
 
@@ -653,6 +670,12 @@ class CMJJumpHeightResult:
                     output_observation=True,
                 ):
                     raise ValueError("V2 result must preserve registered ballistic authority")
+                _assert_v2_source_provenance(
+                    self.observation,
+                    applicability,
+                    self.takeoff_event,
+                    self.landing_event,
+                )
                 if not any(
                     evidence.reference == RES47_DECISION_FLIGHT_TIME_BALLISTIC_APPLICABILITY
                     for evidence in evidence_references
@@ -1062,6 +1085,12 @@ def assess_cmj_jump_height_comparability(
     differences.extend(_jump_method_differences(left, right))
     reasons = tuple(dict.fromkeys(reason for reason, _ in differences))
     if not reasons:
+        if request.requested_transformations:
+            return _comparability_result(
+                request,
+                ComparabilityState.REQUIRES_TRANSFORMATION,
+                reasons=(ComparabilityReasonCode.TRANSFORMATION_REQUIRED,),
+            )
         return _comparability_result(request, ComparabilityState.COMPARABLE)
     if ComparabilityReasonCode.MEASURAND_MISMATCH in reasons:
         return _comparability_result(request, ComparabilityState.NOT_COMPARABLE, reasons=reasons)
@@ -1181,6 +1210,11 @@ def _build_result(
     if not base_provenance.source_artifacts:
         raise ValueError("jump-height estimate requires source artifact provenance")
     software_version = _software_version_for_method(method)
+    method_evidence_description = (
+        "registered RES-48 V2 estimator method"
+        if method == CMJ_FLIGHT_TIME_JUMP_HEIGHT_METHOD_V2
+        else "registered RES-38 estimator method"
+    )
     source_signal = source_identity.acquisition.sign_convention
     metadata = _processing_parameters(
         method,
@@ -1275,7 +1309,7 @@ def _build_result(
             ),
         ),
         evidence_references=(
-            EvidenceReference(method.evidence_decision, "registered RES-38 estimator method"),
+            EvidenceReference(method.evidence_decision, method_evidence_description),
             EvidenceReference(
                 RES38_DECISION_CLASSIFICATION_COMPARABILITY,
                 "model-estimate and comparability contract",
@@ -1726,6 +1760,16 @@ def _assert_output_identity(
     parameter_map = {entry.key: entry.value for entry in identity.processing.method_parameters}
     if parameter_map.get("estimator_parameters") != canonical_json(parameters):
         raise ValueError("jump-height output must preserve typed estimator parameters")
+    expected_method_metadata: dict[str, str] = {
+        "estimator_id": method.reference.stable_id,
+        "operation_id": method.operation.stable_id,
+        "estimand_id": method.estimand.reference.stable_id,
+        "equation": method.equation,
+        "assumptions": canonical_json(method.assumptions),
+    }
+    for key, expected_method_value in expected_method_metadata.items():
+        if parameter_map.get(key) != expected_method_value:
+            raise ValueError(f"jump-height output must preserve {key}")
     if parameter_map.get("output_schema") != CMJ_JUMP_HEIGHT_SCHEMA.stable_id:
         raise ValueError("jump-height output must preserve the registered scalar schema")
     for key in ("filtering", "interpolation", "resampling", "drift_correction"):
@@ -1738,30 +1782,22 @@ def _assert_output_identity(
             raise ValueError("V1 flight-time output must preserve the historical parameter type")
         if parameters.system_contract is not None:
             raise ValueError("V1 flight-time output cannot carry a RES-47 system contract")
-        if any(
-            key in parameter_map
-            for key in (
-                "ballistic_applicability",
-                "ballistic_loading_state",
-                "ballistic_loading_state_reference",
-                "ballistic_applicability_decision",
-            )
-        ):
+        if any(key in parameter_map for key in _V2_APPLICABILITY_METADATA_KEYS):
             raise ValueError("transitional RES-47 semantics cannot use the V1 identity")
     elif method == CMJ_FLIGHT_TIME_JUMP_HEIGHT_METHOD_V2:
         if not isinstance(parameters, FlightTimeV2EstimatorParameters):
             raise ValueError("V2 flight-time output must preserve typed applicability parameters")
         applicability = parameters.ballistic_applicability
         assert applicability is not None
-        expected_metadata = {
+        expected_metadata: dict[str, object] = {
             "ballistic_applicability": canonical_json(applicability),
             "ballistic_loading_state": applicability.loading_state.value,
             "ballistic_loading_state_reference": applicability.loading_state_reference.stable_id,
             "ballistic_applicability_decision": applicability.applicability_decision.stable_id,
             "ballistic_applicability_source_binding": applicability.source_binding_digest,
         }
-        for key, expected in expected_metadata.items():
-            if parameter_map.get(key) != expected:
+        for key, expected_metadata_value in expected_metadata.items():
+            if parameter_map.get(key) != expected_metadata_value:
                 raise ValueError(f"V2 output must preserve {key}")
     if observation.result.unit != METER or not isinstance(observation.result.value, ScalarValue):
         raise ValueError("jump-height output must be a scalar in metres")
@@ -1839,12 +1875,59 @@ def _assert_shared_event_source(
         or takeoff.source_signal_id != landing.source_signal_id
         or takeoff.source_artifact_id != landing.source_artifact_id
         or takeoff.source_acquisition_id != landing.source_acquisition_id
-        or takeoff.source_measurement_identity.identity_id
-        != landing.source_measurement_identity.identity_id
+        or takeoff.source_measurement_identity != landing.source_measurement_identity
         or takeoff.source_timebase != landing.source_timebase
         or takeoff.source_sample_count != landing.source_sample_count
     ):
         raise ValueError("takeoff and landing events must share exact source identity")
+
+
+def _assert_v2_source_provenance(
+    observation: ScientificMeasurementObservation,
+    applicability: FlightBallisticApplicability,
+    takeoff: CMJEventOccurrence,
+    landing: CMJEventOccurrence,
+) -> None:
+    matching_runs = tuple(
+        run
+        for run in observation.provenance.processing_runs
+        if run.output_entity_id == observation.observation_id
+    )
+    if len(matching_runs) != 1:
+        raise ValueError("V2 output must have exactly one source-linked processing run")
+    processing_run = matching_runs[0]
+    source_artifact_ids = tuple(
+        artifact.artifact_id for artifact in observation.provenance.source_artifacts
+    )
+    if applicability.source_artifact_id not in source_artifact_ids:
+        raise ValueError("V2 output must preserve the applicability source artifact")
+    acquisition_ids = tuple(
+        acquisition.acquisition_id for acquisition in observation.provenance.acquisitions
+    )
+    if applicability.source_acquisition_id not in acquisition_ids:
+        raise ValueError("V2 output must preserve the applicability source acquisition")
+    derived_source_ids = (
+        applicability.source_observation_id,
+        applicability.source_signal_id,
+        applicability.source_artifact_id,
+        takeoff.occurrence_id,
+        landing.occurrence_id,
+    )
+    for source_id in derived_source_ids:
+        if not any(
+            edge.from_id == source_id.qualified
+            and edge.to_id == processing_run.processing_run_id.qualified
+            and edge.relation is LineageRelation.DERIVED_FROM
+            for edge in observation.provenance.lineage_edges
+        ):
+            raise ValueError("V2 output must preserve exact source lineage edges")
+    if not any(
+        edge.from_id == applicability.source_acquisition_id.qualified
+        and edge.to_id == processing_run.processing_run_id.qualified
+        and edge.relation is LineageRelation.PROCESSED_AS
+        for edge in observation.provenance.lineage_edges
+    ):
+        raise ValueError("V2 output must preserve the source acquisition lineage edge")
 
 
 def _flight_ballistic_applicability_issues(
