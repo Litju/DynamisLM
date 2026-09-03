@@ -731,6 +731,10 @@ NEWTON_SECOND = UnitReference(
     ScientificIdentifier("dynamislm", "unit", "newton-second", CMJ_REGISTRY_VERSION),
     "N·s",
 )
+SECOND = UnitReference(
+    ScientificIdentifier("dynamislm", "unit", "second", CMJ_REGISTRY_VERSION),
+    "s",
+)
 # Short aliases retain readable operation names without creating additional
 # registry identities.
 CMJ_SUPPORTED_SYSTEM_COM_ACCELERATION = CMJ_SUPPORTED_SYSTEM_COM_ACCELERATION_OPERATION
