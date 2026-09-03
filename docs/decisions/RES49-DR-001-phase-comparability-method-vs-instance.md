@@ -77,11 +77,12 @@ and metric objects still validate exact interval/source lineage internally.
 
 ## ZERO_REFERENCE_METHOD_KEY
 
-Retain qualified zero-reference method and evidence decision, unit/value,
-weighing/reference selection method and parameters, and the QC authority state
-that controls admissibility. Exclude source observation/signal/artifact/
-identity IDs, weighing segment coordinates, reference sample index, and QC
-numeric realizations when the registered authority method is unchanged.
+Retain qualified zero-reference method and evidence decision, the registered
+unit/zero-value convention, weighing/reference selection method and parameters,
+and the QC authority state that controls admissibility. Exclude source
+observation/signal/artifact/identity IDs, weighing segment coordinates,
+reference sample index, and QC numeric realizations when the registered
+authority method is unchanged.
 
 ## TIMEBASE_METHOD_KEY
 
