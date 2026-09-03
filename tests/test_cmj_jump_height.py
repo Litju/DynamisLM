@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import inspect
+import json
 from dataclasses import replace
+from pathlib import Path
 
 import pytest
 
@@ -11,6 +13,7 @@ from dynamislm import (
     MetadataEntry,
     ScalarValue,
     ScientificRole,
+    SerializationError,
     ValueOrigin,
     canonical_hash,
     canonical_json,
@@ -18,22 +21,35 @@ from dynamislm import (
 )
 from dynamislm.comparability import ComparabilityReasonCode, ComparabilityState
 from dynamislm.measurement.cmj import (
+    CMJ_BALLISTIC_VERTICAL_MOTION_ASSUMPTION,
     CMJ_FLIGHT_TIME_JUMP_HEIGHT_METHOD,
+    CMJ_FLIGHT_TIME_JUMP_HEIGHT_METHOD_V1,
+    CMJ_FLIGHT_TIME_JUMP_HEIGHT_METHOD_V2,
     CMJ_JUMP_HEIGHT_MEASURAND,
     CMJ_JUMP_HEIGHT_METRIC,
+    CMJ_LOCAL_GRAVITY_APPLICABLE_ASSUMPTION,
+    CMJ_NEGLIGIBLE_AIR_RESISTANCE_ASSUMPTION,
+    CMJ_REGISTERED_FLIGHT_LOADING_APPLICABILITY_ASSUMPTION,
+    CMJ_REGISTERED_MECHANICAL_SYSTEM_CONTRACT_ASSUMPTION,
     CMJ_SUPPORTED_SYSTEM_STABLE_ASSUMPTION,
     CMJ_TAKEOFF_LANDING_HEIGHT_EQUIVALENCE_ASSUMPTION,
     CMJ_TAKEOFF_VELOCITY_EVENT_SAMPLE_CONVENTION,
     CMJ_TAKEOFF_VELOCITY_JUMP_HEIGHT_METHOD,
     RES47_DECISION_FLIGHT_TIME_BALLISTIC_APPLICABILITY,
+    RES48_DECISION_FLIGHT_TIME_V2_LOADING_AUTHORITY,
     STANDARD_GRAVITY,
     CMJEventOccurrence,
     CMJForceInput,
     CMJIntegrationInterval,
     CMJJumpHeightResult,
+    CMJMeasurementIdentity,
     CMJMechanicalSystemContract,
     CMJThresholdDirection,
+    FlightBallisticApplicability,
+    FlightLoadingState,
+    FlightTimeV2EstimatorParameters,
     InitialVelocityCondition,
+    JumpHeightEstimatorParameters,
     QualifiedZeroVelocityReference,
     SupportedSystemComVelocityResult,
     assess_cmj_jump_height_comparability,
@@ -70,27 +86,31 @@ def _flight_fixture(
     *,
     gravity_suffix: str | None = None,
     external_loading: str = "none",
+    loading_state: FlightLoadingState = FlightLoadingState.UNLOADED,
 ) -> tuple[CMJJumpHeightResult, CMJEventOccurrence, CMJEventOccurrence, CMJForceInput]:
     takeoff, landing, force = _flight_events(
         suffix,
         external_loading=external_loading,
     )
     gravity = _local_gravity(gravity_suffix or suffix)
-    normalized_loading = external_loading.casefold().replace("-", " ").strip()
-    includes_supported_external_load = normalized_loading not in {
-        "none",
-        "unloaded",
-        "no external load",
-        "no external loading",
-    }
+    includes_supported_external_load = (
+        loading_state is FlightLoadingState.STABLE_ATTACHED_SUPPORTED_LOAD
+    )
+    contract = _mechanics_contract(
+        includes_supported_external_load=includes_supported_external_load
+    )
+    applicability = FlightBallisticApplicability.from_takeoff_event(
+        force.observation,
+        takeoff,
+        loading_state,
+        contract,
+    )
     result = estimate_flight_time_jump_height(
         takeoff,
         landing,
         gravity,
         source_observation=force.observation,
-        system_contract=_mechanics_contract(
-            includes_supported_external_load=includes_supported_external_load
-        ),
+        ballistic_applicability=applicability,
     )
     assert isinstance(result, CMJJumpHeightResult)
     return result, takeoff, landing, force
@@ -178,6 +198,96 @@ def _velocity_fixture(
     return result, velocity, takeoff, contract
 
 
+def _historical_v1_result(result: CMJJumpHeightResult) -> CMJJumpHeightResult:
+    """Build the exact pre-RES-47 V1 shape from an equivalent V2 fixture."""
+
+    import dynamislm.measurement.cmj.jump_height as jump_height
+
+    assert isinstance(result.parameters, FlightTimeV2EstimatorParameters)
+    assert isinstance(result.observation.identity, CMJMeasurementIdentity)
+    historical_parameters = JumpHeightEstimatorParameters(
+        gravity=result.parameters.gravity,
+        source_observation_id=result.parameters.source_observation_id,
+        source_signal_id=result.parameters.source_signal_id,
+        source_artifact_id=result.parameters.source_artifact_id,
+        source_acquisition_id=result.parameters.source_acquisition_id,
+        source_measurement_identity_id=result.parameters.source_measurement_identity_id,
+        source_timebase=result.parameters.source_timebase,
+        takeoff_event_id=result.parameters.takeoff_event_id,
+        takeoff_sample_index=result.parameters.takeoff_sample_index,
+        takeoff_event_time_s=result.parameters.takeoff_event_time_s,
+        landing_event_id=result.parameters.landing_event_id,
+        landing_sample_index=result.parameters.landing_sample_index,
+        landing_event_time_s=result.parameters.landing_event_time_s,
+        flight_time_s=result.parameters.flight_time_s,
+        assumptions=CMJ_FLIGHT_TIME_JUMP_HEIGHT_METHOD_V1.assumptions,
+    )
+    metadata = jump_height._processing_parameters(
+        CMJ_FLIGHT_TIME_JUMP_HEIGHT_METHOD_V1,
+        historical_parameters,
+        result.takeoff_event,
+        result.landing_event,
+        None,
+        result.observation.identity,
+    )
+    identity = result.observation.identity
+    historical_processing = replace(
+        identity.processing,
+        estimator=CMJ_FLIGHT_TIME_JUMP_HEIGHT_METHOD_V1.reference,
+        registered_operation=CMJ_FLIGHT_TIME_JUMP_HEIGHT_METHOD_V1.operation,
+        method_parameters=metadata,
+    )
+    historical_version = replace(
+        identity.version,
+        processing_method=CMJ_FLIGHT_TIME_JUMP_HEIGHT_METHOD_V1.operation,
+        software_version=jump_height.RES38_SOFTWARE_VERSION,
+    )
+    historical_identity = replace(
+        identity,
+        processing=historical_processing,
+        version=historical_version,
+    )
+    historical_run = replace(
+        result.observation.provenance.processing_runs[-1],
+        method=CMJ_FLIGHT_TIME_JUMP_HEIGHT_METHOD_V1.operation,
+        parameters=metadata,
+        software_version=jump_height.RES38_SOFTWARE_VERSION,
+    )
+    authority_ids = {
+        RES47_DECISION_FLIGHT_TIME_BALLISTIC_APPLICABILITY.stable_id,
+        RES48_DECISION_FLIGHT_TIME_V2_LOADING_AUTHORITY.stable_id,
+    }
+    historical_provenance = replace(
+        result.observation.provenance,
+        processing_runs=tuple(
+            historical_run if run.output_entity_id == result.observation.observation_id else run
+            for run in result.observation.provenance.processing_runs
+        ),
+        evidence_references=tuple(
+            evidence
+            for evidence in result.observation.provenance.evidence_references
+            if evidence.reference.stable_id not in authority_ids
+        ),
+        lineage_edges=tuple(
+            edge
+            for edge in result.observation.provenance.lineage_edges
+            if edge.from_id not in authority_ids
+        ),
+    )
+    historical_observation = replace(
+        result.observation,
+        identity=historical_identity,
+        provenance=historical_provenance,
+    )
+    return CMJJumpHeightResult(
+        observation=historical_observation,
+        method=CMJ_FLIGHT_TIME_JUMP_HEIGHT_METHOD_V1,
+        parameters=historical_parameters,
+        takeoff_event=result.takeoff_event,
+        landing_event=result.landing_event,
+    )
+
+
 def test_registry_has_one_shared_estimand_and_distinct_methods() -> None:
     assert CMJ_FLIGHT_TIME_JUMP_HEIGHT_METHOD.estimand.reference == CMJ_JUMP_HEIGHT_MEASURAND
     assert CMJ_TAKEOFF_VELOCITY_JUMP_HEIGHT_METHOD.estimand.reference == CMJ_JUMP_HEIGHT_MEASURAND
@@ -188,6 +298,39 @@ def test_registry_has_one_shared_estimand_and_distinct_methods() -> None:
         CMJ_TAKEOFF_VELOCITY_JUMP_HEIGHT_METHOD.operation
     )
     assert CMJ_JUMP_HEIGHT_METRIC.stable_id.endswith("@1.0.0")
+
+
+def test_flight_time_v1_is_historical_and_v2_has_distinct_scientific_identity() -> None:
+    assert CMJ_FLIGHT_TIME_JUMP_HEIGHT_METHOD_V1.reference != (
+        CMJ_FLIGHT_TIME_JUMP_HEIGHT_METHOD_V2.reference
+    )
+    assert CMJ_FLIGHT_TIME_JUMP_HEIGHT_METHOD_V1.operation != (
+        CMJ_FLIGHT_TIME_JUMP_HEIGHT_METHOD_V2.operation
+    )
+    assert CMJ_FLIGHT_TIME_JUMP_HEIGHT_METHOD_V1.reference.identifier.version != (
+        CMJ_FLIGHT_TIME_JUMP_HEIGHT_METHOD_V2.reference.identifier.version
+    )
+    assert CMJ_FLIGHT_TIME_JUMP_HEIGHT_METHOD_V1.operation.identifier.version != (
+        CMJ_FLIGHT_TIME_JUMP_HEIGHT_METHOD_V2.operation.identifier.version
+    )
+    assert CMJ_FLIGHT_TIME_JUMP_HEIGHT_METHOD_V1.assumptions == (
+        CMJ_BALLISTIC_VERTICAL_MOTION_ASSUMPTION,
+        CMJ_TAKEOFF_LANDING_HEIGHT_EQUIVALENCE_ASSUMPTION,
+        CMJ_NEGLIGIBLE_AIR_RESISTANCE_ASSUMPTION,
+        CMJ_LOCAL_GRAVITY_APPLICABLE_ASSUMPTION,
+    )
+    assert (
+        CMJ_SUPPORTED_SYSTEM_STABLE_ASSUMPTION in CMJ_FLIGHT_TIME_JUMP_HEIGHT_METHOD_V2.assumptions
+    )
+    assert (
+        CMJ_REGISTERED_MECHANICAL_SYSTEM_CONTRACT_ASSUMPTION
+        in CMJ_FLIGHT_TIME_JUMP_HEIGHT_METHOD_V2.assumptions
+    )
+    assert (
+        CMJ_REGISTERED_FLIGHT_LOADING_APPLICABILITY_ASSUMPTION
+        in CMJ_FLIGHT_TIME_JUMP_HEIGHT_METHOD_V2.assumptions
+    )
+    assert CMJ_FLIGHT_TIME_JUMP_HEIGHT_METHOD is CMJ_FLIGHT_TIME_JUMP_HEIGHT_METHOD_V2
 
 
 def test_no_unqualified_public_jump_height_operation_exists() -> None:
@@ -211,6 +354,7 @@ def test_flight_time_uses_exact_recorded_event_times_and_model_classification() 
     assert takeoff.sample_index == 10
     assert landing.sample_index == 15
     assert result.parameters.flight_time_s == landing.event_time_s - takeoff.event_time_s
+    assert result.method.equation == "h = g_local * flight_time_s^2 / 8"
     assert result.value_m == pytest.approx((0.005**2) / 8.0)
     assert result.observation.result.classification.value_origin is ValueOrigin.MODEL_ESTIMATE
     assert result.observation.result.classification.scientific_roles == (
@@ -265,6 +409,16 @@ def test_flight_time_preserves_event_and_source_provenance() -> None:
         for edge in edges
     )
     assert force.observation.observation_id == result.parameters.source_observation_id
+    assert result.method == CMJ_FLIGHT_TIME_JUMP_HEIGHT_METHOD_V2
+    assert isinstance(result.parameters, FlightTimeV2EstimatorParameters)
+    applicability = result.parameters.ballistic_applicability
+    assert applicability is not None
+    assert applicability.source_observation_id == force.observation.observation_id
+    assert applicability.source_signal_id == takeoff.source_signal_id
+    assert applicability.source_measurement_identity_id == force.identity.identity_id
+    assert applicability.source_protocol_identity == force.identity.semantic.protocol_identity
+    assert applicability.system_contract == result.parameters.system_contract
+    assert applicability.is_authorized
     assert any(
         evidence.reference == result.method.evidence_decision
         for evidence in result.observation.provenance.evidence_references
@@ -273,10 +427,17 @@ def test_flight_time_preserves_event_and_source_provenance() -> None:
         evidence.reference == RES47_DECISION_FLIGHT_TIME_BALLISTIC_APPLICABILITY
         for evidence in result.observation.provenance.evidence_references
     )
+    assert any(
+        evidence.reference == RES48_DECISION_FLIGHT_TIME_V2_LOADING_AUTHORITY
+        for evidence in result.observation.provenance.evidence_references
+    )
     metadata = {
         entry.key: entry.value for entry in result.observation.identity.processing.method_parameters
     }
     assert metadata["system_contract"] == canonical_json(result.parameters.system_contract)
+    assert metadata["ballistic_applicability"] == canonical_json(applicability)
+    assert metadata["ballistic_loading_state"] == FlightLoadingState.UNLOADED.value
+    assert metadata["protocol_external_loading"] == "none"
 
 
 def test_flight_time_refuses_missing_or_mismatched_sources_and_gravity() -> None:
@@ -369,7 +530,9 @@ def test_flight_time_requires_an_explicit_ballistic_system_contract() -> None:
 
 def test_flight_time_accepts_a_stable_free_flying_supported_load() -> None:
     result, _, _, _ = _flight_fixture(
-        "flight-loaded-supported", external_loading="supported-barbell"
+        "flight-loaded-supported",
+        external_loading="supported-barbell",
+        loading_state=FlightLoadingState.STABLE_ATTACHED_SUPPORTED_LOAD,
     )
     contract = result.parameters.system_contract
     metadata = {
@@ -387,36 +550,18 @@ def test_flight_time_accepts_a_stable_free_flying_supported_load() -> None:
 
 
 @pytest.mark.parametrize(
-    ("external_loading", "expected_reason"),
+    "external_loading",
     (
-        ("anchored-elastic", RefusalReasonCode.BALLISTIC_ASSUMPTION_UNSUPPORTED),
-        ("tethered", RefusalReasonCode.BALLISTIC_ASSUMPTION_UNSUPPORTED),
-        ("cable-resistance", RefusalReasonCode.BALLISTIC_ASSUMPTION_UNSUPPORTED),
-        ("external-assistance", RefusalReasonCode.BALLISTIC_ASSUMPTION_UNSUPPORTED),
-        ("externally-anchored-support", RefusalReasonCode.BALLISTIC_ASSUMPTION_UNSUPPORTED),
-        ("partially-supported-load", RefusalReasonCode.BALLISTIC_ASSUMPTION_UNSUPPORTED),
-        ("detached-barbell", RefusalReasonCode.BALLISTIC_ASSUMPTION_UNSUPPORTED),
-        ("transferred-load", RefusalReasonCode.BALLISTIC_ASSUMPTION_UNSUPPORTED),
-        ("changing-system-composition", RefusalReasonCode.BALLISTIC_ASSUMPTION_UNSUPPORTED),
-        ("unsupported-load", RefusalReasonCode.BALLISTIC_ASSUMPTION_UNSUPPORTED),
-        ("resistance-band", RefusalReasonCode.BALLISTIC_ASSUMPTION_UNSUPPORTED),
-        ("not-attached-external-load", RefusalReasonCode.BALLISTIC_ASSUMPTION_UNSUPPORTED),
-        (
-            "attached-external-load-not-stable",
-            RefusalReasonCode.BALLISTIC_ASSUMPTION_UNSUPPORTED,
-        ),
-        (
-            "supported-load-released-during-flight",
-            RefusalReasonCode.BALLISTIC_ASSUMPTION_UNSUPPORTED,
-        ),
-        ("unknown-loading", RefusalReasonCode.EXTERNAL_FORCE_MODEL_UNRESOLVED),
-        ("unresolved-loading", RefusalReasonCode.EXTERNAL_FORCE_MODEL_UNRESOLVED),
-        ("loaded", RefusalReasonCode.EXTERNAL_FORCE_MODEL_UNRESOLVED),
+        "supported-barbell-overhead-harness",
+        "supported-barbell-banded",
+        "supported-barbell-experimental-device",
+        "free-flying-whatever",
+        "definitely-safe-trust-me",
+        "completely-new-unseen-description",
     ),
 )
-def test_flight_time_refuses_nonballistic_or_unresolved_loading(
+def test_raw_external_loading_text_has_zero_authority(
     external_loading: str,
-    expected_reason: RefusalReasonCode,
 ) -> None:
     takeoff, landing, force = _flight_events(
         f"flight-refusal-{external_loading}",
@@ -432,8 +577,170 @@ def test_flight_time_refuses_nonballistic_or_unresolved_loading(
     )
 
     assert isinstance(refusal, RefusalResult)
-    assert expected_reason in refusal.reason_codes
+    assert RefusalReasonCode.MECHANICAL_SYSTEM_UNRESOLVED in refusal.reason_codes
+    assert RefusalReasonCode.EXTERNAL_FORCE_MODEL_UNRESOLVED in refusal.reason_codes
     assert refusal.observation_ids == (force.observation.observation_id,)
+    assert force.identity.semantic.protocol_identity is not None
+    assert force.identity.semantic.protocol_identity.external_loading is not None
+    assert force.identity.semantic.protocol_identity.external_loading.value == external_loading
+
+
+@pytest.mark.parametrize(
+    ("loading_state", "includes_supported_external_load", "expected_reason"),
+    (
+        (
+            FlightLoadingState.NON_BALLISTIC_EXTERNAL_FORCE,
+            False,
+            RefusalReasonCode.BALLISTIC_ASSUMPTION_UNSUPPORTED,
+        ),
+        (
+            FlightLoadingState.UNRESOLVED,
+            False,
+            RefusalReasonCode.EXTERNAL_FORCE_MODEL_UNRESOLVED,
+        ),
+        (
+            FlightLoadingState.UNLOADED,
+            True,
+            RefusalReasonCode.SUPPORTED_SYSTEM_INTERPRETATION_REQUIRED,
+        ),
+        (
+            FlightLoadingState.STABLE_ATTACHED_SUPPORTED_LOAD,
+            False,
+            RefusalReasonCode.SUPPORTED_SYSTEM_INTERPRETATION_REQUIRED,
+        ),
+    ),
+)
+def test_registered_loading_state_and_contract_control_v2_authority(
+    loading_state: FlightLoadingState,
+    includes_supported_external_load: bool,
+    expected_reason: RefusalReasonCode,
+) -> None:
+    takeoff, landing, force = _flight_events(
+        f"flight-typed-refusal-{loading_state.value}",
+        external_loading="definitely-safe-trust-me",
+    )
+    contract = _mechanics_contract(
+        includes_supported_external_load=includes_supported_external_load
+    )
+    applicability = FlightBallisticApplicability.from_takeoff_event(
+        force.observation,
+        takeoff,
+        loading_state,
+        contract,
+    )
+
+    refusal = estimate_flight_time_jump_height(
+        takeoff,
+        landing,
+        _local_gravity(f"flight-typed-refusal-{loading_state.value}"),
+        source_observation=force.observation,
+        ballistic_applicability=applicability,
+    )
+
+    assert isinstance(refusal, RefusalResult)
+    assert expected_reason in refusal.reason_codes
+
+
+def test_registered_typed_state_authorizes_even_when_raw_text_is_only_audit_metadata() -> None:
+    result, _, _, force = _flight_fixture(
+        "flight-typed-authority-with-raw-text",
+        external_loading="completely-new-unseen-description",
+        loading_state=FlightLoadingState.UNLOADED,
+    )
+    assert result.method == CMJ_FLIGHT_TIME_JUMP_HEIGHT_METHOD_V2
+    assert isinstance(result.parameters, FlightTimeV2EstimatorParameters)
+    assert result.parameters.ballistic_applicability is not None
+    metadata = {
+        entry.key: entry.value for entry in result.observation.identity.processing.method_parameters
+    }
+    assert metadata["protocol_external_loading"] == "completely-new-unseen-description"
+    assert metadata["ballistic_loading_state"] == FlightLoadingState.UNLOADED.value
+    assert force.identity.semantic.protocol_identity is not None
+
+
+def test_flight_applicability_requires_exact_trial_measurement_protocol_and_contract() -> None:
+    takeoff_a, landing_a, force_a = _flight_events("applicability-source-a")
+    takeoff_b, _, force_b = _flight_events(
+        "applicability-source-b",
+        external_loading="supported-barbell",
+    )
+    contract_a = _mechanics_contract(includes_supported_external_load=False)
+    app_a = FlightBallisticApplicability.from_takeoff_event(
+        force_a.observation,
+        takeoff_a,
+        FlightLoadingState.UNLOADED,
+        contract_a,
+    )
+    app_b = FlightBallisticApplicability.from_takeoff_event(
+        force_b.observation,
+        takeoff_b,
+        FlightLoadingState.UNLOADED,
+        contract_a,
+    )
+
+    wrong_trial = estimate_flight_time_jump_height(
+        takeoff_a,
+        landing_a,
+        _local_gravity("applicability-source-a"),
+        source_observation=force_a.observation,
+        ballistic_applicability=app_b,
+    )
+    wrong_measurement = replace(
+        app_a,
+        source_measurement_identity_id=force_b.identity.identity_id,
+        source_binding_digest=None,
+    )
+    wrong_measurement_result = estimate_flight_time_jump_height(
+        takeoff_a,
+        landing_a,
+        _local_gravity("applicability-source-a"),
+        source_observation=force_a.observation,
+        ballistic_applicability=wrong_measurement,
+    )
+    assert force_b.identity.semantic.protocol_identity is not None
+    wrong_protocol = replace(
+        app_a,
+        source_protocol_identity=force_b.identity.semantic.protocol_identity,
+        source_binding_digest=None,
+    )
+    wrong_protocol_result = estimate_flight_time_jump_height(
+        takeoff_a,
+        landing_a,
+        _local_gravity("applicability-source-a"),
+        source_observation=force_a.observation,
+        ballistic_applicability=wrong_protocol,
+    )
+    wrong_contract = replace(
+        app_a,
+        system_contract=_mechanics_contract(includes_supported_external_load=True),
+        source_binding_digest=None,
+    )
+    wrong_contract_result = estimate_flight_time_jump_height(
+        takeoff_a,
+        landing_a,
+        _local_gravity("applicability-source-a"),
+        source_observation=force_a.observation,
+        ballistic_applicability=wrong_contract,
+    )
+
+    for refusal in (
+        wrong_trial,
+        wrong_measurement_result,
+        wrong_protocol_result,
+        wrong_contract_result,
+    ):
+        assert isinstance(refusal, RefusalResult)
+    assert isinstance(wrong_trial, RefusalResult)
+    assert isinstance(wrong_measurement_result, RefusalResult)
+    assert isinstance(wrong_protocol_result, RefusalResult)
+    assert isinstance(wrong_contract_result, RefusalResult)
+    assert RefusalReasonCode.EVENT_SOURCE_MISMATCH in wrong_trial.reason_codes
+    assert RefusalReasonCode.EVENT_SOURCE_MISMATCH in wrong_measurement_result.reason_codes
+    assert RefusalReasonCode.PROTOCOL_IDENTITY_MISMATCH in wrong_protocol_result.reason_codes
+    assert (
+        RefusalReasonCode.SUPPORTED_SYSTEM_INTERPRETATION_REQUIRED
+        in wrong_contract_result.reason_codes
+    )
 
 
 def test_flight_time_refuses_missing_protocol_applicability_without_erasing_events() -> None:
@@ -478,6 +785,7 @@ def test_flight_time_loaded_and_unloaded_contracts_are_not_automatically_interch
     loaded, _, _, _ = _flight_fixture(
         "flight-comparable-loaded",
         external_loading="supported-barbell",
+        loading_state=FlightLoadingState.STABLE_ATTACHED_SUPPORTED_LOAD,
     )
 
     comparison = compare_cmj_jump_height_estimates(
@@ -617,6 +925,91 @@ def test_flight_time_result_roundtrips_deterministically_under_v3() -> None:
     assert canonical_hash(restored) == canonical_hash(result)
 
 
+def test_historical_pre_res47_v1_fixture_roundtrips_as_v1() -> None:
+    result, _, _, _ = _flight_fixture("historical-v1", gravity_suffix="historical-v1-g")
+    historical = _historical_v1_result(result)
+
+    assert historical.method == CMJ_FLIGHT_TIME_JUMP_HEIGHT_METHOD_V1
+    assert type(historical.parameters) is JumpHeightEstimatorParameters
+    assert historical.parameters.system_contract is None
+    assert historical.parameters.assumptions == CMJ_FLIGHT_TIME_JUMP_HEIGHT_METHOD_V1.assumptions
+    encoded = canonical_json(historical)
+    restored = from_canonical_json(encoded, CMJJumpHeightResult)
+
+    assert restored == historical
+    assert restored.method.reference == CMJ_FLIGHT_TIME_JUMP_HEIGHT_METHOD_V1.reference
+    assert restored.method.operation == CMJ_FLIGHT_TIME_JUMP_HEIGHT_METHOD_V1.operation
+    assert restored.method.reference.identifier.version == "1.0.0"
+    assert "ballistic_applicability" not in encoded
+    assert canonical_json(restored) == encoded
+
+
+def test_transitional_res47_v1_identity_with_v2_semantics_is_rejected() -> None:
+    result, _, _, _ = _flight_fixture("transitional-res47", gravity_suffix="transitional-g")
+    historical = _historical_v1_result(result)
+    assert isinstance(result.parameters, FlightTimeV2EstimatorParameters)
+    payload = json.loads(canonical_json(historical))
+    payload["payload"]["parameters"]["system_contract"] = json.loads(
+        canonical_json(result.parameters.system_contract)
+    )["payload"]
+    payload["payload"]["parameters"]["assumptions"] = json.loads(
+        canonical_json(CMJ_FLIGHT_TIME_JUMP_HEIGHT_METHOD_V2.assumptions)
+    )["payload"]
+    transitional = json.dumps(payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+
+    with pytest.raises(SerializationError, match="invalid|historical|transitional"):
+        from_canonical_json(transitional, CMJJumpHeightResult)
+
+
+def test_v1_and_v2_comparability_requires_a_registered_bridge() -> None:
+    v2, _, _, _ = _flight_fixture("v2-bridge-right", gravity_suffix="bridge-g")
+    v1_source, _, _, _ = _flight_fixture("v1-bridge-left", gravity_suffix="bridge-g")
+    v1 = _historical_v1_result(v1_source)
+
+    comparison = compare_cmj_jump_height_estimates(
+        v1,
+        v2,
+        claim="compare historical V1 and qualified V2 flight-time heights",
+        request_id=InstanceIdentifier("comparability-request", "v1-v2-bridge"),
+    )
+
+    assert comparison.state is ComparabilityState.BRIDGE_VALIDATION_REQUIRED
+    assert ComparabilityReasonCode.ESTIMATOR_MISMATCH in comparison.reason_codes
+    assert ComparabilityReasonCode.BRIDGE_NOT_REGISTERED in comparison.reason_codes
+
+
+def test_unknown_loading_state_is_not_decodable_or_defaulted() -> None:
+    result, _, _, _ = _flight_fixture("unknown-loading-state")
+    assert isinstance(result.parameters, FlightTimeV2EstimatorParameters)
+    applicability = result.parameters.ballistic_applicability
+    assert applicability is not None
+    with pytest.raises(ValueError, match="closed registered vocabulary"):
+        replace(applicability, loading_state="NEW_STATE", source_binding_digest=None)  # type: ignore[arg-type]
+
+    payload = json.loads(canonical_json(result))
+    nested = payload["payload"]["parameters"]["ballistic_applicability"]
+    nested["loading_state"] = "NEW_STATE"
+    encoded = json.dumps(payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+    with pytest.raises(SerializationError, match="invalid|loading state"):
+        from_canonical_json(encoded, CMJJumpHeightResult)
+
+
+def test_xu_2023_reference_uses_the_exact_pmc10115716_title() -> None:
+    decision = Path(__file__).parents[1] / (
+        "docs/decisions/RES47-DR-001-flight-time-ballistic-system-applicability.md"
+    )
+    text = " ".join(decision.read_text(encoding="utf-8").split())
+    assert (
+        "A Systematic Review of the Different Calculation Methods for Measuring Jump Height "
+        "During the Countermovement and Drop Jump Tests"
+    ) in text
+    assert (
+        "A Systematic Review of the Methodology and Validation of Countermovement Jump Tests"
+        not in text
+    )
+    assert "PMC10115716" in text
+
+
 def test_result_rejects_a_scalar_that_does_not_match_the_registered_equation() -> None:
     result, _, _, _ = _flight_fixture("flight-equation-integrity", gravity_suffix="integrity-g")
     bad_measurement = replace(
@@ -725,12 +1118,13 @@ def test_estimator_disagreement_remains_method_distinct() -> None:
 
 def test_gravity_is_a_material_comparability_dimension() -> None:
     left, takeoff, landing, force = _flight_fixture("gravity-left", gravity_suffix="gravity-left-g")
+    assert isinstance(left.parameters, FlightTimeV2EstimatorParameters)
     right = estimate_flight_time_jump_height(
         takeoff,
         landing,
         _local_gravity("gravity-right-g"),
         source_observation=force.observation,
-        system_contract=left.parameters.system_contract,
+        ballistic_applicability=left.parameters.ballistic_applicability,
     )
     assert isinstance(right, CMJJumpHeightResult)
     comparison = compare_cmj_jump_height_estimates(
