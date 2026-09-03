@@ -2470,6 +2470,7 @@ def _mechanics_fixture(
     *,
     timebase: SignalTimebase | None = None,
     external_loading: str = "none",
+    weighing_start_index: int = 0,
     weighing_end_index: int = 2,
     weighing_selection_parameters: tuple[MetadataEntry, ...] = (),
 ) -> tuple[
@@ -2487,7 +2488,7 @@ def _mechanics_fixture(
         source_signal_id=total.signal.signal_id,
         source_artifact_id=total.source_artifact.artifact_id,
         source_measurement_identity_id=total.observation.identity.identity_id,
-        start_index=0,
+        start_index=weighing_start_index,
         end_index=weighing_end_index,
         selection_parameters=weighing_selection_parameters,
     )
