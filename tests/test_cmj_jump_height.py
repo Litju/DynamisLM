@@ -8,6 +8,8 @@ import pytest
 from dynamislm import (
     SERIALIZATION_VERSION,
     InstanceIdentifier,
+    MetadataEntry,
+    ScalarValue,
     ScientificRole,
     ValueOrigin,
     canonical_hash,
@@ -425,6 +427,43 @@ def test_flight_time_result_roundtrips_deterministically_under_v3() -> None:
     assert restored == result
     assert canonical_json(restored) == encoded
     assert canonical_hash(restored) == canonical_hash(result)
+
+
+def test_result_rejects_a_scalar_that_does_not_match_the_registered_equation() -> None:
+    result, _, _, _ = _flight_fixture("flight-equation-integrity", gravity_suffix="integrity-g")
+    bad_measurement = replace(
+        result.observation.result,
+        value=ScalarValue(result.value_m + 0.001),
+    )
+    bad_observation = replace(result.observation, result=bad_measurement)
+
+    with pytest.raises(ValueError, match="registered equation"):
+        replace(result, observation=bad_observation)
+
+
+def test_result_rejects_a_takeoff_velocity_parameter_not_at_the_event_sample() -> None:
+    result, _, _, _ = _velocity_fixture("velocity-equation-integrity", gravity_suffix="integrity-g")
+    assert result.parameters.takeoff_velocity_m_per_s is not None
+    bad_parameters = replace(
+        result.parameters,
+        takeoff_velocity_m_per_s=result.parameters.takeoff_velocity_m_per_s + 0.001,
+    )
+    bad_metadata = tuple(
+        MetadataEntry(
+            entry.key,
+            canonical_json(bad_parameters) if entry.key == "estimator_parameters" else entry.value,
+        )
+        for entry in result.observation.identity.processing.method_parameters
+    )
+    bad_processing = replace(
+        result.observation.identity.processing,
+        method_parameters=bad_metadata,
+    )
+    bad_identity = replace(result.observation.identity, processing=bad_processing)
+    bad_observation = replace(result.observation, identity=bad_identity)
+
+    with pytest.raises(ValueError, match="linkage"):
+        replace(result, observation=bad_observation, parameters=bad_parameters)
 
 
 def test_same_method_comparability_ignores_trial_instance_ids() -> None:
