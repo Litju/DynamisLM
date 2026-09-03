@@ -76,6 +76,8 @@ def _phase_inputs(
     *,
     timebase: SignalTimebase | None = None,
     external_loading: str = "none",
+    onset_search_start_index: int = 4,
+    takeoff_search_start_index: int = 9,
 ) -> tuple[
     SupportedSystemComVelocityResult,
     NetVerticalForceResult,
@@ -93,7 +95,7 @@ def _phase_inputs(
     onset = detect_movement_onset(
         source,
         weight,
-        _onset_parameters(weight, search_start_index=4, dwell_samples=1),
+        _onset_parameters(weight, search_start_index=onset_search_start_index, dwell_samples=1),
     )
     assert not isinstance(onset, RefusalResult)
     takeoff = detect_takeoff(
@@ -102,7 +104,7 @@ def _phase_inputs(
             20.0,
             CMJThresholdDirection.BELOW_THRESHOLD,
             dwell_samples=1,
-            search_start_index=9,
+            search_start_index=takeoff_search_start_index,
         ),
         onset=onset,
     )
@@ -133,6 +135,8 @@ def _phase_fixture(
     *,
     timebase: SignalTimebase | None = None,
     external_loading: str = "none",
+    onset_search_start_index: int = 4,
+    takeoff_search_start_index: int = 9,
 ) -> tuple[
     SupportedSystemComVelocityResult,
     NetVerticalForceResult,
@@ -146,6 +150,8 @@ def _phase_fixture(
         samples,
         timebase=timebase,
         external_loading=external_loading,
+        onset_search_start_index=onset_search_start_index,
+        takeoff_search_start_index=takeoff_search_start_index,
     )
     phases = construct_cmj_phase_occurrences(velocity, onset, takeoff)
     assert not isinstance(phases, RefusalResult)
@@ -475,6 +481,36 @@ def test_res39_same_label_comparison_requires_registered_source_method_identity(
         first.observation.observation_id,
         changed.observation.observation_id,
     )
+
+
+def test_res49_reproduces_over_refusal_for_same_method_trial_coordinates() -> None:
+    second_velocity, second_net, _, second_phases, second_onset, second_takeoff = _phase_fixture(
+        "phase-instance-second",
+        (100.0, 100.0, 100.0, 100.0, 100.0, -900.0, -400.0, -900.0, 6100.0, 0.0),
+        takeoff_search_start_index=8,
+    )
+    first_velocity, first_net_result, _, first_phases, first_onset, first_takeoff = _phase_fixture(
+        "phase-instance-first",
+        (100.0, 100.0, 100.0, 100.0, -900.0, -900.0, -400.0, 6100.0, 0.0, 0.0),
+        takeoff_search_start_index=8,
+    )
+    assert first_velocity is not second_velocity
+    assert (first_onset.sample_index, first_phases[0].end_boundary.sample_index) == (4, 6)
+    assert (first_phases[1].end_boundary.sample_index, first_takeoff.sample_index) == (7, 8)
+    assert (second_onset.sample_index, second_phases[0].end_boundary.sample_index) == (5, 7)
+    assert (second_phases[1].end_boundary.sample_index, second_takeoff.sample_index) == (8, 9)
+
+    first_metric = _metric(
+        calculate_cmj_phase_net_vertical_impulse(first_phases[1], first_net_result)
+    )
+    second_metric = _metric(calculate_cmj_phase_net_vertical_impulse(second_phases[1], second_net))
+    comparison = compare_cmj_phase_metrics(
+        first_metric,
+        second_metric,
+        claim="compare same-method V1 braking impulse across trial realizations",
+        request_id=InstanceIdentifier("comparability-request", "phase-instance-reproduction"),
+    )
+    assert comparison.state is ComparabilityState.COMPARABLE
 
 
 def test_res39_wrong_metric_source_refuses_without_erasing_valid_phase() -> None:
