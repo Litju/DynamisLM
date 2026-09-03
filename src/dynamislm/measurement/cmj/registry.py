@@ -232,6 +232,76 @@ CMJ_RELATIVE_DISPLACEMENT_ZERO_ORIGIN = _reference(
     "cmj-relative-vertical-displacement-zero-at-initial-sample-v1",
     "CMJ relative vertical displacement zero at initial sample",
 )
+CMJ_JUMP_HEIGHT_MEASURAND = _reference(
+    "measurand",
+    "cmj-vertical-ballistic-takeoff-to-apex-rise",
+    "CMJ vertical ballistic takeoff-to-apex rise",
+)
+CMJ_JUMP_HEIGHT_METRIC = _reference(
+    "metric",
+    "cmj-estimator-qualified-jump-height",
+    "CMJ estimator-qualified jump-height estimate",
+)
+CMJ_JUMP_HEIGHT_SCHEMA = _reference(
+    "schema",
+    "cmj-jump-height-estimate-v1",
+    "CMJ scalar jump-height estimate",
+)
+CMJ_FLIGHT_TIME_JUMP_HEIGHT_ESTIMATOR = _reference(
+    "estimator",
+    "cmj-flight-time-ballistic-jump-height-v1",
+    "CMJ flight-time ballistic jump-height estimator",
+)
+CMJ_QUALIFIED_TAKEOFF_VELOCITY_JUMP_HEIGHT_ESTIMATOR = _reference(
+    "estimator",
+    "cmj-qualified-takeoff-velocity-ballistic-apex-rise-v1",
+    "CMJ qualified takeoff-velocity ballistic apex-rise estimator",
+)
+CMJ_FLIGHT_TIME_JUMP_HEIGHT_OPERATION = _reference(
+    "registered-operation",
+    "cmj-flight-time-ballistic-jump-height-v1",
+    "CMJ flight-time ballistic jump-height estimate",
+)
+CMJ_QUALIFIED_TAKEOFF_VELOCITY_JUMP_HEIGHT_OPERATION = _reference(
+    "registered-operation",
+    "cmj-qualified-takeoff-velocity-ballistic-apex-rise-v1",
+    "CMJ qualified takeoff-velocity ballistic apex-rise estimate",
+)
+CMJ_JUMP_HEIGHT_COMPARABILITY_RULE = _reference(
+    "comparability-rule",
+    "cmj-jump-height-estimator-v1",
+    "CMJ estimator-qualified jump-height comparability",
+)
+CMJ_BALLISTIC_VERTICAL_MOTION_ASSUMPTION = _reference(
+    "assumption",
+    "cmj-ballistic-vertical-motion-v1",
+    "ballistic vertical motion over the takeoff-to-apex interval",
+)
+CMJ_TAKEOFF_LANDING_HEIGHT_EQUIVALENCE_ASSUMPTION = _reference(
+    "assumption",
+    "cmj-takeoff-landing-height-equivalence-v1",
+    "takeoff and landing COM heights are equivalent",
+)
+CMJ_NEGLIGIBLE_AIR_RESISTANCE_ASSUMPTION = _reference(
+    "assumption",
+    "cmj-negligible-air-resistance-v1",
+    "air resistance is negligible for the ballistic estimate",
+)
+CMJ_SUPPORTED_SYSTEM_STABLE_ASSUMPTION = _reference(
+    "assumption",
+    "cmj-supported-system-stable-v1",
+    "supported physical system remains stable through the mechanics chain",
+)
+CMJ_LOCAL_GRAVITY_APPLICABLE_ASSUMPTION = _reference(
+    "assumption",
+    "cmj-local-gravity-applicable-v1",
+    "the explicit local gravitational reference applies to the trial",
+)
+CMJ_TAKEOFF_VELOCITY_EVENT_SAMPLE_CONVENTION = _reference(
+    "sample-convention",
+    "cmj-takeoff-velocity-at-event-sample-v1",
+    "takeoff velocity sampled at the registered takeoff event sample",
+)
 CMJ_TOTAL_SUPPORTED_VERTICAL_FORCE_SCHEMA = _reference(
     "schema", "cmj-total-supported-vertical-force-v1", "CMJ total supported vertical-force series"
 )
@@ -351,6 +421,45 @@ RES46_DECISION_QUALIFIED_ZERO_VELOCITY = RegistryReference(
         # and its applicability to the existing decision remain unchanged.
         "https://pubmed.ncbi.nlm.nih.gov/20664368/",
     ),
+)
+RES38_DECISION_FLIGHT_TIME_ESTIMATOR = RegistryReference(
+    identifier=ScientificIdentifier(
+        "dynamislm", "decision-record", "res38-flight-time-estimator", CMJ_REGISTRY_VERSION
+    ),
+    display_label="RES-38 flight-time estimator decision",
+    reference_ids=(
+        "docs/decisions/RES38-DR-001-flight-time-estimator.md",
+        "https://bura.brunel.ac.uk/handle/2438/1392",
+        "https://journals.plos.org/plosone/article?id=10.1371/journal.pone.0265999",
+    ),
+)
+RES38_DECISION_TAKEOFF_VELOCITY_ESTIMATOR = RegistryReference(
+    identifier=ScientificIdentifier(
+        "dynamislm", "decision-record", "res38-takeoff-velocity-estimator", CMJ_REGISTRY_VERSION
+    ),
+    display_label="RES-38 takeoff-velocity estimator decision",
+    reference_ids=(
+        "docs/decisions/RES38-DR-002-takeoff-velocity-estimator.md",
+        "https://bura.brunel.ac.uk/handle/2438/1392",
+        "https://journals.plos.org/plosone/article?id=10.1371/journal.pone.0265999",
+    ),
+)
+RES38_DECISION_CLASSIFICATION_COMPARABILITY = RegistryReference(
+    identifier=ScientificIdentifier(
+        "dynamislm",
+        "decision-record",
+        "res38-estimator-classification-and-comparability",
+        CMJ_REGISTRY_VERSION,
+    ),
+    display_label="RES-38 estimator classification and comparability decision",
+    reference_ids=("docs/decisions/RES38-DR-003-estimator-comparability-and-classification.md",),
+)
+RES38_DECISION_COM_DISPLACEMENT = RegistryReference(
+    identifier=ScientificIdentifier(
+        "dynamislm", "decision-record", "res38-com-displacement-decision", CMJ_REGISTRY_VERSION
+    ),
+    display_label="RES-38 COM-displacement estimator decision",
+    reference_ids=("docs/decisions/RES38-DR-004-com-displacement-estimator-decision.md",),
 )
 RES37_DECISION_DISPLACEMENT_REFERENCE = RegistryReference(
     identifier=ScientificIdentifier(
