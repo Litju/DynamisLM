@@ -1644,11 +1644,6 @@ def _event_refusal_if_invalid(
     return None
 
 
-def _assert_event_source_identity(event: CMJEventOccurrence) -> None:
-    if event.source_signal_id.instance_type != "signal":
-        raise ValueError("event source signal must identify a signal")
-
-
 def _event_method_key(event: CMJEventOccurrence) -> tuple[object, ...]:
     return (
         event.definition.reference.stable_id,
