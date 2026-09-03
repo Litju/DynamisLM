@@ -450,10 +450,14 @@ class CMJPhaseOccurrence:
     source_velocity_measurement_identity: CMJMeasurementIdentity
     source_velocity_operation: RegistryReference
     source_velocity_integration_method: RegistryReference
+    source_velocity_integration_interval: CMJIntegrationInterval
     source_velocity_initial_condition: QualifiedZeroVelocityReference
     source_velocity_version: VersionIdentity
     source_velocity_processing_parameters: tuple[MetadataEntry, ...]
     source_velocity_filtering: tuple[RegistryReference, ...]
+    source_velocity_source_signal_ids: tuple[InstanceIdentifier, ...]
+    source_velocity_source_observation_ids: tuple[InstanceIdentifier, ...]
+    source_velocity_source_measurement_identity_ids: tuple[ScientificIdentifier, ...]
     source_system_contract: CMJMechanicalSystemContract
     start_boundary: CMJPhaseBoundary
     end_boundary: CMJPhaseBoundary
@@ -541,6 +545,13 @@ class CMJPhaseOccurrence:
             != CMJ_TRAPEZOIDAL_INTEGRATION_METHOD.stable_id
         ):
             raise ValueError("phase velocity integration method is not registered")
+        if not isinstance(self.source_velocity_integration_interval, CMJIntegrationInterval):
+            raise ValueError("phase velocity interval must be a registered integration interval")
+        if (
+            self.source_velocity_integration_interval.integration_method.stable_id
+            != self.source_velocity_integration_method.stable_id
+        ):
+            raise ValueError("phase velocity interval must preserve its integration method")
         if not isinstance(self.source_velocity_initial_condition, QualifiedZeroVelocityReference):
             raise ValueError("phase occurrence requires a qualified velocity reference")
         if not self.source_velocity_initial_condition.is_authorized:
@@ -563,6 +574,33 @@ class CMJPhaseOccurrence:
             self.source_velocity_processing_parameters, "source_velocity_processing_parameters"
         )
         require_tuple(self.source_velocity_filtering, "source_velocity_filtering")
+        require_tuple(self.source_velocity_source_signal_ids, "source_velocity_source_signal_ids")
+        require_tuple(
+            self.source_velocity_source_observation_ids,
+            "source_velocity_source_observation_ids",
+        )
+        require_tuple(
+            self.source_velocity_source_measurement_identity_ids,
+            "source_velocity_source_measurement_identity_ids",
+        )
+        if any(item.instance_type != "signal" for item in self.source_velocity_source_signal_ids):
+            raise ValueError("source_velocity_source_signal_ids must identify signals")
+        if any(
+            item.instance_type != "observation"
+            for item in self.source_velocity_source_observation_ids
+        ):
+            raise ValueError("source_velocity_source_observation_ids must identify observations")
+        if any(
+            item.object_type != "measurement-identity"
+            for item in self.source_velocity_source_measurement_identity_ids
+        ):
+            raise ValueError(
+                "source_velocity_source_measurement_identity_ids must identify measurement identities"
+            )
+        if self.source_velocity_integration_interval.source_signal_id not in (
+            self.source_velocity_source_signal_ids
+        ):
+            raise ValueError("phase velocity interval must preserve its source signal")
         require_tuple(self.source_event_ids, "source_event_ids")
         if any(event_id.instance_type != "event-occurrence" for event_id in self.source_event_ids):
             raise ValueError("source_event_ids must identify event occurrences")
@@ -1143,6 +1181,7 @@ def _boundary_provenance(
     velocity_threshold_policy: str,
     interpolation_policy: str,
     evidence_decision: RegistryReference,
+    source_event: CMJEventOccurrence | None,
 ) -> Provenance:
     base = _phase_source_provenance(velocity, movement_onset, takeoff)
     source_observation_ids = _phase_source_observation_ids(velocity, movement_onset, takeoff)
@@ -1165,6 +1204,26 @@ def _boundary_provenance(
         MetadataEntry("source_velocity_series_id", velocity.series.series_id.qualified),
         MetadataEntry("source_timebase", canonical_json(velocity.series.timebase)),
         MetadataEntry("source_system_contract", canonical_json(velocity.system_contract)),
+        MetadataEntry(
+            "source_event_id",
+            source_event.occurrence_id.qualified if source_event is not None else None,
+        ),
+        MetadataEntry(
+            "source_event_definition",
+            source_event.definition.reference.stable_id if source_event is not None else None,
+        ),
+        MetadataEntry(
+            "source_event_method",
+            source_event.detector_method.reference.stable_id if source_event is not None else None,
+        ),
+        MetadataEntry(
+            "source_event_parameters",
+            canonical_json(source_event.detector_parameters) if source_event is not None else None,
+        ),
+        MetadataEntry(
+            "source_event_effective_threshold_n",
+            source_event.effective_threshold_n if source_event is not None else None,
+        ),
     )
     digest = canonical_hash(
         {
@@ -1241,6 +1300,21 @@ def _make_boundary(
             "tie_policy": tie_policy,
             "velocity_threshold_policy": velocity_threshold_policy,
             "interpolation_policy": interpolation_policy,
+            "source_event_id": source_event.occurrence_id if source_event is not None else None,
+            "source_event_definition": (
+                source_event.definition.reference if source_event is not None else None
+            ),
+            "source_event_method": (
+                source_event.detector_method.reference if source_event is not None else None
+            ),
+            "source_event_parameters": (
+                canonical_json(source_event.detector_parameters)
+                if source_event is not None
+                else None
+            ),
+            "source_event_effective_threshold_n": (
+                source_event.effective_threshold_n if source_event is not None else None
+            ),
         }
     ).removeprefix("sha256:")[:24]
     boundary_id = InstanceIdentifier("phase-boundary", f"cmj-phase-boundary:{boundary_digest}")
@@ -1258,6 +1332,7 @@ def _make_boundary(
         velocity_threshold_policy=velocity_threshold_policy,
         interpolation_policy=interpolation_policy,
         evidence_decision=evidence_decision,
+        source_event=source_event,
     )
     return CMJPhaseBoundary(
         boundary_id=boundary_id,
@@ -1546,6 +1621,22 @@ def _phase_occurrence_provenance(
             "source_velocity_initial_condition", canonical_json(velocity.initial_velocity_condition)
         ),
         MetadataEntry(
+            "source_velocity_integration_interval",
+            canonical_json(velocity.series.integration_interval),
+        ),
+        MetadataEntry(
+            "source_velocity_source_signal_ids",
+            canonical_json(velocity.series.source_signal_ids),
+        ),
+        MetadataEntry(
+            "source_velocity_source_observation_ids",
+            canonical_json(velocity.series.source_observation_ids),
+        ),
+        MetadataEntry(
+            "source_velocity_source_measurement_identity_ids",
+            canonical_json(velocity.series.source_measurement_identity_ids),
+        ),
+        MetadataEntry(
             "source_velocity_version", canonical_json(velocity.observation.identity.version)
         ),
         MetadataEntry("source_system_contract", canonical_json(velocity.system_contract)),
@@ -1627,6 +1718,8 @@ def _make_phase_occurrence(
     velocity_identity = velocity.observation.identity
     if not isinstance(velocity_identity, CMJMeasurementIdentity):
         raise ValueError("velocity observation must preserve a CMJ measurement identity")
+    if velocity.series.integration_interval is None or velocity.series.integration_method is None:
+        raise ValueError("velocity series must preserve its exact integration identity")
     source_event_ids = _unique(
         tuple(
             boundary.source_event_id
@@ -1657,12 +1750,15 @@ def _make_phase_occurrence(
         source_velocity_series_id=velocity.series.series_id,
         source_velocity_measurement_identity=velocity_identity,
         source_velocity_operation=velocity.series.operation,
-        source_velocity_integration_method=velocity.series.integration_method
-        or CMJ_TRAPEZOIDAL_INTEGRATION_METHOD,
+        source_velocity_integration_method=velocity.series.integration_method,
+        source_velocity_integration_interval=velocity.series.integration_interval,
         source_velocity_initial_condition=velocity.initial_velocity_condition,
         source_velocity_version=velocity_identity.version,
         source_velocity_processing_parameters=velocity_identity.processing.method_parameters,
         source_velocity_filtering=velocity_identity.processing.filtering,
+        source_velocity_source_signal_ids=velocity.series.source_signal_ids,
+        source_velocity_source_observation_ids=velocity.series.source_observation_ids,
+        source_velocity_source_measurement_identity_ids=velocity.series.source_measurement_identity_ids,
         source_system_contract=velocity.system_contract,
         start_boundary=start_boundary,
         end_boundary=end_boundary,
@@ -1724,6 +1820,20 @@ def construct_cmj_phase_occurrences(
     )
     if isinstance(propulsion_onset, RefusalResult):
         return propulsion_onset
+    if (
+        peak.sample_index <= movement_onset.sample_index
+        or direction.sample_index <= peak.sample_index
+        or propulsion_onset.sample_index >= takeoff.sample_index
+        or peak.boundary_time_s <= movement_onset.event_time_s
+        or direction.boundary_time_s <= peak.boundary_time_s
+        or propulsion_onset.boundary_time_s >= takeoff.event_time_s
+    ):
+        return _phase_refusal(
+            claim,
+            (RefusalReasonCode.PHASE_INTERVAL_INVALID,),
+            ("each registered V1 phase must contain at least one source interval",),
+            observation_ids=observation_ids,
+        )
     unweighting = _make_phase_occurrence(
         velocity,
         movement_onset,
@@ -1887,8 +1997,19 @@ def _validate_mechanics_source(
     source_series_quantity: CMJMechanicsQuantity,
     source_timebase: SignalTimebase,
     source_system_contract: CMJMechanicalSystemContract,
+    source_result: NetVerticalForceResult | SupportedSystemComRelativeDisplacementResult,
 ) -> RefusalResult | None:
-    observation_ids = (phase.source_velocity_observation_id, source_observation.observation_id)
+    observation_ids = _unique(
+        (
+            phase.source_velocity_observation_id,
+            source_observation.observation_id,
+            *(
+                (source_result.source_system_weight_observation_id,)
+                if isinstance(source_result, NetVerticalForceResult)
+                else ()
+            ),
+        )
+    )
     if source_system_contract != phase.source_system_contract:
         return _phase_refusal(
             "calculate RES-39 phase metric",
@@ -1924,6 +2045,24 @@ def _validate_mechanics_source(
             observation_ids=observation_ids,
             refusal_class=RefusalClass.IDENTITY_UNRESOLVED,
         )
+    if source_result.observation is not source_observation or source_result.series.series_id != (
+        source_series_id
+    ):
+        return _phase_refusal(
+            "calculate RES-39 phase metric",
+            (RefusalReasonCode.PHASE_SOURCE_MISMATCH,),
+            ("the exact typed mechanics result named by the phase metric source fields",),
+            observation_ids=observation_ids,
+            refusal_class=RefusalClass.IDENTITY_UNRESOLVED,
+        )
+    if source_result.series.quantity is not source_series_quantity:
+        return _phase_refusal(
+            "calculate RES-39 phase metric",
+            (RefusalReasonCode.PHASE_SOURCE_MISMATCH,),
+            ("mechanics result quantity matching its preserved source series",),
+            observation_ids=observation_ids,
+            refusal_class=RefusalClass.IDENTITY_UNRESOLVED,
+        )
     if not _provenance_has_entity(source_observation.provenance, phase.source_observation_id):
         return _phase_refusal(
             "calculate RES-39 phase metric",
@@ -1932,6 +2071,52 @@ def _validate_mechanics_source(
             observation_ids=observation_ids,
             refusal_class=RefusalClass.IDENTITY_UNRESOLVED,
         )
+    if isinstance(source_result, NetVerticalForceResult):
+        reference = phase.source_velocity_initial_condition
+        parameters = {
+            entry.key: entry.value
+            for entry in source_observation.identity.processing.method_parameters
+        }
+        if (
+            source_result.source_system_weight_observation_id
+            != reference.source_system_weight_observation_id
+            or source_result.source_system_weight_observation_id
+            not in phase.source_velocity_source_observation_ids
+            or source_series_id not in phase.source_velocity_source_signal_ids
+            or parameters.get("system_weight_segment") != canonical_json(reference.weighing_segment)
+            or parameters.get("system_weight_qc") != canonical_json(reference.weighing_qc)
+        ):
+            return _phase_refusal(
+                "calculate RES-39 phase metric",
+                (RefusalReasonCode.PHASE_SOURCE_MISMATCH,),
+                ("the exact RES-37 net-force/system-weight lineage used by the phase velocity",),
+                observation_ids=observation_ids,
+                refusal_class=RefusalClass.IDENTITY_UNRESOLVED,
+            )
+    else:
+        parameters = {
+            entry.key: entry.value
+            for entry in source_observation.identity.processing.method_parameters
+        }
+        origin = source_result.displacement_origin
+        if (
+            source_result.series.initial_velocity_condition
+            != phase.source_velocity_initial_condition
+            or source_result.series.integration_interval
+            != phase.source_velocity_integration_interval
+            or origin.source_velocity_series_id != phase.source_velocity_series_id
+            or parameters.get("source_velocity_observation_id")
+            != phase.source_velocity_observation_id.qualified
+            or parameters.get("source_velocity_series_id")
+            != phase.source_velocity_series_id.qualified
+        ):
+            return _phase_refusal(
+                "calculate RES-39 phase metric",
+                (RefusalReasonCode.PHASE_SOURCE_MISMATCH,),
+                ("the exact RES-37 displacement lineage from the phase velocity and origin",),
+                observation_ids=observation_ids,
+                refusal_class=RefusalClass.IDENTITY_UNRESOLVED,
+            )
     return None
 
 
@@ -2242,6 +2427,7 @@ def calculate_cmj_phase_net_vertical_impulse(
         net_force.series.quantity,
         net_force.series.timebase,
         net_force.system_contract,
+        net_force,
     )
     if source_refusal is not None:
         return source_refusal
@@ -2344,6 +2530,7 @@ def calculate_cmj_phase_relative_displacement_change(
         displacement.series.quantity,
         displacement.series.timebase,
         displacement.system_contract,
+        displacement,
     )
     if source_refusal is not None:
         return source_refusal
@@ -2458,6 +2645,64 @@ def _processing_policy_key(
     return tuple((entry.key, entry.value) for entry in parameters if entry.key in policy_names)
 
 
+def _phase_event_semantic_key(event: CMJEventOccurrence | None) -> object:
+    if event is None:
+        return None
+    return (
+        event.definition.reference.stable_id,
+        event.detector_method.reference.stable_id,
+        event.detector_parameters,
+        event.source_sample_count,
+        event.sample_index,
+        event.source_timebase,
+        event.effective_threshold_n,
+    )
+
+
+def _phase_integration_interval_key(interval: CMJIntegrationInterval) -> tuple[object, ...]:
+    return (
+        interval.kind,
+        interval.start_index,
+        interval.end_index,
+        interval.boundary_convention.stable_id,
+        interval.integration_method.stable_id,
+        _phase_event_semantic_key(interval.start_event),
+        _phase_event_semantic_key(interval.end_event),
+    )
+
+
+def _phase_velocity_processing_key(
+    parameters: tuple[MetadataEntry, ...],
+) -> tuple[tuple[str, object], ...]:
+    """Retain upstream method semantics while excluding trial entity IDs."""
+
+    ignored_keys = {
+        "source_signal_ids",
+        "source_observation_ids",
+        "source_measurement_identity_ids",
+        "source_event_ids",
+        "integration_interval",
+        "zero_velocity_reference",
+        "displacement_origin",
+    }
+    ignored_suffixes = (
+        "_observation_id",
+        "_series_id",
+        "_signal_id",
+        "_artifact_id",
+        "_acquisition_id",
+        "_identity_id",
+        "_segment",
+        "_qc",
+        "_quality_flags",
+    )
+    return tuple(
+        (entry.key, entry.value)
+        for entry in parameters
+        if entry.key not in ignored_keys and not entry.key.endswith(ignored_suffixes)
+    )
+
+
 def _event_boundary_key(boundary: CMJPhaseBoundary) -> tuple[object, ...]:
     return (
         boundary.kind,
@@ -2486,10 +2731,11 @@ def _phase_method_key(result: CMJPhaseMetricResult) -> tuple[object, ...]:
         _event_boundary_key(phase.end_boundary),
         phase.source_velocity_operation.stable_id,
         phase.source_velocity_integration_method.stable_id,
+        _phase_integration_interval_key(phase.source_velocity_integration_interval),
         _condition_key(phase.source_velocity_initial_condition),
         phase.source_velocity_version,
         phase.source_velocity_filtering,
-        _processing_policy_key(phase.source_velocity_processing_parameters),
+        _phase_velocity_processing_key(phase.source_velocity_processing_parameters),
         phase.source_system_contract,
         phase.source_velocity_measurement_identity.semantic.protocol_identity,
         _source_identity_key(phase.source_velocity_measurement_identity),
