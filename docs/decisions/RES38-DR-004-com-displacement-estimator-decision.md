@@ -69,9 +69,11 @@ No new gravity path is created.
 
 ## ASSUMPTIONS
 
-The blocker is unresolved authority, not arithmetic: an absolute/anatomical COM
-origin, apex selection, and drift policy are absent from the sealed upstream
-contracts.
+The blocker is unresolved method authority, not arithmetic: a registered
+apex-selection authority and drift/error treatment are absent from the sealed
+upstream contracts. A valid relative coordinate origin may be sufficient for a
+future standing-to-apex estimator; absolute anatomical COM height is not
+inherently required.
 
 ## CLASSIFICATION
 
@@ -97,8 +99,9 @@ preserves any supplied upstream displacement description.
 
 ## LIMITATIONS
 
-Future work must separately authorize apex/phase selection, coordinate origin,
-and drift handling before implementation.
+Future work must separately authorize apex/phase selection and drift/error
+handling before implementation. A relative coordinate origin may be sufficient
+for a future standing-to-apex displacement estimate.
 
 ## IMPLEMENTATION
 

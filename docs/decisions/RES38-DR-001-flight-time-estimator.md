@@ -26,8 +26,9 @@ height, a phase detector, or a COM-displacement estimator.
 - RES-44/45 gravity decisions.
 - Linthorne (2001), *Analysis of standing vertical jumps using a force platform*,
   https://bura.brunel.ac.uk/handle/2438/1392.
-- McMahon et al. (2022), *The effects of strength and conditioning interventions
-  on ... countermovement jump*, https://journals.plos.org/plosone/article?id=10.1371/journal.pone.0265999.
+- McMahon, Lake & Comfort (2022), *Identifying and reporting position-specific
+  countermovement jump outcome and phase characteristics within rugby league*,
+  https://journals.plos.org/plosone/article?id=10.1371/journal.pone.0265999.
 - Meylan, Nosaka, Green & Cronin (2011), PMID 20664368,
   https://pubmed.ncbi.nlm.nih.gov/20664368/.
 
