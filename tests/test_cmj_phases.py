@@ -67,9 +67,10 @@ from test_cmj import (
 _UNIQUE_TRACE = (100.0, 100.0, 100.0, 100.0, -900.0, -900.0, -400.0, 2600.0, 5100.0, 0.0)
 _TIED_TRACE = (100.0, 100.0, 100.0, 100.0, -900.0, -900.0, 1100.0, 2100.0, 1100.0, 0.0)
 _SUBTHRESHOLD_TRACE = (100.0, 100.0, 100.0, 100.0, 90.0, 90.0, 100.0, 151.0, 151.0, 0.0)
+_ZERO_LENGTH_TRACE = (100.0, 100.0, 100.0, 100.0, 0.0, 300.0, 100.0, 100.0, 5100.0, 0.0)
 
 
-def _phase_fixture(
+def _phase_inputs(
     suffix: str,
     samples: tuple[float, ...] = _UNIQUE_TRACE,
     *,
@@ -79,7 +80,6 @@ def _phase_fixture(
     SupportedSystemComVelocityResult,
     NetVerticalForceResult,
     SupportedSystemComRelativeDisplacementResult,
-    tuple[CMJPhaseOccurrence, ...],
     CMJEventOccurrence,
     CMJEventOccurrence,
 ]:
@@ -124,6 +124,29 @@ def _phase_fixture(
         DisplacementOrigin.zero_at_velocity_start(velocity.series.series_id, 2),
     )
     assert isinstance(displacement, SupportedSystemComRelativeDisplacementResult)
+    return velocity, net_force, displacement, onset, takeoff
+
+
+def _phase_fixture(
+    suffix: str,
+    samples: tuple[float, ...] = _UNIQUE_TRACE,
+    *,
+    timebase: SignalTimebase | None = None,
+    external_loading: str = "none",
+) -> tuple[
+    SupportedSystemComVelocityResult,
+    NetVerticalForceResult,
+    SupportedSystemComRelativeDisplacementResult,
+    tuple[CMJPhaseOccurrence, ...],
+    CMJEventOccurrence,
+    CMJEventOccurrence,
+]:
+    velocity, net_force, displacement, onset, takeoff = _phase_inputs(
+        suffix,
+        samples,
+        timebase=timebase,
+        external_loading=external_loading,
+    )
     phases = construct_cmj_phase_occurrences(velocity, onset, takeoff)
     assert not isinstance(phases, RefusalResult)
     return velocity, net_force, displacement, phases, onset, takeoff
@@ -244,6 +267,15 @@ def test_res39_unresolved_direction_refuses_only_phase_construction() -> None:
     assert isinstance(refusal, RefusalResult)
     assert RefusalReasonCode.DIRECTION_CHANGE_UNRESOLVED in refusal.reason_codes
     assert RefusalReasonCode.PROPULSION_ONSET_UNRESOLVED in refusal.reason_codes
+    assert isinstance(velocity, SupportedSystemComVelocityResult)
+    assert isinstance(net, NetVerticalForceResult)
+
+
+def test_res39_zero_length_phase_refuses_granularly() -> None:
+    velocity, net, _, onset, takeoff = _phase_inputs("phase-zero-length", _ZERO_LENGTH_TRACE)
+    refusal = construct_cmj_phase_occurrences(velocity, onset, takeoff)
+    assert isinstance(refusal, RefusalResult)
+    assert RefusalReasonCode.PHASE_INTERVAL_INVALID in refusal.reason_codes
     assert isinstance(velocity, SupportedSystemComVelocityResult)
     assert isinstance(net, NetVerticalForceResult)
 
@@ -413,6 +445,25 @@ def test_res39_same_label_comparison_requires_registered_source_method_identity(
     )
     assert changed_comparison.state is ComparabilityState.BRIDGE_VALIDATION_REQUIRED
     assert ComparabilityReasonCode.PHASE_METRIC_METHOD_MISMATCH in (changed_comparison.reason_codes)
+
+    changed_velocity_phase = replace(
+        second_phases[1],
+        source_velocity_integration_interval=replace(
+            second_phases[1].source_velocity_integration_interval,
+            end_index=8,
+        ),
+    )
+    changed_velocity = replace(second, phase_occurrence=changed_velocity_phase)
+    changed_velocity_comparison = compare_cmj_phase_metrics(
+        first,
+        changed_velocity,
+        claim="compare V1 braking net vertical impulse with a changed velocity interval",
+        request_id=InstanceIdentifier("comparability-request", "phase-velocity-interval-change"),
+    )
+    assert changed_velocity_comparison.state is ComparabilityState.BRIDGE_VALIDATION_REQUIRED
+    assert ComparabilityReasonCode.PHASE_METRIC_METHOD_MISMATCH in (
+        changed_velocity_comparison.reason_codes
+    )
     refused = refusal_for_cmj_phase_comparability(
         changed_comparison,
         blocked_claim="compare V1 braking net vertical impulse",
@@ -434,3 +485,48 @@ def test_res39_wrong_metric_source_refuses_without_erasing_valid_phase() -> None
     assert RefusalReasonCode.PHASE_SOURCE_MISMATCH in refusal.reason_codes
     assert first_phases[1].label is CMJPhaseLabel.BRAKING
     assert isinstance(first_net, NetVerticalForceResult)
+
+
+def test_res39_metric_source_binds_exact_upstream_mechanics_lineage() -> None:
+    velocity, _, _, onset, takeoff = _phase_inputs("phase-exact-lineage")
+    phases = construct_cmj_phase_occurrences(velocity, onset, takeoff)
+    assert not isinstance(phases, RefusalResult)
+
+    _, total, alternate_weight, contract = _mechanics_fixture(
+        "phase-exact-lineage",
+        _UNIQUE_TRACE,
+        weighing_end_index=2,
+    )
+    alternate_net = derive_net_vertical_force(total, alternate_weight, contract)
+    assert isinstance(alternate_net, NetVerticalForceResult)
+    net_refusal = calculate_cmj_phase_net_vertical_impulse(phases[1], alternate_net)
+    assert isinstance(net_refusal, RefusalResult)
+    assert RefusalReasonCode.PHASE_SOURCE_MISMATCH in net_refusal.reason_codes
+
+    _, total, weight, contract = _mechanics_fixture(
+        "phase-exact-lineage",
+        _UNIQUE_TRACE,
+        weighing_end_index=3,
+    )
+    mass = derive_physical_system_mass(weight, _local_gravity("res39-synthetic"))
+    assert not isinstance(mass, RefusalResult)
+    net = derive_net_vertical_force(total, weight, contract)
+    assert isinstance(net, NetVerticalForceResult)
+    acceleration = derive_supported_system_com_acceleration(net, mass, contract)
+    assert not isinstance(acceleration, RefusalResult)
+    alternate_velocity = derive_supported_system_com_velocity(
+        acceleration,
+        CMJIntegrationInterval.explicit_sample(acceleration.series.series_id, 1, 9),
+        QualifiedZeroVelocityReference.from_system_weight(weight, 1),
+    )
+    assert isinstance(alternate_velocity, SupportedSystemComVelocityResult)
+    alternate_displacement = derive_supported_system_com_relative_vertical_displacement(
+        alternate_velocity,
+        DisplacementOrigin.zero_at_velocity_start(alternate_velocity.series.series_id, 1),
+    )
+    assert isinstance(alternate_displacement, SupportedSystemComRelativeDisplacementResult)
+    displacement_refusal = calculate_cmj_phase_relative_displacement_change(
+        phases[2], alternate_displacement
+    )
+    assert isinstance(displacement_refusal, RefusalResult)
+    assert RefusalReasonCode.PHASE_SOURCE_MISMATCH in displacement_refusal.reason_codes

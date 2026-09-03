@@ -3358,3 +3358,6 @@ def test_res37_public_surface_stops_before_unregistered_phase_metrics() -> None:
     assert hasattr(cmj, "construct_cmj_phase_occurrences")
     assert not hasattr(cmj, "calculate_cmj_phase_power")
     assert not hasattr(cmj, "calculate_cmj_phase_rfd")
+    assert not hasattr(cmj, "calculate_cmj_phase_rsi_mod")
+    assert not hasattr(cmj, "calculate_cmj_phase_asymmetry")
+    assert not hasattr(cmj, "aggregate_cmj_trials")
