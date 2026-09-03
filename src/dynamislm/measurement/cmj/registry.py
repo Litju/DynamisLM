@@ -28,6 +28,105 @@ CMJ_EVENT_COMPARABILITY_RULE = _reference(
 CMJ_MECHANICS_COMPARABILITY_RULE = _reference(
     "comparability-rule", "cmj-mechanics-v1", "CMJ mechanics comparability"
 )
+CMJ_PHASE_COMPARABILITY_RULE = _reference(
+    "comparability-rule", "cmj-phase-v1", "CMJ phase and phase-metric comparability"
+)
+
+CMJ_FORCE_COM_VELOCITY_PHASE_SYSTEM_V1 = _reference(
+    "phase-system",
+    "cmj-force-com-velocity-v1",
+    "CMJ force-platform supported-system COM-velocity phase system V1",
+)
+CMJ_UNWEIGHTING_PHASE_DEFINITION = _reference(
+    "phase-definition",
+    "cmj-force-com-velocity-unweighting-v1",
+    "CMJ V1 unweighting phase",
+)
+CMJ_BRAKING_PHASE_DEFINITION = _reference(
+    "phase-definition",
+    "cmj-force-com-velocity-braking-v1",
+    "CMJ V1 braking phase",
+)
+CMJ_PROPULSION_PHASE_DEFINITION = _reference(
+    "phase-definition",
+    "cmj-force-com-velocity-propulsion-v1",
+    "CMJ V1 propulsion phase",
+)
+CMJ_PHASE_SHARED_SAMPLE_BOUNDARY_CONVENTION = _reference(
+    "phase-boundary-convention",
+    "cmj-shared-sample-no-interpolation-v1",
+    "CMJ V1 shared sample boundary without interpolation",
+)
+CMJ_PEAK_NEGATIVE_SUPPORTED_SYSTEM_COM_VELOCITY_METHOD = _reference(
+    "phase-landmark-method",
+    "cmj-peak-negative-supported-system-com-velocity-v1",
+    "CMJ V1 peak-negative supported-system COM velocity",
+)
+CMJ_FIRST_STRICTLY_POSITIVE_SUPPORTED_SYSTEM_COM_VELOCITY_BOUNDARY_METHOD = _reference(
+    "phase-boundary-method",
+    "cmj-first-strictly-positive-supported-system-com-velocity-sample-v1",
+    "CMJ V1 first strictly positive supported-system COM velocity sample",
+)
+CMJ_PHASE_DURATION_OPERATION = _reference(
+    "registered-operation", "cmj-phase-duration-v1", "CMJ V1 phase duration"
+)
+CMJ_PHASE_NET_VERTICAL_IMPULSE_OPERATION = _reference(
+    "registered-operation", "cmj-phase-net-vertical-impulse-v1", "CMJ V1 phase net vertical impulse"
+)
+CMJ_PHASE_RELATIVE_DISPLACEMENT_CHANGE_OPERATION = _reference(
+    "registered-operation",
+    "cmj-phase-relative-displacement-change-v1",
+    "CMJ V1 supported-system COM relative displacement change",
+)
+
+CMJ_UNWEIGHTING_DURATION_MEASURAND = _reference(
+    "measurand", "cmj-unweighting-duration", "CMJ V1 unweighting duration"
+)
+CMJ_UNWEIGHTING_DURATION_METRIC = _reference(
+    "metric", "cmj-unweighting-duration", "Unweighting duration"
+)
+CMJ_BRAKING_DURATION_MEASURAND = _reference(
+    "measurand", "cmj-braking-duration", "CMJ V1 braking duration"
+)
+CMJ_BRAKING_DURATION_METRIC = _reference("metric", "cmj-braking-duration", "Braking duration")
+CMJ_PROPULSION_DURATION_MEASURAND = _reference(
+    "measurand", "cmj-propulsion-duration", "CMJ V1 propulsion duration"
+)
+CMJ_PROPULSION_DURATION_METRIC = _reference(
+    "metric", "cmj-propulsion-duration", "Propulsion duration"
+)
+CMJ_BRAKING_NET_VERTICAL_IMPULSE_MEASURAND = _reference(
+    "measurand", "cmj-braking-net-vertical-impulse", "CMJ V1 braking net vertical impulse"
+)
+CMJ_BRAKING_NET_VERTICAL_IMPULSE_METRIC = _reference(
+    "metric", "cmj-braking-net-vertical-impulse", "Braking net vertical impulse"
+)
+CMJ_PROPULSION_NET_VERTICAL_IMPULSE_MEASURAND = _reference(
+    "measurand", "cmj-propulsion-net-vertical-impulse", "CMJ V1 propulsion net vertical impulse"
+)
+CMJ_PROPULSION_NET_VERTICAL_IMPULSE_METRIC = _reference(
+    "metric", "cmj-propulsion-net-vertical-impulse", "Propulsion net vertical impulse"
+)
+CMJ_BRAKING_DISPLACEMENT_CHANGE_MEASURAND = _reference(
+    "measurand",
+    "cmj-braking-supported-system-com-relative-displacement-change",
+    "CMJ V1 braking supported-system COM relative displacement change",
+)
+CMJ_BRAKING_DISPLACEMENT_CHANGE_METRIC = _reference(
+    "metric",
+    "cmj-braking-supported-system-com-relative-displacement-change",
+    "Braking supported-system COM relative displacement change",
+)
+CMJ_PROPULSION_DISPLACEMENT_CHANGE_MEASURAND = _reference(
+    "measurand",
+    "cmj-propulsion-supported-system-com-relative-displacement-change",
+    "CMJ V1 propulsion supported-system COM relative displacement change",
+)
+CMJ_PROPULSION_DISPLACEMENT_CHANGE_METRIC = _reference(
+    "metric",
+    "cmj-propulsion-supported-system-com-relative-displacement-change",
+    "Propulsion supported-system COM relative displacement change",
+)
 
 CMJ_MOVEMENT_ONSET_EVENT_DEFINITION_REF = _reference(
     "event-definition", "cmj-movement-onset", "CMJ movement onset"
@@ -469,6 +568,53 @@ RES46_DECISION_QUALIFIED_ZERO_VELOCITY = RegistryReference(
         "https://pubmed.ncbi.nlm.nih.gov/20664368/",
     ),
 )
+RES39_DECISION_PHASE_SYSTEM = RegistryReference(
+    identifier=ScientificIdentifier(
+        "dynamislm", "decision-record", "res39-cmj-phase-system-v1", CMJ_REGISTRY_VERSION
+    ),
+    display_label="RES-39 CMJ phase-system V1 decision",
+    reference_ids=(
+        "docs/decisions/RES39-DR-001-cmj-phase-system-v1.md",
+        "https://eprints.chi.ac.uk/id/eprint/3266/1/UNDERSTANDINGTHEKEYPHASESOFTHECOUNTERMOVEMENTJUMPFORCE-TIMECURVE.pdf",
+        "https://doi.org/10.1249/MSS.0000000000002197",
+    ),
+)
+RES39_DECISION_PHASE_BOUNDARIES = RegistryReference(
+    identifier=ScientificIdentifier(
+        "dynamislm", "decision-record", "res39-phase-landmarks-and-boundaries", CMJ_REGISTRY_VERSION
+    ),
+    display_label="RES-39 phase landmarks and boundaries decision",
+    reference_ids=(
+        "docs/decisions/RES39-DR-002-phase-landmarks-and-boundaries.md",
+        "https://eprints.chi.ac.uk/id/eprint/3266/1/UNDERSTANDINGTHEKEYPHASESOFTHECOUNTERMOVEMENTJUMPFORCE-TIMECURVE.pdf",
+        "https://doi.org/10.1249/MSS.0000000000002197",
+    ),
+)
+RES39_DECISION_PHASE_METRICS = RegistryReference(
+    identifier=ScientificIdentifier(
+        "dynamislm", "decision-record", "res39-initial-phase-metrics", CMJ_REGISTRY_VERSION
+    ),
+    display_label="RES-39 initial CMJ phase metrics decision",
+    reference_ids=(
+        "docs/decisions/RES39-DR-003-initial-phase-metrics.md",
+        "docs/decisions/RES37-DR-002-impulse-and-integration-semantics.md",
+        "docs/decisions/RES37-DR-005-relative-displacement-reference.md",
+        "https://eprints.chi.ac.uk/id/eprint/3266/1/UNDERSTANDINGTHEKEYPHASESOFTHECOUNTERMOVEMENTJUMPFORCE-TIMECURVE.pdf",
+    ),
+)
+RES39_DECISION_PHASE_COMPARABILITY_REFUSAL = RegistryReference(
+    identifier=ScientificIdentifier(
+        "dynamislm",
+        "decision-record",
+        "res39-phase-comparability-and-refusal",
+        CMJ_REGISTRY_VERSION,
+    ),
+    display_label="RES-39 phase comparability and refusal decision",
+    reference_ids=(
+        "docs/decisions/RES39-DR-004-phase-comparability-and-refusal.md",
+        "docs/decisions/RES34-DR-003-comparability-refusal-boundary.md",
+    ),
+)
 RES38_DECISION_FLIGHT_TIME_ESTIMATOR = RegistryReference(
     identifier=ScientificIdentifier(
         "dynamislm", "decision-record", "res38-flight-time-estimator", CMJ_REGISTRY_VERSION
@@ -584,6 +730,10 @@ METER = UnitReference(
 NEWTON_SECOND = UnitReference(
     ScientificIdentifier("dynamislm", "unit", "newton-second", CMJ_REGISTRY_VERSION),
     "N·s",
+)
+SECOND = UnitReference(
+    ScientificIdentifier("dynamislm", "unit", "second", CMJ_REGISTRY_VERSION),
+    "s",
 )
 # Short aliases retain readable operation names without creating additional
 # registry identities.
