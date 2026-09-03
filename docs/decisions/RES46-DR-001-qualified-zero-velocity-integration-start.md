@@ -14,7 +14,7 @@ SOURCES=
 - [Linthorne, 2001, Standing vertical jump](https://bura.brunel.ac.uk/handle/2438/1392)
 - [Guess et al., 2020, force-platform CMJ COM processing](https://pmc.ncbi.nlm.nih.gov/articles/PMC7761544/)
 - [McMahon, Lake & Comfort, 2022, position-specific CMJ processing](https://journals.plos.org/plosone/article?id=10.1371/journal.pone.0265999)
-- [Kraska et al., 2010, movement-initiation threshold effects](https://pubmed.ncbi.nlm.nih.gov/20664368/)
+- [Meylan, Nosaka, Green & Cronin, 2011, The effect of three different start thresholds on the kinematics and kinetics of a countermovement jump](https://pubmed.ncbi.nlm.nih.gov/20664368/)
 
 APPLICABILITY=Authoritative supported-system COM vertical velocity derived from a valid RES-37 supported-system acceleration series and a registered inclusive integration interval. This decision does not authorize takeoff velocity, jump height, or any downstream flight calculation.
 
