@@ -1437,8 +1437,11 @@ _NON_BALLISTIC_FLIGHT_LOADING_MARKERS = (
     "composition",
     "unsupported",
     "resistance",
+    "externally supported",
     "not attached",
     "notattached",
+    "not supported",
+    "notsupported",
     "not stable",
     "notstable",
     "unstable",
@@ -1470,13 +1473,11 @@ def _flight_external_loading_state(
     if any(marker in normalized for marker in _UNRESOLVED_FLIGHT_LOADING_MARKERS):
         return None, RefusalReasonCode.EXTERNAL_FORCE_MODEL_UNRESOLVED
     loading_terms = set(normalized.split()) & {"load", "barbell", "weight", "implement"}
+    loading_tokens = set(normalized.split())
     if (
         normalized == "supported"
-        or "supported external load" in normalized
-        or "attached external load" in normalized
-        or "external load attached" in normalized
-        or (normalized.startswith("supported ") and bool(loading_terms))
-        or ("attached" in normalized and bool(loading_terms))
+        or ("supported" in loading_tokens and bool(loading_terms))
+        or ("attached" in loading_tokens and bool(loading_terms))
     ):
         return True, None
     return None, RefusalReasonCode.EXTERNAL_FORCE_MODEL_UNRESOLVED
