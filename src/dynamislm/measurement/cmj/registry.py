@@ -1,4 +1,4 @@
-"""Small, explicit CMJ registry surface for the P1B-P1E contracts."""
+"""Small, explicit CMJ registry surface for the P1B-P1F contracts."""
 
 from __future__ import annotations
 
