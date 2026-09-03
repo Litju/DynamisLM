@@ -353,6 +353,7 @@ class CMJJumpHeightResult:
             )
         else:
             raise ValueError("unregistered jump-height estimator family")
+        _assert_output_value(self.observation, self.method, self.parameters, self.source_velocity)
         _assert_output_run(self.observation, self.method)
 
     @property
@@ -1314,6 +1315,31 @@ def _assert_output_run(
         raise ValueError("jump-height output run parameters must match identity parameters")
 
 
+def _assert_output_value(
+    observation: ScientificMeasurementObservation,
+    method: JumpHeightEstimatorMethod,
+    parameters: JumpHeightEstimatorParameters,
+    source_velocity: SupportedSystemComVelocityResult | None,
+) -> None:
+    value = observation.result.value
+    if not isinstance(value, ScalarValue) or isinstance(value.value, bool):
+        raise ValueError("jump-height output must contain a numeric scalar")
+    if method.family is JumpHeightEstimatorFamily.FLIGHT_TIME:
+        if parameters.flight_time_s is None:
+            raise ValueError("flight-time output must preserve its duration")
+        expected = parameters.gravity.value_m_per_s2 * parameters.flight_time_s**2 / 8.0
+    elif method.family is JumpHeightEstimatorFamily.TAKEOFF_VELOCITY:
+        if source_velocity is None or parameters.takeoff_velocity_m_per_s is None:
+            raise ValueError("takeoff-velocity output must preserve its sampled velocity")
+        expected = parameters.takeoff_velocity_m_per_s**2 / (
+            2.0 * parameters.gravity.value_m_per_s2
+        )
+    else:
+        raise ValueError("unregistered jump-height estimator family")
+    if float(value.value) != expected:
+        raise ValueError("jump-height scalar does not match its registered equation")
+
+
 def _assert_event(
     event: CMJEventOccurrence,
     method: object,
@@ -1381,6 +1407,10 @@ def _assert_velocity_linkage(
     raise_errors: bool,
 ) -> None:
     condition = velocity.initial_velocity_condition
+    local_index = takeoff.sample_index - velocity.series.sample_start_index
+    sampled_takeoff_velocity = (
+        velocity.samples[local_index] if 0 <= local_index < len(velocity.samples) else None
+    )
     checks = (
         isinstance(condition, QualifiedZeroVelocityReference),
         condition.is_authorized if isinstance(condition, QualifiedZeroVelocityReference) else False,
@@ -1411,6 +1441,7 @@ def _assert_velocity_linkage(
         parameters.takeoff_velocity_sample_index == takeoff.sample_index,
         parameters.takeoff_velocity_sample_convention
         == CMJ_TAKEOFF_VELOCITY_EVENT_SAMPLE_CONVENTION,
+        parameters.takeoff_velocity_m_per_s == sampled_takeoff_velocity,
     )
     if not all(checks) and raise_errors:
         raise ValueError("takeoff event and velocity series linkage is incomplete")
