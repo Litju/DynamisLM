@@ -1160,23 +1160,7 @@ def _validate_contract(
         missing.append("stable supported-system composition")
     if protocol is None or protocol.external_loading is None:
         reasons.append(RefusalReasonCode.MECHANICAL_SYSTEM_UNRESOLVED)
-        missing.append("resolved protocol external-loading attribute")
-    else:
-        loading = protocol.external_loading.value
-        normalized_loading = loading.strip().lower() if isinstance(loading, str) else ""
-        if normalized_loading in {"none", "unloaded", "no external load"}:
-            expected_loaded = False
-        elif normalized_loading == "supported" or normalized_loading.startswith("supported-"):
-            expected_loaded = True
-        else:
-            reasons.append(RefusalReasonCode.EXTERNAL_FORCE_MODEL_UNRESOLVED)
-            missing.append(
-                "protocol external loading must be none or a mechanically supported load"
-            )
-            expected_loaded = contract.includes_supported_external_load
-        if contract.includes_supported_external_load != expected_loaded:
-            reasons.append(RefusalReasonCode.EXTERNAL_FORCE_MODEL_UNRESOLVED)
-            missing.append("mechanics contract must match protocol external loading")
+        missing.append("resolved protocol external-loading attribute for audit")
     if reasons:
         return _mechanics_refusal(
             claim,

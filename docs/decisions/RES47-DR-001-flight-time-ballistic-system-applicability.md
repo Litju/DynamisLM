@@ -30,8 +30,9 @@ material vertical external force or change the modeled system. Applying
 - McMahon, Lake & Comfort (2022), *Identifying and reporting position-specific
   countermovement jump outcome and phase characteristics within rugby league*,
   https://journals.plos.org/plosone/article?id=10.1371/journal.pone.0265999.
-- Xu et al. (2023), *A Systematic Review of the Methodology and Validation of
-  Countermovement Jump Tests*, https://pmc.ncbi.nlm.nih.gov/articles/PMC10115716/.
+- Xu, Turner, Comfort & Harry (2023), *A Systematic Review of the Different
+  Calculation Methods for Measuring Jump Height During the Countermovement and
+  Drop Jump Tests*, https://pmc.ncbi.nlm.nih.gov/articles/PMC10115716/.
 - Eythorsdottir et al. (2024), *The Battle of the Equations: A Systematic
   Review of Jump Height Calculations Using Force Platforms*,
   https://pmc.ncbi.nlm.nih.gov/articles/PMC11561012/.
@@ -63,8 +64,9 @@ The flight-time estimate is authorized only when all of the following hold:
 3. The `CMJMechanicalSystemContract` identifies the supported physical system,
    force-platform-plus-gravity model, total supported force, gravity as the
    only other material vertical external force, and stable composition.
-4. The resolved CMJ protocol explicitly classifies loading as either unloaded
-   or a supported attached load, and agrees with the contract's system boundary.
+4. A registered closed loading state explicitly classifies loading as either
+   unloaded or a stable attached supported load, and agrees with the contract's
+   system boundary. The raw protocol loading attribute is descriptive only.
 
 The equation remains exactly:
 
@@ -90,10 +92,10 @@ height is calculated.
 
 ## SUPPORTED_LOAD_SEMANTICS
 
-`UNLOADED` is authorized when the protocol explicitly identifies no external
-load and the contract excludes a supported external load. A supported external
-load may be authorized when the protocol and contract explicitly establish
-that the load remains attached and the athlete-plus-load system is one stable
+`UNLOADED` is authorized when the registered loading state is unloaded and the
+contract excludes a supported external load. A supported external load may be
+authorized when the registered state and contract explicitly establish that the
+load remains attached and the athlete-plus-load system is one stable
 free-flying system. This is a mechanics inference from the registered system
 boundary, not permission to treat the load as athlete body mass.
 
@@ -101,8 +103,9 @@ boundary, not permission to treat the load as athlete body mass.
 
 Anchored elastic resistance, tethers, cables, external assistance, anchored
 support, partial support, detached or transferred loads, changing composition,
-unsupported loads, unknown loading, and unrecognized or missing protocol
-loading semantics are refused. Unknown is never defaulted to unloaded.
+unsupported loads, unknown loading, and unrecognized or missing loading
+resolution are refused. Unknown is never defaulted to unloaded. Free-form
+protocol text does not resolve any of these states.
 
 ## ASSUMPTIONS
 
@@ -121,10 +124,12 @@ supported system and is not automatically athlete-only COM jump height.
 
 ## PROVENANCE_EFFECT
 
-New flight-time results preserve the exact `CMJMechanicalSystemContract` in
-typed estimator parameters, deterministic processing metadata, processing-run
-parameters, and the RES-47 decision evidence reference. The protocol identity
-and external-loading attribute remain in the source measurement identity.
+New qualified flight-time results preserve the exact
+`CMJMechanicalSystemContract` and registered loading state in typed estimator
+parameters, deterministic processing metadata, processing-run parameters, and
+the RES-47 decision evidence reference. The protocol identity and raw
+external-loading attribute remain in the source measurement identity for audit
+only.
 
 ## COMPARABILITY_EFFECT
 
@@ -143,10 +148,9 @@ independent observations.
 
 ## SERIALIZATION_EFFECT
 
-`SERIALIZATION_VERSION=3` is retained. `JumpHeightEstimatorParameters` already
-has the optional v3 `system_contract` field, so no wire field or version change
-is required. New flight-time results populate that field and require the
-authority; an older unqualified v3 result is not silently reissued as a newly
+`SERIALIZATION_VERSION=3` is retained. The RES-48 qualified V2 payload adds a
+typed applicability object while retaining the historical V1 parameter shape.
+An older unqualified v3 result is not silently reissued as a newly
 authoritative result.
 
 ## LIMITATIONS
@@ -157,10 +161,11 @@ height, new phase methods, or a generic protocol reasoning framework.
 
 ## IMPLEMENTATION
 
-Reuse `CMJMechanicalSystemContract` and the registered protocol
-`external_loading` attribute in `src/dynamislm/measurement/cmj/jump_height.py`.
-The existing RES-37 contract validation and RES-38 event/gravity gates remain
-otherwise unchanged.
+Reuse `CMJMechanicalSystemContract` and add a typed
+`FlightBallisticApplicability` in
+`src/dynamislm/measurement/cmj/jump_height.py`. The existing RES-37 contract
+validation and RES-38 event/gravity gates remain otherwise unchanged; raw
+`external_loading` text is not a computational authority.
 
 ## TESTS
 

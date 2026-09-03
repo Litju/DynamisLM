@@ -3087,16 +3087,20 @@ def test_res37_loaded_system_rejects_unresolved_force_model() -> None:
     assert RefusalReasonCode.EXTERNAL_FORCE_MODEL_UNRESOLVED in refused.reason_codes
 
 
-def test_res37_protocol_external_loading_must_be_supported_by_the_contract() -> None:
+def test_res37_contract_is_authority_when_protocol_text_is_unseen() -> None:
     _, total, weight, contract = _mechanics_fixture(
         "mechanics-anchored-elastic",
         (101.0, 101.0, 103.0, 103.0),
         external_loading="anchored-elastic",
     )
-    refused = derive_net_vertical_force(total, weight, contract)
+    result = derive_net_vertical_force(total, weight, contract)
 
-    assert isinstance(refused, RefusalResult)
-    assert RefusalReasonCode.EXTERNAL_FORCE_MODEL_UNRESOLVED in refused.reason_codes
+    assert isinstance(result, NetVerticalForceResult)
+    assert result.system_contract == contract
+    metadata = {
+        entry.key: entry.value for entry in result.observation.identity.processing.method_parameters
+    }
+    assert metadata["protocol_external_loading"] == "anchored-elastic"
 
 
 def test_res37_acceleration_contract_cannot_change_after_net_force_is_derived() -> None:

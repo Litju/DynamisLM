@@ -252,6 +252,13 @@ CMJ_FLIGHT_TIME_JUMP_HEIGHT_ESTIMATOR = _reference(
     "cmj-flight-time-ballistic-jump-height-v1",
     "CMJ flight-time ballistic jump-height estimator",
 )
+CMJ_FLIGHT_TIME_JUMP_HEIGHT_ESTIMATOR_V1 = CMJ_FLIGHT_TIME_JUMP_HEIGHT_ESTIMATOR
+CMJ_FLIGHT_TIME_JUMP_HEIGHT_ESTIMATOR_V2 = RegistryReference(
+    identifier=ScientificIdentifier(
+        "dynamislm", "estimator", "cmj-flight-time-ballistic-jump-height-v2", "2.0.0"
+    ),
+    display_label="CMJ flight-time ballistic jump-height estimator V2",
+)
 CMJ_QUALIFIED_TAKEOFF_VELOCITY_JUMP_HEIGHT_ESTIMATOR = _reference(
     "estimator",
     "cmj-qualified-takeoff-velocity-ballistic-apex-rise-v1",
@@ -261,6 +268,16 @@ CMJ_FLIGHT_TIME_JUMP_HEIGHT_OPERATION = _reference(
     "registered-operation",
     "cmj-flight-time-ballistic-jump-height-v1",
     "CMJ flight-time ballistic jump-height estimate",
+)
+CMJ_FLIGHT_TIME_JUMP_HEIGHT_OPERATION_V1 = CMJ_FLIGHT_TIME_JUMP_HEIGHT_OPERATION
+CMJ_FLIGHT_TIME_JUMP_HEIGHT_OPERATION_V2 = RegistryReference(
+    identifier=ScientificIdentifier(
+        "dynamislm",
+        "registered-operation",
+        "cmj-flight-time-ballistic-jump-height-v2",
+        "2.0.0",
+    ),
+    display_label="CMJ flight-time ballistic jump-height estimate V2",
 )
 CMJ_QUALIFIED_TAKEOFF_VELOCITY_JUMP_HEIGHT_OPERATION = _reference(
     "registered-operation",
@@ -296,6 +313,36 @@ CMJ_LOCAL_GRAVITY_APPLICABLE_ASSUMPTION = _reference(
     "assumption",
     "cmj-local-gravity-applicable-v1",
     "the explicit local gravitational reference applies to the trial",
+)
+CMJ_REGISTERED_MECHANICAL_SYSTEM_CONTRACT_ASSUMPTION = _reference(
+    "assumption",
+    "cmj-registered-mechanical-system-contract-v1",
+    "a registered CMJ mechanical system contract defines the modeled system",
+)
+CMJ_REGISTERED_FLIGHT_LOADING_APPLICABILITY_ASSUMPTION = _reference(
+    "assumption",
+    "cmj-registered-flight-loading-applicability-v1",
+    "a registered closed flight-loading state authorizes ballistic applicability",
+)
+CMJ_FLIGHT_LOADING_STATE_UNLOADED = _reference(
+    "flight-loading-state",
+    "cmj-unloaded-v1",
+    "CMJ flight loading state: unloaded",
+)
+CMJ_FLIGHT_LOADING_STATE_STABLE_ATTACHED_SUPPORTED_LOAD = _reference(
+    "flight-loading-state",
+    "cmj-stable-attached-supported-load-v1",
+    "CMJ flight loading state: stable attached supported load",
+)
+CMJ_FLIGHT_LOADING_STATE_NON_BALLISTIC_EXTERNAL_FORCE = _reference(
+    "flight-loading-state",
+    "cmj-non-ballistic-external-force-v1",
+    "CMJ flight loading state: non-ballistic external force",
+)
+CMJ_FLIGHT_LOADING_STATE_UNRESOLVED = _reference(
+    "flight-loading-state",
+    "cmj-unresolved-v1",
+    "CMJ flight loading state: unresolved",
 )
 CMJ_TAKEOFF_VELOCITY_EVENT_SAMPLE_CONVENTION = _reference(
     "sample-convention",
@@ -476,6 +523,23 @@ RES47_DECISION_FLIGHT_TIME_BALLISTIC_APPLICABILITY = RegistryReference(
         "https://journals.plos.org/plosone/article?id=10.1371/journal.pone.0265999",
         "https://pmc.ncbi.nlm.nih.gov/articles/PMC10115716/",
         "https://pmc.ncbi.nlm.nih.gov/articles/PMC11561012/",
+    ),
+)
+RES48_DECISION_FLIGHT_TIME_V2_LOADING_AUTHORITY = RegistryReference(
+    identifier=ScientificIdentifier(
+        "dynamislm",
+        "decision-record",
+        "res48-flight-time-v2-registered-loading-authority",
+        CMJ_REGISTRY_VERSION,
+    ),
+    display_label="RES-48 flight-time V2 and registered loading authority decision",
+    reference_ids=(
+        "docs/decisions/RES48-DR-001-flight-time-v2-and-registered-loading-authority.md",
+        "docs/decisions/RES38-DR-001-flight-time-estimator.md",
+        "docs/decisions/RES47-DR-001-flight-time-ballistic-system-applicability.md",
+        "https://bura.brunel.ac.uk/handle/2438/1392",
+        "https://journals.plos.org/plosone/article?id=10.1371/journal.pone.0265999",
+        "https://pmc.ncbi.nlm.nih.gov/articles/PMC10115716/",
     ),
 )
 RES37_DECISION_DISPLACEMENT_REFERENCE = RegistryReference(
