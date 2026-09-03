@@ -783,6 +783,7 @@ def _event_input(
     samples: tuple[float, ...],
     *,
     timebase: SignalTimebase | None = None,
+    external_loading: str = "none",
 ) -> CMJForceInput:
     timebase_kind = (
         TimebaseKind.EXPLICIT if isinstance(timebase, ExplicitTimebase) else TimebaseKind.REGULAR
@@ -792,6 +793,7 @@ def _event_input(
         arrangement=AcquisitionArrangement.SINGLE_PLATFORM,
         timebase_kind=timebase_kind,
         declared_sample_rate=1000.0 if timebase_kind is TimebaseKind.REGULAR else None,
+        external_loading=external_loading,
     )
     event_signal = replace(
         signal,
