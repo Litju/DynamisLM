@@ -52,8 +52,9 @@ global alias in this repository. `BRAKING` is not globally `ECCENTRIC`,
   COM velocity.
 - `BRAKING`: peak negative supported-system COM velocity through the V1
   direction-change boundary.
-- `PROPULSION`: the same V1 direction-change/propulsion-onset boundary through
-  sealed takeoff/contact loss.
+- `PROPULSION`: the V1 propulsion-onset boundary, which selects the same source
+  sample as direction change but is represented by its own role-specific
+  boundary record, through sealed takeoff/contact loss.
 
 Flight and landing remain independent RES-36 events, not phase occurrences.
 No `ECCENTRIC`, `CONCENTRIC`, `YIELDING`, `AMORTIZATION`, `FLIGHT`, or

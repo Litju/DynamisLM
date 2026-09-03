@@ -48,8 +48,9 @@ peak-negative landmark method and first-strictly-positive boundary method.
 
 `MOVEMENT_ONSET` and `TAKEOFF_CONTACT_LOSS` are the exact RES-36 occurrences.
 The peak-negative boundary is a derived sample landmark. The direction-change
-boundary and propulsion-onset boundary are the same sample occurrence only in
-V1 and carry the registered first-strictly-positive method reference.
+boundary and propulsion-onset boundary select the same source sample in V1 but
+remain distinct role-specific boundary records; both carry the registered
+first-strictly-positive method reference.
 
 ## SAMPLE/TIME SEMANTICS
 
