@@ -51,6 +51,9 @@ Trial instance IDs are not themselves a comparability failure; material source
 method, timebase, processing, and system fields remain in the comparison key.
 The phase occurrence and metric observation retain exact source IDs for
 provenance even when those IDs are omitted from the cross-trial method key.
+The velocity integration interval and upstream mechanics processing semantics
+remain in the method key; a metric source must also be the exact net-force or
+displacement result in the velocity lineage, not merely a same-trial quantity.
 
 ## EQUATIONS
 

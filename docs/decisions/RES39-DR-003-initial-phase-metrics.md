@@ -97,8 +97,10 @@ or biological validity claims.
 
 Each numerical observation records phase occurrence ID/system/definition,
 boundary methods and convention, source metric series and observation, source
-timebase, source system contract, integration method where applicable, equation,
-software version, and decision/evidence lineage.
+timebase, source system contract, exact upstream mechanics lineage (including
+the qualified weighing reference, velocity integration interval, and relative
+displacement origin where applicable), integration method where applicable,
+equation, software version, and decision/evidence lineage.
 
 ## COMPARABILITY
 
