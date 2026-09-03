@@ -56,9 +56,9 @@ Retain event definition and detector method IDs/versions, threshold family,
 absolute threshold or baseline-SD method parameters, direction, dwell, and
 declared detector search semantics. Exclude occurrence index/time, trial
 length, source IDs, baseline observation/segment coordinates, realized baseline
-statistics, and effective threshold realization. A configured detector search
-start remains material when it is an explicit detector parameter; phase-relative
-landmark search endpoints are not.
+statistics, effective threshold realization, and numeric detector search-start
+coordinates. The registered detector method preserves search-role semantics;
+the concrete start sample is a trial realization.
 
 ## BOUNDARY_METHOD_KEY
 
@@ -147,9 +147,11 @@ trial-specific QC equivalence needs a more specific registered rule.
 
 ## IMPLEMENTATION
 
-`src/dynamislm/measurement/cmj/phases.py` separates event, boundary,
-integration, zero-reference, timing, source-identity, processing, and aggregate
-method keys. No RES-39 arithmetic/detection or RES-40 code changes.
+`src/dynamislm/measurement/cmj/phases.py` separates
+`_phase_event_method_key`, `_phase_boundary_method_key`,
+`_velocity_integration_method_key`, `_zero_velocity_reference_method_key`,
+`_timebase_method_key`, source-identity, processing, and aggregate method keys.
+No RES-39 arithmetic/detection or RES-40 code changes.
 
 ## TESTS
 
