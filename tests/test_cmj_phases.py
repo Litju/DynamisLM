@@ -6,12 +6,13 @@ import pytest
 
 from dynamislm import (
     SERIALIZATION_VERSION,
+    MetadataEntry,
     ValueOrigin,
     canonical_hash,
     canonical_json,
     from_canonical_json,
 )
-from dynamislm.comparability import ComparabilityReasonCode, ComparabilityState
+from dynamislm.comparability import ComparabilityReasonCode, ComparabilityResult, ComparabilityState
 from dynamislm.measurement.cmj import (
     CMJ_BRAKING_PHASE_DEFINITION,
     CMJ_FORCE_COM_VELOCITY_PHASE_SYSTEM_SPEC,
@@ -25,6 +26,7 @@ from dynamislm.measurement.cmj import (
     CMJPhaseBoundary,
     CMJPhaseBoundaryKind,
     CMJPhaseLabel,
+    CMJPhaseMetric,
     CMJPhaseMetricResult,
     CMJPhaseOccurrence,
     CMJPhaseSystem,
@@ -50,7 +52,7 @@ from dynamislm.measurement.cmj import (
     integrate_net_vertical_impulse,
     refusal_for_cmj_phase_comparability,
 )
-from dynamislm.measurement.cmj.signal import ExplicitTimebase, SignalTimebase
+from dynamislm.measurement.cmj.signal import ExplicitTimebase, RegularTimebase, SignalTimebase
 from dynamislm.measurement.identity import (
     InstanceIdentifier,
     RegistryReference,
@@ -68,6 +70,19 @@ _UNIQUE_TRACE = (100.0, 100.0, 100.0, 100.0, -900.0, -900.0, -400.0, 2600.0, 510
 _TIED_TRACE = (100.0, 100.0, 100.0, 100.0, -900.0, -900.0, 1100.0, 2100.0, 1100.0, 0.0)
 _SUBTHRESHOLD_TRACE = (100.0, 100.0, 100.0, 100.0, 90.0, 90.0, 100.0, 151.0, 151.0, 0.0)
 _ZERO_LENGTH_TRACE = (100.0, 100.0, 100.0, 100.0, 0.0, 300.0, 100.0, 100.0, 5100.0, 0.0)
+_RES49_FIRST_TRACE = (100.0, 100.0, 100.0, 100.0, -900.0, -900.0, -400.0, 6100.0, 0.0, 0.0)
+_RES49_SECOND_TRACE = (100.0, 100.0, 100.0, 100.0, 100.0, -900.0, -400.0, -900.0, 6100.0, 0.0)
+_RES49_VALUE_TRACE = (100.0, 100.0, 100.0, 100.0, 100.0, -900.0, -300.0, -900.0, 6200.0, 0.0)
+_RES49_QC_TRACE = (101.0, 99.0, 100.0, 100.0, -900.0, -900.0, -400.0, 6100.0, 0.0, 0.0)
+
+type PhaseFixture = tuple[
+    SupportedSystemComVelocityResult,
+    NetVerticalForceResult,
+    SupportedSystemComRelativeDisplacementResult,
+    tuple[CMJPhaseOccurrence, ...],
+    CMJEventOccurrence,
+    CMJEventOccurrence,
+]
 
 
 def _phase_inputs(
@@ -76,6 +91,18 @@ def _phase_inputs(
     *,
     timebase: SignalTimebase | None = None,
     external_loading: str = "none",
+    weighing_start_index: int = 0,
+    weighing_end_index: int = 3,
+    onset_search_start_index: int = 4,
+    takeoff_search_start_index: int = 9,
+    onset_sigma_multiplier: float | None = None,
+    onset_dwell_samples: int = 1,
+    takeoff_threshold_n: float = 20.0,
+    takeoff_dwell_samples: int = 1,
+    velocity_start_index: int = 2,
+    velocity_end_index: int = 9,
+    zero_reference_sample_index: int | None = None,
+    weighing_selection_parameters: tuple[MetadataEntry, ...] = (),
 ) -> tuple[
     SupportedSystemComVelocityResult,
     NetVerticalForceResult,
@@ -88,21 +115,28 @@ def _phase_inputs(
         samples,
         timebase=timebase,
         external_loading=external_loading,
-        weighing_end_index=3,
+        weighing_start_index=weighing_start_index,
+        weighing_end_index=weighing_end_index,
+        weighing_selection_parameters=weighing_selection_parameters,
     )
+    onset_parameters = _onset_parameters(
+        weight, search_start_index=onset_search_start_index, dwell_samples=onset_dwell_samples
+    )
+    if onset_sigma_multiplier is not None:
+        onset_parameters = replace(onset_parameters, sigma_multiplier=onset_sigma_multiplier)
     onset = detect_movement_onset(
         source,
         weight,
-        _onset_parameters(weight, search_start_index=4, dwell_samples=1),
+        onset_parameters,
     )
     assert not isinstance(onset, RefusalResult)
     takeoff = detect_takeoff(
         total,
         _absolute_parameters(
-            20.0,
+            takeoff_threshold_n,
             CMJThresholdDirection.BELOW_THRESHOLD,
-            dwell_samples=1,
-            search_start_index=9,
+            dwell_samples=takeoff_dwell_samples,
+            search_start_index=takeoff_search_start_index,
         ),
         onset=onset,
     )
@@ -115,13 +149,20 @@ def _phase_inputs(
     assert not isinstance(acceleration, RefusalResult)
     velocity = derive_supported_system_com_velocity(
         acceleration,
-        CMJIntegrationInterval.explicit_sample(acceleration.series.series_id, 2, 9),
-        QualifiedZeroVelocityReference.from_system_weight(weight, 2),
+        CMJIntegrationInterval.explicit_sample(
+            acceleration.series.series_id, velocity_start_index, velocity_end_index
+        ),
+        QualifiedZeroVelocityReference.from_system_weight(
+            weight,
+            velocity_start_index
+            if zero_reference_sample_index is None
+            else zero_reference_sample_index,
+        ),
     )
     assert isinstance(velocity, SupportedSystemComVelocityResult)
     displacement = derive_supported_system_com_relative_vertical_displacement(
         velocity,
-        DisplacementOrigin.zero_at_velocity_start(velocity.series.series_id, 2),
+        DisplacementOrigin.zero_at_velocity_start(velocity.series.series_id, velocity_start_index),
     )
     assert isinstance(displacement, SupportedSystemComRelativeDisplacementResult)
     return velocity, net_force, displacement, onset, takeoff
@@ -133,6 +174,18 @@ def _phase_fixture(
     *,
     timebase: SignalTimebase | None = None,
     external_loading: str = "none",
+    weighing_start_index: int = 0,
+    weighing_end_index: int = 3,
+    onset_search_start_index: int = 4,
+    takeoff_search_start_index: int = 9,
+    onset_sigma_multiplier: float | None = None,
+    onset_dwell_samples: int = 1,
+    takeoff_threshold_n: float = 20.0,
+    takeoff_dwell_samples: int = 1,
+    velocity_start_index: int = 2,
+    velocity_end_index: int = 9,
+    zero_reference_sample_index: int | None = None,
+    weighing_selection_parameters: tuple[MetadataEntry, ...] = (),
 ) -> tuple[
     SupportedSystemComVelocityResult,
     NetVerticalForceResult,
@@ -146,6 +199,18 @@ def _phase_fixture(
         samples,
         timebase=timebase,
         external_loading=external_loading,
+        weighing_start_index=weighing_start_index,
+        weighing_end_index=weighing_end_index,
+        onset_search_start_index=onset_search_start_index,
+        takeoff_search_start_index=takeoff_search_start_index,
+        onset_sigma_multiplier=onset_sigma_multiplier,
+        onset_dwell_samples=onset_dwell_samples,
+        takeoff_threshold_n=takeoff_threshold_n,
+        takeoff_dwell_samples=takeoff_dwell_samples,
+        velocity_start_index=velocity_start_index,
+        velocity_end_index=velocity_end_index,
+        zero_reference_sample_index=zero_reference_sample_index,
+        weighing_selection_parameters=weighing_selection_parameters,
     )
     phases = construct_cmj_phase_occurrences(velocity, onset, takeoff)
     assert not isinstance(phases, RefusalResult)
@@ -155,6 +220,31 @@ def _phase_fixture(
 def _metric(value: CMJPhaseMetricResult | RefusalResult) -> CMJPhaseMetricResult:
     assert isinstance(value, CMJPhaseMetricResult)
     return value
+
+
+def _phase_metric(fixture: PhaseFixture, metric: CMJPhaseMetric) -> CMJPhaseMetricResult:
+    _, net_force, displacement, phases, _, _ = fixture
+    phase_index = 1 if metric.value.startswith("BRAKING") else 2
+    phase = phases[phase_index]
+    if metric.value.endswith("DURATION"):
+        return _metric(calculate_cmj_phase_duration(phase))
+    if metric.value.endswith("IMPULSE"):
+        return _metric(calculate_cmj_phase_net_vertical_impulse(phase, net_force))
+    return _metric(calculate_cmj_phase_relative_displacement_change(phase, displacement))
+
+
+def _compare_phase_metrics(
+    left_fixture: PhaseFixture,
+    right_fixture: PhaseFixture,
+    metric: CMJPhaseMetric,
+    label: str,
+) -> ComparabilityResult:
+    return compare_cmj_phase_metrics(
+        _phase_metric(left_fixture, metric),
+        _phase_metric(right_fixture, metric),
+        claim=label,
+        request_id=InstanceIdentifier("comparability-request", f"res49-{label}"),
+    )
 
 
 def test_res39_phase_system_is_versioned_and_labels_are_not_global_aliases() -> None:
@@ -460,10 +550,7 @@ def test_res39_same_label_comparison_requires_registered_source_method_identity(
         claim="compare V1 braking net vertical impulse with a changed velocity interval",
         request_id=InstanceIdentifier("comparability-request", "phase-velocity-interval-change"),
     )
-    assert changed_velocity_comparison.state is ComparabilityState.BRIDGE_VALIDATION_REQUIRED
-    assert ComparabilityReasonCode.PHASE_METRIC_METHOD_MISMATCH in (
-        changed_velocity_comparison.reason_codes
-    )
+    assert changed_velocity_comparison.state is ComparabilityState.COMPARABLE
     refused = refusal_for_cmj_phase_comparability(
         changed_comparison,
         blocked_claim="compare V1 braking net vertical impulse",
@@ -475,6 +562,456 @@ def test_res39_same_label_comparison_requires_registered_source_method_identity(
         first.observation.observation_id,
         changed.observation.observation_id,
     )
+
+
+def test_res49_reproduces_over_refusal_for_same_method_trial_coordinates() -> None:
+    second_velocity, second_net, _, second_phases, second_onset, second_takeoff = _phase_fixture(
+        "phase-instance-second",
+        _RES49_SECOND_TRACE,
+        takeoff_search_start_index=8,
+    )
+    first_velocity, first_net_result, _, first_phases, first_onset, first_takeoff = _phase_fixture(
+        "phase-instance-first",
+        _RES49_FIRST_TRACE,
+        takeoff_search_start_index=8,
+    )
+    assert first_velocity is not second_velocity
+    assert (first_onset.sample_index, first_phases[0].end_boundary.sample_index) == (4, 6)
+    assert (first_phases[1].end_boundary.sample_index, first_takeoff.sample_index) == (7, 8)
+    assert (second_onset.sample_index, second_phases[0].end_boundary.sample_index) == (5, 7)
+    assert (second_phases[1].end_boundary.sample_index, second_takeoff.sample_index) == (8, 9)
+
+    first_metric = _metric(
+        calculate_cmj_phase_net_vertical_impulse(first_phases[1], first_net_result)
+    )
+    second_metric = _metric(calculate_cmj_phase_net_vertical_impulse(second_phases[1], second_net))
+    comparison = compare_cmj_phase_metrics(
+        first_metric,
+        second_metric,
+        claim="compare same-method V1 braking impulse across trial realizations",
+        request_id=InstanceIdentifier("comparability-request", "phase-instance-reproduction"),
+    )
+    assert comparison.state is ComparabilityState.COMPARABLE
+
+
+def test_res49_same_method_coordinates_and_values_are_comparable_for_all_initial_metrics() -> None:
+    first = _phase_fixture("res49-method-first", _RES49_FIRST_TRACE, takeoff_search_start_index=8)
+    second = _phase_fixture("res49-method-second", _RES49_VALUE_TRACE, takeoff_search_start_index=8)
+    assert tuple(
+        (phase.start_boundary.sample_index, phase.end_boundary.sample_index) for phase in first[3]
+    ) != tuple(
+        (phase.start_boundary.sample_index, phase.end_boundary.sample_index) for phase in second[3]
+    )
+    for metric in CMJPhaseMetric:
+        if metric is CMJPhaseMetric.UNWEIGHTING_DURATION:
+            continue
+        comparison = _compare_phase_metrics(first, second, metric, f"res49-{metric.value}")
+        assert comparison.state is ComparabilityState.COMPARABLE
+
+    assert (
+        _phase_metric(first, CMJPhaseMetric.BRAKING_NET_VERTICAL_IMPULSE).value
+        != _phase_metric(second, CMJPhaseMetric.BRAKING_NET_VERTICAL_IMPULSE).value
+    )
+    first_propulsion_impulse = _phase_metric(first, CMJPhaseMetric.PROPULSION_NET_VERTICAL_IMPULSE)
+    second_propulsion_impulse = _phase_metric(
+        second, CMJPhaseMetric.PROPULSION_NET_VERTICAL_IMPULSE
+    )
+    assert first_propulsion_impulse.value != second_propulsion_impulse.value
+
+
+def test_res49_configured_detector_search_start_is_event_method_identity() -> None:
+    first = _phase_fixture("res49-search-first", _RES49_FIRST_TRACE, takeoff_search_start_index=8)
+    movement_search_changed = _phase_fixture(
+        "res49-search-second",
+        _RES49_FIRST_TRACE,
+        onset_search_start_index=5,
+        takeoff_search_start_index=8,
+    )
+    takeoff_search_changed = _phase_fixture(
+        "res49-search-third",
+        _RES49_FIRST_TRACE,
+        onset_search_start_index=4,
+        takeoff_search_start_index=9,
+    )
+
+    assert first[4].detector_parameters.search_start_index == 4
+    assert movement_search_changed[4].detector_parameters.search_start_index == 5
+    assert (
+        first[5].detector_parameters.search_start_index
+        != takeoff_search_changed[5].detector_parameters.search_start_index
+    )
+    for label, changed in (
+        ("movement-onset-search-start", movement_search_changed),
+        ("takeoff-search-start", takeoff_search_changed),
+    ):
+        comparison = _compare_phase_metrics(
+            first, changed, CMJPhaseMetric.BRAKING_DURATION, f"res49-{label}"
+        )
+        assert comparison.state is ComparabilityState.BRIDGE_VALIDATION_REQUIRED
+        assert ComparabilityReasonCode.PHASE_METRIC_METHOD_MISMATCH in comparison.reason_codes
+
+
+def test_res49_same_method_phase_durations_can_differ() -> None:
+    first = _phase_fixture("res49-duration-first", _RES49_FIRST_TRACE, takeoff_search_start_index=8)
+    longer = _phase_fixture(
+        "res49-duration-longer",
+        (
+            100.0,
+            100.0,
+            100.0,
+            100.0,
+            -900.0,
+            -900.0,
+            -400.0,
+            1000.0,
+            1000.0,
+            1000.0,
+            1000.0,
+            1000.0,
+            0.0,
+        ),
+        takeoff_search_start_index=8,
+        velocity_end_index=12,
+    )
+    assert (
+        _phase_metric(first, CMJPhaseMetric.BRAKING_DURATION).value
+        != _phase_metric(longer, CMJPhaseMetric.BRAKING_DURATION).value
+    )
+    assert (
+        _phase_metric(first, CMJPhaseMetric.PROPULSION_DURATION).value
+        != _phase_metric(longer, CMJPhaseMetric.PROPULSION_DURATION).value
+    )
+    for metric in (CMJPhaseMetric.BRAKING_DURATION, CMJPhaseMetric.PROPULSION_DURATION):
+        comparison = _compare_phase_metrics(first, longer, metric, f"res49-duration-{metric.value}")
+        assert comparison.state is ComparabilityState.COMPARABLE
+
+
+def test_res49_trial_length_and_explicit_timestamp_origin_are_not_method_identity() -> None:
+    first = _phase_fixture(
+        "res49-trial-length-first", _RES49_FIRST_TRACE, takeoff_search_start_index=8
+    )
+    longer = _phase_fixture(
+        "res49-trial-length-longer",
+        (*_RES49_FIRST_TRACE, 0.0),
+        takeoff_search_start_index=8,
+    )
+    assert (
+        first[3][1].start_boundary.source_sample_count
+        != longer[3][1].start_boundary.source_sample_count
+    )
+    assert (
+        _compare_phase_metrics(
+            first, longer, CMJPhaseMetric.BRAKING_DURATION, "res49-trial-length"
+        ).state
+        is ComparabilityState.COMPARABLE
+    )
+
+    explicit_first = _phase_fixture(
+        "res49-time-origin-first",
+        _RES49_FIRST_TRACE,
+        timebase=ExplicitTimebase(tuple(10.0 + index / 1000.0 for index in range(10))),
+        takeoff_search_start_index=8,
+    )
+    explicit_second = _phase_fixture(
+        "res49-time-origin-second",
+        _RES49_FIRST_TRACE,
+        timebase=ExplicitTimebase(tuple(20.0 + index / 1000.0 for index in range(10))),
+        takeoff_search_start_index=8,
+    )
+    assert explicit_first[3][1].start_time_s != explicit_second[3][1].start_time_s
+    assert (
+        _compare_phase_metrics(
+            explicit_first,
+            explicit_second,
+            CMJPhaseMetric.BRAKING_DURATION,
+            "res49-explicit-time-origin",
+        ).state
+        is ComparabilityState.COMPARABLE
+    )
+
+
+def test_res49_sampling_rate_and_timebase_kind_remain_material() -> None:
+    regular_1000 = _phase_fixture(
+        "res49-rate-1000",
+        _RES49_FIRST_TRACE,
+        timebase=RegularTimebase(1000.0),
+        takeoff_search_start_index=8,
+    )
+    regular_500 = _phase_fixture(
+        "res49-rate-500",
+        _RES49_FIRST_TRACE,
+        timebase=RegularTimebase(500.0),
+        takeoff_search_start_index=8,
+    )
+    comparison = _compare_phase_metrics(
+        regular_1000, regular_500, CMJPhaseMetric.BRAKING_DURATION, "res49-sampling-rate"
+    )
+    assert comparison.state is ComparabilityState.BRIDGE_VALIDATION_REQUIRED
+    assert ComparabilityReasonCode.SAMPLE_OR_TIMEBASE_MISMATCH in comparison.reason_codes
+
+    explicit = _phase_fixture(
+        "res49-explicit-timebase",
+        _RES49_FIRST_TRACE,
+        timebase=ExplicitTimebase(tuple(index / 1000.0 for index in range(10))),
+        takeoff_search_start_index=8,
+    )
+    comparison = _compare_phase_metrics(
+        regular_1000, explicit, CMJPhaseMetric.BRAKING_DURATION, "res49-timebase-kind"
+    )
+    assert comparison.state is ComparabilityState.BRIDGE_VALIDATION_REQUIRED
+    assert ComparabilityReasonCode.SAMPLE_OR_TIMEBASE_MISMATCH in comparison.reason_codes
+
+
+@pytest.mark.parametrize(
+    ("parameter_name", "parameter_value"),
+    (
+        ("onset_sigma_multiplier", 2.0),
+        ("onset_dwell_samples", 2),
+        ("takeoff_threshold_n", 21.0),
+        ("takeoff_dwell_samples", 2),
+    ),
+)
+def test_res49_detector_parameters_remain_method_identity(
+    parameter_name: str, parameter_value: float | int
+) -> None:
+    first = _phase_fixture("res49-detector-first", _RES49_FIRST_TRACE, takeoff_search_start_index=8)
+    if parameter_name == "onset_sigma_multiplier":
+        second = _phase_fixture(
+            "res49-detector-second",
+            _RES49_FIRST_TRACE,
+            takeoff_search_start_index=8,
+            onset_sigma_multiplier=float(parameter_value),
+        )
+    elif parameter_name == "onset_dwell_samples":
+        second = _phase_fixture(
+            "res49-detector-second",
+            _RES49_FIRST_TRACE,
+            takeoff_search_start_index=8,
+            onset_dwell_samples=int(parameter_value),
+        )
+    elif parameter_name == "takeoff_threshold_n":
+        second = _phase_fixture(
+            "res49-detector-second",
+            _RES49_FIRST_TRACE,
+            takeoff_search_start_index=8,
+            takeoff_threshold_n=float(parameter_value),
+        )
+    else:
+        second = _phase_fixture(
+            "res49-detector-second",
+            _RES49_FIRST_TRACE,
+            takeoff_search_start_index=8,
+            takeoff_dwell_samples=int(parameter_value),
+        )
+    comparison = _compare_phase_metrics(
+        first,
+        second,
+        CMJPhaseMetric.BRAKING_DURATION,
+        f"res49-{parameter_name}",
+    )
+    assert comparison.state is ComparabilityState.BRIDGE_VALIDATION_REQUIRED
+    assert ComparabilityReasonCode.PHASE_METRIC_METHOD_MISMATCH in comparison.reason_codes
+
+
+@pytest.mark.parametrize(
+    ("boundary_field", "boundary_value"),
+    (
+        ("tie_policy", "latest source sample among tied minimum velocity values"),
+        ("velocity_threshold_policy", "registered positive threshold > 0.01 m/s"),
+        ("interpolation_policy", "linear sub-sample interpolation"),
+    ),
+)
+def test_res49_boundary_policy_differences_remain_material(
+    boundary_field: str, boundary_value: str
+) -> None:
+    left_fixture = _phase_fixture(
+        "res49-boundary-policy-left", _RES49_FIRST_TRACE, takeoff_search_start_index=8
+    )
+    right_fixture = _phase_fixture(
+        "res49-boundary-policy-right", _RES49_FIRST_TRACE, takeoff_search_start_index=8
+    )
+    original = _phase_metric(left_fixture, CMJPhaseMetric.BRAKING_NET_VERTICAL_IMPULSE)
+    right_metric = _phase_metric(right_fixture, CMJPhaseMetric.BRAKING_NET_VERTICAL_IMPULSE)
+    if boundary_field == "tie_policy":
+        changed_boundary = replace(
+            right_metric.phase_occurrence.end_boundary,
+            tie_policy=boundary_value,
+        )
+    elif boundary_field == "velocity_threshold_policy":
+        changed_boundary = replace(
+            right_metric.phase_occurrence.end_boundary,
+            velocity_threshold_policy=boundary_value,
+        )
+    else:
+        changed_boundary = replace(
+            right_metric.phase_occurrence.end_boundary,
+            interpolation_policy=boundary_value,
+        )
+    changed_phase = replace(right_metric.phase_occurrence, end_boundary=changed_boundary)
+    changed = replace(right_metric, phase_occurrence=changed_phase)
+    comparison = compare_cmj_phase_metrics(
+        original,
+        changed,
+        claim=f"res49-boundary-{boundary_field}",
+        request_id=InstanceIdentifier("comparability-request", f"res49-{boundary_field}"),
+    )
+    assert comparison.state is ComparabilityState.BRIDGE_VALIDATION_REQUIRED
+    assert ComparabilityReasonCode.PHASE_METRIC_METHOD_MISMATCH in comparison.reason_codes
+
+
+def test_res49_zero_reference_realization_is_not_method_identity() -> None:
+    first = _phase_fixture(
+        "res49-zero-first",
+        _RES49_FIRST_TRACE,
+        takeoff_search_start_index=8,
+        velocity_start_index=1,
+    )
+    second = _phase_fixture(
+        "res49-zero-second",
+        _RES49_FIRST_TRACE,
+        takeoff_search_start_index=8,
+        velocity_start_index=2,
+    )
+    assert (
+        first[3][1].source_velocity_initial_condition.sample_index
+        != second[3][1].source_velocity_initial_condition.sample_index
+    )
+    comparison = _compare_phase_metrics(
+        first, second, CMJPhaseMetric.BRAKING_DURATION, "res49-zero-reference-index"
+    )
+    assert comparison.state is ComparabilityState.COMPARABLE
+
+
+def test_res49_weighing_segment_coordinates_and_qc_values_are_not_method_identity() -> None:
+    first = _phase_fixture(
+        "res49-zero-segment-first",
+        _RES49_FIRST_TRACE,
+        takeoff_search_start_index=8,
+    )
+    second = _phase_fixture(
+        "res49-zero-segment-second",
+        _RES49_QC_TRACE,
+        weighing_start_index=1,
+        weighing_end_index=4,
+        takeoff_search_start_index=8,
+    )
+    first_reference = first[3][1].source_velocity_initial_condition
+    second_reference = second[3][1].source_velocity_initial_condition
+    assert (
+        first_reference.weighing_segment.start_index
+        != second_reference.weighing_segment.start_index
+    )
+    assert first[4].detector_parameters.baseline_standard_deviation_n != (
+        second[4].detector_parameters.baseline_standard_deviation_n
+    )
+    comparison = _compare_phase_metrics(
+        first, second, CMJPhaseMetric.BRAKING_DURATION, "res49-zero-segment-and-qc"
+    )
+    assert comparison.state is ComparabilityState.COMPARABLE
+
+
+def test_res49_zero_reference_method_and_authority_state_remain_material() -> None:
+    first = _phase_fixture(
+        "res49-zero-method-first", _RES49_FIRST_TRACE, takeoff_search_start_index=8
+    )
+    changed_selection = _phase_fixture(
+        "res49-zero-method-second",
+        _RES49_FIRST_TRACE,
+        takeoff_search_start_index=8,
+        weighing_selection_parameters=(MetadataEntry("selection_window", "alternate"),),
+    )
+    comparison = _compare_phase_metrics(
+        first, changed_selection, CMJPhaseMetric.BRAKING_DURATION, "res49-zero-method"
+    )
+    assert comparison.state is ComparabilityState.BRIDGE_VALIDATION_REQUIRED
+    assert ComparabilityReasonCode.PHASE_METRIC_METHOD_MISMATCH in comparison.reason_codes
+
+
+def test_res49_integration_coordinates_are_realization_but_algorithm_is_registered() -> None:
+    first = _phase_fixture(
+        "res49-integration-first", _RES49_FIRST_TRACE, takeoff_search_start_index=8
+    )
+    second = _phase_fixture(
+        "res49-integration-second", _RES49_FIRST_TRACE, takeoff_search_start_index=8
+    )
+    changed_interval = replace(
+        second[3][1].source_velocity_integration_interval,
+        end_index=8,
+    )
+    changed_phase = replace(second[3][1], source_velocity_integration_interval=changed_interval)
+    changed_metric = replace(
+        _phase_metric(second, CMJPhaseMetric.BRAKING_NET_VERTICAL_IMPULSE),
+        phase_occurrence=changed_phase,
+    )
+    comparison = compare_cmj_phase_metrics(
+        _phase_metric(first, CMJPhaseMetric.BRAKING_NET_VERTICAL_IMPULSE),
+        changed_metric,
+        claim="res49-integration-interval-realization",
+        request_id=InstanceIdentifier("comparability-request", "res49-integration-interval"),
+    )
+    assert comparison.state is ComparabilityState.COMPARABLE
+    assert first[3][1].source_velocity_integration_method.stable_id.endswith(
+        "cmj-sample-attached-trapezoidal-v1@1.0.0"
+    )
+
+
+def test_res49_different_integration_algorithm_cannot_enter_the_v1_phase_contract() -> None:
+    fixture = _phase_fixture(
+        "res49-integration-method", _RES49_FIRST_TRACE, takeoff_search_start_index=8
+    )
+    alternate = RegistryReference(
+        ScientificIdentifier("dynamislm", "integration-method", "alternate", "1.0.0"),
+        "alternate integration method",
+    )
+    with pytest.raises(ValueError, match="registered trapezoidal"):
+        replace(
+            fixture[3][1].source_velocity_integration_interval,
+            integration_method=alternate,
+        )
+
+
+def test_res49_loading_contract_remains_material() -> None:
+    unloaded = _phase_fixture("res49-unloaded", _RES49_FIRST_TRACE, takeoff_search_start_index=8)
+    loaded = _phase_fixture(
+        "res49-loaded",
+        _RES49_FIRST_TRACE,
+        external_loading="stable-attached-supported-load",
+        takeoff_search_start_index=8,
+    )
+    comparison = _compare_phase_metrics(
+        unloaded, loaded, CMJPhaseMetric.BRAKING_DURATION, "res49-loading-contract"
+    )
+    assert comparison.state is ComparabilityState.BRIDGE_VALIDATION_REQUIRED
+    assert ComparabilityReasonCode.PROTOCOL_MISMATCH in comparison.reason_codes
+
+
+def test_res49_provenance_coordinates_and_historical_serialization_hashes_are_preserved() -> None:
+    _, net_force, _, phases, _, _ = _phase_fixture("phase-serialization")
+    phase = phases[1]
+    metric = _metric(calculate_cmj_phase_net_vertical_impulse(phase, net_force))
+    assert SERIALIZATION_VERSION == 3
+    assert phase.start_boundary.sample_index == 6
+    assert phase.end_boundary.sample_index == 8
+    assert phase.start_boundary.source_event_id is None
+    assert phase.end_boundary.source_event_id is None
+    assert phase.provenance.processing_runs
+    assert metric.observation.identity.processing.method_parameters
+    phase_json = canonical_json(phase)
+    metric_json = canonical_json(metric)
+    assert '"sample_index":6' in phase_json
+    assert '"sample_index":8' in phase_json
+    assert '"start_index":6' in metric_json
+    assert '"end_index":8' in metric_json
+    assert canonical_hash(phase) == (
+        "sha256:65f8a45fb54060da0b2d2b59156b2f62837c9c6f82cfb8bb9968b7d75a5c0f01"
+    )
+    assert canonical_hash(metric) == (
+        "sha256:040b3e6013d773d65d5c9f967fafaf3d7ab434ae48968c38044ee9dc6a66a11b"
+    )
+    restored_phase = from_canonical_json(phase_json, CMJPhaseOccurrence)
+    restored_metric = from_canonical_json(metric_json, CMJPhaseMetricResult)
+    assert canonical_json(restored_phase) == canonical_json(phase)
+    assert canonical_json(restored_metric) == canonical_json(metric)
 
 
 def test_res39_wrong_metric_source_refuses_without_erasing_valid_phase() -> None:

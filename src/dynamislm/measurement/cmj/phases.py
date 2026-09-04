@@ -19,12 +19,14 @@ from dynamislm.comparability.models import (
     ComparabilityState,
     TransformationRequest,
 )
+from dynamislm.measurement.cmj.acquisition import TimebaseIdentity
 from dynamislm.measurement.cmj.comparability import compare_cmj_measurement_identities
 from dynamislm.measurement.cmj.events import (
     CMJ_MOVEMENT_ONSET_BASELINE_SD_METHOD,
     CMJ_MOVEMENT_ONSET_EVENT_DEFINITION,
     CMJ_TAKEOFF_ABSOLUTE_FORCE_METHOD,
     CMJ_TAKEOFF_CONTACT_LOSS_EVENT_DEFINITION,
+    CMJEventDetectorParameters,
     CMJEventOccurrence,
 )
 from dynamislm.measurement.cmj.identity import CMJ_REGISTRY_VERSION, CMJMeasurementIdentity
@@ -32,11 +34,11 @@ from dynamislm.measurement.cmj.mechanics import (
     CMJIntegrationInterval,
     CMJMechanicalSystemContract,
     CMJMechanicsQuantity,
+    InitialVelocityCondition,
     NetVerticalForceResult,
     QualifiedZeroVelocityReference,
     SupportedSystemComRelativeDisplacementResult,
     SupportedSystemComVelocityResult,
-    _condition_key,
     integrate_net_vertical_impulse,
 )
 from dynamislm.measurement.cmj.registry import (
@@ -122,7 +124,12 @@ from dynamislm.refusal.models import (
     RefusalResult,
     RefusalStatus,
 )
-from dynamislm.serialization import canonical_hash, canonical_json, register_serializable_type
+from dynamislm.serialization import (
+    canonical_hash,
+    canonical_json,
+    from_canonical_json,
+    register_serializable_type,
+)
 
 RES39_SOFTWARE_VERSION = "dynamislm-res39-1.0.0"
 _UNCERTAINTY_NOTE = "RES-39 deterministic phase arithmetic; uncertainty is not assessed."
@@ -2578,7 +2585,7 @@ calculate_cmj_phase_supported_system_com_relative_displacement_change = (
 )
 
 
-def _source_identity_key(identity: CMJMeasurementIdentity) -> tuple[object, ...]:
+def _source_measurement_method_key(identity: CMJMeasurementIdentity) -> tuple[object, ...]:
     acquisition = identity.acquisition
     processing = identity.processing
     return (
@@ -2597,7 +2604,7 @@ def _source_identity_key(identity: CMJMeasurementIdentity) -> tuple[object, ...]
         acquisition.reference_frame,
         acquisition.unit,
         acquisition.sign_convention,
-        acquisition.timebase,
+        _timebase_method_key(acquisition.timebase),
         acquisition.acquisition_software_version,
         acquisition.calibration,
         acquisition.zeroing,
@@ -2623,7 +2630,66 @@ def _source_identity_key(identity: CMJMeasurementIdentity) -> tuple[object, ...]
     )
 
 
-def _processing_policy_key(
+_INSTANCE_METADATA_KEYS = frozenset(
+    {
+        "source_id",
+        "source_signal_id",
+        "source_signal_ids",
+        "source_observation_id",
+        "source_observation_ids",
+        "source_artifact_id",
+        "source_artifact_ids",
+        "source_acquisition_id",
+        "source_acquisition_ids",
+        "source_measurement_identity_id",
+        "source_measurement_identity_ids",
+        "source_event_id",
+        "source_event_ids",
+        "event_id",
+        "event_ids",
+        "source_sample_count",
+        "sample_index",
+        "sample_indices",
+        "search_start_index",
+        "search_end_index",
+        "start_index",
+        "end_index",
+        "event_time_s",
+        "time_s",
+        "timestamp",
+    }
+)
+_INSTANCE_METADATA_SUFFIXES = (
+    "_observation_id",
+    "_signal_id",
+    "_artifact_id",
+    "_acquisition_id",
+    "_identity_id",
+    "_event_id",
+    "_event_ids",
+    "_occurrence_id",
+    "_sample_index",
+    "_start_index",
+    "_end_index",
+    "_time_s",
+    "_timestamp",
+)
+
+
+def _method_metadata_key(
+    parameters: tuple[MetadataEntry, ...],
+) -> tuple[tuple[str, object], ...]:
+    """Retain method metadata while excluding embedded instance coordinates."""
+
+    return tuple(
+        (entry.key, entry.value)
+        for entry in parameters
+        if entry.key not in _INSTANCE_METADATA_KEYS
+        and not entry.key.endswith(_INSTANCE_METADATA_SUFFIXES)
+    )
+
+
+def _processing_method_policy_key(
     parameters: tuple[MetadataEntry, ...],
 ) -> tuple[tuple[str, object], ...]:
     policy_names = {
@@ -2639,36 +2705,111 @@ def _processing_policy_key(
     return tuple((entry.key, entry.value) for entry in parameters if entry.key in policy_names)
 
 
-def _phase_event_semantic_key(event: CMJEventOccurrence | None) -> object:
+def _timebase_method_key(
+    timebase: SignalTimebase | TimebaseIdentity | None,
+) -> tuple[object, ...] | None:
+    """Describe timing method characteristics without trial clock coordinates."""
+
+    if timebase is None:
+        return None
+    if isinstance(timebase, RegularTimebase):
+        return ("REGULAR", timebase.sample_rate_hz)
+    if isinstance(timebase, ExplicitTimebase):
+        return ("EXPLICIT",)
+    if isinstance(timebase, TimebaseIdentity):
+        return (
+            timebase.kind.value,
+            timebase.sample_rate_hz,
+            timebase.clock_reference.stable_id if timebase.clock_reference else None,
+            timebase.description,
+        )
+    return ("UNKNOWN", type(timebase).__name__)
+
+
+def _event_detector_parameter_method_key(
+    parameters: CMJEventDetectorParameters,
+) -> tuple[tuple[str, object], ...]:
+    """Retain detector configuration while excluding baseline realization data."""
+
+    baseline_segment = parameters.baseline_segment
+    return (
+        ("threshold_n", parameters.threshold_n),
+        (
+            "baseline_selection_method",
+            baseline_segment.selection_method.stable_id if baseline_segment else None,
+        ),
+        (
+            "baseline_selection_parameters",
+            _method_metadata_key(baseline_segment.selection_parameters)
+            if baseline_segment
+            else None,
+        ),
+        ("sigma_multiplier", parameters.sigma_multiplier),
+        ("direction", parameters.direction.value if parameters.direction else None),
+        ("dwell_samples", parameters.dwell_samples),
+        ("search_start_index", parameters.search_start_index),
+    )
+
+
+def _phase_event_method_key(event: CMJEventOccurrence | None) -> object:
     if event is None:
         return None
     return (
         event.definition.reference.stable_id,
         event.detector_method.reference.stable_id,
-        event.detector_parameters,
-        event.source_sample_count,
-        event.sample_index,
-        event.source_timebase,
-        event.effective_threshold_n,
+        event.detector_method.threshold_family.value,
+        _event_detector_parameter_method_key(event.detector_parameters),
+        _timebase_method_key(event.source_timebase),
     )
 
 
-def _phase_integration_interval_key(interval: CMJIntegrationInterval) -> tuple[object, ...]:
+def _velocity_integration_method_key(
+    interval: CMJIntegrationInterval | None,
+) -> tuple[object, ...] | None:
+    """Describe integration semantics without realized interval coordinates."""
+
+    if interval is None:
+        return None
     return (
         interval.kind,
-        interval.start_index,
-        interval.end_index,
         interval.boundary_convention.stable_id,
         interval.integration_method.stable_id,
-        _phase_event_semantic_key(interval.start_event),
-        _phase_event_semantic_key(interval.end_event),
+        _phase_event_method_key(interval.start_event),
+        _phase_event_method_key(interval.end_event),
     )
 
 
-def _phase_velocity_processing_key(
+def _zero_velocity_reference_method_key(
+    condition: QualifiedZeroVelocityReference | InitialVelocityCondition | None,
+) -> object:
+    """Retain zero-reference authority semantics without trial realization fields."""
+
+    if condition is None:
+        return None
+    if isinstance(condition, QualifiedZeroVelocityReference):
+        segment = condition.weighing_segment
+        return (
+            "QUALIFIED",
+            condition.method.stable_id,
+            condition.evidence_decision.stable_id,
+            condition.unit.identifier.stable_id,
+            segment.selection_method.stable_id,
+            _method_metadata_key(segment.selection_parameters),
+            condition.weighing_qc.acceptability_adjudicated,
+        )
+    return (
+        "LEGACY",
+        condition.method.stable_id,
+        condition.unit.identifier.stable_id,
+        condition.assumption,
+        _phase_event_method_key(condition.reference_event),
+    )
+
+
+def _phase_velocity_processing_method_key(
     parameters: tuple[MetadataEntry, ...],
 ) -> tuple[tuple[str, object], ...]:
-    """Retain upstream method semantics while excluding trial entity IDs."""
+    """Retain upstream processing semantics while excluding trial realizations."""
 
     ignored_keys = {
         "source_signal_ids",
@@ -2678,6 +2819,12 @@ def _phase_velocity_processing_key(
         "integration_interval",
         "zero_velocity_reference",
         "displacement_origin",
+        "source_sample_count",
+        "sample_start_index",
+        "sample_end_index",
+        "selected_sample_index",
+        "search_start_index",
+        "search_end_index",
     }
     ignored_suffixes = (
         "_observation_id",
@@ -2686,9 +2833,17 @@ def _phase_velocity_processing_key(
         "_artifact_id",
         "_acquisition_id",
         "_identity_id",
+        "_event_id",
+        "_event_ids",
+        "_occurrence_id",
         "_segment",
         "_qc",
         "_quality_flags",
+        "_sample_index",
+        "_start_index",
+        "_end_index",
+        "_time_s",
+        "_timestamp",
     )
     return tuple(
         (entry.key, entry.value)
@@ -2697,48 +2852,84 @@ def _phase_velocity_processing_key(
     )
 
 
-def _event_boundary_key(boundary: CMJPhaseBoundary) -> tuple[object, ...]:
+def _event_parameter_method_key_from_boundary(
+    serialized_parameters: str | None,
+) -> object:
+    if serialized_parameters is None:
+        return None
+    try:
+        parameters = from_canonical_json(serialized_parameters, CMJEventDetectorParameters)
+    except (TypeError, ValueError):
+        return ("UNPARSED", serialized_parameters)
+    return _event_detector_parameter_method_key(parameters)
+
+
+def _phase_boundary_method_key(boundary: CMJPhaseBoundary) -> tuple[object, ...]:
     return (
         boundary.kind,
         boundary.method.stable_id,
         boundary.source_event_definition.stable_id if boundary.source_event_definition else None,
         boundary.source_event_method.stable_id if boundary.source_event_method else None,
-        boundary.source_event_parameters,
-        boundary.source_event_effective_threshold_n,
-        boundary.search_start_index if boundary.source_event_id is None else None,
-        boundary.search_end_index if boundary.source_event_id is None else None,
+        _event_parameter_method_key_from_boundary(boundary.source_event_parameters),
         boundary.tie_policy,
         boundary.velocity_threshold_policy,
         boundary.interpolation_policy,
-        boundary.source_timebase,
+        _timebase_method_key(boundary.source_timebase),
     )
 
 
-def _phase_method_key(result: CMJPhaseMetricResult) -> tuple[object, ...]:
+def _phase_provenance_event_method_key(
+    provenance: Provenance,
+) -> tuple[tuple[object, ...], ...]:
+    """Recover all source event method semantics without occurrence coordinates."""
+
+    keys: set[tuple[object, ...]] = set()
+    for run in provenance.processing_runs:
+        if run.method.identifier.object_type != "event-method":
+            continue
+        parameters = {entry.key: entry.value for entry in run.parameters}
+        detector_parameters = parameters.get("detector_parameters")
+        keys.add(
+            (
+                parameters.get("event_definition"),
+                run.method.stable_id,
+                _event_parameter_method_key_from_boundary(
+                    detector_parameters if isinstance(detector_parameters, str) else None
+                ),
+            )
+        )
+    return tuple(sorted(keys, key=repr))
+
+
+def _phase_metric_method_key(result: CMJPhaseMetricResult) -> tuple[object, ...]:
     phase = result.phase_occurrence
     return (
         result.metric,
         phase.phase_system.stable_id,
         phase.phase_definition.stable_id,
         phase.boundary_convention.stable_id,
-        _event_boundary_key(phase.start_boundary),
-        _event_boundary_key(phase.end_boundary),
+        _phase_boundary_method_key(phase.start_boundary),
+        _phase_boundary_method_key(phase.end_boundary),
+        _phase_provenance_event_method_key(phase.provenance),
         phase.source_velocity_operation.stable_id,
         phase.source_velocity_integration_method.stable_id,
-        _phase_integration_interval_key(phase.source_velocity_integration_interval),
-        _condition_key(phase.source_velocity_initial_condition),
+        _velocity_integration_method_key(phase.source_velocity_integration_interval),
+        _zero_velocity_reference_method_key(phase.source_velocity_initial_condition),
         phase.source_velocity_version,
         phase.source_velocity_filtering,
-        _phase_velocity_processing_key(phase.source_velocity_processing_parameters),
+        _phase_velocity_processing_method_key(phase.source_velocity_processing_parameters),
         phase.source_system_contract,
-        phase.source_velocity_measurement_identity.semantic.protocol_identity,
-        _source_identity_key(phase.source_velocity_measurement_identity),
+        _timebase_method_key(phase.source_velocity_measurement_identity.acquisition.timebase),
+        _source_measurement_method_key(phase.source_velocity_measurement_identity),
+        result.source_mechanics_quantity,
+        _timebase_method_key(result.source_timebase),
         result.observation.identity.semantic.measurand.stable_id,
         result.observation.identity.semantic.metric_definition.stable_id,
         result.observation.identity.processing.registered_operation,
         result.source_mechanics_operation.stable_id,
         result.observation.identity.processing.integration_method,
-        _processing_policy_key(result.observation.identity.processing.method_parameters),
+        _velocity_integration_method_key(result.source_integration_interval),
+        _processing_method_policy_key(result.observation.identity.processing.method_parameters),
         result.observation.identity.processing.filtering,
         result.observation.identity.processing.normalization,
         result.observation.identity.processing.trial_selection,
@@ -2795,15 +2986,17 @@ def assess_cmj_phase_comparability(
         differences.append(
             (ComparabilityReasonCode.PHASE_BOUNDARY_CONVENTION_MISMATCH, "boundary convention")
         )
-    if _event_boundary_key(left.phase_occurrence.start_boundary) != _event_boundary_key(
+    if _phase_boundary_method_key(
+        left.phase_occurrence.start_boundary
+    ) != _phase_boundary_method_key(
         right.phase_occurrence.start_boundary
-    ) or _event_boundary_key(left.phase_occurrence.end_boundary) != _event_boundary_key(
-        right.phase_occurrence.end_boundary
-    ):
+    ) or _phase_boundary_method_key(
+        left.phase_occurrence.end_boundary
+    ) != _phase_boundary_method_key(right.phase_occurrence.end_boundary):
         differences.append(
             (ComparabilityReasonCode.PHASE_BOUNDARY_METHOD_MISMATCH, "phase boundary methods")
         )
-    if _phase_method_key(left) != _phase_method_key(right):
+    if _phase_metric_method_key(left) != _phase_metric_method_key(right):
         differences.append(
             (ComparabilityReasonCode.PHASE_METRIC_METHOD_MISMATCH, "phase/upstream method identity")
         )
