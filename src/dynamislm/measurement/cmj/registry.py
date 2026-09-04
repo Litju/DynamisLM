@@ -31,6 +31,42 @@ CMJ_MECHANICS_COMPARABILITY_RULE = _reference(
 CMJ_PHASE_COMPARABILITY_RULE = _reference(
     "comparability-rule", "cmj-phase-v1", "CMJ phase and phase-metric comparability"
 )
+CMJ_SESSION_COMPARABILITY_RULE = _reference(
+    "comparability-rule", "cmj-session-summary-v1", "CMJ session-summary comparability"
+)
+CMJ_SELECT_ALL_DECLARED_ELIGIBLE_V1 = _reference(
+    "selection-rule",
+    "cmj-select-all-declared-eligible-v1",
+    "CMJ select all declared eligible trials V1",
+)
+CMJ_SELECT_EXTREME_BY_REGISTERED_METRIC_V1 = _reference(
+    "selection-rule",
+    "cmj-select-extreme-by-registered-metric-v1",
+    "CMJ select extreme by registered metric V1",
+)
+CMJ_TIE_EARLIEST_DECLARED_CANDIDATE_V1 = _reference(
+    "tie-policy",
+    "cmj-earliest-declared-candidate-v1",
+    "CMJ earliest declared candidate tie policy V1",
+)
+CMJ_EXPLICIT_TRIAL_EXCLUSION_POLICY_V1 = _reference(
+    "eligibility-policy",
+    "cmj-explicit-trial-exclusion-v1",
+    "CMJ explicit caller-registered trial exclusion policy V1",
+)
+CMJ_ARITHMETIC_MEAN_V1 = _reference(
+    "aggregation-rule", "cmj-arithmetic-mean-v1", "CMJ arithmetic mean V1"
+)
+CMJ_SELECTED_SINGLE_TRIAL_PROJECTION_V1 = _reference(
+    "aggregation-rule",
+    "cmj-selected-single-trial-projection-v1",
+    "CMJ selected single-trial projection V1",
+)
+CMJ_SESSION_AGGREGATION_OPERATION = _reference(
+    "registered-operation",
+    "cmj-session-selection-aggregation-v1",
+    "CMJ session selection and aggregation V1",
+)
 
 CMJ_FORCE_COM_VELOCITY_PHASE_SYSTEM_V1 = _reference(
     "phase-system",
@@ -698,6 +734,28 @@ RES37_DECISION_DISPLACEMENT_REFERENCE = RegistryReference(
         "https://journals.plos.org/plosone/article?id=10.1371/journal.pone.0265999",
         "https://pmc.ncbi.nlm.nih.gov/articles/PMC7761544/",
     ),
+)
+
+RES40_DECISION_TRIAL_SELECTION = RegistryReference(
+    identifier=ScientificIdentifier(
+        "dynamislm", "decision-record", "res40-trial-selection", CMJ_REGISTRY_VERSION
+    ),
+    display_label="RES-40 trial set, eligibility, and selection decision",
+    reference_ids=("docs/decisions/RES40-DR-001-trial-selection-and-eligibility.md",),
+)
+RES40_DECISION_SESSION_AGGREGATION = RegistryReference(
+    identifier=ScientificIdentifier(
+        "dynamislm", "decision-record", "res40-session-aggregation", CMJ_REGISTRY_VERSION
+    ),
+    display_label="RES-40 scalar session aggregation decision",
+    reference_ids=("docs/decisions/RES40-DR-002-scalar-session-aggregation.md",),
+)
+RES40_DECISION_SESSION_COMPARABILITY = RegistryReference(
+    identifier=ScientificIdentifier(
+        "dynamislm", "decision-record", "res40-session-comparability", CMJ_REGISTRY_VERSION
+    ),
+    display_label="RES-40 session comparability and capability matrix decision",
+    reference_ids=("docs/decisions/RES40-DR-003-session-comparability-capability-matrix.md",),
 )
 
 NEWTON = UnitReference(
