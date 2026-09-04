@@ -2747,6 +2747,7 @@ def _event_detector_parameter_method_key(
         ("sigma_multiplier", parameters.sigma_multiplier),
         ("direction", parameters.direction.value if parameters.direction else None),
         ("dwell_samples", parameters.dwell_samples),
+        ("search_start_index", parameters.search_start_index),
     )
 
 

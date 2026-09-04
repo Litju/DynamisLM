@@ -619,26 +619,36 @@ def test_res49_same_method_coordinates_and_values_are_comparable_for_all_initial
     assert first_propulsion_impulse.value != second_propulsion_impulse.value
 
 
-def test_res49_detector_search_coordinates_are_not_event_method_identity() -> None:
+def test_res49_configured_detector_search_start_is_event_method_identity() -> None:
     first = _phase_fixture("res49-search-first", _RES49_FIRST_TRACE, takeoff_search_start_index=8)
-    second = _phase_fixture(
+    movement_search_changed = _phase_fixture(
         "res49-search-second",
         _RES49_FIRST_TRACE,
         onset_search_start_index=5,
+        takeoff_search_start_index=8,
+    )
+    takeoff_search_changed = _phase_fixture(
+        "res49-search-third",
+        _RES49_FIRST_TRACE,
+        onset_search_start_index=4,
         takeoff_search_start_index=9,
     )
-    assert (
-        first[4].detector_parameters.search_start_index
-        != second[4].detector_parameters.search_start_index
-    )
+
+    assert first[4].detector_parameters.search_start_index == 4
+    assert movement_search_changed[4].detector_parameters.search_start_index == 5
     assert (
         first[5].detector_parameters.search_start_index
-        != second[5].detector_parameters.search_start_index
+        != takeoff_search_changed[5].detector_parameters.search_start_index
     )
-    comparison = _compare_phase_metrics(
-        first, second, CMJPhaseMetric.BRAKING_DURATION, "res49-detector-search-coordinates"
-    )
-    assert comparison.state is ComparabilityState.COMPARABLE
+    for label, changed in (
+        ("movement-onset-search-start", movement_search_changed),
+        ("takeoff-search-start", takeoff_search_changed),
+    ):
+        comparison = _compare_phase_metrics(
+            first, changed, CMJPhaseMetric.BRAKING_DURATION, f"res49-{label}"
+        )
+        assert comparison.state is ComparabilityState.BRIDGE_VALIDATION_REQUIRED
+        assert ComparabilityReasonCode.PHASE_METRIC_METHOD_MISMATCH in comparison.reason_codes
 
 
 def test_res49_same_method_phase_durations_can_differ() -> None:

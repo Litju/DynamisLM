@@ -54,11 +54,19 @@ through a nested source, event, interval, reference, or timebase value.
 
 Retain event definition and detector method IDs/versions, threshold family,
 absolute threshold or baseline-SD method parameters, direction, dwell, and
-declared detector search semantics. Exclude occurrence index/time, trial
-length, source IDs, baseline observation/segment coordinates, realized baseline
-statistics, effective threshold realization, and numeric detector search-start
-coordinates. The registered detector method preserves search-role semantics;
-the concrete start sample is a trial realization.
+declared detector search semantics. Under the current RES-36 contract, the
+configured detector `search_start_index` is an explicit method parameter and is
+retained. Exclude occurrence index/time, trial length, source IDs, baseline
+observation/segment coordinates, realized baseline statistics, and effective
+threshold realization. The resulting event sample/time is a trial realization.
+
+The configured RES-36 detector `search_start_index` is distinct from the
+`CMJPhaseBoundary.search_start_index` / `search_end_index` values derived from
+realized events or landmarks. Those phase search supports remain
+`TRIAL_INSTANCE_REALIZATION` and are excluded from method identity.
+
+A future typed relative search-origin contract may replace the raw configured
+integer with registered semantics; that redesign is out of scope for RES-49.
 
 ## BOUNDARY_METHOD_KEY
 
