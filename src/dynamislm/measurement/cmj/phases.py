@@ -612,6 +612,50 @@ class CMJPhaseOccurrence:
         require_tuple(self.source_event_ids, "source_event_ids")
         if any(event_id.instance_type != "event-occurrence" for event_id in self.source_event_ids):
             raise ValueError("source_event_ids must identify event occurrences")
+        event_runs = {
+            run.output_entity_id: run
+            for run in self.provenance.processing_runs
+            if run.method.identifier.object_type == "event-method"
+            and run.output_entity_id.instance_type == "event-occurrence"
+        }
+        expected_event_definitions = {
+            CMJ_MOVEMENT_ONSET_EVENT_DEFINITION.reference.stable_id,
+            CMJ_TAKEOFF_CONTACT_LOSS_EVENT_DEFINITION.reference.stable_id,
+        }
+        preserved_event_definitions = {
+            entry.value
+            for run in event_runs.values()
+            for entry in run.parameters
+            if entry.key == "event_definition" and isinstance(entry.value, str)
+        }
+        if len(event_runs) != len(expected_event_definitions) or (
+            preserved_event_definitions != expected_event_definitions
+        ):
+            raise ValueError(
+                "phase occurrence must preserve movement-onset and takeoff event processing runs"
+            )
+        for event_run in event_runs.values():
+            detector_parameters = next(
+                (
+                    entry.value
+                    for entry in event_run.parameters
+                    if entry.key == "detector_parameters"
+                ),
+                None,
+            )
+            if not isinstance(detector_parameters, str) or not detector_parameters.strip():
+                raise ValueError("source event processing run must preserve detector parameters")
+            try:
+                from_canonical_json(detector_parameters, CMJEventDetectorParameters)
+            except (TypeError, ValueError):
+                raise ValueError(
+                    "source event processing run detector parameters must be canonical"
+                ) from None
+        for event_id in self.source_event_ids:
+            if event_id not in event_runs:
+                raise ValueError(
+                    "phase occurrence must preserve the processing run for every source event"
+                )
         for boundary in (self.start_boundary, self.end_boundary):
             if (
                 boundary.phase_system.stable_id != self.phase_system.stable_id
