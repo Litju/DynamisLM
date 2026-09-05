@@ -51,8 +51,8 @@ hash, dictionary, and storage order never break ties.
 The selection decision returns trial identity, the ranking observation IDs and
 values aligned to the eligible declared order, a canonical ranking-method
 semantic key, and all candidate, eligibility, exclusion, selected, and
-ranking-observation counts. For the V1 extreme rule, ranking observations are
-the declared candidate observations and their immutable provenance is retained.
+ranking-observation counts. For the V1 extreme rule, the ranking observations'
+immutable provenance is retained alongside that alignment.
 It never returns a metric-shopping instruction and never independently
 maximizes a later target metric.
 

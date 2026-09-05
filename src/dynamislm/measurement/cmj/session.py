@@ -343,12 +343,15 @@ class TrialSelectionDecision:
                 raise ValueError(
                     "extreme selection must preserve one ranking observation per eligible trial"
                 )
-            expected_ranking_ids = tuple(
-                self.candidate_set.candidate_observation_ids[expected_order.index(trial_id)]
-                for trial_id in eligible
-            )
-            if self.ranking_observation_ids != expected_ranking_ids:
-                raise ValueError("ranking observation IDs must align to eligible declared order")
+            if not self.ranking_provenance:
+                expected_ranking_ids = tuple(
+                    self.candidate_set.candidate_observation_ids[expected_order.index(trial_id)]
+                    for trial_id in eligible
+                )
+                if self.ranking_observation_ids != expected_ranking_ids:
+                    raise ValueError(
+                        "ranking observation IDs must align to eligible declared order"
+                    )
             if len(self.ranking_values) != len(eligible):
                 raise ValueError("extreme selection must preserve every ranking value")
             if any(

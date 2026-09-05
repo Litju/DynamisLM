@@ -566,7 +566,7 @@ def test_selection_decision_self_validates_registered_rules_and_winners() -> Non
             extreme,
             tie_policy=_unregistered_reference("tie-policy", "not-registered"),
         )
-    with pytest.raises(ValueError, match="ranking observation IDs"):
+    with pytest.raises(ValueError, match="ranking (observation IDs|provenance)"):
         replace(
             extreme,
             ranking_observation_ids=tuple(reversed(extreme.ranking_observation_ids)),
@@ -669,6 +669,31 @@ def test_ranking_method_key_excludes_trial_instance_coordinates() -> None:
     assert jump_b.observation.observation_id.qualified not in jump_selection.ranking_method_key
     assert "trial:a" not in jump_selection.ranking_method_key
     assert "trial:b" not in jump_selection.ranking_method_key
+
+
+def test_extreme_selection_retains_distinct_ranking_observations() -> None:
+    candidate_a = _bind(_phase("distinct-candidate-a", _RES49_FIRST_TRACE), "a")
+    candidate_b = _bind(_phase("distinct-candidate-b", _RES49_SECOND_TRACE), "b")
+    ranking_a = _bind(_phase("distinct-ranking-a", _RES49_FIRST_TRACE), "a")
+    ranking_b = _bind(_phase("distinct-ranking-b", _RES49_SECOND_TRACE), "b")
+    candidate_set = _candidate_set((candidate_a, candidate_b))
+    eligibility = evaluate_trial_eligibility(candidate_set, (candidate_a, candidate_b))
+    assert not isinstance(eligibility, RefusalResult)
+    selection = select_trials(
+        candidate_set,
+        eligibility,
+        selection_rule=CMJ_SELECT_EXTREME_BY_REGISTERED_METRIC_V1,
+        ranking_observations=(ranking_a, ranking_b),
+        ranking_metric=ranking_a.observation.identity.semantic.metric_definition,
+        ranking_method=ranking_a.observation.identity.processing.registered_operation,
+        ranking_direction=TrialSelectionDirection.MAXIMIZE,
+        tie_policy=CMJ_TIE_EARLIEST_DECLARED_CANDIDATE_V1,
+    )
+    assert isinstance(selection, TrialSelectionDecision)
+    assert selection.ranking_observation_ids == (
+        ranking_a.observation.observation_id,
+        ranking_b.observation.observation_id,
+    )
 
 
 def test_ranking_selection_refuses_material_method_mismatches() -> None:

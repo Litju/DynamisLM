@@ -40,8 +40,9 @@ direction, tie policy, ranking IDs, ranking values, or ranking provenance.
 `CMJ_SELECT_EXTREME_BY_REGISTERED_METRIC_V1` requires one ranking observation,
 finite ranking value, and aligned ranking ID for each eligible trial; the
 registered direction and `CMJ_TIE_EARLIEST_DECLARED_CANDIDATE_V1` tie policy
-are retained. The ranking observations are the declared candidate observations
-for the V1 decision, preserving their eligible declared order.
+are retained in eligible declared order. When the ranking observations are
+distinct from candidate observations, their paired immutable provenance is
+required to preserve the alignment.
 
 ## DETERMINISTIC_WINNER_RECOMPUTATION
 
