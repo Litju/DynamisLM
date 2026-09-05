@@ -186,17 +186,6 @@ def _decode_dataclass(value: object, cls: SerializableType) -> object:
         raise SerializationError(
             f"unexpected fields for {type_identifier(target_cls)}: {sorted(unexpected)}"
         )
-    missing = set(fields) - set(value)
-    required_missing = sorted(
-        name
-        for name in missing
-        if fields[name].default is dataclasses.MISSING
-        and fields[name].default_factory is dataclasses.MISSING
-    )
-    if required_missing:
-        raise SerializationError(
-            f"missing fields for {type_identifier(target_cls)}: {required_missing}"
-        )
     hints = get_type_hints(target_cls)
     kwargs = {
         field.name: _decode_value(value[field.name], hints[field.name])
@@ -211,6 +200,14 @@ def _decode_dataclass(value: object, cls: SerializableType) -> object:
                 f"legacy decoder for {type_identifier(target_cls)} must return a mapping"
             )
         kwargs = decoded_kwargs
+    unexpected_decoded = set(kwargs) - set(fields)
+    if unexpected_decoded:
+        raise SerializationError(
+            f"unexpected fields for {type_identifier(target_cls)}: {sorted(unexpected_decoded)}"
+        )
+    missing = sorted(set(fields) - set(kwargs))
+    if missing:
+        raise SerializationError(f"missing fields for {type_identifier(target_cls)}: {missing}")
     try:
         return target_cls(**kwargs)
     except (TypeError, ValueError) as exc:
