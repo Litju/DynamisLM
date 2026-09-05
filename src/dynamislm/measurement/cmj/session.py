@@ -2508,7 +2508,17 @@ def _source_method_key(value: CMJTrialMetricValue) -> str:
     if isinstance(value, CMJPhaseMetricResult):
         return canonical_json(_phase_metric_method_key(value))
     if isinstance(value, CMJJumpHeightResult):
-        return canonical_json(_jump_height_method_key(value))
+        return canonical_json(
+            {
+                "kind": "JUMP_HEIGHT",
+                "method": value.method,
+                "gravity": value.parameters.gravity,
+                "source_identity": _identity_method_key(value.observation.identity),
+                "source_timebase": _timebase_method_key(value.parameters.source_timebase),
+                "takeoff_event": _event_method_key(value.takeoff_event),
+                "landing_event": _event_method_key(value.landing_event),
+            }
+        )
     observation = _observation(value)
     return canonical_json(
         {
@@ -2521,6 +2531,8 @@ def _source_method_key(value: CMJTrialMetricValue) -> str:
 def _ranking_method_key(value: CMJTrialMetricValue) -> str:
     """Return the trial-instance-independent method identity used for ranking."""
 
+    if isinstance(value, CMJJumpHeightResult):
+        return canonical_json(_jump_height_method_key(value))
     return _source_method_key(value)
 
 
