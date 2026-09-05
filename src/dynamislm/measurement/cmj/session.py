@@ -1229,6 +1229,26 @@ def compare_cmj_session_summaries(
             missing_information=("CMJ session measurement identities",),
             unresolved=True,
         )
+    if any(
+        isinstance(key, str) and key.startswith(_LEGACY_RANKING_METHOD_KEY_PREFIX)
+        for key in (
+            left.selection_decision.ranking_method_key,
+            right.selection_decision.ranking_method_key,
+        )
+    ):
+        return _session_comparability_result(
+            request,
+            ComparabilityState.INSUFFICIENT_INFORMATION,
+            (
+                ComparabilityReasonCode.COMPARABILITY_NOT_REGISTERED,
+                ComparabilityReasonCode.MISSING_METADATA,
+            ),
+            missing_information=(
+                "full RES-50 ranking method semantic identity",
+                "ranking observation authority/provenance",
+            ),
+            unresolved=True,
+        )
     if left.target_measurand.stable_id != right.target_measurand.stable_id:
         differences.append((ComparabilityReasonCode.MEASURAND_MISMATCH, "target measurand"))
     if left.target_metric.stable_id != right.target_metric.stable_id:
