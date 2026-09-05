@@ -75,6 +75,42 @@ the new session processing run. Its artifacts, acquisitions, processing runs,
 evidence, and lineage are retained. Target source, athlete, session, test
 family, scalar, method, and comparability checks fail closed.
 
+## STRICT_V3_DECODING
+
+Python dataclass defaults are not implicit wire defaults. Generic v3 decoding
+requires every dataclass field, rejects unknown fields, and retains finite/type
+validation even when a field has a Python default or default factory.
+Modern ranking method keys also retain their existing generated v3 shape; an
+arbitrary payload cannot add ranking semantics while preserving the declared
+metric and method references. Phase ranking keys also retain the event-method
+semantics present in the ranking observation provenance, and registered
+JUMP_HEIGHT method payloads remain exact. Candidate observation IDs cannot be
+reassigned to another declared trial; intentionally distinct ranking
+observations remain represented by their explicit authority records.
+
+## LEGACY_MIGRATION_SCOPE
+
+Backward readability is type-specific to `TrialSelectionDecision`. A genuine
+pre-RES-50 wire shape has none of `ranking_method_key`, `ranking_provenance`,
+or `ranking_authority`; migration explicitly supplies all three fields. No
+other dataclass receives missing-field compatibility, and no scientific
+metadata is reconstructed.
+
+## PARTIAL_MODERN_PAYLOAD_POLICY
+
+The three RES-50 additive fields are all-or-none. A modern payload must carry
+all three; a payload carrying only one or two is malformed and is never
+reclassified as legacy.
+
+## LEGACY_RANKING_COMPARABILITY
+
+`legacy-res40:*` ranking records remain readable and auditable, but their
+nominal historical marker is not full ranking semantic identity or ranking
+observation authority. Any session comparison involving one is
+`INSUFFICIENT_INFORMATION`, unresolved, and missing the full RES-50 ranking
+method semantic identity and ranking observation authority/provenance. Legacy
+records do not establish direct cross-session comparability.
+
 ## DEDUPLICATION
 
 Ranking and target provenance is merged by stable identity. Shared artifacts,
@@ -85,9 +121,10 @@ observations are immutable; reprocessing creates a new output observation.
 ## SERIALIZATION
 
 `SERIALIZATION_VERSION=3` remains unchanged. The new ranking method key and
-ranking provenance fields are additive v3 fields; optional fields use their
-declared defaults when absent from older v3 wire objects. Canonical roundtrips
-preserve selection authority, session results, and the complete lineage graph.
+ranking provenance fields are required on modern v3 wire objects. Only the
+explicit TrialSelectionDecision legacy migration may supply them for a genuine
+pre-RES-50 shape. Canonical roundtrips preserve selection authority, session
+results, and the complete lineage graph.
 RES-39 and RES-49 phase/metric historical hashes are unchanged.
 
 ## P2_MULTI_SOURCE_ACQUISITION_HANDOFF
@@ -118,8 +155,8 @@ The RES-50 matrix covers selected-only projection targets, complete selected
 means, source mismatch refusal, full ranking method identity, method-versus-
 instance separation, registered-rule self-validation, deterministic winner
 recomputation, ranking/target lineage, deduplication, canonical roundtrip,
-and historical hash regression. The full suite contains 241 passing tests.
+and historical hash regression. The full suite contains 255 passing tests.
 
 ## VERSION
 
-RES50-DR-001 v1.0.0; `SERIALIZATION_VERSION=3`.
+RES50-DR-001 v1.1.0; `SERIALIZATION_VERSION=3`.

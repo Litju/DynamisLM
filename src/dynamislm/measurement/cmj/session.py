@@ -29,6 +29,9 @@ from dynamislm.measurement.cmj.identity import (
     CMJMeasurementIdentity,
 )
 from dynamislm.measurement.cmj.jump_height import (
+    CMJ_FLIGHT_TIME_JUMP_HEIGHT_METHOD_V1,
+    CMJ_FLIGHT_TIME_JUMP_HEIGHT_METHOD_V2,
+    CMJ_TAKEOFF_VELOCITY_JUMP_HEIGHT_METHOD,
     CMJJumpHeightResult,
     compare_cmj_jump_height_estimates,
 )
@@ -45,6 +48,7 @@ from dynamislm.measurement.cmj.mechanics import (
 from dynamislm.measurement.cmj.phases import (
     CMJPhaseMetricResult,
     _phase_metric_method_key,
+    _phase_provenance_event_method_key,
     _phase_velocity_processing_method_key,
     _zero_velocity_reference_method_key,
     compare_cmj_phase_metrics,
@@ -107,7 +111,12 @@ from dynamislm.refusal.models import (
     RefusalResult,
     RefusalStatus,
 )
-from dynamislm.serialization import canonical_hash, canonical_json, register_serializable_type
+from dynamislm.serialization import (
+    canonical_data,
+    canonical_hash,
+    canonical_json,
+    register_serializable_type,
+)
 
 RES40_SOFTWARE_VERSION = "dynamislm-res40-1.0.0"
 _UNCERTAINTY_DESCRIPTION = (
@@ -115,8 +124,57 @@ _UNCERTAINTY_DESCRIPTION = (
     "reliability analysis is assessed."
 )
 _LEGACY_RANKING_METHOD_KEY_PREFIX = "legacy-res40:"
-_RES50_RANKING_FIELDS = frozenset(
-    {"ranking_method_key", "ranking_provenance", "ranking_authority"}
+_RES50_RANKING_FIELDS = frozenset({"ranking_method_key", "ranking_provenance", "ranking_authority"})
+_RANKING_METHOD_KEY_FIELDS = {
+    "DERIVED": frozenset({"kind", "identity"}),
+    "JUMP_HEIGHT": frozenset(
+        {
+            "kind",
+            "method",
+            "gravity",
+            "source_identity",
+            "source_timebase",
+            "takeoff_event",
+            "landing_event",
+            "system_contract",
+            "takeoff_velocity_sample_convention",
+            "source_velocity_operation",
+            "source_velocity_integration_method",
+            "source_velocity_initial_condition",
+            "source_velocity_identity",
+            "source_velocity_processing",
+            "source_velocity_filtering",
+            "processing_parameters",
+            "source_filtering",
+            "unit",
+            "normalization",
+        }
+    ),
+    "MECHANICS": frozenset(
+        {
+            "kind",
+            "identity",
+            "method_parameters",
+            "quantity",
+            "operation",
+            "system_contract",
+            "timebase",
+            "unit",
+            "physical_axis",
+            "reference_frame",
+            "sign_convention",
+            "integration_method",
+            "integration_interval",
+            "zero_velocity_reference",
+            "displacement_origin",
+        }
+    ),
+    "OBSERVATION": frozenset({"kind", "identity"}),
+}
+_REGISTERED_JUMP_HEIGHT_METHODS = (
+    CMJ_FLIGHT_TIME_JUMP_HEIGHT_METHOD_V1,
+    CMJ_FLIGHT_TIME_JUMP_HEIGHT_METHOD_V2,
+    CMJ_TAKEOFF_VELOCITY_JUMP_HEIGHT_METHOD,
 )
 
 
@@ -313,14 +371,16 @@ class RankingObservationAuthority:
             raise ValueError("ranking authority method key must be non-empty")
         if not self.ranking_method_key.startswith(_LEGACY_RANKING_METHOD_KEY_PREFIX):
             _validate_ranking_method_key(self.ranking_method_key)
+            _validate_ranking_method_key_references(
+                self.ranking_method_key,
+                self.ranking_metric,
+                self.ranking_method,
+                self.provenance,
+            )
         if not isinstance(self.provenance, Provenance):
             raise ValueError("ranking authority must preserve immutable provenance")
-        if not any(
-            edge.from_id == self.observation_id.qualified
-            or edge.to_id == self.observation_id.qualified
-            for edge in self.provenance.lineage_edges
-        ):
-            raise ValueError("ranking authority provenance must preserve its observation ID")
+        if not _provenance_preserves_observation(self.provenance, self.observation_id):
+            raise ValueError("ranking authority provenance must preserve its observation output")
 
 
 @register_serializable_type
@@ -398,6 +458,18 @@ class TrialSelectionDecision:
         decision_order = tuple(decision.trial_id for decision in self.eligibility_decisions)
         if decision_order != expected_order:
             raise ValueError("eligibility decisions must follow explicit candidate order")
+        candidate_observation_by_trial = dict(
+            zip(
+                self.candidate_set.trial_ids,
+                self.candidate_set.candidate_observation_ids,
+                strict=True,
+            )
+        )
+        if any(
+            candidate_observation_by_trial[decision.trial_id] not in decision.observation_ids
+            for decision in self.eligibility_decisions
+        ):
+            raise ValueError("eligibility decisions must preserve candidate observation IDs")
         if len(set(self.selected_trial_ids)) != len(self.selected_trial_ids):
             raise ValueError("selected trials must be distinct")
         eligible = self.eligible_trial_ids
@@ -484,8 +556,11 @@ class TrialSelectionDecision:
                     }
                 ):
                     raise ValueError("legacy ranking identity does not match its nominal fields")
-            elif not self.ranking_authority:
-                raise ValueError("extreme selection must preserve ranking observation authority")
+            else:
+                if not self.ranking_authority:
+                    raise ValueError(
+                        "extreme selection must preserve ranking observation authority"
+                    )
             if len(self.ranking_observation_ids) != len(eligible):
                 raise ValueError(
                     "extreme selection must preserve one ranking observation per eligible trial"
@@ -511,11 +586,7 @@ class TrialSelectionDecision:
             if self.ranking_provenance and len(self.ranking_provenance) != len(eligible):
                 raise ValueError("ranking provenance must align to every ranking observation")
             if self.ranking_provenance and any(
-                not any(
-                    edge.from_id == observation_id.qualified
-                    or edge.to_id == observation_id.qualified
-                    for edge in provenance.lineage_edges
-                )
+                not _provenance_preserves_observation(provenance, observation_id)
                 for observation_id, provenance in zip(
                     self.ranking_observation_ids, self.ranking_provenance, strict=True
                 )
@@ -543,6 +614,14 @@ class TrialSelectionDecision:
                         raise ValueError("ranking authority value differs from selection value")
                     if authority.ranking_method_key != self.ranking_method_key:
                         raise ValueError("ranking authority method key differs from selection key")
+                    candidate_observation_id = candidate_observation_by_trial[trial_id]
+                    if (
+                        authority.observation_id in self.candidate_set.candidate_observation_ids
+                        and authority.observation_id != candidate_observation_id
+                    ):
+                        raise ValueError(
+                            "ranking authority observation IDs must preserve declared trial mapping"
+                        )
                 if (
                     tuple(item.provenance for item in self.ranking_authority)
                     != self.ranking_provenance
@@ -550,6 +629,14 @@ class TrialSelectionDecision:
                     raise ValueError(
                         "ranking authority provenance differs from selection provenance"
                     )
+                if not self.ranking_method_key.startswith(_LEGACY_RANKING_METHOD_KEY_PREFIX):
+                    for provenance in self.ranking_provenance:
+                        _validate_ranking_method_key_references(
+                            self.ranking_method_key,
+                            self.ranking_metric,
+                            self.ranking_method,
+                            provenance,
+                        )
             expected_trial = eligible[0]
             expected_value = float(self.ranking_values[0])
             for trial_id, value in zip(eligible[1:], self.ranking_values[1:], strict=True):
@@ -3190,8 +3277,84 @@ def _validate_ranking_method_key(key: str) -> None:
         raise ValueError("ranking_method_key must preserve the v3 canonical envelope")
     if canonical != key:
         raise ValueError("ranking_method_key must use canonical JSON ordering")
+    if set(decoded) != {"payload", "serialization_version", "type"}:
+        raise ValueError("ranking_method_key must preserve its canonical payload")
+    key_type = decoded.get("type")
+    payload = decoded.get("payload")
+    if (
+        not isinstance(key_type, str)
+        or key_type not in {"builtins.dict", "builtins.tuple"}
+        or not payload
+    ):
+        raise ValueError("ranking_method_key must preserve a non-empty canonical payload")
+    if key_type == "builtins.tuple":
+        if not isinstance(payload, list) or len(payload) != 31:
+            raise ValueError("ranking_method_key must preserve the known phase key shape")
+    elif not isinstance(payload, dict):
+        raise ValueError("ranking_method_key must preserve the known ranking key shape")
+    else:
+        kind = payload.get("kind")
+        expected_fields = _RANKING_METHOD_KEY_FIELDS.get(kind) if isinstance(kind, str) else None
+        if expected_fields is None or set(payload) != expected_fields:
+            raise ValueError("ranking_method_key must preserve the known ranking key shape")
     if _strip_ranking_instance_data(decoded) != decoded:
         raise ValueError("ranking_method_key must exclude trial-instance data")
+
+
+def _provenance_preserves_observation(
+    provenance: Provenance,
+    observation_id: InstanceIdentifier,
+) -> bool:
+    return any(
+        run.output_entity_id == observation_id
+        and any(
+            edge.from_id == run.processing_run_id.qualified
+            and edge.to_id == observation_id.qualified
+            and edge.relation is LineageRelation.PRODUCED
+            for edge in provenance.lineage_edges
+        )
+        for run in provenance.processing_runs
+    )
+
+
+def _contains_canonical_value(value: object, expected: object) -> bool:
+    if value == expected:
+        return True
+    if isinstance(value, dict):
+        return any(_contains_canonical_value(item, expected) for item in value.values())
+    if isinstance(value, list):
+        return any(_contains_canonical_value(item, expected) for item in value)
+    return False
+
+
+def _validate_ranking_method_key_references(
+    key: str,
+    ranking_metric: RegistryReference,
+    ranking_method: RegistryReference,
+    provenance: Provenance,
+) -> None:
+    payload = json.loads(key)["payload"]
+    for reference in (ranking_metric, ranking_method):
+        if not any(
+            _contains_canonical_value(payload, expected)
+            for expected in (reference.stable_id, canonical_data(reference))
+        ):
+            raise ValueError("ranking_method_key must preserve declared metric and method identity")
+    if isinstance(payload, dict) and payload.get("kind") == "JUMP_HEIGHT":
+        method = next(
+            (
+                item
+                for item in _REGISTERED_JUMP_HEIGHT_METHODS
+                if item.reference.stable_id == ranking_method.stable_id
+            ),
+            None,
+        )
+        if method is None or payload["method"] != canonical_data(method):
+            raise ValueError("ranking_method_key must preserve registered jump method semantics")
+    if isinstance(payload, list) and payload[6] != canonical_data(
+        _phase_provenance_event_method_key(provenance)
+    ):
+        raise ValueError("ranking_method_key must preserve its ranking provenance semantics")
 
 
 def _ranking_method_metadata_key(

@@ -62,7 +62,7 @@ from dynamislm.measurement.identity import (
     SemanticIdentity,
 )
 from dynamislm.measurement.result import ResultStatus, UncertaintyStatus
-from dynamislm.provenance.models import LineageRelation
+from dynamislm.provenance.models import LineageEdge, LineageRelation
 from dynamislm.refusal import RefusalReasonCode, RefusalResult
 from test_cmj import _mechanics_fixture
 from test_cmj import _observation as _raw_observation
@@ -671,13 +671,124 @@ def test_selection_rejects_semantically_empty_modern_ranking_key() -> None:
     second = _bind(_phase("forged-key-b", _RES49_SECOND_TRACE), "b")
     selection = _extreme_selection((first, second))
     envelope = json.loads(canonical_json(selection))
-    forged_key = '{"serialization_version":3}'
+    forged_key = canonical_json({"forged": "ranking-authority"})
     envelope["payload"]["ranking_method_key"] = forged_key
     for authority in envelope["payload"]["ranking_authority"]:
         authority["ranking_method_key"] = forged_key
 
-    with pytest.raises(ValueError, match="invalid|canonical payload"):
+    with pytest.raises(ValueError, match="invalid|declared metric and method"):
         from_canonical_json(json.dumps(envelope), TrialSelectionDecision)
+
+
+def test_selection_rejects_extra_modern_ranking_key_fields_on_wire_decode() -> None:
+    first, _, _, _ = _flight_fixture("forged-key-shape-a", gravity_suffix="shared")
+    second, _, _, _ = _flight_fixture("forged-key-shape-b", gravity_suffix="shared")
+    selection = _extreme_selection((_bind(first, "a"), _bind(second, "b")))
+    assert selection.ranking_method_key is not None
+    key_envelope = json.loads(selection.ranking_method_key)
+    assert isinstance(key_envelope["payload"], dict)
+    key_envelope["payload"]["forged"] = "ranking-semantics"
+    forged_key = json.dumps(key_envelope, separators=(",", ":"), sort_keys=True)
+
+    envelope = json.loads(canonical_json(selection))
+    envelope["payload"]["ranking_method_key"] = forged_key
+    for authority in envelope["payload"]["ranking_authority"]:
+        authority["ranking_method_key"] = forged_key
+
+    with pytest.raises(ValueError, match="invalid|known ranking key shape"):
+        from_canonical_json(json.dumps(envelope), TrialSelectionDecision)
+
+
+def test_selection_rejects_nested_jump_method_semantics_on_wire_decode() -> None:
+    first, _, _, _ = _flight_fixture("forged-nested-key-a", gravity_suffix="shared")
+    second, _, _, _ = _flight_fixture("forged-nested-key-b", gravity_suffix="shared")
+    selection = _extreme_selection((_bind(first, "a"), _bind(second, "b")))
+    assert selection.ranking_method_key is not None
+    key_envelope = json.loads(selection.ranking_method_key)
+    assert isinstance(key_envelope["payload"], dict)
+    key_envelope["payload"]["method"] = {
+        "legitimate_method": key_envelope["payload"]["method"],
+        "forged_semantics": {"ranking_window": "invented"},
+    }
+    forged_key = json.dumps(key_envelope, separators=(",", ":"), sort_keys=True)
+
+    envelope = json.loads(canonical_json(selection))
+    envelope["payload"]["ranking_method_key"] = forged_key
+    for authority in envelope["payload"]["ranking_authority"]:
+        authority["ranking_method_key"] = forged_key
+
+    with pytest.raises(ValueError, match="invalid|registered jump method semantics"):
+        from_canonical_json(json.dumps(envelope), TrialSelectionDecision)
+
+
+def test_selection_rejects_changed_modern_ranking_key_provenance_semantics() -> None:
+    first = _bind(_phase("forged-key-value-a", _RES49_FIRST_TRACE), "a")
+    second = _bind(_phase("forged-key-value-b", _RES49_SECOND_TRACE), "b")
+    selection = _extreme_selection((first, second))
+    assert selection.ranking_method_key is not None
+    key_envelope = json.loads(selection.ranking_method_key)
+    assert isinstance(key_envelope["payload"], list)
+    detector_parameters = key_envelope["payload"][6][0][2]
+    assert isinstance(detector_parameters, list)
+    for parameter in detector_parameters:
+        if parameter[0] == "search_start_index":
+            parameter[1] = 5
+            break
+    else:
+        pytest.fail("expected a search_start_index ranking parameter")
+    forged_key = json.dumps(key_envelope, separators=(",", ":"), sort_keys=True)
+
+    envelope = json.loads(canonical_json(selection))
+    envelope["payload"]["ranking_method_key"] = forged_key
+    for authority in envelope["payload"]["ranking_authority"]:
+        authority["ranking_method_key"] = forged_key
+
+    with pytest.raises(ValueError, match="invalid|ranking provenance semantics"):
+        from_canonical_json(json.dumps(envelope), TrialSelectionDecision)
+
+
+def test_selection_rejects_cross_trial_candidate_ranking_authority_repair() -> None:
+    first = _bind(_phase("repaired-authority-a", _RES49_FIRST_TRACE), "a")
+    second = _bind(_phase("repaired-authority-b", _RES49_SECOND_TRACE), "b")
+    selection = _extreme_selection((first, second))
+    left, right = selection.ranking_authority
+    swapped_left = replace(left, observation_id=right.observation_id, provenance=right.provenance)
+    swapped_right = replace(right, observation_id=left.observation_id, provenance=left.provenance)
+
+    with pytest.raises(ValueError, match="declared trial mapping"):
+        replace(
+            selection,
+            ranking_observation_ids=(right.observation_id, left.observation_id),
+            ranking_provenance=(right.provenance, left.provenance),
+            ranking_authority=(swapped_left, swapped_right),
+        )
+
+
+def test_selection_rejects_forged_ranking_authority_source_binding() -> None:
+    first = _bind(_phase("forged-ranking-source-a", _RES49_FIRST_TRACE), "a")
+    second = _bind(_phase("forged-ranking-source-b", _RES49_SECOND_TRACE), "b")
+    selection = _extreme_selection((first, second))
+    authority = selection.ranking_authority[0]
+    forged_observation_id = InstanceIdentifier("observation", "forged-ranking-source")
+    processing_run = authority.provenance.processing_runs[0]
+    forged_provenance = replace(
+        authority.provenance,
+        lineage_edges=(
+            *authority.provenance.lineage_edges,
+            LineageEdge(
+                forged_observation_id.qualified,
+                processing_run.processing_run_id.qualified,
+                LineageRelation.DERIVED_FROM,
+            ),
+        ),
+    )
+
+    with pytest.raises(ValueError, match="observation output"):
+        replace(
+            authority,
+            observation_id=forged_observation_id,
+            provenance=forged_provenance,
+        )
 
 
 def test_select_all_rejects_ranking_arguments_at_selection_boundary() -> None:
@@ -1476,7 +1587,9 @@ def test_legacy_ranking_summaries_are_comparability_insufficient() -> None:
     )
     assert legacy_comparison.state is ComparabilityState.INSUFFICIENT_INFORMATION
     assert ComparabilityReasonCode.MISSING_METADATA.value in legacy_comparison.reason_codes
-    assert ComparabilityReasonCode.COMPARABILITY_NOT_REGISTERED.value in legacy_comparison.reason_codes
+    assert (
+        ComparabilityReasonCode.COMPARABILITY_NOT_REGISTERED.value in legacy_comparison.reason_codes
+    )
     assert legacy_comparison.decided_by is ComparabilityDecisionSource.UNRESOLVED
     assert legacy_comparison.rule_reference is None
     assert "full RES-50 ranking method semantic identity" in legacy_comparison.missing_information
