@@ -9,9 +9,10 @@ SCOPE=Comparability/refusal of immutable CMJ session summaries and closure of th
 Two session summaries are directly comparable only when their target measurand,
 metric definition, source estimator/method, phase system/definition, acquisition
 and processing identity, device/protocol/system/loading contract, selection and
-ranking identity, tie policy, aggregation rule/version, candidate and
-contributing counts, unit/normalization, filtering, resampling, drift, and
-processing state agree under the existing registered authorities.
+ranking identity including the canonical ranking-method semantic key, tie
+policy, aggregation rule/version, candidate and contributing counts,
+unit/normalization, filtering, resampling, drift, and processing state agree
+under the existing registered authorities.
 
 The following are not direct-comparable by default: selected maximum versus
 arithmetic mean; maximum by different ranking metrics; maximize versus

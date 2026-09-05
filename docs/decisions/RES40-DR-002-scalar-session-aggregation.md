@@ -37,10 +37,13 @@ mean-of-2 is not directly comparable to mean-of-3, and maximum-of-2 is not
 directly comparable to maximum-of-3, absent future bridge authority. Exact
 trial and observation IDs remain provenance/instance information.
 
-Missing ranking or target observations, refused observations, and undeclared
-available-case inputs do not produce a summary. A registered explicit
-exclusion can reduce the honest eligible and contributing counts and is
-retained in the selection decision.
+Missing ranking observations, refused observations, and undeclared
+available-case inputs do not produce a summary. A selected-trial projection
+requires its target only for the selected trial; an eligible but unselected
+target is not required. An arithmetic mean requires a target for every
+selected/contributing trial. A registered explicit exclusion can reduce the
+honest eligible and contributing counts and is retained in the selection
+decision.
 
 ## CLASSIFICATION_AND_UNCERTAINTY
 
@@ -54,10 +57,10 @@ reliability analysis.
 ## PROVENANCE
 
 The output is a new frozen `ScientificMeasurementObservation`. Source trial
-and observation IDs, source identities, acquisition/device/protocol/loading
-semantics, selection and aggregation rule/version, equation, counts, evidence,
-processing run, and lineage edges are retained. Source observations are never
-overwritten.
+and observation IDs, including every ranking dependency, source identities,
+acquisition/device/protocol/loading semantics, selection and aggregation
+rule/version, equation, counts, evidence, processing run, and lineage edges
+are retained. Source observations are never overwritten.
 
 ## LIMITATIONS
 

@@ -186,13 +186,31 @@ def _decode_dataclass(value: object, cls: SerializableType) -> object:
         raise SerializationError(
             f"unexpected fields for {type_identifier(target_cls)}: {sorted(unexpected)}"
         )
-    if set(fields) - set(value):
-        missing = sorted(set(fields) - set(value))
-        raise SerializationError(f"missing fields for {type_identifier(target_cls)}: {missing}")
+    missing = set(fields) - set(value)
+    required_missing = sorted(
+        name
+        for name in missing
+        if fields[name].default is dataclasses.MISSING
+        and fields[name].default_factory is dataclasses.MISSING
+    )
+    if required_missing:
+        raise SerializationError(
+            f"missing fields for {type_identifier(target_cls)}: {required_missing}"
+        )
     hints = get_type_hints(target_cls)
     kwargs = {
-        field.name: _decode_value(value[field.name], hints[field.name]) for field in fields.values()
+        field.name: _decode_value(value[field.name], hints[field.name])
+        for field in fields.values()
+        if field.name in value
     }
+    legacy_decoder = getattr(target_cls, "__decode_legacy_wire__", None)
+    if legacy_decoder is not None:
+        decoded_kwargs = legacy_decoder(value, kwargs)
+        if not isinstance(decoded_kwargs, dict):
+            raise SerializationError(
+                f"legacy decoder for {type_identifier(target_cls)} must return a mapping"
+            )
+        kwargs = decoded_kwargs
     try:
         return target_cls(**kwargs)
     except (TypeError, ValueError) as exc:

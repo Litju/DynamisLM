@@ -49,10 +49,12 @@ the ranking. Exact ties select the first candidate in the declared tuple; UUID,
 hash, dictionary, and storage order never break ties.
 
 The selection decision returns trial identity, the ranking observation IDs and
-values aligned to the eligible declared order, and all candidate, eligibility,
-exclusion, selected, and ranking-observation counts. It never returns a
-metric-shopping instruction and never independently maximizes a later target
-metric.
+values aligned to the eligible declared order, a canonical ranking-method
+semantic key, and all candidate, eligibility, exclusion, selected, and
+ranking-observation counts. For the V1 extreme rule, the ranking observations'
+immutable provenance is retained alongside that alignment.
+It never returns a metric-shopping instruction and never independently
+maximizes a later target metric.
 
 ## SOURCE_INVARIANTS
 
