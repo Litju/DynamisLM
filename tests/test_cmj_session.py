@@ -548,6 +548,17 @@ def test_selection_decision_self_validates_registered_rules_and_winners() -> Non
     wrong_trial = second_trial if extreme.selected_trial_ids == (first_trial,) else first_trial
     with pytest.raises(ValueError, match="deterministic ranking winner"):
         replace(extreme, selected_trial_ids=(wrong_trial,))
+
+    minimum = _extreme_selection(
+        (first, second),
+        direction=TrialSelectionDirection.MINIMIZE,
+    )
+    minimum_wrong_trial = (
+        second_trial if minimum.selected_trial_ids == (first_trial,) else first_trial
+    )
+    with pytest.raises(ValueError, match="deterministic ranking winner"):
+        replace(minimum, selected_trial_ids=(minimum_wrong_trial,))
+
     with pytest.raises(ValueError, match="ranking method identity"):
         replace(extreme, ranking_method_key=None)
     with pytest.raises(ValueError, match="tie policy"):
@@ -950,6 +961,22 @@ def test_select_all_additive_fields_are_optional_on_v3_wire_decode() -> None:
     restored = from_canonical_json(json.dumps(envelope), TrialSelectionDecision)
     assert restored == selection
     assert SERIALIZATION_VERSION == 3
+
+
+def test_deserialized_extreme_decision_recomputes_its_winner() -> None:
+    first = _bind(_phase("deserialize-winner-a", _RES49_FIRST_TRACE), "a")
+    second = _bind(_phase("deserialize-winner-b", _RES49_SECOND_TRACE), "b")
+    selection = _extreme_selection((first, second))
+    wrong_trial = (
+        second.observation.context.trial_id
+        if selection.selected_trial_ids[0] == first.observation.context.trial_id
+        else first.observation.context.trial_id
+    )
+    assert wrong_trial is not None
+    envelope = json.loads(canonical_json(selection))
+    envelope["payload"]["selected_trial_ids"] = [json.loads(canonical_json(wrong_trial))["payload"]]
+    with pytest.raises(ValueError, match="invalid|winner"):
+        from_canonical_json(json.dumps(envelope), TrialSelectionDecision)
 
 
 def test_scalar_only_boundary_refuses_vectors_and_no_array_mean_is_attempted() -> None:
