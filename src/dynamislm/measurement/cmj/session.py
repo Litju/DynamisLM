@@ -41,6 +41,9 @@ from dynamislm.measurement.cmj.mechanics import (
 from dynamislm.measurement.cmj.phases import (
     CMJPhaseMetricResult,
     _phase_metric_method_key,
+    _phase_velocity_processing_method_key,
+    _source_measurement_method_key,
+    _zero_velocity_reference_method_key,
     compare_cmj_phase_metrics,
 )
 from dynamislm.measurement.cmj.registry import (
@@ -264,14 +267,22 @@ class TrialSelectionDecision:
     tie_policy: RegistryReference | None = None
     ranking_observation_ids: tuple[InstanceIdentifier, ...] = ()
     ranking_values: tuple[float, ...] = ()
+    ranking_method_key: str | None = None
+    ranking_provenance: tuple[Provenance, ...] = ()
 
     def __post_init__(self) -> None:
         require_tuple(self.eligibility_decisions, "eligibility_decisions")
         require_tuple(self.selected_trial_ids, "selected_trial_ids")
         require_tuple(self.ranking_observation_ids, "ranking_observation_ids")
         require_tuple(self.ranking_values, "ranking_values")
-        if self.selection_rule.identifier.object_type != "selection-rule":
-            raise ValueError("selection_rule must be a selection-rule reference")
+        require_tuple(self.ranking_provenance, "ranking_provenance")
+        if not isinstance(self.selection_rule, RegistryReference):
+            raise ValueError("selection_rule must be a registered selection-rule reference")
+        if self.selection_rule not in (
+            CMJ_SELECT_ALL_DECLARED_ELIGIBLE_V1,
+            CMJ_SELECT_EXTREME_BY_REGISTERED_METRIC_V1,
+        ):
+            raise ValueError("selection_rule is not one of the registered CMJ V1 rules")
         expected_order = self.candidate_set.trial_ids
         decision_order = tuple(decision.trial_id for decision in self.eligibility_decisions)
         if decision_order != expected_order:
@@ -291,34 +302,91 @@ class TrialSelectionDecision:
             raise ValueError("ranking observation IDs must identify observations")
         if len(set(self.ranking_observation_ids)) != len(self.ranking_observation_ids):
             raise ValueError("ranking observation IDs must be distinct")
-        if self.ranking_direction is not None and not isinstance(
-            self.ranking_direction, TrialSelectionDirection
+        if self.ranking_method_key is not None and (
+            not isinstance(self.ranking_method_key, str) or not self.ranking_method_key.strip()
         ):
-            raise ValueError("ranking direction must be MAXIMIZE or MINIMIZE")
-        if self.tie_policy is not None and self.tie_policy.identifier.object_type != "tie-policy":
-            raise ValueError("tie_policy must be a tie-policy reference")
-        is_extreme = (
-            self.selection_rule.stable_id == CMJ_SELECT_EXTREME_BY_REGISTERED_METRIC_V1.stable_id
-        )
+            raise ValueError("ranking_method_key must be a non-empty canonical string")
+        if any(not isinstance(item, Provenance) for item in self.ranking_provenance):
+            raise ValueError("ranking_provenance must contain immutable Provenance records")
+        is_extreme = self.selection_rule == CMJ_SELECT_EXTREME_BY_REGISTERED_METRIC_V1
+        if self.selection_rule == CMJ_SELECT_ALL_DECLARED_ELIGIBLE_V1:
+            if self.selected_trial_ids != eligible:
+                raise ValueError("SELECT_ALL must select every eligible trial in declared order")
+            if any(
+                value is not None
+                for value in (
+                    self.ranking_metric,
+                    self.ranking_method,
+                    self.ranking_direction,
+                    self.tie_policy,
+                    self.ranking_method_key,
+                )
+            ):
+                raise ValueError("SELECT_ALL must not preserve ranking metadata")
+            if self.ranking_observation_ids or self.ranking_values or self.ranking_provenance:
+                raise ValueError("SELECT_ALL must not preserve ranking observations")
+            return
         if is_extreme:
             if len(self.selected_trial_ids) != 1:
                 raise ValueError("extreme selection must select exactly one trial")
-            if self.ranking_metric is None or self.ranking_method is None:
+            if not isinstance(self.ranking_metric, RegistryReference) or not isinstance(
+                self.ranking_method, RegistryReference
+            ):
                 raise ValueError("extreme selection must preserve ranking metric and method")
-            if self.ranking_direction is None or self.tie_policy is None:
+            if not isinstance(self.ranking_direction, TrialSelectionDirection):
                 raise ValueError("extreme selection must preserve direction and tie policy")
+            if self.tie_policy != CMJ_TIE_EARLIEST_DECLARED_CANDIDATE_V1:
+                raise ValueError("extreme selection must use the registered V1 tie policy")
+            if self.ranking_method_key is None:
+                raise ValueError("extreme selection must preserve ranking method identity")
             if len(self.ranking_observation_ids) != len(eligible):
                 raise ValueError(
                     "extreme selection must preserve one ranking observation per eligible trial"
                 )
+            expected_ranking_ids = tuple(
+                self.candidate_set.candidate_observation_ids[expected_order.index(trial_id)]
+                for trial_id in eligible
+            )
+            if self.ranking_observation_ids != expected_ranking_ids:
+                raise ValueError("ranking observation IDs must align to eligible declared order")
             if len(self.ranking_values) != len(eligible):
                 raise ValueError("extreme selection must preserve every ranking value")
-            if any(not math.isfinite(value) for value in self.ranking_values):
+            if any(
+                isinstance(value, bool)
+                or not isinstance(value, int | float)
+                or not math.isfinite(float(value))
+                for value in self.ranking_values
+            ):
                 raise ValueError("ranking values must be finite")
-        elif self.ranking_observation_ids:
-            raise ValueError("non-extreme selection must not preserve ranking observations")
-        elif self.ranking_values:
-            raise ValueError("non-extreme selection must not preserve ranking values")
+            if self.ranking_provenance and len(self.ranking_provenance) != len(eligible):
+                raise ValueError("ranking provenance must align to every ranking observation")
+            if self.ranking_provenance and any(
+                not any(
+                    edge.from_id == observation_id.qualified
+                    or edge.to_id == observation_id.qualified
+                    for edge in provenance.lineage_edges
+                )
+                for observation_id, provenance in zip(
+                    self.ranking_observation_ids, self.ranking_provenance, strict=True
+                )
+            ):
+                raise ValueError("ranking provenance must preserve each ranking observation ID")
+            expected_trial = eligible[0]
+            expected_value = float(self.ranking_values[0])
+            for trial_id, value in zip(eligible[1:], self.ranking_values[1:], strict=True):
+                scalar = float(value)
+                is_better = (
+                    scalar > expected_value
+                    if self.ranking_direction is TrialSelectionDirection.MAXIMIZE
+                    else scalar < expected_value
+                )
+                if is_better:
+                    expected_trial = trial_id
+                    expected_value = scalar
+            if self.selected_trial_ids != (expected_trial,):
+                raise ValueError("selected trial is not the deterministic ranking winner")
+            return
+        raise AssertionError("selection rule validation did not resolve a registered rule")
 
     @property
     def eligible_trial_ids(self) -> tuple[InstanceIdentifier, ...]:
@@ -654,10 +722,10 @@ def select_trials(
     decision_refusal = _validate_eligibility_decisions(candidate_set, decisions)
     if decision_refusal is not None:
         return decision_refusal
-    if selection_rule.stable_id not in {
-        CMJ_SELECT_ALL_DECLARED_ELIGIBLE_V1.stable_id,
-        CMJ_SELECT_EXTREME_BY_REGISTERED_METRIC_V1.stable_id,
-    }:
+    if selection_rule not in (
+        CMJ_SELECT_ALL_DECLARED_ELIGIBLE_V1,
+        CMJ_SELECT_EXTREME_BY_REGISTERED_METRIC_V1,
+    ):
         return _session_refusal(
             "select CMJ trials",
             (RefusalReasonCode.SELECTION_RULE_NOT_REGISTERED,),
@@ -682,12 +750,15 @@ def select_trials(
             ("at least one eligible declared candidate",),
             observation_ids=_decision_observation_ids(decisions),
         )
-    if selection_rule.stable_id == CMJ_SELECT_ALL_DECLARED_ELIGIBLE_V1.stable_id:
-        if ranking_observations:
+    if selection_rule == CMJ_SELECT_ALL_DECLARED_ELIGIBLE_V1:
+        if ranking_observations or any(
+            value is not None
+            for value in (ranking_metric, ranking_method, ranking_direction, tie_policy)
+        ):
             return _session_refusal(
                 "select all eligible CMJ trials",
                 (RefusalReasonCode.SESSION_SOURCE_MISMATCH,),
-                ("ranking observations are not part of SELECT_ALL_DECLARED_ELIGIBLE_V1",),
+                ("ranking metadata is not part of SELECT_ALL_DECLARED_ELIGIBLE_V1",),
             )
         return TrialSelectionDecision(
             candidate_set=candidate_set,
@@ -722,7 +793,7 @@ def select_trials(
             ("registered earliest-declared-candidate tie policy",),
         )
     resolved_tie_policy = tie_policy
-    if resolved_tie_policy.stable_id != CMJ_TIE_EARLIEST_DECLARED_CANDIDATE_V1.stable_id:
+    if resolved_tie_policy != CMJ_TIE_EARLIEST_DECLARED_CANDIDATE_V1:
         return _session_refusal(
             "select extreme CMJ trial",
             (RefusalReasonCode.SELECTION_RULE_NOT_REGISTERED,),
@@ -741,6 +812,9 @@ def select_trials(
             observation_ids=_decision_observation_ids(decisions),
         )
     ranking_values: list[tuple[InstanceIdentifier, CMJTrialMetricValue, float]] = []
+    ranking_method_keys: list[str] = []
+    resolved_ranking_metric: RegistryReference | None = None
+    resolved_ranking_method: RegistryReference | None = None
     for trial_id in eligible:
         value = ranking_by_trial[trial_id]
         metric = _metric_reference(value)
@@ -756,6 +830,10 @@ def select_trials(
                 ("every ranking observation must use the registered ranking metric and method",),
                 observation_ids=_observation_ids_for_values(ranking_by_trial.values()),
             )
+        if resolved_ranking_metric is None:
+            resolved_ranking_metric = metric
+        if resolved_ranking_method is None:
+            resolved_ranking_method = method
         scalar = _numeric_value(_observation(value))
         if scalar is None:
             return _session_refusal(
@@ -765,6 +843,14 @@ def select_trials(
                 observation_ids=_observation_ids_for_values(ranking_by_trial.values()),
             )
         ranking_values.append((trial_id, value, scalar))
+        ranking_method_keys.append(_ranking_method_key(value))
+    if len(set(ranking_method_keys)) != 1:
+        return _session_refusal(
+            "select extreme CMJ trial",
+            (RefusalReasonCode.RANKING_METRICS_NOT_COMPARABLE,),
+            ("all ranking observations must share one canonical method identity",),
+            observation_ids=_observation_ids_for_values(ranking_by_trial.values()),
+        )
     for left_index, (_, left_value, _) in enumerate(ranking_values):
         for _, right_value, _ in ranking_values[left_index + 1 :]:
             comparison = _compare_trial_values(left_value, right_value, "rank CMJ trials")
@@ -795,12 +881,16 @@ def select_trials(
         eligibility_decisions=decisions,
         selection_rule=selection_rule,
         selected_trial_ids=(chosen_trial,),
-        ranking_metric=ranking_metric,
-        ranking_method=ranking_method,
+        ranking_metric=resolved_ranking_metric,
+        ranking_method=resolved_ranking_method,
         ranking_direction=direction,
         tie_policy=resolved_tie_policy,
         ranking_observation_ids=ranking_ids,
         ranking_values=tuple(scalar for _, _, scalar in ranking_values),
+        ranking_method_key=ranking_method_keys[0],
+        ranking_provenance=tuple(
+            _observation(ranking_by_trial[trial_id]).provenance for trial_id in eligible
+        ),
     )
 
 
@@ -808,6 +898,7 @@ def project_selected_trial(
     selection_decision: TrialSelectionDecision,
     target_observations: TrialMetricInputs,
     *,
+    ranking_observations: TrialMetricInputs | None = None,
     output_observation_id: InstanceIdentifier | None = None,
     recorded_at: datetime_module.datetime | None = None,
 ) -> SessionAggregationResult | RefusalResult:
@@ -829,6 +920,7 @@ def project_selected_trial(
     return _aggregate_session(
         selection_decision,
         target_observations,
+        ranking_observations=ranking_observations,
         aggregation_rule=CMJ_SELECTED_SINGLE_TRIAL_PROJECTION_V1,
         equation="x_selected",
         output_observation_id=output_observation_id,
@@ -840,6 +932,7 @@ def aggregate_cmj_session(
     selection_decision: TrialSelectionDecision,
     target_observations: TrialMetricInputs,
     *,
+    ranking_observations: TrialMetricInputs | None = None,
     output_observation_id: InstanceIdentifier | None = None,
     recorded_at: datetime_module.datetime | None = None,
 ) -> SessionAggregationResult | RefusalResult:
@@ -848,6 +941,7 @@ def aggregate_cmj_session(
     return _aggregate_session(
         selection_decision,
         target_observations,
+        ranking_observations=ranking_observations,
         aggregation_rule=CMJ_ARITHMETIC_MEAN_V1,
         equation="sum(x_i) / n",
         output_observation_id=output_observation_id,
@@ -860,6 +954,7 @@ def aggregate_cmj_trial_metrics(
     target_observations: TrialMetricInputs,
     *,
     aggregation_rule: RegistryReference = CMJ_ARITHMETIC_MEAN_V1,
+    ranking_observations: TrialMetricInputs | None = None,
     output_observation_id: InstanceIdentifier | None = None,
     recorded_at: datetime_module.datetime | None = None,
 ) -> SessionAggregationResult | RefusalResult:
@@ -875,6 +970,7 @@ def aggregate_cmj_trial_metrics(
         return project_selected_trial(
             selection_decision,
             target_observations,
+            ranking_observations=ranking_observations,
             output_observation_id=output_observation_id,
             recorded_at=recorded_at,
         )
@@ -887,6 +983,7 @@ def aggregate_cmj_trial_metrics(
     return aggregate_cmj_session(
         selection_decision,
         target_observations,
+        ranking_observations=ranking_observations,
         output_observation_id=output_observation_id,
         recorded_at=recorded_at,
     )
@@ -966,6 +1063,13 @@ def compare_cmj_session_summaries(
     ):
         differences.append(
             (ComparabilityReasonCode.SESSION_RANKING_METHOD_MISMATCH, "ranking method")
+        )
+    if left.selection_decision.ranking_method_key != right.selection_decision.ranking_method_key:
+        differences.append(
+            (
+                ComparabilityReasonCode.SESSION_RANKING_METHOD_MISMATCH,
+                "ranking method semantic identity",
+            )
         )
     if left.selection_decision.ranking_direction != right.selection_decision.ranking_direction:
         differences.append(
@@ -1109,6 +1213,7 @@ def _aggregate_session(
     selection_decision: TrialSelectionDecision,
     target_observations: TrialMetricInputs,
     *,
+    ranking_observations: TrialMetricInputs | None,
     aggregation_rule: RegistryReference,
     equation: str,
     output_observation_id: InstanceIdentifier | None,
@@ -1123,13 +1228,17 @@ def _aggregate_session(
             (RefusalReasonCode.AGGREGATION_RULE_NOT_REGISTERED,),
             ("registered RES-40 aggregation rule",),
         )
+    ranking_provenance = _ranking_provenance_for_aggregation(
+        selection_decision,
+        ranking_observations,
+    )
+    if isinstance(ranking_provenance, RefusalResult):
+        return ranking_provenance
     ordered = _ordered_trial_values(selection_decision.candidate_set, target_observations, "target")
     if isinstance(ordered, RefusalResult):
         return ordered
     target_by_trial = {trial_id: value for trial_id, value in ordered}
-    required_target_trial_ids = _required_target_trial_ids(
-        selection_decision, aggregation_rule
-    )
+    required_target_trial_ids = _required_target_trial_ids(selection_decision, aggregation_rule)
     missing = tuple(
         trial_id for trial_id in required_target_trial_ids if trial_id not in target_by_trial
     )
@@ -1235,6 +1344,7 @@ def _aggregate_session(
         source_metric_kind=_metric_kind(first),
         source_phase_system=phase_system,
         source_phase_definitions=phase_definitions,
+        ranking_provenance=ranking_provenance,
         classification=classification,
         unit=unit,
         output_observation_id=output_observation_id,
@@ -1255,6 +1365,126 @@ def _required_target_trial_ids(
     raise ValueError("aggregation rule is not registered")
 
 
+def _ranking_provenance_for_aggregation(
+    selection_decision: TrialSelectionDecision,
+    ranking_observations: TrialMetricInputs | None,
+) -> tuple[Provenance, ...] | RefusalResult:
+    if selection_decision.selection_rule == CMJ_SELECT_ALL_DECLARED_ELIGIBLE_V1:
+        if ranking_observations:
+            return _session_refusal(
+                "aggregate CMJ session",
+                (RefusalReasonCode.SESSION_SOURCE_MISMATCH,),
+                ("SELECT_ALL session aggregation must not receive ranking observations",),
+            )
+        return ()
+    if ranking_observations is None:
+        if selection_decision.ranking_provenance:
+            return selection_decision.ranking_provenance
+        return _session_refusal(
+            "aggregate CMJ session",
+            (RefusalReasonCode.RANKING_METRIC_REQUIRED,),
+            ("the actual ranking observations or their preserved provenance",),
+            observation_ids=selection_decision.ranking_observation_ids,
+        )
+    ranking_metric = selection_decision.ranking_metric
+    ranking_method = selection_decision.ranking_method
+    if ranking_metric is None or ranking_method is None:
+        return _session_refusal(
+            "aggregate CMJ session",
+            (RefusalReasonCode.RANKING_METRIC_REQUIRED, RefusalReasonCode.RANKING_METHOD_REQUIRED),
+            ("ranking metric and method on the selection decision",),
+            observation_ids=selection_decision.ranking_observation_ids,
+        )
+    ordered = _ordered_trial_values(
+        selection_decision.candidate_set,
+        ranking_observations,
+        "ranking",
+    )
+    if isinstance(ordered, RefusalResult):
+        return ordered
+    ranking_by_trial = {trial_id: value for trial_id, value in ordered}
+    eligible = selection_decision.eligible_trial_ids
+    if any(trial_id not in ranking_by_trial for trial_id in eligible):
+        return _session_refusal(
+            "aggregate CMJ session",
+            (RefusalReasonCode.TRIAL_SET_INCOMPLETE, RefusalReasonCode.RANKING_METRIC_REQUIRED),
+            ("ranking observation for every eligible declared trial",),
+            observation_ids=selection_decision.ranking_observation_ids,
+        )
+    ordered_values = tuple(ranking_by_trial[trial_id] for trial_id in eligible)
+    ranking_ids = tuple(_observation(value).observation_id for value in ordered_values)
+    if ranking_ids != selection_decision.ranking_observation_ids:
+        return _session_refusal(
+            "aggregate CMJ session",
+            (RefusalReasonCode.SESSION_SOURCE_MISMATCH,),
+            ("the actual ranking observations used to create the selection decision",),
+            observation_ids=ranking_ids,
+        )
+    for value in ordered_values:
+        value_method = _method_reference(value)
+        if (
+            _metric_reference(value).stable_id != ranking_metric.stable_id
+            or value_method is None
+            or value_method.stable_id != ranking_method.stable_id
+        ):
+            return _session_refusal(
+                "aggregate CMJ session",
+                (RefusalReasonCode.SESSION_SOURCE_MISMATCH,),
+                ("ranking observations matching the selection metric and method",),
+                observation_ids=ranking_ids,
+            )
+    scalar_values = tuple(_numeric_value(_observation(value)) for value in ordered_values)
+    if any(value is None for value in scalar_values):
+        return _session_refusal(
+            "aggregate CMJ session",
+            (RefusalReasonCode.RANKING_METRIC_REQUIRED,),
+            ("finite scalar ranking observations matching the selection decision",),
+            observation_ids=ranking_ids,
+        )
+    if tuple(float(value) for value in scalar_values if value is not None) != tuple(
+        float(value) for value in selection_decision.ranking_values
+    ):
+        return _session_refusal(
+            "aggregate CMJ session",
+            (RefusalReasonCode.SESSION_SOURCE_MISMATCH,),
+            ("ranking values matching the self-validating selection decision",),
+            observation_ids=ranking_ids,
+        )
+    keys = tuple(_ranking_method_key(value) for value in ordered_values)
+    if len(set(keys)) != 1 or keys[0] != selection_decision.ranking_method_key:
+        return _session_refusal(
+            "aggregate CMJ session",
+            (RefusalReasonCode.RANKING_METRICS_NOT_COMPARABLE,),
+            ("ranking observations with the preserved canonical method identity",),
+            observation_ids=ranking_ids,
+        )
+    for left_index, left_value in enumerate(ordered_values):
+        for right_value in ordered_values[left_index + 1 :]:
+            comparison = _compare_trial_values(left_value, right_value, "validate ranking inputs")
+            if comparison.state is not ComparabilityState.COMPARABLE:
+                return _comparison_refusal(
+                    comparison,
+                    category=RefusalReasonCode.RANKING_METRICS_NOT_COMPARABLE,
+                    claim="validate the ranking observations used by the selection decision",
+                    observation_ids=(
+                        _observation(left_value).observation_id,
+                        _observation(right_value).observation_id,
+                    ),
+                )
+    provenance = tuple(_observation(value).provenance for value in ordered_values)
+    if (
+        selection_decision.ranking_provenance
+        and provenance != selection_decision.ranking_provenance
+    ):
+        return _session_refusal(
+            "aggregate CMJ session",
+            (RefusalReasonCode.SESSION_SOURCE_MISMATCH,),
+            ("ranking provenance matching the self-validating selection decision",),
+            observation_ids=ranking_ids,
+        )
+    return provenance
+
+
 def _build_session_result(
     selection_decision: TrialSelectionDecision,
     values: tuple[CMJTrialMetricValue, ...],
@@ -1269,6 +1499,7 @@ def _build_session_result(
     source_metric_kind: str,
     source_phase_system: RegistryReference | None,
     source_phase_definitions: tuple[RegistryReference, ...],
+    ranking_provenance: tuple[Provenance, ...],
     classification: ScientificClassification,
     unit: UnitReference,
     output_observation_id: InstanceIdentifier | None,
@@ -1399,6 +1630,8 @@ def _build_session_result(
     )
     provenance = _session_provenance(
         observations,
+        ranking_provenance=ranking_provenance,
+        ranking_observation_ids=selection_decision.ranking_observation_ids,
         output_id=output_id,
         parameters=parameters,
         recorded_at=recorded_at,
@@ -1457,6 +1690,10 @@ def _session_processing_parameters(
         MetadataEntry("ranking_metric", _reference_id(selection_decision.ranking_metric)),
         MetadataEntry("ranking_method", _reference_id(selection_decision.ranking_method)),
         MetadataEntry(
+            "ranking_method_key",
+            selection_decision.ranking_method_key or "not_applicable",
+        ),
+        MetadataEntry(
             "ranking_direction",
             selection_decision.ranking_direction.value
             if selection_decision.ranking_direction is not None
@@ -1497,6 +1734,8 @@ def _session_processing_parameters(
 def _session_provenance(
     observations: tuple[ScientificMeasurementObservation, ...],
     *,
+    ranking_provenance: tuple[Provenance, ...],
+    ranking_observation_ids: tuple[InstanceIdentifier, ...],
     output_id: InstanceIdentifier,
     parameters: tuple[MetadataEntry, ...],
     recorded_at: datetime_module.datetime | None,
@@ -1507,15 +1746,30 @@ def _session_provenance(
     lineage_edges: list[LineageEdge] = []
     evidence: list[EvidenceReference] = []
     metrological: list[RegistryReference] = []
-    for observation in observations:
-        provenance = observation.provenance
+    observation_provenance: dict[InstanceIdentifier, Provenance] = {}
+    provenance_inputs = tuple(
+        (observation_id, provenance)
+        for observation_id, provenance in zip(
+            ranking_observation_ids, ranking_provenance, strict=True
+        )
+    ) + tuple((observation.observation_id, observation.provenance) for observation in observations)
+    for source_observation_id, provenance in provenance_inputs:
+        existing_provenance = observation_provenance.get(source_observation_id)
+        if existing_provenance is not None and existing_provenance != provenance:
+            return _session_refusal(
+                "build CMJ session provenance",
+                (RefusalReasonCode.SESSION_SOURCE_MISMATCH,),
+                ("one immutable provenance record per source observation",),
+                observation_ids=(source_observation_id,),
+            )
+        observation_provenance[source_observation_id] = provenance
         for artifact in provenance.source_artifacts:
             if not _append_same(artifacts, artifact, lambda item: item.artifact_id):
                 return _session_refusal(
                     "build CMJ session provenance",
                     (RefusalReasonCode.SESSION_SOURCE_MISMATCH,),
                     ("consistent source artifact identity",),
-                    observation_ids=(observation.observation_id,),
+                    observation_ids=(source_observation_id,),
                 )
         for acquisition in provenance.acquisitions:
             if not _append_same(acquisitions, acquisition, lambda item: item.acquisition_id):
@@ -1523,7 +1777,7 @@ def _session_provenance(
                     "build CMJ session provenance",
                     (RefusalReasonCode.SESSION_SOURCE_MISMATCH,),
                     ("consistent source acquisition identity",),
-                    observation_ids=(observation.observation_id,),
+                    observation_ids=(source_observation_id,),
                 )
         for run in provenance.processing_runs:
             if not _append_same(processing_runs, run, lambda item: item.processing_run_id):
@@ -1531,7 +1785,7 @@ def _session_provenance(
                     "build CMJ session provenance",
                     (RefusalReasonCode.SESSION_SOURCE_MISMATCH,),
                     ("consistent source processing-run identity",),
-                    observation_ids=(observation.observation_id,),
+                    observation_ids=(source_observation_id,),
                 )
         _append_unique_items(lineage_edges, provenance.lineage_edges)
         _append_unique_items(evidence, provenance.evidence_references)
@@ -1544,10 +1798,16 @@ def _session_provenance(
                 RefusalReasonCode.SOURCE_ARTIFACT_UNVERIFIED,
             ),
             ("at least one verified source artifact in contributing observations",),
-            observation_ids=_observation_ids(observations),
+            observation_ids=_unique_tuple(
+                (*ranking_observation_ids, *_observation_ids(observations))
+            ),
         )
     digest = canonical_hash(
-        {"output": output_id, "parameters": parameters, "sources": _observation_ids(observations)}
+        {
+            "output": output_id,
+            "parameters": parameters,
+            "sources": _unique_tuple((*ranking_observation_ids, *_observation_ids(observations))),
+        }
     ).removeprefix("sha256:")[:24]
     run = ProcessingRun(
         processing_run_id=InstanceIdentifier("processing-run", f"cmj-session:{digest}"),
@@ -1562,7 +1822,9 @@ def _session_provenance(
             "build CMJ session provenance",
             (RefusalReasonCode.SESSION_SOURCE_MISMATCH,),
             ("unique RES-40 processing-run identity",),
-            observation_ids=_observation_ids(observations),
+            observation_ids=_unique_tuple(
+                (*ranking_observation_ids, *_observation_ids(observations))
+            ),
         )
     source_artifact_ids = tuple(item.artifact_id for item in artifacts)
     for observation in observations:
@@ -1571,6 +1833,17 @@ def _session_provenance(
             (
                 LineageEdge(
                     observation.observation_id.qualified,
+                    run.processing_run_id.qualified,
+                    LineageRelation.DERIVED_FROM,
+                ),
+            ),
+        )
+    for observation_id in ranking_observation_ids:
+        _append_unique_items(
+            lineage_edges,
+            (
+                LineageEdge(
+                    observation_id.qualified,
                     run.processing_run_id.qualified,
                     LineageRelation.DERIVED_FROM,
                 ),
@@ -2235,17 +2508,7 @@ def _source_method_key(value: CMJTrialMetricValue) -> str:
     if isinstance(value, CMJPhaseMetricResult):
         return canonical_json(_phase_metric_method_key(value))
     if isinstance(value, CMJJumpHeightResult):
-        return canonical_json(
-            {
-                "kind": "JUMP_HEIGHT",
-                "method": value.method,
-                "gravity": value.parameters.gravity,
-                "source_identity": _identity_method_key(value.observation.identity),
-                "source_timebase": _timebase_method_key(value.parameters.source_timebase),
-                "takeoff_event": _event_method_key(value.takeoff_event),
-                "landing_event": _event_method_key(value.landing_event),
-            }
-        )
+        return canonical_json(_jump_height_method_key(value))
     observation = _observation(value)
     return canonical_json(
         {
@@ -2253,6 +2516,80 @@ def _source_method_key(value: CMJTrialMetricValue) -> str:
             "identity": _identity_method_key(observation.identity),
         }
     )
+
+
+def _ranking_method_key(value: CMJTrialMetricValue) -> str:
+    """Return the trial-instance-independent method identity used for ranking."""
+
+    return _source_method_key(value)
+
+
+def _jump_height_method_key(value: CMJJumpHeightResult) -> dict[str, object]:
+    parameters = value.parameters
+    identity = value.observation.identity
+    if not isinstance(identity, CMJMeasurementIdentity):
+        raise ValueError("jump-height ranking requires a CMJ measurement identity")
+    source_velocity = value.source_velocity
+    source_velocity_identity = (
+        source_velocity.observation.identity
+        if source_velocity is not None
+        and isinstance(source_velocity.observation.identity, CMJMeasurementIdentity)
+        else None
+    )
+    processing_parameters = tuple(
+        (entry.key, entry.value)
+        for entry in identity.processing.method_parameters
+        if entry.key
+        in {
+            "event_time_semantics",
+            "filtering",
+            "interpolation",
+            "resampling",
+            "drift_correction",
+            "standard_gravity_substitution",
+            "source_velocity_present",
+            "ballistic_loading_state",
+            "ballistic_loading_state_reference",
+            "ballistic_applicability_decision",
+            "protocol_external_loading",
+        }
+    )
+    return {
+        "kind": "JUMP_HEIGHT",
+        "method": value.method,
+        "gravity": parameters.gravity,
+        "source_identity": _source_measurement_method_key(identity),
+        "source_timebase": _timebase_method_key(parameters.source_timebase),
+        "takeoff_event": _event_method_key(value.takeoff_event),
+        "landing_event": _event_method_key(value.landing_event),
+        "system_contract": parameters.system_contract,
+        "takeoff_velocity_sample_convention": parameters.takeoff_velocity_sample_convention,
+        "source_velocity_operation": parameters.source_velocity_operation,
+        "source_velocity_integration_method": parameters.source_velocity_integration_method,
+        "source_velocity_initial_condition": _zero_velocity_reference_method_key(
+            parameters.source_velocity_initial_condition
+        ),
+        "source_velocity_identity": (
+            _source_measurement_method_key(source_velocity_identity)
+            if source_velocity_identity is not None
+            else None
+        ),
+        "source_velocity_processing": (
+            _phase_velocity_processing_method_key(
+                source_velocity_identity.processing.method_parameters
+            )
+            if source_velocity_identity is not None
+            else None
+        ),
+        "source_velocity_filtering": (
+            source_velocity_identity.processing.filtering
+            if source_velocity_identity is not None
+            else None
+        ),
+        "processing_parameters": processing_parameters,
+        "unit": value.observation.result.unit,
+        "normalization": identity.processing.normalization,
+    }
 
 
 def _identity_method_key(identity: object) -> object:

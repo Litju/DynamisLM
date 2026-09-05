@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from dataclasses import FrozenInstanceError, replace
 from typing import overload
 
@@ -27,6 +28,7 @@ from dynamislm.measurement.cmj import (
     CMJ_TEST_FAMILY,
     CMJ_TIE_EARLIEST_DECLARED_CANDIDATE_V1,
     CMJJumpHeightResult,
+    CMJMeasurementIdentity,
     CMJPhaseMetric,
     CMJPhaseMetricResult,
     CMJTrialMetricValue,
@@ -44,8 +46,14 @@ from dynamislm.measurement.cmj import (
     project_selected_trial,
     select_trials,
 )
-from dynamislm.measurement.identity import RegistryReference, ScientificIdentifier
+from dynamislm.measurement.identity import (
+    MeasurementIdentity,
+    RegistryReference,
+    ScientificIdentifier,
+    SemanticIdentity,
+)
 from dynamislm.measurement.result import ResultStatus, UncertaintyStatus
+from dynamislm.provenance.models import LineageRelation
 from dynamislm.refusal import RefusalReasonCode, RefusalResult
 from test_cmj import _observation as _raw_observation
 from test_cmj_jump_height import _flight_fixture, _velocity_fixture
@@ -212,6 +220,13 @@ def _numeric(value: CMJTrialMetricValue) -> float:
     assert isinstance(scalar, ScalarValue)
     assert isinstance(scalar.value, int | float) and not isinstance(scalar.value, bool)
     return float(scalar.value)
+
+
+def _unregistered_reference(object_type: str, key: str) -> RegistryReference:
+    return RegistryReference(
+        ScientificIdentifier("synthetic", object_type, key, "1.0.0"),
+        f"Unregistered {key}",
+    )
 
 
 def _extreme_selection(
@@ -441,6 +456,299 @@ def test_selected_projection_requires_only_the_selected_target() -> None:
     assert result.value == pytest.approx(_numeric(target_b))
 
 
+def test_selected_projection_refuses_missing_or_mismatched_target_sources() -> None:
+    ranking_a = _bind(_phase("target-source-ranking-a", _RES49_FIRST_TRACE), "a")
+    ranking_b = _bind(_phase("target-source-ranking-b", _UNIQUE_TRACE), "b")
+    selection = _extreme_selection((ranking_a, ranking_b))
+    target_metric = CMJPhaseMetric.PROPULSION_NET_VERTICAL_IMPULSE
+
+    target_a = _bind(_phase("target-source-a", _RES49_FIRST_TRACE, target_metric), "a")
+    _assert_refusal(
+        project_selected_trial(selection, (target_a,)), RefusalReasonCode.TRIAL_SET_INCOMPLETE
+    )
+
+    wrong_athlete = _bind(
+        _phase("target-source-athlete", _UNIQUE_TRACE, target_metric),
+        "b",
+        athlete=InstanceIdentifier("athlete", "other"),
+    )
+    _assert_refusal(
+        project_selected_trial(selection, (wrong_athlete,)),
+        RefusalReasonCode.SESSION_SOURCE_MISMATCH,
+    )
+
+    wrong_session = _bind(
+        _phase("target-source-session", _UNIQUE_TRACE, target_metric),
+        "b",
+        session=InstanceIdentifier("session", "other"),
+    )
+    _assert_refusal(
+        project_selected_trial(selection, (wrong_session,)),
+        RefusalReasonCode.SESSION_SOURCE_MISMATCH,
+    )
+
+    wrong_trial = _bind(_phase("target-source-trial", _UNIQUE_TRACE, target_metric), "a")
+    _assert_refusal(
+        project_selected_trial(selection, (wrong_trial,)), RefusalReasonCode.TRIAL_SET_INCOMPLETE
+    )
+
+    source = _bind(_phase("target-source-family", _UNIQUE_TRACE, target_metric), "b")
+    source_identity = source.observation.identity
+    assert isinstance(source_identity, CMJMeasurementIdentity)
+    wrong_family_identity = MeasurementIdentity(
+        identity_id=source_identity.identity_id,
+        semantic=SemanticIdentity(
+            construct=source_identity.semantic.construct,
+            test_family=_unregistered_reference("test-family", "other-family"),
+            protocol=source_identity.semantic.protocol,
+            measurand=source_identity.semantic.measurand,
+            metric_definition=source_identity.semantic.metric_definition,
+        ),
+        acquisition=source_identity.acquisition,
+        processing=source_identity.processing,
+        version=source_identity.version,
+    )
+    wrong_family = replace(source.observation, identity=wrong_family_identity)
+    _assert_refusal(
+        project_selected_trial(selection, (wrong_family,)),
+        RefusalReasonCode.SESSION_SOURCE_MISMATCH,
+    )
+
+
+def test_arithmetic_mean_requires_every_selected_target() -> None:
+    first = _bind(_phase("mean-selected-a", _RES49_FIRST_TRACE), "a")
+    second = _bind(_phase("mean-selected-b", _RES49_SECOND_TRACE), "b")
+    third = _bind(_phase("mean-selected-c", _UNIQUE_TRACE), "c")
+    selection = _select_all((first, second, third))
+    refused = aggregate_cmj_session(selection, (first, second))
+    _assert_refusal(refused, RefusalReasonCode.TRIAL_SET_INCOMPLETE)
+
+
+def test_selection_decision_self_validates_registered_rules_and_winners() -> None:
+    first = _bind(_phase("self-validating-a", _RES49_FIRST_TRACE), "a")
+    second = _bind(_phase("self-validating-b", _RES49_SECOND_TRACE), "b")
+    all_selection = _select_all((first, second))
+    first_trial = InstanceIdentifier("trial", "a")
+    second_trial = InstanceIdentifier("trial", "b")
+
+    with pytest.raises(ValueError, match="every eligible"):
+        replace(all_selection, selected_trial_ids=(first_trial,))
+    with pytest.raises(ValueError, match="ranking metadata"):
+        replace(
+            all_selection,
+            ranking_metric=first.observation.identity.semantic.metric_definition,
+        )
+    with pytest.raises(ValueError, match="registered CMJ V1"):
+        replace(
+            all_selection,
+            selection_rule=_unregistered_reference("selection-rule", "not-registered"),
+        )
+
+    extreme = _extreme_selection((first, second))
+    wrong_trial = second_trial if extreme.selected_trial_ids == (first_trial,) else first_trial
+    with pytest.raises(ValueError, match="deterministic ranking winner"):
+        replace(extreme, selected_trial_ids=(wrong_trial,))
+    with pytest.raises(ValueError, match="ranking method identity"):
+        replace(extreme, ranking_method_key=None)
+    with pytest.raises(ValueError, match="tie policy"):
+        replace(
+            extreme,
+            tie_policy=_unregistered_reference("tie-policy", "not-registered"),
+        )
+    with pytest.raises(ValueError, match="ranking observation IDs"):
+        replace(
+            extreme,
+            ranking_observation_ids=tuple(reversed(extreme.ranking_observation_ids)),
+        )
+    with pytest.raises(ValueError, match="every ranking value"):
+        replace(extreme, ranking_values=extreme.ranking_values[:-1])
+    with pytest.raises(ValueError, match="finite"):
+        replace(extreme, ranking_values=(float("nan"), *extreme.ranking_values[1:]))
+    with pytest.raises(ValueError, match="finite"):
+        replace(extreme, ranking_values=(float("inf"), *extreme.ranking_values[1:]))
+
+    tie_first = _bind(_phase("self-validating-tie-a", _UNIQUE_TRACE), "a")
+    tie_second = _bind(_phase("self-validating-tie-b", _UNIQUE_TRACE), "b")
+    tie_selection = _extreme_selection((tie_first, tie_second))
+    with pytest.raises(ValueError, match="deterministic ranking winner"):
+        replace(tie_selection, selected_trial_ids=(second_trial,))
+
+    excluded = TrialEligibilityDecision.excluded(
+        second_trial,
+        (second.observation.observation_id,),
+        policy=CMJ_EXPLICIT_TRIAL_EXCLUSION_POLICY_V1,
+        reason="registered exclusion",
+    )
+    candidate_set = _candidate_set((first, second))
+    eligibility = evaluate_trial_eligibility(candidate_set, (first,), exclusions=(excluded,))
+    assert not isinstance(eligibility, RefusalResult)
+    excluded_selection = select_trials(candidate_set, eligibility)
+    assert isinstance(excluded_selection, TrialSelectionDecision)
+    with pytest.raises(ValueError, match="eligible"):
+        replace(excluded_selection, selected_trial_ids=(second_trial,))
+
+
+def test_select_all_rejects_ranking_arguments_at_selection_boundary() -> None:
+    first = _bind(_phase("select-all-ranking-a"), "a")
+    second = _bind(_phase("select-all-ranking-b"), "b")
+    candidate_set = _candidate_set((first, second))
+    eligibility = evaluate_trial_eligibility(candidate_set, (first, second))
+    assert not isinstance(eligibility, RefusalResult)
+    result = select_trials(
+        candidate_set,
+        eligibility,
+        ranking_metric=first.observation.identity.semantic.metric_definition,
+    )
+    _assert_refusal(result, RefusalReasonCode.SESSION_SOURCE_MISMATCH)
+
+
+def test_ranking_method_key_excludes_trial_instance_coordinates() -> None:
+    first = _bind(_phase("ranking-key-coordinate-a", _RES49_FIRST_TRACE), "a")
+    second = _bind(_phase("ranking-key-coordinate-b", _RES49_SECOND_TRACE), "b")
+    selection = _extreme_selection((first, second))
+    assert selection.ranking_method_key is not None
+    assert first.observation.observation_id.qualified not in selection.ranking_method_key
+    assert second.observation.observation_id.qualified not in selection.ranking_method_key
+    assert "trial:a" not in selection.ranking_method_key
+    assert "trial:b" not in selection.ranking_method_key
+
+    explicit_first = _bind(
+        _phase(
+            "ranking-key-explicit-a",
+            _RES49_FIRST_TRACE,
+            timebase=ExplicitTimebase(tuple(10.0 + index / 1000.0 for index in range(10))),
+        ),
+        "a",
+    )
+    explicit_second = _bind(
+        _phase(
+            "ranking-key-explicit-b",
+            _RES49_SECOND_TRACE,
+            timebase=ExplicitTimebase(tuple(20.0 + index / 1000.0 for index in range(10))),
+        ),
+        "b",
+    )
+    explicit_selection = _extreme_selection((explicit_first, explicit_second))
+    shifted_first = _bind(
+        _phase(
+            "ranking-key-explicit-shifted-a",
+            _RES49_FIRST_TRACE,
+            timebase=ExplicitTimebase(tuple(30.0 + index / 1000.0 for index in range(10))),
+        ),
+        "a",
+    )
+    shifted_second = _bind(
+        _phase(
+            "ranking-key-explicit-shifted-b",
+            _RES49_SECOND_TRACE,
+            timebase=ExplicitTimebase(tuple(40.0 + index / 1000.0 for index in range(10))),
+        ),
+        "b",
+    )
+    shifted_selection = _extreme_selection((shifted_first, shifted_second))
+    assert explicit_selection.ranking_method_key == shifted_selection.ranking_method_key
+
+
+def test_ranking_selection_refuses_material_method_mismatches() -> None:
+    baseline = _bind(
+        _phase("ranking-method-baseline", _RES49_FIRST_TRACE, onset_search_start_index=4),
+        "a",
+    )
+    for changed in (
+        _bind(
+            _phase("ranking-method-onset", _RES49_SECOND_TRACE, onset_search_start_index=5),
+            "b",
+        ),
+        _bind(
+            _phase("ranking-method-takeoff", _RES49_SECOND_TRACE, takeoff_search_start_index=8),
+            "b",
+        ),
+        _bind(
+            _phase(
+                "ranking-method-timebase",
+                _RES49_SECOND_TRACE,
+                timebase=RegularTimebase(500.0),
+            ),
+            "b",
+        ),
+        _bind(
+            _phase(
+                "ranking-method-loading",
+                _RES49_SECOND_TRACE,
+                external_loading="stable-attached-supported-load",
+            ),
+            "b",
+        ),
+    ):
+        candidate_set = _candidate_set((baseline, changed))
+        eligibility = evaluate_trial_eligibility(candidate_set, (baseline, changed))
+        assert not isinstance(eligibility, RefusalResult)
+        result = select_trials(
+            candidate_set,
+            eligibility,
+            selection_rule=CMJ_SELECT_EXTREME_BY_REGISTERED_METRIC_V1,
+            ranking_observations=(baseline, changed),
+            ranking_metric=baseline.observation.identity.semantic.metric_definition,
+            ranking_method=baseline.observation.identity.processing.registered_operation,
+            ranking_direction=TrialSelectionDirection.MAXIMIZE,
+            tie_policy=CMJ_TIE_EARLIEST_DECLARED_CANDIDATE_V1,
+        )
+        _assert_refusal(result, RefusalReasonCode.RANKING_METRICS_NOT_COMPARABLE)
+
+
+def test_session_summary_comparability_retains_full_ranking_method_identity() -> None:
+    def make_summary(prefix: str, onset_search_start_index: int) -> SessionAggregationResult:
+        ranking_a = _bind(
+            _phase(
+                f"{prefix}-ranking-a",
+                _RES49_FIRST_TRACE,
+                onset_search_start_index=onset_search_start_index,
+            ),
+            "a",
+        )
+        ranking_b = _bind(
+            _phase(
+                f"{prefix}-ranking-b",
+                _RES49_SECOND_TRACE,
+                onset_search_start_index=onset_search_start_index,
+            ),
+            "b",
+        )
+        target_a = _bind(
+            _phase(
+                f"{prefix}-target-a",
+                _RES49_FIRST_TRACE,
+                CMJPhaseMetric.PROPULSION_NET_VERTICAL_IMPULSE,
+            ),
+            "a",
+        )
+        target_b = _bind(
+            _phase(
+                f"{prefix}-target-b",
+                _RES49_SECOND_TRACE,
+                CMJPhaseMetric.PROPULSION_NET_VERTICAL_IMPULSE,
+            ),
+            "b",
+        )
+        result = project_selected_trial(
+            _extreme_selection((ranking_a, ranking_b)),
+            (target_a, target_b),
+            output_observation_id=InstanceIdentifier("observation", f"{prefix}-summary"),
+        )
+        assert isinstance(result, SessionAggregationResult)
+        return result
+
+    left = make_summary("ranking-bridge-left", 4)
+    right = make_summary("ranking-bridge-right", 5)
+    comparison = compare_cmj_session_summaries(
+        left,
+        right,
+        claim="compare summaries with different ranking detector parameters",
+    )
+    assert comparison.state is ComparabilityState.BRIDGE_VALIDATION_REQUIRED
+    assert ComparabilityReasonCode.SESSION_RANKING_METHOD_MISMATCH.value in comparison.reason_codes
+
+
 def test_jump_height_selection_projects_a_different_target_from_the_same_trial() -> None:
     jump_a, _, _, _ = _flight_fixture("jump-selection-a")
     jump_b, _, _, _ = _flight_fixture("jump-selection-b", gravity_suffix="jump-selection-a")
@@ -508,6 +816,140 @@ def test_arithmetic_mean_is_exact_scalar_mean_and_preserves_provenance() -> None
     with pytest.raises(FrozenInstanceError):
         result.observation.context.trial_id = InstanceIdentifier("trial", "mutate")  # type: ignore[misc]
     assert first.observation.context.trial_id == InstanceIdentifier("trial", "a")
+
+
+def test_extreme_selection_preserves_ranking_and_target_lineage() -> None:
+    ranking_a = _bind(_phase("lineage-ranking-a", _RES49_FIRST_TRACE), "a")
+    ranking_b = _bind(_phase("lineage-ranking-b", _UNIQUE_TRACE), "b")
+    ranking_c = _bind(_phase("lineage-ranking-c", _RES49_SECOND_TRACE), "c")
+    selection = _extreme_selection((ranking_a, ranking_b, ranking_c))
+    target_b = _bind(
+        _phase(
+            "lineage-target-b",
+            _RES49_SECOND_TRACE,
+            CMJPhaseMetric.PROPULSION_NET_VERTICAL_IMPULSE,
+        ),
+        "b",
+    )
+    result = project_selected_trial(
+        selection,
+        (target_b,),
+        ranking_observations=(ranking_a, ranking_b, ranking_c),
+        output_observation_id=InstanceIdentifier("observation", "lineage-result"),
+    )
+    assert isinstance(result, SessionAggregationResult)
+    provenance = result.observation.provenance
+    session_run = next(
+        run
+        for run in provenance.processing_runs
+        if run.output_entity_id == result.observation.observation_id
+    )
+    ranking_values = (ranking_a, ranking_b, ranking_c)
+    source_observation_ids = tuple(_observation(value).observation_id for value in ranking_values)
+    source_observation_ids += (target_b.observation.observation_id,)
+    for observation_id in source_observation_ids:
+        assert (
+            sum(
+                edge.from_id == observation_id.qualified
+                and edge.to_id == session_run.processing_run_id.qualified
+                and edge.relation is LineageRelation.DERIVED_FROM
+                for edge in provenance.lineage_edges
+            )
+            == 1
+        )
+    source_artifact_ids = {
+        artifact.artifact_id
+        for value in (*ranking_values, target_b)
+        for artifact in _observation(value).provenance.source_artifacts
+    }
+    source_acquisition_ids = {
+        acquisition.acquisition_id
+        for value in (*ranking_values, target_b)
+        for acquisition in _observation(value).provenance.acquisitions
+    }
+    source_run_ids = {
+        run.processing_run_id
+        for value in (*ranking_values, target_b)
+        for run in _observation(value).provenance.processing_runs
+    }
+    source_evidence = {
+        evidence.reference.stable_id
+        for value in (*ranking_values, target_b)
+        for evidence in _observation(value).provenance.evidence_references
+    }
+    assert source_artifact_ids <= {item.artifact_id for item in provenance.source_artifacts}
+    assert source_acquisition_ids <= {item.acquisition_id for item in provenance.acquisitions}
+    assert source_run_ids <= {item.processing_run_id for item in provenance.processing_runs}
+    assert source_evidence <= {
+        evidence.reference.stable_id for evidence in provenance.evidence_references
+    }
+    assert any(
+        edge.from_id == session_run.processing_run_id.qualified
+        and edge.to_id == result.observation.observation_id.qualified
+        and edge.relation is LineageRelation.PRODUCED
+        for edge in provenance.lineage_edges
+    )
+
+    restored = from_canonical_json(canonical_json(result), SessionAggregationResult)
+    assert restored == result
+    assert canonical_hash(restored) == canonical_hash(result)
+
+
+def test_shared_ranking_and_target_provenance_is_deduplicated() -> None:
+    ranking_a = _bind(_phase("dedupe-ranking-a", _RES49_FIRST_TRACE), "a")
+    ranking_b = _bind(_phase("dedupe-ranking-b", _RES49_SECOND_TRACE), "b")
+    selection = _extreme_selection((ranking_a, ranking_b))
+    result = project_selected_trial(
+        selection,
+        (ranking_a, ranking_b),
+        output_observation_id=InstanceIdentifier("observation", "dedupe-result"),
+    )
+    assert isinstance(result, SessionAggregationResult)
+    provenance = result.observation.provenance
+    assert len(provenance.source_artifacts) == len(
+        {item.artifact_id for item in provenance.source_artifacts}
+    )
+    assert len(provenance.acquisitions) == len(
+        {item.acquisition_id for item in provenance.acquisitions}
+    )
+    assert len(provenance.processing_runs) == len(
+        {item.processing_run_id for item in provenance.processing_runs}
+    )
+    session_run = next(
+        run
+        for run in provenance.processing_runs
+        if run.output_entity_id == result.observation.observation_id
+    )
+    assert (
+        sum(
+            edge.from_id == ranking_a.observation.observation_id.qualified
+            and edge.to_id == session_run.processing_run_id.qualified
+            and edge.relation is LineageRelation.DERIVED_FROM
+            for edge in provenance.lineage_edges
+        )
+        == 1
+    )
+
+
+def test_projection_refuses_a_forged_extreme_without_ranking_provenance() -> None:
+    ranking_a = _bind(_phase("missing-ranking-provenance-a", _RES49_FIRST_TRACE), "a")
+    ranking_b = _bind(_phase("missing-ranking-provenance-b", _RES49_SECOND_TRACE), "b")
+    selection = _extreme_selection((ranking_a, ranking_b))
+    forged = replace(selection, ranking_provenance=())
+    result = project_selected_trial(forged, (ranking_a, ranking_b))
+    _assert_refusal(result, RefusalReasonCode.RANKING_METRIC_REQUIRED)
+
+
+def test_select_all_additive_fields_are_optional_on_v3_wire_decode() -> None:
+    first = _bind(_phase("select-all-v3-a"), "a")
+    second = _bind(_phase("select-all-v3-b"), "b")
+    selection = _select_all((first, second))
+    envelope = json.loads(canonical_json(selection))
+    del envelope["payload"]["ranking_method_key"]
+    del envelope["payload"]["ranking_provenance"]
+    restored = from_canonical_json(json.dumps(envelope), TrialSelectionDecision)
+    assert restored == selection
+    assert SERIALIZATION_VERSION == 3
 
 
 def test_scalar_only_boundary_refuses_vectors_and_no_array_mean_is_attempted() -> None:
