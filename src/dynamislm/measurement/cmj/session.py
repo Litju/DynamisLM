@@ -2548,6 +2548,9 @@ def _jump_height_method_key(value: CMJJumpHeightResult) -> dict[str, object]:
         and isinstance(source_velocity.observation.identity, CMJMeasurementIdentity)
         else None
     )
+    metadata_parameters = {
+        entry.key: entry.value for entry in identity.processing.method_parameters
+    }
     processing_parameters = tuple(
         (entry.key, entry.value)
         for entry in identity.processing.method_parameters
@@ -2555,6 +2558,7 @@ def _jump_height_method_key(value: CMJJumpHeightResult) -> dict[str, object]:
         in {
             "event_time_semantics",
             "filtering",
+            "source_filtering",
             "interpolation",
             "resampling",
             "drift_correction",
@@ -2599,6 +2603,7 @@ def _jump_height_method_key(value: CMJJumpHeightResult) -> dict[str, object]:
             else None
         ),
         "processing_parameters": processing_parameters,
+        "source_filtering": metadata_parameters.get("source_filtering"),
         "unit": value.observation.result.unit,
         "normalization": identity.processing.normalization,
     }
