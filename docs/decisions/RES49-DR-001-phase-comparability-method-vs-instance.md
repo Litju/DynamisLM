@@ -60,13 +60,22 @@ retained. Exclude occurrence index/time, trial length, source IDs, baseline
 observation/segment coordinates, realized baseline statistics, and effective
 threshold realization. The resulting event sample/time is a trial realization.
 
+### SEARCH_START_INDEX_POLICY
+
+`CMJEventDetectorParameters.search_start_index` under the current RES-36 API is
+`METHOD_IDENTITY`: it is caller-supplied detector input that defines candidate
+search support. The resulting event `sample_index` and `event_time_s` are
+`TRIAL_INSTANCE_REALIZATION`: they are outputs selected from that support.
+`CMJPhaseBoundary.search_start_index` and `search_end_index` for RES-39
+event/landmark searches are also `TRIAL_INSTANCE_REALIZATION`, because those
+supports are derived from registered realized events or landmarks. A future
+typed relative search-origin contract may replace raw integer method identity;
+that redesign is out of scope.
+
 The configured RES-36 detector `search_start_index` is distinct from the
 `CMJPhaseBoundary.search_start_index` / `search_end_index` values derived from
 realized events or landmarks. Those phase search supports remain
 `TRIAL_INSTANCE_REALIZATION` and are excluded from method identity.
-
-A future typed relative search-origin contract may replace the raw configured
-integer with registered semantics; that redesign is out of scope for RES-49.
 
 ## BOUNDARY_METHOD_KEY
 
@@ -160,7 +169,9 @@ trial-specific QC equivalence needs a more specific registered rule.
 `_phase_event_method_key`, `_phase_boundary_method_key`,
 `_velocity_integration_method_key`, `_zero_velocity_reference_method_key`,
 `_timebase_method_key`, source-identity, processing, and aggregate method keys.
-No RES-39 arithmetic/detection or RES-40 code changes.
+RES-49 remains comparator/provenance validation logic only; RES-40 consumes the
+resulting method/instance distinction without changing RES-39 detection or
+phase arithmetic.
 
 ## TESTS
 
