@@ -115,6 +115,9 @@ _UNCERTAINTY_DESCRIPTION = (
     "reliability analysis is assessed."
 )
 _LEGACY_RANKING_METHOD_KEY_PREFIX = "legacy-res40:"
+_RES50_RANKING_FIELDS = frozenset(
+    {"ranking_method_key", "ranking_provenance", "ranking_authority"}
+)
 
 
 def _legacy_ranking_method_key(fields: Mapping[str, object]) -> str:
@@ -349,11 +352,26 @@ class TrialSelectionDecision:
 
         if not isinstance(payload, dict):
             return kwargs
-        if "ranking_method_key" in payload or "ranking_authority" in payload:
+        present_fields = _RES50_RANKING_FIELDS.intersection(payload)
+        if present_fields and present_fields != _RES50_RANKING_FIELDS:
+            raise ValueError("RES-50 ranking fields must be present together")
+        if present_fields:
             return kwargs
-        if kwargs.get("selection_rule") != CMJ_SELECT_EXTREME_BY_REGISTERED_METRIC_V1:
-            return kwargs
-        kwargs["ranking_method_key"] = _legacy_ranking_method_key(kwargs)
+        selection_rule = kwargs.get("selection_rule")
+        if selection_rule == CMJ_SELECT_ALL_DECLARED_ELIGIBLE_V1:
+            return {
+                **kwargs,
+                "ranking_method_key": None,
+                "ranking_provenance": (),
+                "ranking_authority": (),
+            }
+        if selection_rule == CMJ_SELECT_EXTREME_BY_REGISTERED_METRIC_V1:
+            return {
+                **kwargs,
+                "ranking_method_key": _legacy_ranking_method_key(kwargs),
+                "ranking_provenance": (),
+                "ranking_authority": (),
+            }
         return kwargs
 
     def __post_init__(self) -> None:
