@@ -111,7 +111,7 @@ The RES-50 matrix covers selected-only projection targets, complete selected
 means, source mismatch refusal, full ranking method identity, method-versus-
 instance separation, registered-rule self-validation, deterministic winner
 recomputation, ranking/target lineage, deduplication, canonical roundtrip,
-and historical hash regression. The full suite contains 237 passing tests.
+and historical hash regression. The full suite contains 239 passing tests.
 
 ## VERSION
 

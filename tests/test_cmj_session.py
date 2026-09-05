@@ -659,6 +659,17 @@ def test_ranking_method_key_excludes_trial_instance_coordinates() -> None:
     shifted_selection = _extreme_selection((shifted_first, shifted_second))
     assert explicit_selection.ranking_method_key == shifted_selection.ranking_method_key
 
+    jump_a, _, _, _ = _flight_fixture("ranking-key-jump-a", gravity_suffix="shared")
+    jump_b, _, _, _ = _flight_fixture("ranking-key-jump-b", gravity_suffix="shared")
+    jump_a = _bind(jump_a, "a")
+    jump_b = _bind(jump_b, "b")
+    jump_selection = _extreme_selection((jump_a, jump_b))
+    assert jump_selection.ranking_method_key is not None
+    assert jump_a.observation.observation_id.qualified not in jump_selection.ranking_method_key
+    assert jump_b.observation.observation_id.qualified not in jump_selection.ranking_method_key
+    assert "trial:a" not in jump_selection.ranking_method_key
+    assert "trial:b" not in jump_selection.ranking_method_key
+
 
 def test_ranking_selection_refuses_material_method_mismatches() -> None:
     baseline = _bind(
