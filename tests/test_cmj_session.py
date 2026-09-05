@@ -17,7 +17,11 @@ from dynamislm import (
     canonical_json,
     from_canonical_json,
 )
-from dynamislm.comparability import ComparabilityReasonCode, ComparabilityState
+from dynamislm.comparability import (
+    ComparabilityDecisionSource,
+    ComparabilityReasonCode,
+    ComparabilityState,
+)
 from dynamislm.measurement.cmj import (
     CMJ_ARITHMETIC_MEAN_V1,
     CMJ_EXPLICIT_TRIAL_EXCLUSION_POLICY_V1,
@@ -274,6 +278,25 @@ def _extreme_selection(
     )
     assert isinstance(selection, TrialSelectionDecision)
     return selection
+
+
+def _legacy_selection(selection: TrialSelectionDecision) -> TrialSelectionDecision:
+    envelope = json.loads(canonical_json(selection))
+    for field_name in ("ranking_method_key", "ranking_provenance", "ranking_authority"):
+        del envelope["payload"][field_name]
+    restored = from_canonical_json(json.dumps(envelope), TrialSelectionDecision)
+    assert isinstance(restored, TrialSelectionDecision)
+    return restored
+
+
+def _legacy_summary(summary: SessionAggregationResult) -> SessionAggregationResult:
+    envelope = json.loads(canonical_json(summary))
+    selection_payload = envelope["payload"]["selection_decision"]
+    for field_name in ("ranking_method_key", "ranking_provenance", "ranking_authority"):
+        del selection_payload[field_name]
+    restored = from_canonical_json(json.dumps(envelope), SessionAggregationResult)
+    assert isinstance(restored, SessionAggregationResult)
+    return restored
 
 
 def test_candidate_order_and_all_eligibility_are_explicit() -> None:
@@ -580,6 +603,8 @@ def test_selection_decision_self_validates_registered_rules_and_winners() -> Non
         replace(extreme, ranking_method_key=None)
     with pytest.raises(ValueError, match="canonical|selection key"):
         replace(extreme, ranking_method_key="forged-ranking-method-key")
+    with pytest.raises(ValueError, match="canonical payload"):
+        replace(extreme, ranking_method_key='{"serialization_version":3}')
     altered_values = (extreme.ranking_values[0] + 0.001, *extreme.ranking_values[1:])
     with pytest.raises(ValueError, match="selection value"):
         replace(extreme, ranking_values=altered_values)
@@ -626,6 +651,33 @@ def test_selection_decision_self_validates_registered_rules_and_winners() -> Non
     assert isinstance(excluded_selection, TrialSelectionDecision)
     with pytest.raises(ValueError, match="eligible"):
         replace(excluded_selection, selected_trial_ids=(second_trial,))
+
+
+def test_selection_rejects_forged_eligibility_observation_ids_on_wire_decode() -> None:
+    first = _bind(_phase("forged-eligibility-a", _RES49_FIRST_TRACE), "a")
+    second = _bind(_phase("forged-eligibility-b", _RES49_SECOND_TRACE), "b")
+    selection = _select_all((first, second))
+    envelope = json.loads(canonical_json(selection))
+    envelope["payload"]["eligibility_decisions"][0]["observation_ids"] = [
+        json.loads(canonical_json(InstanceIdentifier("observation", "forged")))["payload"]
+    ]
+
+    with pytest.raises(ValueError, match="invalid|candidate observation IDs"):
+        from_canonical_json(json.dumps(envelope), TrialSelectionDecision)
+
+
+def test_selection_rejects_semantically_empty_modern_ranking_key() -> None:
+    first = _bind(_phase("forged-key-a", _RES49_FIRST_TRACE), "a")
+    second = _bind(_phase("forged-key-b", _RES49_SECOND_TRACE), "b")
+    selection = _extreme_selection((first, second))
+    envelope = json.loads(canonical_json(selection))
+    forged_key = '{"serialization_version":3}'
+    envelope["payload"]["ranking_method_key"] = forged_key
+    for authority in envelope["payload"]["ranking_authority"]:
+        authority["ranking_method_key"] = forged_key
+
+    with pytest.raises(ValueError, match="invalid|canonical payload"):
+        from_canonical_json(json.dumps(envelope), TrialSelectionDecision)
 
 
 def test_select_all_rejects_ranking_arguments_at_selection_boundary() -> None:
@@ -1059,35 +1111,77 @@ def test_selection_rejects_a_forged_extreme_without_ranking_provenance() -> None
         replace(selection, ranking_provenance=())
 
 
-def test_select_all_additive_fields_are_optional_on_v3_wire_decode() -> None:
+def test_select_all_legacy_wire_decode_explicitly_supplies_additive_fields() -> None:
     first = _bind(_phase("select-all-v3-a"), "a")
     second = _bind(_phase("select-all-v3-b"), "b")
     selection = _select_all((first, second))
     envelope = json.loads(canonical_json(selection))
-    del envelope["payload"]["ranking_method_key"]
-    del envelope["payload"]["ranking_provenance"]
+    for field_name in ("ranking_method_key", "ranking_provenance", "ranking_authority"):
+        del envelope["payload"][field_name]
     restored = from_canonical_json(json.dumps(envelope), TrialSelectionDecision)
     assert restored == selection
+    assert restored.ranking_method_key is None
+    assert restored.ranking_provenance == ()
+    assert restored.ranking_authority == ()
     assert SERIALIZATION_VERSION == 3
+
+
+@pytest.mark.parametrize(
+    "present_fields",
+    (
+        ("ranking_method_key",),
+        ("ranking_provenance",),
+        ("ranking_authority",),
+        ("ranking_method_key", "ranking_provenance"),
+        ("ranking_method_key", "ranking_authority"),
+        ("ranking_provenance", "ranking_authority"),
+    ),
+)
+def test_partial_res50_ranking_fields_are_not_legacy(
+    present_fields: tuple[str, ...],
+) -> None:
+    first = _bind(_phase("partial-modern-a", _RES49_FIRST_TRACE), "a")
+    second = _bind(_phase("partial-modern-b", _RES49_SECOND_TRACE), "b")
+    selection = _extreme_selection((first, second))
+    envelope = json.loads(canonical_json(selection))
+    for field_name in {"ranking_method_key", "ranking_provenance", "ranking_authority"} - set(
+        present_fields
+    ):
+        del envelope["payload"][field_name]
+
+    with pytest.raises(ValueError, match="present together"):
+        from_canonical_json(json.dumps(envelope), TrialSelectionDecision)
 
 
 def test_pre_res50_extreme_v3_wire_is_readable_but_not_aggregation_authority() -> None:
     first = _bind(_phase("legacy-extreme-a", _RES49_FIRST_TRACE), "a")
     second = _bind(_phase("legacy-extreme-b", _RES49_SECOND_TRACE), "b")
     selection = _extreme_selection((first, second))
-    envelope = json.loads(canonical_json(selection))
-    del envelope["payload"]["ranking_method_key"]
-    del envelope["payload"]["ranking_provenance"]
-    del envelope["payload"]["ranking_authority"]
-
-    restored = from_canonical_json(json.dumps(envelope), TrialSelectionDecision)
+    restored = _legacy_selection(selection)
 
     assert restored.selected_trial_ids == selection.selected_trial_ids
+    assert restored.ranking_provenance == ()
     assert restored.ranking_authority == ()
     assert restored.ranking_method_key is not None
     assert restored.ranking_method_key.startswith("legacy-res40:")
     refused = project_selected_trial(restored, (first, second))
     _assert_refusal(refused, RefusalReasonCode.RANKING_METRIC_REQUIRED)
+
+
+def test_legacy_ranking_authority_cannot_be_escalated() -> None:
+    first = _bind(_phase("legacy-escalation-a", _RES49_FIRST_TRACE), "a")
+    second = _bind(_phase("legacy-escalation-b", _RES49_SECOND_TRACE), "b")
+    modern = _extreme_selection((first, second))
+    legacy = _legacy_selection(modern)
+
+    with pytest.raises(ValueError, match="legacy ranking identity"):
+        replace(legacy, ranking_provenance=modern.ranking_provenance)
+    with pytest.raises(ValueError, match="legacy ranking identity"):
+        replace(legacy, ranking_authority=modern.ranking_authority)
+    with pytest.raises(ValueError, match="ranking observation authority"):
+        replace(legacy, ranking_method_key=modern.ranking_method_key)
+    with pytest.raises(ValueError, match="legacy ranking identity"):
+        replace(modern, ranking_method_key="legacy-res40:forged")
 
 
 def test_deserialized_extreme_decision_recomputes_its_winner() -> None:
@@ -1334,6 +1428,8 @@ def test_session_summary_comparability_retains_rule_and_count_identity() -> None
     right_b = _bind(_phase("summary-right-b", _RES49_SECOND_TRACE), "d")
     left = _mean((left_a, left_b), output_id="summary-left")
     right = _mean((right_a, right_b), output_id="summary-right")
+    assert left.selection_decision.ranking_method_key is None
+    assert right.selection_decision.ranking_method_key is None
     comparable = compare_cmj_session_summaries(left, right, claim="compare CMJ session means")
     assert comparable.state is ComparabilityState.COMPARABLE
 
@@ -1351,6 +1447,55 @@ def test_session_summary_comparability_retains_rule_and_count_identity() -> None
         ComparabilityReasonCode.SESSION_CONTRIBUTING_COUNT_MISMATCH.value
         in count_difference.reason_codes
     )
+
+
+def test_legacy_ranking_summaries_are_comparability_insufficient() -> None:
+    left_first = _bind(_phase("legacy-summary-left-a", _RES49_FIRST_TRACE), "a")
+    left_second = _bind(_phase("legacy-summary-left-b", _RES49_SECOND_TRACE), "b")
+    right_first = _bind(_phase("legacy-summary-right-a", _RES49_FIRST_TRACE), "c")
+    right_second = _bind(_phase("legacy-summary-right-b", _RES49_SECOND_TRACE), "d")
+    left_modern = project_selected_trial(
+        _extreme_selection((left_first, left_second)),
+        (left_first, left_second),
+        output_observation_id=InstanceIdentifier("observation", "legacy-summary-left"),
+    )
+    right_modern = project_selected_trial(
+        _extreme_selection((right_first, right_second)),
+        (right_first, right_second),
+        output_observation_id=InstanceIdentifier("observation", "legacy-summary-right"),
+    )
+    assert isinstance(left_modern, SessionAggregationResult)
+    assert isinstance(right_modern, SessionAggregationResult)
+    left_legacy = _legacy_summary(left_modern)
+    right_legacy = _legacy_summary(right_modern)
+
+    legacy_comparison = compare_cmj_session_summaries(
+        left_legacy,
+        right_legacy,
+        claim="compare legacy extreme summaries",
+    )
+    assert legacy_comparison.state is ComparabilityState.INSUFFICIENT_INFORMATION
+    assert ComparabilityReasonCode.MISSING_METADATA.value in legacy_comparison.reason_codes
+    assert ComparabilityReasonCode.COMPARABILITY_NOT_REGISTERED.value in legacy_comparison.reason_codes
+    assert legacy_comparison.decided_by is ComparabilityDecisionSource.UNRESOLVED
+    assert legacy_comparison.rule_reference is None
+    assert "full RES-50 ranking method semantic identity" in legacy_comparison.missing_information
+    assert "ranking observation authority/provenance" in legacy_comparison.missing_information
+
+    legacy_modern_comparison = compare_cmj_session_summaries(
+        left_legacy,
+        right_modern,
+        claim="compare legacy and modern extreme summaries",
+    )
+    assert legacy_modern_comparison.state is ComparabilityState.INSUFFICIENT_INFORMATION
+    assert legacy_modern_comparison.decided_by is ComparabilityDecisionSource.UNRESOLVED
+
+    modern_comparison = compare_cmj_session_summaries(
+        left_modern,
+        right_modern,
+        claim="compare modern extreme summaries",
+    )
+    assert modern_comparison.state is ComparabilityState.COMPARABLE
 
 
 def test_maximum_and_mean_are_not_directly_comparable_even_with_same_count() -> None:

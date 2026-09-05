@@ -41,6 +41,7 @@ from dynamislm import (
     RegistryReference,
     ResultStatus,
     ScalarValue,
+    SamplingCharacteristics,
     ScientificClassification,
     ScientificIdentifier,
     ScientificMeasurementObservation,
@@ -636,6 +637,45 @@ def test_canonical_serialization_is_stable_and_rejects_non_finite_values() -> No
         canonical_json({"value": math.nan})
     with pytest.raises(ValueError, match="NaN or Infinity"):
         ScalarValue(math.inf)
+
+
+def test_v3_decoder_rejects_missing_defaulted_source_artifact_field() -> None:
+    artifact = SourceArtifact(
+        artifact_id=InstanceIdentifier("artifact", "strict-v3"),
+        content_digest="sha256:strict-v3",
+        media_type="application/octet-stream",
+    )
+    envelope = json.loads(canonical_json(artifact))
+    del envelope["payload"]["immutable"]
+
+    with pytest.raises(ValueError, match="missing fields"):
+        from_canonical_json(json.dumps(envelope), SourceArtifact)
+
+    restored = from_canonical_json(canonical_json(artifact), SourceArtifact)
+    assert restored == artifact
+    assert canonical_hash(restored) == canonical_hash(artifact)
+
+
+def test_v3_decoder_rejects_missing_field_on_unrelated_defaulted_dataclass() -> None:
+    sampling = SamplingCharacteristics(frequency_hz=500.0)
+    envelope = json.loads(canonical_json(sampling))
+    del envelope["payload"]["channels"]
+
+    with pytest.raises(ValueError, match="missing fields"):
+        from_canonical_json(json.dumps(envelope), SamplingCharacteristics)
+
+
+def test_v3_decoder_rejects_unknown_fields() -> None:
+    artifact = SourceArtifact(
+        artifact_id=InstanceIdentifier("artifact", "unknown-field"),
+        content_digest="sha256:unknown-field",
+        media_type="application/octet-stream",
+    )
+    envelope = json.loads(canonical_json(artifact))
+    envelope["payload"]["unexpected"] = True
+
+    with pytest.raises(ValueError, match="unexpected fields"):
+        from_canonical_json(json.dumps(envelope), SourceArtifact)
 
 
 def test_tagged_result_variants_are_typed_and_serializable() -> None:
