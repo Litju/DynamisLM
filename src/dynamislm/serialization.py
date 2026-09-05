@@ -203,6 +203,14 @@ def _decode_dataclass(value: object, cls: SerializableType) -> object:
         for field in fields.values()
         if field.name in value
     }
+    legacy_decoder = getattr(target_cls, "__decode_legacy_wire__", None)
+    if legacy_decoder is not None:
+        decoded_kwargs = legacy_decoder(value, kwargs)
+        if not isinstance(decoded_kwargs, dict):
+            raise SerializationError(
+                f"legacy decoder for {type_identifier(target_cls)} must return a mapping"
+            )
+        kwargs = decoded_kwargs
     try:
         return target_cls(**kwargs)
     except (TypeError, ValueError) as exc:

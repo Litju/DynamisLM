@@ -40,23 +40,29 @@ direction, tie policy, ranking IDs, ranking values, or ranking provenance.
 `CMJ_SELECT_EXTREME_BY_REGISTERED_METRIC_V1` requires one ranking observation,
 finite ranking value, and aligned ranking ID for each eligible trial; the
 registered direction and `CMJ_TIE_EARLIEST_DECLARED_CANDIDATE_V1` tie policy
-are retained in eligible declared order. When the ranking observations are
-distinct from candidate observations, their paired immutable provenance is
-required to preserve the alignment.
+are retained in eligible declared order. Each modern decision also carries a
+typed `RankingObservationAuthority` for every ranking observation, pairing its
+trial, observation, nominal references, value, canonical method key, and
+provenance. When ranking observations are distinct from candidate observations,
+that paired authority preserves the alignment.
 
 ## DETERMINISTIC_WINNER_RECOMPUTATION
 
 `TrialSelectionDecision` accepts only the two registered selection rules. Its
 constructor, canonical deserializer, and `replace(...)` path recompute argmax
 or argmin from the retained eligible order, values, direction, and tie policy.
-The selected trial must equal that winner. Missing, non-finite, misaligned, or
-unregistered fields fail closed.
+The selected trial must equal that winner, and modern ranking authority fields
+must agree with every retained ranking field. Missing, non-finite, misaligned,
+or unregistered fields fail closed. Pre-RES-50 extreme v3 records remain
+readable under an explicit legacy marker but cannot silently produce a new
+session result without actual ranking observations.
 
 ## RANKING_PROVENANCE
 
 Extreme decisions retain an immutable, order-aligned tuple of the actual
-ranking observations' `Provenance` records. Projection/aggregation can also
-validate an explicit tuple of the actual ranking observations. The session
+ranking observations' `Provenance` records and typed authority records.
+Projection/aggregation can also validate an explicit tuple of the actual
+ranking observations. The session
 processing run receives a direct lineage edge from every ranking observation,
 including unselected ranking trials, so ranking dependencies are computational
 lineage rather than metadata-only IDs. Their artifacts, acquisitions,
@@ -112,7 +118,7 @@ The RES-50 matrix covers selected-only projection targets, complete selected
 means, source mismatch refusal, full ranking method identity, method-versus-
 instance separation, registered-rule self-validation, deterministic winner
 recomputation, ranking/target lineage, deduplication, canonical roundtrip,
-and historical hash regression. The full suite contains 239 passing tests.
+and historical hash regression. The full suite contains 241 passing tests.
 
 ## VERSION
 

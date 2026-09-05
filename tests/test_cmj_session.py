@@ -27,6 +27,7 @@ from dynamislm.measurement.cmj import (
     CMJ_SESSION_AGGREGATION_OPERATION,
     CMJ_TEST_FAMILY,
     CMJ_TIE_EARLIEST_DECLARED_CANDIDATE_V1,
+    CMJIntegrationInterval,
     CMJJumpHeightResult,
     CMJMeasurementIdentity,
     CMJPhaseMetric,
@@ -34,6 +35,8 @@ from dynamislm.measurement.cmj import (
     CMJTrialMetricValue,
     DeclaredCandidateTrialSet,
     ExplicitTimebase,
+    NetVerticalForceResult,
+    NetVerticalImpulseResult,
     RegularTimebase,
     SessionAggregationResult,
     SignalTimebase,
@@ -42,7 +45,9 @@ from dynamislm.measurement.cmj import (
     TrialSelectionDirection,
     aggregate_cmj_session,
     compare_cmj_session_summaries,
+    derive_net_vertical_force,
     evaluate_trial_eligibility,
+    integrate_net_vertical_impulse,
     project_selected_trial,
     select_trials,
 )
@@ -55,6 +60,7 @@ from dynamislm.measurement.identity import (
 from dynamislm.measurement.result import ResultStatus, UncertaintyStatus
 from dynamislm.provenance.models import LineageRelation
 from dynamislm.refusal import RefusalReasonCode, RefusalResult
+from test_cmj import _mechanics_fixture
 from test_cmj import _observation as _raw_observation
 from test_cmj_jump_height import _flight_fixture, _velocity_fixture
 from test_cmj_phases import (
@@ -105,6 +111,17 @@ def _bind(
     session: InstanceIdentifier = SESSION,
     test_instance: InstanceIdentifier = TEST_INSTANCE,
 ) -> CMJJumpHeightResult: ...
+
+
+@overload
+def _bind(
+    value: NetVerticalImpulseResult,
+    trial: str,
+    *,
+    athlete: InstanceIdentifier = ATHLETE,
+    session: InstanceIdentifier = SESSION,
+    test_instance: InstanceIdentifier = TEST_INSTANCE,
+) -> NetVerticalImpulseResult: ...
 
 
 def _bind(
@@ -561,6 +578,18 @@ def test_selection_decision_self_validates_registered_rules_and_winners() -> Non
 
     with pytest.raises(ValueError, match="ranking method identity"):
         replace(extreme, ranking_method_key=None)
+    with pytest.raises(ValueError, match="canonical|selection key"):
+        replace(extreme, ranking_method_key="forged-ranking-method-key")
+    altered_values = (extreme.ranking_values[0] + 0.001, *extreme.ranking_values[1:])
+    with pytest.raises(ValueError, match="selection value"):
+        replace(extreme, ranking_values=altered_values)
+    with pytest.raises(ValueError, match="selection method"):
+        replace(
+            extreme,
+            ranking_method=_unregistered_reference("registered-operation", "forged-method"),
+        )
+    with pytest.raises(ValueError, match="ranking observation authority"):
+        replace(extreme, ranking_authority=())
     with pytest.raises(ValueError, match="tie policy"):
         replace(
             extreme,
@@ -669,6 +698,50 @@ def test_ranking_method_key_excludes_trial_instance_coordinates() -> None:
     assert jump_b.observation.observation_id.qualified not in jump_selection.ranking_method_key
     assert "trial:a" not in jump_selection.ranking_method_key
     assert "trial:b" not in jump_selection.ranking_method_key
+
+
+def test_mechanics_ranking_method_key_excludes_source_instance_identity() -> None:
+    first_fixture = _mechanics_fixture(
+        "ranking-mechanics-a",
+        (1.0, 1.0, 3.0, 3.0),
+    )
+    second_fixture = _mechanics_fixture(
+        "ranking-mechanics-b",
+        (1.0, 1.0, 3.0, 3.0),
+    )
+    first_net_force = derive_net_vertical_force(
+        first_fixture[1], first_fixture[2], first_fixture[3]
+    )
+    second_net_force = derive_net_vertical_force(
+        second_fixture[1], second_fixture[2], second_fixture[3]
+    )
+    assert isinstance(first_net_force, NetVerticalForceResult)
+    assert isinstance(second_net_force, NetVerticalForceResult)
+    first = integrate_net_vertical_impulse(
+        first_net_force,
+        CMJIntegrationInterval.explicit_sample(first_net_force.series.series_id, 0, 3),
+    )
+    second = integrate_net_vertical_impulse(
+        second_net_force,
+        CMJIntegrationInterval.explicit_sample(second_net_force.series.series_id, 0, 3),
+    )
+    assert not isinstance(first, RefusalResult)
+    assert not isinstance(second, RefusalResult)
+    first = _bind(first, "a")
+    second = _bind(second, "b")
+
+    selection = _extreme_selection((first, second))
+    assert selection.ranking_method_key is not None
+    assert selection.ranking_method_key == selection.ranking_authority[0].ranking_method_key
+    for value in (first, second):
+        assert _observation(value).observation_id.qualified not in selection.ranking_method_key
+    for series_id in (
+        first_net_force.series.series_id,
+        second_net_force.series.series_id,
+    ):
+        assert series_id.qualified not in selection.ranking_method_key
+    assert "ranking-mechanics-a" not in selection.ranking_method_key
+    assert "ranking-mechanics-b" not in selection.ranking_method_key
 
 
 def test_extreme_selection_retains_distinct_ranking_observations() -> None:
@@ -978,13 +1051,12 @@ def test_shared_ranking_and_target_provenance_is_deduplicated() -> None:
     )
 
 
-def test_projection_refuses_a_forged_extreme_without_ranking_provenance() -> None:
+def test_selection_rejects_a_forged_extreme_without_ranking_provenance() -> None:
     ranking_a = _bind(_phase("missing-ranking-provenance-a", _RES49_FIRST_TRACE), "a")
     ranking_b = _bind(_phase("missing-ranking-provenance-b", _RES49_SECOND_TRACE), "b")
     selection = _extreme_selection((ranking_a, ranking_b))
-    forged = replace(selection, ranking_provenance=())
-    result = project_selected_trial(forged, (ranking_a, ranking_b))
-    _assert_refusal(result, RefusalReasonCode.RANKING_METRIC_REQUIRED)
+    with pytest.raises(ValueError, match="ranking authority provenance"):
+        replace(selection, ranking_provenance=())
 
 
 def test_select_all_additive_fields_are_optional_on_v3_wire_decode() -> None:
@@ -997,6 +1069,25 @@ def test_select_all_additive_fields_are_optional_on_v3_wire_decode() -> None:
     restored = from_canonical_json(json.dumps(envelope), TrialSelectionDecision)
     assert restored == selection
     assert SERIALIZATION_VERSION == 3
+
+
+def test_pre_res50_extreme_v3_wire_is_readable_but_not_aggregation_authority() -> None:
+    first = _bind(_phase("legacy-extreme-a", _RES49_FIRST_TRACE), "a")
+    second = _bind(_phase("legacy-extreme-b", _RES49_SECOND_TRACE), "b")
+    selection = _extreme_selection((first, second))
+    envelope = json.loads(canonical_json(selection))
+    del envelope["payload"]["ranking_method_key"]
+    del envelope["payload"]["ranking_provenance"]
+    del envelope["payload"]["ranking_authority"]
+
+    restored = from_canonical_json(json.dumps(envelope), TrialSelectionDecision)
+
+    assert restored.selected_trial_ids == selection.selected_trial_ids
+    assert restored.ranking_authority == ()
+    assert restored.ranking_method_key is not None
+    assert restored.ranking_method_key.startswith("legacy-res40:")
+    refused = project_selected_trial(restored, (first, second))
+    _assert_refusal(refused, RefusalReasonCode.RANKING_METRIC_REQUIRED)
 
 
 def test_deserialized_extreme_decision_recomputes_its_winner() -> None:
@@ -1013,6 +1104,11 @@ def test_deserialized_extreme_decision_recomputes_its_winner() -> None:
     envelope["payload"]["selected_trial_ids"] = [json.loads(canonical_json(wrong_trial))["payload"]]
     with pytest.raises(ValueError, match="invalid|winner"):
         from_canonical_json(json.dumps(envelope), TrialSelectionDecision)
+
+    altered_values = json.loads(canonical_json(selection))
+    altered_values["payload"]["ranking_values"][0] += 0.001
+    with pytest.raises(ValueError, match="invalid"):
+        from_canonical_json(json.dumps(altered_values), TrialSelectionDecision)
 
 
 def test_scalar_only_boundary_refuses_vectors_and_no_array_mean_is_attempted() -> None:

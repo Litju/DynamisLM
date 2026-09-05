@@ -10,6 +10,7 @@ operation.
 from __future__ import annotations
 
 import datetime as datetime_module
+import json
 import math
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
@@ -21,6 +22,7 @@ from dynamislm.comparability.models import (
     ComparabilityResult,
     ComparabilityState,
 )
+from dynamislm.measurement.cmj.acquisition import TimebaseIdentity
 from dynamislm.measurement.cmj.comparability import compare_cmj_measurement_identities
 from dynamislm.measurement.cmj.identity import (
     CMJ_TEST_FAMILY,
@@ -31,6 +33,8 @@ from dynamislm.measurement.cmj.jump_height import (
     compare_cmj_jump_height_estimates,
 )
 from dynamislm.measurement.cmj.mechanics import (
+    CMJIntegrationInterval,
+    DisplacementOrigin,
     NetVerticalForceResult,
     NetVerticalImpulseResult,
     SupportedSystemComAccelerationResult,
@@ -42,7 +46,6 @@ from dynamislm.measurement.cmj.phases import (
     CMJPhaseMetricResult,
     _phase_metric_method_key,
     _phase_velocity_processing_method_key,
-    _source_measurement_method_key,
     _zero_velocity_reference_method_key,
     compare_cmj_phase_metrics,
 )
@@ -111,6 +114,20 @@ _UNCERTAINTY_DESCRIPTION = (
     "RES-40 deterministic session selection/aggregation; no measurement-error or "
     "reliability analysis is assessed."
 )
+_LEGACY_RANKING_METHOD_KEY_PREFIX = "legacy-res40:"
+
+
+def _legacy_ranking_method_key(fields: Mapping[str, object]) -> str:
+    """Name a pre-RES-50 nominal ranking identity without instance fields."""
+
+    return _LEGACY_RANKING_METHOD_KEY_PREFIX + canonical_hash(
+        {
+            "ranking_metric": fields.get("ranking_metric"),
+            "ranking_method": fields.get("ranking_method"),
+            "ranking_direction": fields.get("ranking_direction"),
+            "tie_policy": fields.get("tie_policy"),
+        }
+    ).removeprefix("sha256:")
 
 
 class TrialEligibilityStatus(StrEnum):
@@ -254,6 +271,57 @@ class TrialEligibilityDecision:
 
 @register_serializable_type
 @dataclass(frozen=True, slots=True)
+class RankingObservationAuthority:
+    """Immutable source authority paired with one ranking observation."""
+
+    trial_id: InstanceIdentifier
+    observation_id: InstanceIdentifier
+    ranking_metric: RegistryReference
+    ranking_method: RegistryReference
+    ranking_value: float
+    ranking_method_key: str
+    provenance: Provenance
+
+    def __post_init__(self) -> None:
+        if self.trial_id.instance_type != "trial":
+            raise ValueError("ranking authority trial_id must identify a trial")
+        if self.observation_id.instance_type != "observation":
+            raise ValueError("ranking authority observation_id must identify an observation")
+        if not isinstance(self.ranking_metric, RegistryReference):
+            raise ValueError("ranking authority metric must be a registered reference")
+        if not isinstance(self.ranking_method, RegistryReference):
+            raise ValueError("ranking authority method must be a registered reference")
+        if self.ranking_metric.identifier.object_type != "metric":
+            raise ValueError("ranking authority metric must identify a registered metric")
+        if self.ranking_method.identifier.object_type not in {
+            "estimator",
+            "registered-operation",
+            "processing-method",
+            "metric-method",
+        }:
+            raise ValueError("ranking authority method must identify a registered method")
+        if (
+            isinstance(self.ranking_value, bool)
+            or not isinstance(self.ranking_value, int | float)
+            or not math.isfinite(float(self.ranking_value))
+        ):
+            raise ValueError("ranking authority value must be finite")
+        if not isinstance(self.ranking_method_key, str) or not self.ranking_method_key.strip():
+            raise ValueError("ranking authority method key must be non-empty")
+        if not self.ranking_method_key.startswith(_LEGACY_RANKING_METHOD_KEY_PREFIX):
+            _validate_ranking_method_key(self.ranking_method_key)
+        if not isinstance(self.provenance, Provenance):
+            raise ValueError("ranking authority must preserve immutable provenance")
+        if not any(
+            edge.from_id == self.observation_id.qualified
+            or edge.to_id == self.observation_id.qualified
+            for edge in self.provenance.lineage_edges
+        ):
+            raise ValueError("ranking authority provenance must preserve its observation ID")
+
+
+@register_serializable_type
+@dataclass(frozen=True, slots=True)
 class TrialSelectionDecision:
     """Immutable result of applying one registered selection rule."""
 
@@ -269,6 +337,24 @@ class TrialSelectionDecision:
     ranking_values: tuple[float, ...] = ()
     ranking_method_key: str | None = None
     ranking_provenance: tuple[Provenance, ...] = ()
+    ranking_authority: tuple[RankingObservationAuthority, ...] = ()
+
+    @classmethod
+    def __decode_legacy_wire__(
+        cls,
+        payload: object,
+        kwargs: dict[str, object],
+    ) -> dict[str, object]:
+        """Supply a non-authoritative marker for pre-RES-50 extreme records."""
+
+        if not isinstance(payload, dict):
+            return kwargs
+        if "ranking_method_key" in payload or "ranking_authority" in payload:
+            return kwargs
+        if kwargs.get("selection_rule") != CMJ_SELECT_EXTREME_BY_REGISTERED_METRIC_V1:
+            return kwargs
+        kwargs["ranking_method_key"] = _legacy_ranking_method_key(kwargs)
+        return kwargs
 
     def __post_init__(self) -> None:
         require_tuple(self.eligibility_decisions, "eligibility_decisions")
@@ -276,6 +362,13 @@ class TrialSelectionDecision:
         require_tuple(self.ranking_observation_ids, "ranking_observation_ids")
         require_tuple(self.ranking_values, "ranking_values")
         require_tuple(self.ranking_provenance, "ranking_provenance")
+        require_tuple(self.ranking_authority, "ranking_authority")
+        if not isinstance(self.candidate_set, DeclaredCandidateTrialSet):
+            raise ValueError("candidate_set must be a declared candidate trial set")
+        if any(
+            not isinstance(item, TrialEligibilityDecision) for item in self.eligibility_decisions
+        ):
+            raise ValueError("eligibility_decisions must contain typed eligibility records")
         if not isinstance(self.selection_rule, RegistryReference):
             raise ValueError("selection_rule must be a registered selection-rule reference")
         if self.selection_rule not in (
@@ -306,8 +399,16 @@ class TrialSelectionDecision:
             not isinstance(self.ranking_method_key, str) or not self.ranking_method_key.strip()
         ):
             raise ValueError("ranking_method_key must be a non-empty canonical string")
+        if self.ranking_method_key is not None and not self.ranking_method_key.startswith(
+            _LEGACY_RANKING_METHOD_KEY_PREFIX
+        ):
+            _validate_ranking_method_key(self.ranking_method_key)
         if any(not isinstance(item, Provenance) for item in self.ranking_provenance):
             raise ValueError("ranking_provenance must contain immutable Provenance records")
+        if any(
+            not isinstance(item, RankingObservationAuthority) for item in self.ranking_authority
+        ):
+            raise ValueError("ranking_authority must contain typed ranking authority records")
         is_extreme = self.selection_rule == CMJ_SELECT_EXTREME_BY_REGISTERED_METRIC_V1
         if self.selection_rule == CMJ_SELECT_ALL_DECLARED_ELIGIBLE_V1:
             if self.selected_trial_ids != eligible:
@@ -323,7 +424,12 @@ class TrialSelectionDecision:
                 )
             ):
                 raise ValueError("SELECT_ALL must not preserve ranking metadata")
-            if self.ranking_observation_ids or self.ranking_values or self.ranking_provenance:
+            if (
+                self.ranking_observation_ids
+                or self.ranking_values
+                or self.ranking_provenance
+                or self.ranking_authority
+            ):
                 raise ValueError("SELECT_ALL must not preserve ranking observations")
             return
         if is_extreme:
@@ -333,12 +439,35 @@ class TrialSelectionDecision:
                 self.ranking_method, RegistryReference
             ):
                 raise ValueError("extreme selection must preserve ranking metric and method")
+            if self.ranking_metric.identifier.object_type != "metric":
+                raise ValueError("extreme ranking_metric must identify a registered metric")
+            if self.ranking_method.identifier.object_type not in {
+                "estimator",
+                "registered-operation",
+                "processing-method",
+                "metric-method",
+            }:
+                raise ValueError("extreme ranking_method must identify a registered method")
             if not isinstance(self.ranking_direction, TrialSelectionDirection):
                 raise ValueError("extreme selection must preserve direction and tie policy")
             if self.tie_policy != CMJ_TIE_EARLIEST_DECLARED_CANDIDATE_V1:
                 raise ValueError("extreme selection must use the registered V1 tie policy")
             if self.ranking_method_key is None:
                 raise ValueError("extreme selection must preserve ranking method identity")
+            if self.ranking_method_key.startswith(_LEGACY_RANKING_METHOD_KEY_PREFIX):
+                if self.ranking_authority or self.ranking_provenance:
+                    raise ValueError("legacy ranking identity cannot carry modern authority")
+                if self.ranking_method_key != _legacy_ranking_method_key(
+                    {
+                        "ranking_metric": self.ranking_metric,
+                        "ranking_method": self.ranking_method,
+                        "ranking_direction": self.ranking_direction,
+                        "tie_policy": self.tie_policy,
+                    }
+                ):
+                    raise ValueError("legacy ranking identity does not match its nominal fields")
+            elif not self.ranking_authority:
+                raise ValueError("extreme selection must preserve ranking observation authority")
             if len(self.ranking_observation_ids) != len(eligible):
                 raise ValueError(
                     "extreme selection must preserve one ranking observation per eligible trial"
@@ -374,6 +503,35 @@ class TrialSelectionDecision:
                 )
             ):
                 raise ValueError("ranking provenance must preserve each ranking observation ID")
+            if self.ranking_authority:
+                if len(self.ranking_authority) != len(eligible):
+                    raise ValueError("ranking authority must align to every eligible trial")
+                for trial_id, observation_id, value, authority in zip(
+                    eligible,
+                    self.ranking_observation_ids,
+                    self.ranking_values,
+                    self.ranking_authority,
+                    strict=True,
+                ):
+                    if authority.trial_id != trial_id:
+                        raise ValueError("ranking authority must follow eligible declared order")
+                    if authority.observation_id != observation_id:
+                        raise ValueError("ranking authority observation IDs are misaligned")
+                    if authority.ranking_metric != self.ranking_metric:
+                        raise ValueError("ranking authority metric differs from selection metric")
+                    if authority.ranking_method != self.ranking_method:
+                        raise ValueError("ranking authority method differs from selection method")
+                    if float(authority.ranking_value) != float(value):
+                        raise ValueError("ranking authority value differs from selection value")
+                    if authority.ranking_method_key != self.ranking_method_key:
+                        raise ValueError("ranking authority method key differs from selection key")
+                if (
+                    tuple(item.provenance for item in self.ranking_authority)
+                    != self.ranking_provenance
+                ):
+                    raise ValueError(
+                        "ranking authority provenance differs from selection provenance"
+                    )
             expected_trial = eligible[0]
             expected_value = float(self.ranking_values[0])
             for trial_id, value in zip(eligible[1:], self.ranking_values[1:], strict=True):
@@ -846,7 +1004,15 @@ def select_trials(
                 observation_ids=_observation_ids_for_values(ranking_by_trial.values()),
             )
         ranking_values.append((trial_id, value, scalar))
-        ranking_method_keys.append(_ranking_method_key(value))
+        try:
+            ranking_method_keys.append(_ranking_method_key(value))
+        except (TypeError, ValueError):
+            return _session_refusal(
+                "select extreme CMJ trial",
+                (RefusalReasonCode.RANKING_METRICS_NOT_COMPARABLE,),
+                ("ranking observations with a resolvable canonical method identity",),
+                observation_ids=_observation_ids_for_values(ranking_by_trial.values()),
+            )
     if len(set(ranking_method_keys)) != 1:
         return _session_refusal(
             "select extreme CMJ trial",
@@ -879,6 +1045,25 @@ def select_trials(
     ranking_ids = tuple(
         _observation(ranking_by_trial[trial_id]).observation_id for trial_id in eligible
     )
+    ranking_provenance = tuple(
+        _observation(ranking_by_trial[trial_id]).provenance for trial_id in eligible
+    )
+    assert resolved_ranking_metric is not None
+    assert resolved_ranking_method is not None
+    ranking_authority = tuple(
+        RankingObservationAuthority(
+            trial_id=trial_id,
+            observation_id=_observation(ranking_by_trial[trial_id]).observation_id,
+            ranking_metric=resolved_ranking_metric,
+            ranking_method=resolved_ranking_method,
+            ranking_value=scalar,
+            ranking_method_key=ranking_method_keys[0],
+            provenance=provenance,
+        )
+        for (trial_id, _value, scalar), provenance in zip(
+            ranking_values, ranking_provenance, strict=True
+        )
+    )
     return TrialSelectionDecision(
         candidate_set=candidate_set,
         eligibility_decisions=decisions,
@@ -891,9 +1076,8 @@ def select_trials(
         ranking_observation_ids=ranking_ids,
         ranking_values=tuple(scalar for _, _, scalar in ranking_values),
         ranking_method_key=ranking_method_keys[0],
-        ranking_provenance=tuple(
-            _observation(ranking_by_trial[trial_id]).provenance for trial_id in eligible
-        ),
+        ranking_provenance=ranking_provenance,
+        ranking_authority=ranking_authority,
     )
 
 
@@ -1381,12 +1565,12 @@ def _ranking_provenance_for_aggregation(
             )
         return ()
     if ranking_observations is None:
-        if selection_decision.ranking_provenance:
+        if selection_decision.ranking_authority and selection_decision.ranking_provenance:
             return selection_decision.ranking_provenance
         return _session_refusal(
             "aggregate CMJ session",
             (RefusalReasonCode.RANKING_METRIC_REQUIRED,),
-            ("the actual ranking observations or their preserved provenance",),
+            ("the actual ranking observations or their preserved ranking authority",),
             observation_ids=selection_decision.ranking_observation_ids,
         )
     ranking_metric = selection_decision.ranking_metric
@@ -1453,7 +1637,15 @@ def _ranking_provenance_for_aggregation(
             ("ranking values matching the self-validating selection decision",),
             observation_ids=ranking_ids,
         )
-    keys = tuple(_ranking_method_key(value) for value in ordered_values)
+    try:
+        keys = tuple(_ranking_method_key(value) for value in ordered_values)
+    except (TypeError, ValueError):
+        return _session_refusal(
+            "aggregate CMJ session",
+            (RefusalReasonCode.RANKING_METRICS_NOT_COMPARABLE,),
+            ("ranking observations with a resolvable canonical method identity",),
+            observation_ids=ranking_ids,
+        )
     if len(set(keys)) != 1 or keys[0] != selection_decision.ranking_method_key:
         return _session_refusal(
             "aggregate CMJ session",
@@ -2536,7 +2728,17 @@ def _ranking_method_key(value: CMJTrialMetricValue) -> str:
 
     if isinstance(value, CMJJumpHeightResult):
         return canonical_json(_jump_height_method_key(value))
-    return _source_method_key(value)
+    if isinstance(value, CMJPhaseMetricResult):
+        return _source_method_key(value)
+    if isinstance(value, _MECHANICS_TYPES):
+        return canonical_json(_mechanics_method_key(value))
+    observation = _observation(value)
+    return canonical_json(
+        {
+            "kind": _metric_kind(value),
+            "identity": _ranking_identity_method_key(observation.identity),
+        }
+    )
 
 
 def _jump_height_method_key(value: CMJJumpHeightResult) -> dict[str, object]:
@@ -2577,10 +2779,10 @@ def _jump_height_method_key(value: CMJJumpHeightResult) -> dict[str, object]:
         "kind": "JUMP_HEIGHT",
         "method": value.method,
         "gravity": parameters.gravity,
-        "source_identity": _source_measurement_method_key(identity),
+        "source_identity": _ranking_identity_method_key(identity),
         "source_timebase": _timebase_method_key(parameters.source_timebase),
-        "takeoff_event": _event_method_key(value.takeoff_event),
-        "landing_event": _event_method_key(value.landing_event),
+        "takeoff_event": _event_method_key(value.takeoff_event, instance_free=True),
+        "landing_event": _event_method_key(value.landing_event, instance_free=True),
         "system_contract": parameters.system_contract,
         "takeoff_velocity_sample_convention": parameters.takeoff_velocity_sample_convention,
         "source_velocity_operation": parameters.source_velocity_operation,
@@ -2589,7 +2791,7 @@ def _jump_height_method_key(value: CMJJumpHeightResult) -> dict[str, object]:
             parameters.source_velocity_initial_condition
         ),
         "source_velocity_identity": (
-            _source_measurement_method_key(source_velocity_identity)
+            _ranking_identity_method_key(source_velocity_identity)
             if source_velocity_identity is not None
             else None
         ),
@@ -2612,7 +2814,107 @@ def _jump_height_method_key(value: CMJJumpHeightResult) -> dict[str, object]:
     }
 
 
+def _mechanics_method_key(value: CMJTrialMetricValue) -> dict[str, object]:
+    """Describe mechanics processing without trial-realized coordinates or IDs."""
+
+    observation = _observation(value)
+    identity = observation.identity
+    if not isinstance(identity, CMJMeasurementIdentity):
+        raise ValueError("mechanics ranking requires a CMJ measurement identity")
+    interval: CMJIntegrationInterval | None
+    if isinstance(value, NetVerticalImpulseResult):
+        quantity: object = "NET_VERTICAL_IMPULSE"
+        operation = identity.processing.registered_operation
+        system_contract = value.system_contract
+        timebase = value.timebase
+        unit = value.unit
+        physical_axis = identity.acquisition.physical_axis
+        reference_frame = identity.acquisition.reference_frame
+        sign_convention = identity.acquisition.sign_convention
+        integration_method = identity.processing.integration_method
+        interval = value.interval
+        initial_condition = None
+        origin = None
+    elif isinstance(
+        value,
+        NetVerticalForceResult
+        | SupportedSystemComAccelerationResult
+        | SupportedSystemComVelocityResult
+        | SupportedSystemComRelativeDisplacementResult,
+    ):
+        series = value.series
+        quantity = series.quantity
+        operation = series.operation
+        system_contract = series.system_contract
+        timebase = series.timebase
+        unit = series.unit
+        physical_axis = series.physical_axis
+        reference_frame = series.reference_frame
+        sign_convention = series.sign_convention
+        integration_method = series.integration_method
+        interval = series.integration_interval
+        initial_condition = series.initial_velocity_condition
+        origin = series.displacement_origin
+    else:
+        raise ValueError("unsupported mechanics ranking value")
+    return {
+        "kind": "MECHANICS",
+        "identity": _ranking_identity_method_key(identity),
+        "method_parameters": _ranking_method_metadata_key(identity.processing.method_parameters),
+        "quantity": quantity,
+        "operation": operation,
+        "system_contract": system_contract,
+        "timebase": _timebase_method_key(timebase),
+        "unit": unit,
+        "physical_axis": physical_axis,
+        "reference_frame": reference_frame,
+        "sign_convention": sign_convention,
+        "integration_method": integration_method,
+        "integration_interval": _ranking_interval_method_key(interval),
+        "zero_velocity_reference": _zero_velocity_reference_method_key(initial_condition),
+        "displacement_origin": _ranking_origin_method_key(origin),
+    }
+
+
+def _ranking_interval_method_key(interval: CMJIntegrationInterval | None) -> object:
+    if interval is None:
+        return None
+    return {
+        "kind": interval.kind,
+        "boundary_convention": interval.boundary_convention,
+        "integration_method": interval.integration_method,
+        "start_event": _event_method_key(interval.start_event, instance_free=True),
+        "end_event": _event_method_key(interval.end_event, instance_free=True),
+    }
+
+
+def _ranking_origin_method_key(origin: DisplacementOrigin | None) -> object:
+    if origin is None:
+        return None
+    return {
+        "method": origin.method,
+        "unit": origin.unit,
+        "coordinate_reference": origin.coordinate_reference,
+        "reference_event": _event_method_key(origin.reference_event, instance_free=True),
+    }
+
+
 def _identity_method_key(identity: object) -> object:
+    return _identity_method_key_with_metadata(identity, _method_metadata_key, instance_free=False)
+
+
+def _ranking_identity_method_key(identity: object) -> object:
+    return _identity_method_key_with_metadata(
+        identity, _ranking_method_metadata_key, instance_free=True
+    )
+
+
+def _identity_method_key_with_metadata(
+    identity: object,
+    metadata_key: Callable[[tuple[MetadataEntry, ...]], tuple[tuple[str, object], ...]],
+    *,
+    instance_free: bool,
+) -> object:
     if not isinstance(identity, CMJMeasurementIdentity):
         return ("UNRESOLVED", type(identity).__name__)
     acquisition = identity.acquisition
@@ -2639,8 +2941,16 @@ def _identity_method_key(identity: object) -> object:
             "sign_convention": acquisition.sign_convention,
             "timebase": _timebase_method_key(acquisition.timebase),
             "acquisition_software_version": acquisition.acquisition_software_version,
-            "calibration": acquisition.calibration,
-            "zeroing": acquisition.zeroing,
+            "calibration": (
+                _ranking_reference_metadata_key(acquisition.calibration)
+                if instance_free
+                else acquisition.calibration
+            ),
+            "zeroing": (
+                _ranking_reference_metadata_key(acquisition.zeroing)
+                if instance_free
+                else acquisition.zeroing
+            ),
             "processing_state": acquisition.processing_state,
             "arrangement": acquisition.arrangement,
             "channel": acquisition.channel,
@@ -2660,7 +2970,7 @@ def _identity_method_key(identity: object) -> object:
             "phase_definitions": processing.phase_definitions,
             "trial_selection": processing.trial_selection,
             "aggregation": processing.aggregation,
-            "method_parameters": _method_metadata_key(processing.method_parameters),
+            "method_parameters": metadata_key(processing.method_parameters),
         },
         "version": identity.version,
     }
@@ -2720,15 +3030,167 @@ def _method_metadata_key(parameters: tuple[MetadataEntry, ...]) -> tuple[tuple[s
     )
 
 
+_RANKING_INSTANCE_METADATA_KEYS = frozenset(
+    {
+        *_INSTANCE_METADATA_KEYS,
+        "acquisition_instance_id",
+        "acquisition_timestamp",
+        "absolute_timestamp_origin",
+        "ballistic_applicability_source_binding",
+        "end_index",
+        "event_time_s",
+        "initial_condition_sample_index",
+        "phase_occurrence_id",
+        "processing_run_id",
+        "provenance_id",
+        "raw_artifact",
+        "result_id",
+        "sample_end_index",
+        "sample_start_index",
+        "search_end_index",
+        "selected_sample_index",
+        "start_index",
+        "start_time_s",
+        "trial_duration_s",
+        "phase_id",
+        "source_binding_digest",
+        "source_trial_id",
+        "source_trial_ids",
+        "trial_id",
+        "trial_ids",
+    }
+)
+_RANKING_INSTANCE_METADATA_SUFFIXES = (
+    "_acquisition_id",
+    "_artifact_id",
+    "_event_id",
+    "_event_ids",
+    "_identity_id",
+    "_observation_id",
+    "_occurrence_id",
+    "_processing_run_id",
+    "_provenance_id",
+    "_result_id",
+    "_sample_index",
+    "_series_id",
+    "_signal_id",
+    "_instance_id",
+    "_phase_id",
+    "_trial_id",
+    "_time_s",
+    "_timestamp",
+)
+_DROP_RANKING_METADATA = object()
+
+
+def _ranking_metadata_key_is_instance(key: str) -> bool:
+    return key in _RANKING_INSTANCE_METADATA_KEYS or key.endswith(
+        _RANKING_INSTANCE_METADATA_SUFFIXES
+    )
+
+
+def _strip_ranking_instance_data(value: object) -> object:
+    if isinstance(value, dict):
+        marker = value.get("__type__")
+        if isinstance(marker, str) and marker.endswith(".InstanceIdentifier"):
+            return _DROP_RANKING_METADATA
+        if marker == "dynamislm.measurement.cmj.weighing.WeighingBaselineQC":
+            return {
+                "__type__": marker,
+                "acceptability_adjudicated": value.get("acceptability_adjudicated"),
+            }
+        result: dict[str, object] = {}
+        for key, item in value.items():
+            if not isinstance(key, str) or _ranking_metadata_key_is_instance(key):
+                continue
+            stripped = _strip_ranking_instance_data(item)
+            if stripped is not _DROP_RANKING_METADATA:
+                result[key] = stripped
+        return result
+    if isinstance(value, list):
+        return [
+            stripped
+            for item in value
+            for stripped in (_strip_ranking_instance_data(item),)
+            if stripped is not _DROP_RANKING_METADATA
+        ]
+    return value
+
+
+def _ranking_metadata_value(value: object) -> object:
+    if not isinstance(value, str) or not value.lstrip().startswith(("{", "[")):
+        return value
+    try:
+        decoded = json.loads(value)
+    except (TypeError, ValueError):
+        return value
+    stripped = _strip_ranking_instance_data(decoded)
+    if stripped is _DROP_RANKING_METADATA:
+        return None
+    return json.dumps(
+        stripped,
+        ensure_ascii=False,
+        allow_nan=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+
+
+def _validate_ranking_method_key(key: str) -> None:
+    try:
+        decoded = json.loads(key)
+        canonical = json.dumps(
+            decoded,
+            ensure_ascii=False,
+            allow_nan=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+    except (TypeError, ValueError):
+        raise ValueError("ranking_method_key must be canonical JSON") from None
+    if not isinstance(decoded, dict) or decoded.get("serialization_version") != 3:
+        raise ValueError("ranking_method_key must preserve the v3 canonical envelope")
+    if canonical != key:
+        raise ValueError("ranking_method_key must use canonical JSON ordering")
+    if _strip_ranking_instance_data(decoded) != decoded:
+        raise ValueError("ranking_method_key must exclude trial-instance data")
+
+
+def _ranking_method_metadata_key(
+    parameters: tuple[MetadataEntry, ...],
+) -> tuple[tuple[str, object], ...]:
+    return tuple(
+        (entry.key, _ranking_metadata_value(entry.value))
+        for entry in parameters
+        if not _ranking_metadata_key_is_instance(entry.key)
+    )
+
+
+def _ranking_reference_metadata_key(reference: object) -> object:
+    details = getattr(reference, "details", ())
+    return {
+        "status": getattr(reference, "status", None),
+        "reference": getattr(reference, "reference", None),
+        "details": _ranking_method_metadata_key(details) if isinstance(details, tuple) else (),
+    }
+
+
 def _timebase_method_key(timebase: SignalTimebase | object | None) -> object:
     if isinstance(timebase, RegularTimebase):
         return ("REGULAR", timebase.sample_rate_hz)
     if isinstance(timebase, ExplicitTimebase):
         return ("EXPLICIT",)
+    if isinstance(timebase, TimebaseIdentity):
+        return (
+            timebase.kind.value,
+            timebase.sample_rate_hz,
+            timebase.clock_reference.stable_id if timebase.clock_reference else None,
+            timebase.description,
+        )
     return ("UNKNOWN", type(timebase).__name__ if timebase is not None else None)
 
 
-def _event_method_key(event: object | None) -> object:
+def _event_method_key(event: object | None, *, instance_free: bool = False) -> object:
     if event is None:
         return None
     detector_method = getattr(event, "detector_method", None)
@@ -2745,7 +3207,11 @@ def _event_method_key(event: object | None) -> object:
         "baseline_selection_method": baseline_segment.selection_method
         if baseline_segment is not None
         else None,
-        "baseline_selection_parameters": _method_metadata_key(baseline_segment.selection_parameters)
+        "baseline_selection_parameters": (
+            _ranking_method_metadata_key(baseline_segment.selection_parameters)
+            if instance_free
+            else _method_metadata_key(baseline_segment.selection_parameters)
+        )
         if baseline_segment is not None
         else None,
         "sigma_multiplier": parameters.sigma_multiplier,
@@ -2762,6 +3228,7 @@ __all__ = [
     "CMJTrialMetricValue",
     "DeclaredCandidateTrialSet",
     "RankingDirection",
+    "RankingObservationAuthority",
     "SessionAggregationResult",
     "TrialEligibilityDecision",
     "TrialEligibilityStatus",
