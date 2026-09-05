@@ -414,6 +414,33 @@ def test_selection_metric_and_reported_metric_remain_separate() -> None:
     assert result.target_metric == target_a.observation.identity.semantic.metric_definition
 
 
+def test_selected_projection_requires_only_the_selected_target() -> None:
+    ranking_a = _bind(_phase("projection-ranking-a", _RES49_FIRST_TRACE), "a")
+    ranking_b = _bind(_phase("projection-ranking-b", _UNIQUE_TRACE), "b")
+    ranking_c = _bind(_phase("projection-ranking-c", _RES49_SECOND_TRACE), "c")
+    selection = _extreme_selection((ranking_a, ranking_b, ranking_c))
+    assert selection.selected_trial_ids == (InstanceIdentifier("trial", "b"),)
+
+    target_b = _bind(
+        _phase(
+            "projection-target-b",
+            _RES49_SECOND_TRACE,
+            CMJPhaseMetric.PROPULSION_NET_VERTICAL_IMPULSE,
+        ),
+        "b",
+    )
+    result = project_selected_trial(
+        selection,
+        (target_b,),
+        output_observation_id=InstanceIdentifier("observation", "projection-selected-only"),
+    )
+    assert isinstance(result, SessionAggregationResult)
+    assert result.selected_trial_id == InstanceIdentifier("trial", "b")
+    assert result.contributing_trial_ids == (InstanceIdentifier("trial", "b"),)
+    assert result.contributing_count == 1
+    assert result.value == pytest.approx(_numeric(target_b))
+
+
 def test_jump_height_selection_projects_a_different_target_from_the_same_trial() -> None:
     jump_a, _, _, _ = _flight_fixture("jump-selection-a")
     jump_b, _, _, _ = _flight_fixture("jump-selection-b", gravity_suffix="jump-selection-a")

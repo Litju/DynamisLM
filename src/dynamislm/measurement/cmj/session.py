@@ -1127,13 +1127,17 @@ def _aggregate_session(
     if isinstance(ordered, RefusalResult):
         return ordered
     target_by_trial = {trial_id: value for trial_id, value in ordered}
-    eligible = selection_decision.eligible_trial_ids
-    missing = tuple(trial_id for trial_id in eligible if trial_id not in target_by_trial)
+    required_target_trial_ids = _required_target_trial_ids(
+        selection_decision, aggregation_rule
+    )
+    missing = tuple(
+        trial_id for trial_id in required_target_trial_ids if trial_id not in target_by_trial
+    )
     if missing:
         return _session_refusal(
             "aggregate CMJ session",
             (RefusalReasonCode.TRIAL_SET_INCOMPLETE, RefusalReasonCode.TARGET_METRIC_REQUIRED),
-            ("target observation for every eligible declared candidate",),
+            ("target observation for every selected/contributing trial",),
             observation_ids=_decision_observation_ids(selection_decision.eligibility_decisions),
         )
     contributing = selection_decision.selected_trial_ids
@@ -1237,6 +1241,18 @@ def _aggregate_session(
         recorded_at=recorded_at,
     )
     return result
+
+
+def _required_target_trial_ids(
+    selection_decision: TrialSelectionDecision,
+    aggregation_rule: RegistryReference,
+) -> tuple[InstanceIdentifier, ...]:
+    if aggregation_rule.stable_id in {
+        CMJ_SELECTED_SINGLE_TRIAL_PROJECTION_V1.stable_id,
+        CMJ_ARITHMETIC_MEAN_V1.stable_id,
+    }:
+        return selection_decision.selected_trial_ids
+    raise ValueError("aggregation rule is not registered")
 
 
 def _build_session_result(
