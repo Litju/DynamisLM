@@ -17,7 +17,7 @@ Read [`docs/architecture/SCIENTIFIC_CONSTITUTION_V2.md`](../../docs/architecture
 
 ## Hard invariants
 
-- `P0.2 = AUTHORIZED FOR IMPLEMENTATION`.
+- `P0.2 = SEALED`.
 - The canonical population is `SEX=MALE`, `AGE_CLASS=SENIOR`, `SPORT=ASSOCIATION_FOOTBALL`, `PROFESSIONAL_STATUS=PROFESSIONAL`, `SQUAD_LEVEL=FIRST_TEAM`, `COMPETITION_LEVEL=TOP_DOMESTIC_DIVISION`.
 - The three scientific domains are Performance Testing, External Load / Exposure and Longitudinal Football Context.
 - The original twelve families remain Performance Testing scope, not the complete DynamisLM scientific world.

@@ -4,7 +4,7 @@
 
 ## Status and version
 
-`P0.2 = AUTHORIZED FOR IMPLEMENTATION`
+`P0.2 = SEALED`
 
 `CONSTITUTION_VERSION=2.0.0`
 
