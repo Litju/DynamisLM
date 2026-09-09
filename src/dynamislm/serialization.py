@@ -60,6 +60,8 @@ def canonical_data(value: object) -> object:
             raise SerializationError("datetimes must include an explicit timezone")
         utc_value = value.astimezone(datetime_module.UTC)
         return utc_value.isoformat(timespec="microseconds").replace("+00:00", "Z")
+    if isinstance(value, datetime_module.date):
+        return value.isoformat()
     if dataclasses.is_dataclass(value) and not isinstance(value, type):
         fields = {
             field.name: canonical_data(getattr(value, field.name))
@@ -228,6 +230,13 @@ def _decode_value(value: object, annotation: object) -> object:
         raise SerializationError(f"null is not valid for {annotation!r}")
     if annotation is datetime_module.datetime:
         return _decode_datetime(value)
+    if annotation is datetime_module.date:
+        if not isinstance(value, str):
+            raise SerializationError("date wire value must be a string")
+        try:
+            return datetime_module.date.fromisoformat(value)
+        except ValueError as exc:
+            raise SerializationError(f"invalid date: {value!r}") from exc
     if isinstance(annotation, type) and issubclass(annotation, enum.Enum):
         try:
             return annotation(value)
