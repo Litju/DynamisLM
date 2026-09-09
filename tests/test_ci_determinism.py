@@ -62,3 +62,4 @@ def test_canonical_hashes_are_independent_of_python_hash_seed() -> None:
 
     assert hashes_seed_1
     assert hashes_seed_1 == hashes_seed_92731
+    raise AssertionError("temporary required-ci enforcement attack")
