@@ -1364,20 +1364,59 @@ def test_v3_semantic_tamper_rejects_record_input_run_result_and_graph_mutations(
 
 
 def test_cmj_style_migration_wraps_without_mutating_existing_observation_or_provenance() -> None:
-    entry = _entry("cmj-migration", kind="testing")
-    observation = entry.observation
+    from test_cmj import _observation as existing_cmj_observation
+
+    observation = existing_cmj_observation("res62-existing-cmj")
+    athlete = AthleteIdentity(observation.context.athlete_id)
+    team = TeamIdentity(
+        _instance("team", "cmj-migration-team"),
+        SquadLevel.FIRST_TEAM,
+        TeamKind.CLUB_SQUAD,
+    )
+    season = SeasonIdentity(
+        ScientificIdentifier(SYNTHETIC_NAMESPACE, "season", "cmj-migration", "1.0.0"),
+        f"{SYNTHETIC_LABEL} CMJ migration season",
+    )
+    session = TestingSession(
+        session_id=observation.context.session_id,
+        team=team,
+        season=season,
+        start_at=observation.context.observed_at - datetime_module.timedelta(hours=1),
+        end_at=observation.context.observed_at + datetime_module.timedelta(hours=1),
+        test_type=_reference("test-family", "cmj", f"{SYNTHETIC_LABEL} CMJ migration"),
+    )
+    world = FootballWorldContext(
+        context_id=_instance("football-world-context", "cmj-migration"),
+        athlete=athlete,
+        team=team,
+        season=season,
+        session=session,
+        observation_context_id=observation.context.context_id,
+    )
+    decision = _source_decision("cmj-migration")
+    bindings = SourceArtifactQualificationBinding.from_decision(
+        decision,
+        tuple(artifact.artifact_id for artifact in observation.provenance.source_artifacts),
+    )
     identity_hash = canonical_hash(observation.identity)
     result_hash = canonical_hash(observation.result)
     provenance_hash = canonical_hash(observation.provenance)
 
     migrated = build_longitudinal_observation_entry(
         observation,
-        entry.football_context,
-        entry.source_qualification_bindings,
+        world,
+        (bindings,),
+    )
+    record = build_longitudinal_record(
+        athlete,
+        (migrated,),
+        LongitudinalRecordOrigin.SYNTHETIC_DETERMINISTIC,
     )
 
     assert migrated.observation is observation
+    assert type(observation.provenance.source_artifacts[0]).__name__ == "CMJSourceArtifact"
     assert canonical_hash(migrated.observation.identity) == identity_hash
     assert canonical_hash(migrated.observation.result) == result_hash
     assert canonical_hash(migrated.observation.provenance) == provenance_hash
     assert migrated.observation.observation_id == observation.observation_id
+    assert record.entries == (migrated,)
