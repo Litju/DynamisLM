@@ -398,3 +398,41 @@ and historical hash/wire compatibility.
 - Focused qualification: `tests/test_longitudinal.py`
 
 No scientific numerical authority changed.
+
+## Review-driven closeout integrity rules
+
+### Stable identity consistency
+
+A repeated stable session identifier inside one longitudinal record or
+multi-source input denotes one canonical `FootballSession` content. The
+complete canonical session object is compared, including its concrete session
+subclass and all material fields. Reusing one stable session ID with
+conflicting content fails closed; distinct session IDs remain distinct even
+when their content otherwise matches.
+
+### Processing input provenance
+
+Every artifact named by a source `ProcessingRun.source_artifact_ids` must have
+an explicit recorded source-lineage path to that exact processing run.
+Reachability from the artifact to a final observation, or membership in the
+same provenance collection, is insufficient. RES-62 validates the recorded
+edges and never manufactures a dependency edge from the declared ID list.
+
+### Binding identity
+
+`SourceArtifactQualificationBinding` is content-addressed authority. Its ID is
+recomputed and validated from the canonical immutable source decision,
+canonical artifact-ID set, and canonical evidence-reference set. Artifact IDs,
+evidence references, and entry-level qualification bindings are canonicalized
+where their order has no scientific sequence semantics, so incidental caller
+ordering cannot change binding or entry identity. Exact artifact coverage and
+conflicting decision rejection remain enforced.
+
+### External provenance alignment
+
+These closeout decisions follow provenance principles compatible with W3C
+PROV: stable identifiers act as keys for consistent identified objects,
+processing activities have explicit entity usage dependencies, and material
+relationships are represented as machine-actionable nodes and edges. DynamisLM
+does not claim formal W3C PROV implementation; the alignment is a design
+guardrail at the RES-62 composition boundary.

@@ -95,7 +95,7 @@ from dynamislm.population import (
     SubgroupSeparability,
     qualify_canonical_source,
 )
-from dynamislm.provenance import LineageEdge
+from dynamislm.provenance import EvidenceReference, LineageEdge
 from dynamislm.provenance import LineageRelation as SourceLineageRelation
 
 UTC = datetime_module.UTC
@@ -449,6 +449,85 @@ def _entry(
     return build_longitudinal_observation_entry(observation, world, (binding,))
 
 
+def _entry_with_two_qualification_bindings(
+    key: str,
+) -> tuple[LongitudinalObservationEntry, LongitudinalObservationEntry]:
+    original = _entry(key)
+    provenance = original.observation.provenance
+    artifact_a = provenance.source_artifacts[0]
+    acquisition_a = provenance.acquisitions[0]
+    run = provenance.processing_runs[0]
+    artifact_b = SourceArtifact(
+        artifact_id=_instance("artifact", f"{key}-second-artifact"),
+        content_digest=f"sha256:SYNTHETIC-RES-62-{key}-second-artifact",
+        media_type="application/vnd.synthetic-res62.measurement",
+    )
+    acquisition_b = AcquisitionRecord(
+        acquisition_id=_instance("acquisition", f"{key}-second-acquisition"),
+        device=acquisition_a.device,
+        source_artifact_id=artifact_b.artifact_id,
+        sensor_channel=f"SYNTHETIC-RES-62-{key}-second-channel",
+    )
+    multi_artifact_run = replace(
+        run,
+        source_artifact_ids=(artifact_a.artifact_id, artifact_b.artifact_id),
+    )
+    multi_artifact_provenance = replace(
+        provenance,
+        source_artifacts=(artifact_a, artifact_b),
+        acquisitions=(acquisition_a, acquisition_b),
+        processing_runs=(multi_artifact_run,),
+        lineage_edges=(
+            LineageEdge(
+                artifact_a.artifact_id.qualified,
+                acquisition_a.acquisition_id.qualified,
+                SourceLineageRelation.ACQUIRED_AS,
+            ),
+            LineageEdge(
+                artifact_b.artifact_id.qualified,
+                acquisition_b.acquisition_id.qualified,
+                SourceLineageRelation.ACQUIRED_AS,
+            ),
+            LineageEdge(
+                acquisition_a.acquisition_id.qualified,
+                multi_artifact_run.processing_run_id.qualified,
+                SourceLineageRelation.PROCESSED_AS,
+            ),
+            LineageEdge(
+                acquisition_b.acquisition_id.qualified,
+                multi_artifact_run.processing_run_id.qualified,
+                SourceLineageRelation.PROCESSED_AS,
+            ),
+            LineageEdge(
+                multi_artifact_run.processing_run_id.qualified,
+                original.observation.observation_id.qualified,
+                SourceLineageRelation.PRODUCED,
+            ),
+        ),
+    )
+    observation = replace(original.observation, provenance=multi_artifact_provenance)
+    decision = original.source_qualification_bindings[0].canonical_source_decision
+    binding_a = SourceArtifactQualificationBinding.from_decision(
+        decision,
+        (artifact_a.artifact_id,),
+    )
+    binding_b = SourceArtifactQualificationBinding.from_decision(
+        decision,
+        (artifact_b.artifact_id,),
+    )
+    forward = build_longitudinal_observation_entry(
+        observation,
+        original.football_context,
+        (binding_a, binding_b),
+    )
+    reverse = build_longitudinal_observation_entry(
+        observation,
+        original.football_context,
+        (binding_b, binding_a),
+    )
+    return forward, reverse
+
+
 def _fixture_entries() -> tuple[LongitudinalObservationEntry, ...]:
     entries: list[LongitudinalObservationEntry] = []
     for week in range(10):
@@ -751,6 +830,107 @@ def test_source_artifact_qualification_gate_and_exact_coverage() -> None:
         )
 
 
+def test_source_qualification_binding_identity_and_collection_order_are_authoritative() -> None:
+    decision = _source_decision("closeout-binding-identity")
+    artifact_ids = (
+        _instance("artifact", "closeout-binding-z"),
+        _instance("artifact", "closeout-binding-a"),
+    )
+    evidence_references = (
+        EvidenceReference(
+            _reference("binding-evidence", "z"),
+            "z support",
+        ),
+        EvidenceReference(
+            _reference("binding-evidence", "a"),
+            "a support",
+        ),
+    )
+    forward = SourceArtifactQualificationBinding.from_decision(
+        decision,
+        artifact_ids,
+        evidence_references,
+    )
+    reverse = SourceArtifactQualificationBinding.from_decision(
+        decision,
+        tuple(reversed(artifact_ids)),
+        tuple(reversed(evidence_references)),
+    )
+
+    assert forward == reverse
+    assert forward.binding_id == reverse.binding_id
+    assert forward.source_artifact_ids == tuple(
+        sorted(artifact_ids, key=lambda item: item.qualified)
+    )
+    assert forward.evidence_references == tuple(sorted(evidence_references, key=canonical_hash))
+
+    direct = SourceArtifactQualificationBinding(
+        binding_id=forward.binding_id,
+        canonical_source_decision=decision,
+        source_artifact_ids=tuple(reversed(artifact_ids)),
+        evidence_references=tuple(reversed(evidence_references)),
+    )
+    assert direct == forward
+    assert (
+        replace(
+            forward,
+            source_artifact_ids=tuple(reversed(artifact_ids)),
+            evidence_references=tuple(reversed(evidence_references)),
+        )
+        == forward
+    )
+
+    with pytest.raises(ValueError, match="binding_id"):
+        SourceArtifactQualificationBinding(
+            binding_id=_instance("source-qualification-binding", "forged-binding-id"),
+            canonical_source_decision=decision,
+            source_artifact_ids=artifact_ids,
+            evidence_references=evidence_references,
+        )
+    with pytest.raises(ValueError, match="binding_id"):
+        replace(
+            forward,
+            binding_id=_instance("source-qualification-binding", "forged-binding-id"),
+        )
+
+    binding_wire = _tampered(forward)
+    binding_wire["payload"]["binding_id"]["value"] = "forged-binding-wire"
+    with pytest.raises(ValueError):
+        from_canonical_json(json.dumps(binding_wire), SourceArtifactQualificationBinding)
+
+    ordered_entry, reversed_entry = _entry_with_two_qualification_bindings(
+        "closeout-binding-entry-order"
+    )
+    assert ordered_entry == reversed_entry
+    assert ordered_entry.canonical_entry_id == reversed_entry.canonical_entry_id
+    assert ordered_entry.canonical_entry_hash == reversed_entry.canonical_entry_hash
+    assert ordered_entry.source_qualification_bindings == tuple(
+        sorted(
+            ordered_entry.source_qualification_bindings,
+            key=lambda item: item.binding_id.qualified,
+        )
+    )
+    ordered_record = build_longitudinal_record(
+        ATHLETE,
+        (ordered_entry,),
+        LongitudinalRecordOrigin.SYNTHETIC_DETERMINISTIC,
+    )
+    reversed_record = build_longitudinal_record(
+        ATHLETE,
+        (reversed_entry,),
+        LongitudinalRecordOrigin.SYNTHETIC_DETERMINISTIC,
+    )
+    assert ordered_record.record_id == reversed_record.record_id
+    assert ordered_record.canonical_record_hash == reversed_record.canonical_record_hash
+
+    with pytest.raises(ValueError, match="exactly match"):
+        build_longitudinal_observation_entry(
+            ordered_entry.observation,
+            ordered_entry.football_context,
+            (ordered_entry.source_qualification_bindings[0],),
+        )
+
+
 def test_same_artifact_conflicting_qualification_decisions_are_rejected() -> None:
     first = _entry("shared-artifact-a", artifact_key="shared-artifact")
     second = _entry(
@@ -840,6 +1020,372 @@ def test_analysis_scope_authority_distinguishes_session_season_and_cross_season(
             (same_a, cross_athlete),
             MultiSourceAnalysisScope.WITHIN_SEASON,
         )
+
+
+def test_res62_closeout_rejects_conflicting_content_for_one_session_id() -> None:
+    shared_training = _session(
+        "closeout-shared-session",
+        datetime_module.datetime(2026, 10, 2, 9, tzinfo=UTC),
+        kind="training",
+    )
+    shared_testing = _session(
+        "closeout-shared-session",
+        datetime_module.datetime(2026, 10, 2, 15, tzinfo=UTC),
+        kind="testing",
+    )
+    training_entry = _entry(
+        "closeout-session-training",
+        session=shared_training,
+        observed_at=datetime_module.datetime(2026, 10, 2, 10, tzinfo=UTC),
+    )
+    testing_entry = _entry(
+        "closeout-session-testing",
+        session=shared_testing,
+        kind="testing",
+        observed_at=datetime_module.datetime(2026, 10, 2, 16, tzinfo=UTC),
+    )
+
+    with pytest.raises(ValueError, match="session"):
+        build_longitudinal_record(
+            ATHLETE,
+            (training_entry, testing_entry),
+            LongitudinalRecordOrigin.SYNTHETIC_DETERMINISTIC,
+        )
+    with pytest.raises(ValueError, match="session"):
+        build_multi_source_analysis_input(
+            ATHLETE,
+            (training_entry, testing_entry),
+            MultiSourceAnalysisScope.SAME_SESSION,
+        )
+
+
+def test_session_identity_consistency_matrix_and_direct_reconstruction_guards() -> None:
+    base_training = _session(
+        "closeout-session-matrix",
+        datetime_module.datetime(2026, 10, 3, 9, tzinfo=UTC),
+        kind="training",
+    )
+    assert base_training.end_at is not None
+
+    def pair(
+        left: TrainingSession | TestingSession | MatchSession,
+        right: TrainingSession | TestingSession | MatchSession,
+        *,
+        left_kind: str = "training",
+        right_kind: str = "training",
+    ) -> tuple[LongitudinalObservationEntry, LongitudinalObservationEntry]:
+        return (
+            _entry(
+                "closeout-session-matrix-left",
+                session=left,
+                observed_at=left.start_at + datetime_module.timedelta(hours=1),
+                kind=left_kind,
+                season=left.season,
+                team=left.team,
+            ),
+            _entry(
+                "closeout-session-matrix-right",
+                session=right,
+                observed_at=right.start_at + datetime_module.timedelta(hours=1, minutes=1),
+                kind=right_kind,
+                season=right.season,
+                team=right.team,
+            ),
+        )
+
+    exact_left, exact_right = pair(base_training, base_training)
+    exact_record = build_longitudinal_record(
+        ATHLETE,
+        (exact_right, exact_left),
+        LongitudinalRecordOrigin.SYNTHETIC_DETERMINISTIC,
+    )
+    assert len(exact_record.entries) == 2
+    assert isinstance(
+        build_multi_source_analysis_input(
+            ATHLETE,
+            (exact_right, exact_left),
+            MultiSourceAnalysisScope.SAME_SESSION,
+        ),
+        MultiSourceAnalysisInput,
+    )
+
+    conflicting_sessions = (
+        (
+            "different class",
+            base_training,
+            _session(
+                "closeout-session-matrix",
+                datetime_module.datetime(2026, 10, 3, 9, tzinfo=UTC),
+                kind="testing",
+            ),
+            "training",
+            "testing",
+        ),
+        (
+            "different start",
+            base_training,
+            _session(
+                "closeout-session-matrix",
+                datetime_module.datetime(2026, 10, 3, 10, tzinfo=UTC),
+                kind="training",
+            ),
+            "training",
+            "training",
+        ),
+        (
+            "different end",
+            base_training,
+            replace(
+                base_training, end_at=base_training.end_at + datetime_module.timedelta(hours=1)
+            ),
+            "training",
+            "training",
+        ),
+        (
+            "different team",
+            base_training,
+            _session(
+                "closeout-session-matrix",
+                datetime_module.datetime(2026, 10, 3, 9, tzinfo=UTC),
+                kind="training",
+                team=TEAM_B,
+            ),
+            "training",
+            "training",
+        ),
+        (
+            "different season",
+            base_training,
+            _session(
+                "closeout-session-matrix",
+                datetime_module.datetime(2027, 9, 1, 9, tzinfo=UTC),
+                kind="training",
+                season=SEASON_B,
+                team=TEAM_B,
+            ),
+            "training",
+            "training",
+        ),
+    )
+    for _, left_session, right_session, left_kind, right_kind in conflicting_sessions:
+        left, right = pair(
+            left_session,
+            right_session,
+            left_kind=left_kind,
+            right_kind=right_kind,
+        )
+        with pytest.raises(ValueError, match="conflicting FootballSession"):
+            build_longitudinal_record(
+                ATHLETE,
+                (left, right),
+                LongitudinalRecordOrigin.SYNTHETIC_DETERMINISTIC,
+            )
+        with pytest.raises(ValueError, match="conflicting FootballSession"):
+            build_multi_source_analysis_input(
+                ATHLETE,
+                (left, right),
+                MultiSourceAnalysisScope.SAME_SESSION,
+            )
+    match_session = _session(
+        "closeout-session-match-matrix",
+        datetime_module.datetime(2026, 10, 3, 20, tzinfo=UTC),
+        kind="match",
+    )
+    assert isinstance(match_session, MatchSession)
+    different_opponent = replace(match_session, opponent_team=TEAM_B)
+    match_left, match_right = pair(
+        match_session,
+        different_opponent,
+        left_kind="match",
+        right_kind="match",
+    )
+    with pytest.raises(ValueError, match="conflicting FootballSession"):
+        build_longitudinal_record(
+            ATHLETE,
+            (match_left, match_right),
+            LongitudinalRecordOrigin.SYNTHETIC_DETERMINISTIC,
+        )
+
+    different_competition = replace(
+        match_session,
+        competition_context=replace(
+            COMPETITION,
+            competition_kind=CompetitionKind.DOMESTIC_CUP,
+        ),
+    )
+    competition_left, competition_right = pair(
+        match_session,
+        different_competition,
+        left_kind="match",
+        right_kind="match",
+    )
+    with pytest.raises(ValueError, match="conflicting FootballSession"):
+        build_multi_source_analysis_input(
+            ATHLETE,
+            (competition_left, competition_right),
+            MultiSourceAnalysisScope.SAME_SESSION,
+        )
+
+    different_id = replace(
+        base_training,
+        session_id=_instance("session", "closeout-session-matrix-distinct"),
+    )
+    distinct_left, distinct_right = pair(base_training, different_id)
+    distinct_record = build_longitudinal_record(
+        ATHLETE,
+        (distinct_left, distinct_right),
+        LongitudinalRecordOrigin.SYNTHETIC_DETERMINISTIC,
+    )
+    assert len(distinct_record.session_ids) == 2
+    assert isinstance(
+        build_multi_source_analysis_input(
+            ATHLETE,
+            (distinct_left, distinct_right),
+            MultiSourceAnalysisScope.WITHIN_SEASON,
+        ),
+        MultiSourceAnalysisInput,
+    )
+
+    with pytest.raises(ValueError, match="conflicting FootballSession"):
+        LongitudinalAthletePerformanceRecord(
+            origin=LongitudinalRecordOrigin.SYNTHETIC_DETERMINISTIC,
+            athlete=ATHLETE,
+            entries=tuple(sorted((match_left, match_right), key=lambda item: item.observed_at)),
+        )
+    with pytest.raises(ValueError, match="conflicting FootballSession"):
+        MultiSourceAnalysisInput(
+            athlete=ATHLETE,
+            entries=tuple(
+                sorted((competition_left, competition_right), key=lambda item: item.observed_at)
+            ),
+            scope=MultiSourceAnalysisScope.SAME_SESSION,
+        )
+
+    with pytest.raises(ValueError, match="conflicting FootballSession"):
+        replace(exact_record, entries=(match_left, match_right))
+    with pytest.raises(ValueError, match="conflicting FootballSession"):
+        replace(
+            build_multi_source_analysis_input(
+                ATHLETE,
+                (exact_left, exact_right),
+                MultiSourceAnalysisScope.SAME_SESSION,
+            ),
+            entries=(competition_left, competition_right),
+        )
+
+    within_conflict_left, within_conflict_right = pair(
+        base_training,
+        _session(
+            "closeout-session-matrix",
+            datetime_module.datetime(2026, 10, 3, 11, tzinfo=UTC),
+            kind="training",
+        ),
+    )
+    with pytest.raises(ValueError, match="conflicting FootballSession"):
+        build_multi_source_analysis_input(
+            ATHLETE,
+            (within_conflict_left, within_conflict_right),
+            MultiSourceAnalysisScope.WITHIN_SEASON,
+        )
+    cross_conflict_left, cross_conflict_right = pair(
+        base_training,
+        _session(
+            "closeout-session-matrix",
+            datetime_module.datetime(2027, 9, 1, 9, tzinfo=UTC),
+            season=SEASON_B,
+            team=TEAM_B,
+        ),
+    )
+    with pytest.raises(ValueError, match="conflicting FootballSession"):
+        build_multi_source_analysis_input(
+            ATHLETE,
+            (cross_conflict_left, cross_conflict_right),
+            MultiSourceAnalysisScope.CROSS_SEASON,
+        )
+
+
+def test_res62_closeout_rejects_declared_processing_input_without_path_to_run() -> None:
+    original = _entry("closeout-declared-input-original")
+    provenance = original.observation.provenance
+    artifact_a = provenance.source_artifacts[0]
+    acquisition_a = provenance.acquisitions[0]
+    run_p = provenance.processing_runs[0]
+    artifact_b = SourceArtifact(
+        artifact_id=_instance("artifact", "closeout-declared-input-b"),
+        content_digest="sha256:SYNTHETIC-RES-62-closeout-declared-input-b",
+        media_type="application/vnd.synthetic-res62.measurement",
+    )
+    acquisition_b = AcquisitionRecord(
+        acquisition_id=_instance("acquisition", "closeout-declared-input-b"),
+        device=acquisition_a.device,
+        source_artifact_id=artifact_b.artifact_id,
+        sensor_channel="SYNTHETIC-RES-62-closeout-declared-input-b-channel",
+    )
+    run_q = replace(
+        run_p,
+        processing_run_id=_instance("processing-run", "closeout-declared-input-q"),
+        source_artifact_ids=(artifact_b.artifact_id,),
+    )
+    run_p_declares_b = replace(
+        run_p,
+        source_artifact_ids=(artifact_a.artifact_id, artifact_b.artifact_id),
+    )
+    tampered_provenance = replace(
+        provenance,
+        source_artifacts=(artifact_a, artifact_b),
+        acquisitions=(acquisition_a, acquisition_b),
+        processing_runs=(run_p_declares_b, run_q),
+        lineage_edges=(
+            LineageEdge(
+                artifact_a.artifact_id.qualified,
+                acquisition_a.acquisition_id.qualified,
+                SourceLineageRelation.ACQUIRED_AS,
+            ),
+            LineageEdge(
+                artifact_b.artifact_id.qualified,
+                acquisition_b.acquisition_id.qualified,
+                SourceLineageRelation.ACQUIRED_AS,
+            ),
+            LineageEdge(
+                acquisition_a.acquisition_id.qualified,
+                run_p_declares_b.processing_run_id.qualified,
+                SourceLineageRelation.PROCESSED_AS,
+            ),
+            LineageEdge(
+                acquisition_b.acquisition_id.qualified,
+                run_q.processing_run_id.qualified,
+                SourceLineageRelation.PROCESSED_AS,
+            ),
+            LineageEdge(
+                run_p_declares_b.processing_run_id.qualified,
+                original.observation.observation_id.qualified,
+                SourceLineageRelation.PRODUCED,
+            ),
+            LineageEdge(
+                run_q.processing_run_id.qualified,
+                original.observation.observation_id.qualified,
+                SourceLineageRelation.PRODUCED,
+            ),
+        ),
+    )
+    tampered_observation = replace(original.observation, provenance=tampered_provenance)
+    binding = SourceArtifactQualificationBinding.from_decision(
+        original.source_qualification_bindings[0].canonical_source_decision,
+        (artifact_a.artifact_id, artifact_b.artifact_id),
+    )
+    tampered_entry = build_longitudinal_observation_entry(
+        tampered_observation,
+        original.football_context,
+        (binding,),
+    )
+    analysis_input = build_multi_source_analysis_input(
+        ATHLETE,
+        (tampered_entry, _entry("closeout-declared-input-peer", device_key="device-b")),
+        MultiSourceAnalysisScope.WITHIN_SEASON,
+    )
+
+    with pytest.raises(ValueError, match="declared|processing|dependency"):
+        build_longitudinal_source_manifest(analysis_input)
 
 
 def test_analysis_input_dedup_order_and_identity_are_deterministic() -> None:
@@ -1081,6 +1627,96 @@ def test_one_observation_can_retain_multiple_source_artifacts_explicitly() -> No
         if node.kind is LongitudinalLineageNodeKind.SOURCE_ARTIFACT
     }
     assert artifact_ids <= graph_artifact_ids
+    run_id = multi_artifact_run.processing_run_id.qualified
+    assert all(
+        graph_reaches(result.provenance_graph, artifact_id, run_id) for artifact_id in artifact_ids
+    )
+
+
+def test_shared_artifact_must_explicitly_reach_each_declaring_processing_run() -> None:
+    original = _entry("closeout-shared-artifact-runs")
+    provenance = original.observation.provenance
+    artifact = provenance.source_artifacts[0]
+    acquisition = provenance.acquisitions[0]
+    first_run = provenance.processing_runs[0]
+    second_run = replace(
+        first_run,
+        processing_run_id=_instance("processing-run", "closeout-shared-artifact-run-q"),
+    )
+    shared_run_provenance = replace(
+        provenance,
+        processing_runs=(first_run, second_run),
+        lineage_edges=(
+            *provenance.lineage_edges,
+            LineageEdge(
+                acquisition.acquisition_id.qualified,
+                second_run.processing_run_id.qualified,
+                SourceLineageRelation.PROCESSED_AS,
+            ),
+            LineageEdge(
+                second_run.processing_run_id.qualified,
+                original.observation.observation_id.qualified,
+                SourceLineageRelation.PRODUCED,
+            ),
+        ),
+    )
+    observation = replace(original.observation, provenance=shared_run_provenance)
+    entry = build_longitudinal_observation_entry(
+        observation,
+        original.football_context,
+        original.source_qualification_bindings,
+    )
+    result = build_longitudinal_source_manifest(
+        build_multi_source_analysis_input(
+            ATHLETE,
+            (entry, _entry("closeout-shared-artifact-runs-peer", device_key="device-b")),
+            MultiSourceAnalysisScope.WITHIN_SEASON,
+        )
+    )
+    graph = result.provenance_graph
+    assert graph_reaches(
+        graph,
+        artifact.artifact_id.qualified,
+        first_run.processing_run_id.qualified,
+    )
+    assert graph_reaches(
+        graph,
+        artifact.artifact_id.qualified,
+        second_run.processing_run_id.qualified,
+    )
+    assert (
+        sum(
+            node.node_id == artifact.artifact_id.qualified
+            for node in graph.nodes
+            if node.kind is LongitudinalLineageNodeKind.SOURCE_ARTIFACT
+        )
+        == 1
+    )
+
+
+def test_source_processing_run_cannot_declare_an_artifact_absent_from_provenance() -> None:
+    original = _entry("closeout-absent-declared-artifact")
+    provenance = original.observation.provenance
+    run = replace(
+        provenance.processing_runs[0],
+        source_artifact_ids=(_instance("artifact", "closeout-absent-artifact"),),
+    )
+    observation = replace(
+        original.observation,
+        provenance=replace(provenance, processing_runs=(run,)),
+    )
+    entry = build_longitudinal_observation_entry(
+        observation,
+        original.football_context,
+        original.source_qualification_bindings,
+    )
+    analysis_input = build_multi_source_analysis_input(
+        ATHLETE,
+        (entry, _entry("closeout-absent-declared-artifact-peer", device_key="device-b")),
+        MultiSourceAnalysisScope.WITHIN_SEASON,
+    )
+    with pytest.raises(ValueError, match="absent from provenance"):
+        build_longitudinal_source_manifest(analysis_input)
 
 
 def test_graph_rejects_conflicting_shared_artifact_acquisition_and_processing_nodes() -> None:
@@ -1361,6 +1997,60 @@ def test_v3_semantic_tamper_rejects_record_input_run_result_and_graph_mutations(
     for wire in result_mutations:
         with pytest.raises(ValueError):
             from_canonical_json(json.dumps(wire), LongitudinalSourceManifestResult)
+
+
+def test_v3_session_identity_tampering_rejects_same_id_conflicts() -> None:
+    session = _session(
+        "closeout-v3-session",
+        datetime_module.datetime(2026, 10, 4, 9, tzinfo=UTC),
+        kind="training",
+    )
+    first = _entry(
+        "closeout-v3-session-first",
+        session=session,
+        observed_at=datetime_module.datetime(2026, 10, 4, 10, tzinfo=UTC),
+    )
+    second = _entry(
+        "closeout-v3-session-second",
+        session=session,
+        observed_at=datetime_module.datetime(2026, 10, 4, 10, minute=1, tzinfo=UTC),
+    )
+    record = build_longitudinal_record(
+        ATHLETE,
+        (first, second),
+        LongitudinalRecordOrigin.SYNTHETIC_DETERMINISTIC,
+    )
+    analysis_input = build_multi_source_analysis_input(
+        ATHLETE,
+        (first, second),
+        MultiSourceAnalysisScope.SAME_SESSION,
+    )
+
+    record_wire = _tampered(record)
+    record_wire["payload"]["entries"][1]["football_context"]["session"]["start_at"] = (
+        "2026-10-04T08:00:00Z"
+    )
+    with pytest.raises(ValueError):
+        from_canonical_json(json.dumps(record_wire), LongitudinalAthletePerformanceRecord)
+
+    input_wire = _tampered(analysis_input)
+    team_wire = _tampered(TEAM_B)["payload"]
+    input_wire["payload"]["entries"][1]["football_context"]["team"] = team_wire
+    input_wire["payload"]["entries"][1]["football_context"]["session"]["team"] = team_wire
+    with pytest.raises(ValueError):
+        from_canonical_json(json.dumps(input_wire), MultiSourceAnalysisInput)
+
+    testing_wire = _tampered(
+        _session(
+            "closeout-v3-session",
+            datetime_module.datetime(2026, 10, 4, 9, tzinfo=UTC),
+            kind="testing",
+        )
+    )["payload"]
+    type_wire = _tampered(analysis_input)
+    type_wire["payload"]["entries"][1]["football_context"]["session"] = testing_wire
+    with pytest.raises(ValueError):
+        from_canonical_json(json.dumps(type_wire), MultiSourceAnalysisInput)
 
 
 def test_cmj_style_migration_wraps_without_mutating_existing_observation_or_provenance() -> None:

@@ -191,6 +191,15 @@ def _add_source_provenance(
             pending.extend(source_adjacency.get(current, ()))
         return False
 
+    for run in processing_runs:
+        run_id = run.processing_run_id.qualified
+        for artifact_id in run.source_artifact_ids:
+            if not reaches(artifact_id.qualified, run_id):
+                raise ValueError(
+                    f"declared source artifact {artifact_id.qualified!r} does not reach "
+                    f"declaring processing run {run_id!r}"
+                )
+
     for dependency_id in (*artifact_ids, *acquisition_ids, *processing_ids):
         if not reaches(dependency_id, observation_id):
             raise ValueError(

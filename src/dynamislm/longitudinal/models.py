@@ -102,6 +102,40 @@ def _entry_content_hash(
     )
 
 
+def _canonical_binding_artifact_ids(
+    source_artifact_ids: tuple[InstanceIdentifier, ...],
+) -> tuple[InstanceIdentifier, ...]:
+    return tuple(sorted(source_artifact_ids, key=lambda item: item.qualified))
+
+
+def _canonical_binding_evidence_references(
+    evidence_references: tuple[EvidenceReference, ...],
+) -> tuple[EvidenceReference, ...]:
+    """Canonicalize binding support as a set-like collection.
+
+    EvidenceReference order has no scientific sequence semantics at this
+    boundary.  Sorting by each complete reference's canonical hash preserves
+    all immutable content while removing incidental caller order from binding
+    identity.
+    """
+
+    return tuple(sorted(evidence_references, key=canonical_hash))
+
+
+def _source_artifact_qualification_binding_hash(
+    canonical_source_decision: CanonicalSourceDecision,
+    source_artifact_ids: tuple[InstanceIdentifier, ...],
+    evidence_references: tuple[EvidenceReference, ...],
+) -> str:
+    return canonical_hash(
+        {
+            "canonical_source_decision": canonical_source_decision,
+            "source_artifact_ids": _canonical_binding_artifact_ids(source_artifact_ids),
+            "evidence_references": _canonical_binding_evidence_references(evidence_references),
+        }
+    )
+
+
 def _entry_sort_key(entry: LongitudinalObservationEntry) -> tuple[str, str, str]:
     observed_at = entry.observation.context.observed_at.astimezone(datetime_module.UTC)
     return (
@@ -313,6 +347,22 @@ def _validate_artifact_qualification_consistency(
                 decisions_by_artifact[key] = decision_hash
 
 
+def _validate_session_identity_consistency(
+    entries: tuple[LongitudinalObservationEntry, ...],
+) -> None:
+    """Require one authoritative FootballSession per repeated stable session ID."""
+
+    session_hashes: dict[str, str] = {}
+    for entry in entries:
+        session = entry.football_context.session
+        session_id = session.session_id.qualified
+        session_hash = canonical_hash(session)
+        previous_hash = session_hashes.get(session_id)
+        if previous_hash is not None and previous_hash != session_hash:
+            raise ValueError(f"session_id {session_id!r} has conflicting FootballSession content")
+        session_hashes[session_id] = session_hash
+
+
 class LongitudinalRecordOrigin(StrEnum):
     """Whether a record is an observed canonical snapshot or a synthetic fixture."""
 
@@ -396,9 +446,29 @@ class SourceArtifactQualificationBinding:
             self.source_artifact_ids
         ):
             raise ValueError("source_artifact_ids must not contain duplicates")
+        canonical_artifact_ids = _canonical_binding_artifact_ids(self.source_artifact_ids)
+        if self.source_artifact_ids != canonical_artifact_ids:
+            object.__setattr__(self, "source_artifact_ids", canonical_artifact_ids)
         require_tuple(self.evidence_references, "evidence_references")
         if any(not isinstance(item, EvidenceReference) for item in self.evidence_references):
             raise ValueError("evidence_references must contain EvidenceReference values")
+        canonical_evidence_references = _canonical_binding_evidence_references(
+            self.evidence_references
+        )
+        if self.evidence_references != canonical_evidence_references:
+            object.__setattr__(self, "evidence_references", canonical_evidence_references)
+
+        expected_hash = _source_artifact_qualification_binding_hash(
+            self.canonical_source_decision,
+            self.source_artifact_ids,
+            self.evidence_references,
+        )
+        expected_id = InstanceIdentifier(
+            "source-qualification-binding",
+            expected_hash.removeprefix("sha256:"),
+        )
+        if self.binding_id != expected_id:
+            raise ValueError("binding_id does not match immutable binding content")
 
     @classmethod
     def from_decision(
@@ -409,12 +479,10 @@ class SourceArtifactQualificationBinding:
     ) -> SourceArtifactQualificationBinding:
         """Create a deterministic binding identity from its immutable content."""
 
-        digest = canonical_hash(
-            {
-                "canonical_source_decision": canonical_source_decision,
-                "source_artifact_ids": source_artifact_ids,
-                "evidence_references": evidence_references,
-            }
+        digest = _source_artifact_qualification_binding_hash(
+            canonical_source_decision,
+            source_artifact_ids,
+            evidence_references,
         ).removeprefix("sha256:")
         return cls(
             binding_id=InstanceIdentifier("source-qualification-binding", digest),
@@ -475,6 +543,14 @@ class LongitudinalObservationEntry:
                 "source_qualification_bindings must contain "
                 "SourceArtifactQualificationBinding values"
             )
+        canonical_bindings = tuple(
+            sorted(
+                self.source_qualification_bindings,
+                key=lambda item: item.binding_id.qualified,
+            )
+        )
+        if self.source_qualification_bindings != canonical_bindings:
+            object.__setattr__(self, "source_qualification_bindings", canonical_bindings)
 
         artifacts = self.observation.provenance.source_artifacts
         if not artifacts:
@@ -584,6 +660,7 @@ class LongitudinalAthletePerformanceRecord:
             raise ValueError("a longitudinal record must contain at least one entry")
         if any(not isinstance(item, LongitudinalObservationEntry) for item in self.entries):
             raise ValueError("entries must contain LongitudinalObservationEntry values")
+        _validate_session_identity_consistency(self.entries)
         _require_registry_operation(self.method_reference, "method_reference")
         if self.method_reference != LONGITUDINAL_RECORD_METHOD:
             raise ValueError("method_reference must be the registered RES-62 record method")
@@ -660,6 +737,7 @@ class MultiSourceAnalysisInput:
             raise ValueError("MultiSourceAnalysisInput requires at least two source observations")
         if any(not isinstance(item, LongitudinalObservationEntry) for item in self.entries):
             raise ValueError("entries must contain LongitudinalObservationEntry values")
+        _validate_session_identity_consistency(self.entries)
         if not isinstance(self.scope, MultiSourceAnalysisScope):
             raise ValueError("scope must be a MultiSourceAnalysisScope")
         _require_registry_operation(self.method_reference, "method_reference")
