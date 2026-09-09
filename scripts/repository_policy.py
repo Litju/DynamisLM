@@ -29,6 +29,7 @@ FORBIDDEN_DIRECTORY_NAMES = frozenset(
 FORBIDDEN_EXTENSIONS = frozenset(
     {
         ".arrow",
+        ".bin",
         ".ckpt",
         ".h5",
         ".hdf5",

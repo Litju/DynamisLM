@@ -25,6 +25,14 @@ def test_model_weights_are_rejected() -> None:
     )
 
 
+def test_bin_model_or_data_file_is_rejected() -> None:
+    assert evaluate_paths((("model.bin", 1),)) == ("FORBIDDEN_EXTENSION=model.bin",)
+
+
+def test_nested_bin_model_or_data_file_is_rejected() -> None:
+    assert evaluate_paths((("weights/model.bin", 1),)) == ("FORBIDDEN_EXTENSION=weights/model.bin",)
+
+
 def test_env_file_is_rejected() -> None:
     assert evaluate_paths(((".env", 1),)) == ("SECRET_LIKE_FILE=.env",)
 

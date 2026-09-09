@@ -62,3 +62,11 @@ def test_canonical_hashes_are_independent_of_python_hash_seed() -> None:
 
     assert hashes_seed_1
     assert hashes_seed_1 == hashes_seed_92731
+
+
+def test_setup_uv_cache_is_explicitly_disabled() -> None:
+    workflow = (Path(__file__).resolve().parents[1] / ".github/workflows/ci.yml").read_text()
+    setup_uv_start = workflow.index("uses: astral-sh/setup-uv@")
+    setup_uv_end = workflow.index("\n      - name:", setup_uv_start)
+
+    assert 'enable-cache: "false"' in workflow[setup_uv_start:setup_uv_end]
