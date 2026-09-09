@@ -140,6 +140,7 @@ def _training(
     start_at: datetime_module.datetime | None = None,
     season: SeasonIdentity = SEASON,
     team: TeamIdentity = TEAM,
+    season_context: SeasonContext | None = SEASON_CONTEXT,
 ) -> TrainingSession:
     return TrainingSession(
         session_id=_instance("session", f"training-{key}"),
@@ -147,7 +148,7 @@ def _training(
         season=season,
         start_at=start_at or _at(2026, 9, 11, 10),
         end_at=(start_at or _at(2026, 9, 11, 10)) + datetime_module.timedelta(hours=2),
-        season_context=SEASON_CONTEXT if season is SEASON else None,
+        season_context=season_context if season is SEASON else None,
         evidence_references=(_reference("source", f"training-{key}", "training source"),),
         environment=(MetadataEntry("surface", "SYNTHETIC_TEST_SURFACE"),),
         provider_references=(_reference("provider", "synthetic-provider", "provider"),),
@@ -180,6 +181,7 @@ def _match(
     team: TeamIdentity = TEAM,
     opponent: TeamIdentity = OTHER_TEAM,
     competition: CompetitionContext = DOMESTIC_COMPETITION,
+    season_context: SeasonContext | None = SEASON_CONTEXT,
 ) -> MatchSession:
     kickoff = start_at or _at(2026, 9, 12, 20)
     return MatchSession(
@@ -189,7 +191,7 @@ def _match(
         season=season,
         start_at=kickoff,
         end_at=kickoff + datetime_module.timedelta(hours=2),
-        season_context=SEASON_CONTEXT if season is SEASON else None,
+        season_context=season_context if season is SEASON else None,
         opponent_team=opponent,
         competition_context=competition,
         venue_role=MatchVenueRole.HOME,
@@ -269,6 +271,7 @@ def _world(
     athlete: AthleteIdentity = ATHLETE,
     team: TeamIdentity = TEAM,
     season: SeasonIdentity = SEASON,
+    season_context: SeasonContext | None = SEASON_CONTEXT,
     exposure: MatchExposure | TrainingExposure | None = None,
     microcycle_context: MicrocycleContext | None = None,
     squad_participation: SquadParticipationContext | None = SQUAD_PARTICIPATION,
@@ -279,7 +282,7 @@ def _world(
         team=team,
         season=season,
         session=session,
-        season_context=SEASON_CONTEXT if season is SEASON else None,
+        season_context=season_context if season is SEASON else None,
         squad_participation=squad_participation,
         exposure=exposure,
         microcycle_context=microcycle_context,
@@ -397,6 +400,118 @@ def test_season_context_requires_ordered_explicit_bounds() -> None:
         )
 
 
+def test_session_before_explicit_season_start_is_rejected() -> None:
+    with pytest.raises(ValueError, match="season"):
+        _training("before-season-start", start_at=_at(2026, 7, 31, 10))
+
+
+def test_session_after_explicit_season_end_is_rejected() -> None:
+    with pytest.raises(ValueError, match="season"):
+        _training("after-season-end", start_at=_at(2027, 6, 1, 10))
+
+
+def test_session_end_outside_explicit_season_bounds_is_rejected() -> None:
+    with pytest.raises(ValueError, match="season"):
+        replace(
+            TRAINING_SESSION,
+            end_at=_at(2027, 6, 1, 10),
+        )
+
+
+def test_partial_season_bounds_preserve_unknown_bound() -> None:
+    start_only = SeasonContext(
+        season_identity=SEASON,
+        start_date=datetime_module.date(2026, 8, 1),
+    )
+    end_only = SeasonContext(
+        season_identity=SEASON,
+        end_date=datetime_module.date(2027, 5, 31),
+    )
+
+    with pytest.raises(ValueError, match="season"):
+        replace(
+            TRAINING_SESSION,
+            start_at=_at(2026, 7, 31, 10),
+            season_context=start_only,
+        )
+    assert replace(TRAINING_SESSION, season_context=start_only).season_context == start_only
+
+    with pytest.raises(ValueError, match="season"):
+        replace(
+            TRAINING_SESSION,
+            start_at=_at(2027, 6, 1, 10),
+            end_at=_at(2027, 6, 1, 12),
+            season_context=end_only,
+        )
+    assert replace(TRAINING_SESSION, season_context=end_only).season_context == end_only
+
+
+def test_conflicting_duplicate_season_contexts_are_rejected() -> None:
+    conflicting_context = SeasonContext(
+        season_identity=SEASON,
+        start_date=SEASON_CONTEXT.start_date,
+        end_date=datetime_module.date(2027, 6, 1),
+        evidence_references=SEASON_CONTEXT.evidence_references,
+    )
+    session = replace(TRAINING_SESSION, season_context=conflicting_context)
+
+    with pytest.raises(ValueError, match="season_context"):
+        _world(session, season_context=SEASON_CONTEXT)
+
+
+def test_identical_duplicate_season_contexts_are_valid() -> None:
+    world = _world(TRAINING_SESSION, season_context=SEASON_CONTEXT)
+
+    assert world.season_context == world.session.season_context
+
+
+def test_session_only_season_context_is_valid_when_world_context_is_absent() -> None:
+    world = _world(TRAINING_SESSION, season_context=None)
+
+    assert world.season_context is None
+    assert world.session.season_context == SEASON_CONTEXT
+
+
+def test_world_only_season_context_validates_session_chronology() -> None:
+    session_without_context = replace(TRAINING_SESSION, season_context=None)
+    world = _world(session_without_context, season_context=SEASON_CONTEXT)
+
+    assert world.season_context == SEASON_CONTEXT
+    assert world.session.season_context is None
+
+    outside_session = replace(
+        session_without_context,
+        start_at=_at(2027, 6, 1, 10),
+        end_at=_at(2027, 6, 1, 12),
+    )
+    with pytest.raises(ValueError, match="season"):
+        _world(outside_session, season_context=SEASON_CONTEXT)
+
+
+def test_season_bounds_use_the_timestamp_calendar_date_without_timezone_conversion() -> None:
+    local_start = datetime_module.datetime(
+        2026,
+        8,
+        1,
+        0,
+        30,
+        tzinfo=ZoneInfo("Asia/Tokyo"),
+    )
+    local_end = local_start + datetime_module.timedelta(hours=2)
+    session = replace(
+        TRAINING_SESSION,
+        start_at=local_start,
+        end_at=local_end,
+    )
+
+    assert session.start_at.date() == datetime_module.date(2026, 8, 1)
+    assert session.start_at.astimezone(datetime_module.UTC).date() == datetime_module.date(
+        2026,
+        7,
+        31,
+    )
+
+
 def test_same_team_as_opponent_is_rejected() -> None:
     with pytest.raises(ValueError, match="opponent team must be distinct"):
         _match(opponent=TEAM)
@@ -416,6 +531,36 @@ def test_match_exposure_requires_explicit_duration_but_allows_unknown_duration()
     assert starter.observed_duration_seconds == 5400
     assert unknown_duration.participation_state is ParticipationState.STARTER
     assert unknown_duration.observed_duration_seconds is None
+
+
+def test_exposure_cannot_exceed_known_session_duration() -> None:
+    too_long_match_exposure = replace(MATCH_EXPOSURE, observed_duration_seconds=7200.1)
+    too_long_training_exposure = replace(TRAINING_EXPOSURE, observed_duration_seconds=7200.1)
+
+    with pytest.raises(ValueError, match="duration"):
+        _world(TARGET_MATCH, exposure=too_long_match_exposure, microcycle_context=None)
+    with pytest.raises(ValueError, match="duration"):
+        _world(TRAINING_SESSION, exposure=too_long_training_exposure, microcycle_context=None)
+
+
+def test_exposure_at_or_below_known_session_duration_is_valid() -> None:
+    exact_match_exposure = replace(MATCH_EXPOSURE, observed_duration_seconds=7200)
+    exact_training_exposure = replace(TRAINING_EXPOSURE, observed_duration_seconds=7200)
+
+    _world(TARGET_MATCH, exposure=exact_match_exposure, microcycle_context=None)
+    _world(TRAINING_SESSION, exposure=exact_training_exposure, microcycle_context=None)
+    _world(TARGET_MATCH, exposure=MATCH_EXPOSURE, microcycle_context=None)
+    _world(TRAINING_SESSION, exposure=TRAINING_EXPOSURE, microcycle_context=None)
+
+
+def test_observed_exposure_remains_unbounded_when_session_end_is_unknown() -> None:
+    open_match = replace(TARGET_MATCH, end_at=None)
+    long_exposure = replace(MATCH_EXPOSURE, observed_duration_seconds=36000)
+
+    world = _world(open_match, exposure=long_exposure, microcycle_context=None)
+
+    assert world.session.end_at is None
+    assert world.exposure == long_exposure
 
 
 def test_unused_substitute_cannot_carry_positive_exposure() -> None:
@@ -504,10 +649,12 @@ def test_match_day_relative_dst_conversion_is_deterministic() -> None:
     dst_target = _match(
         "dst-target",
         start_at=_at(2026, 3, 29, 0, 30, timezone="UTC"),
+        season_context=None,
     )
     session = _training(
         "dst-session",
         start_at=_at(2026, 3, 29, 23, 30, timezone="UTC"),
+        season_context=None,
     )
 
     label = derive_match_day_relative_label(session, dst_target, "Europe/London")
@@ -579,6 +726,37 @@ def test_match_day_relative_v3_wire_tampering_fails_on_decode() -> None:
     tampered_method["payload"]["method_reference"]["identifier"]["key"] = "unregistered"
     with pytest.raises(ValueError, match="invalid .*payload"):
         from_canonical_json(json.dumps(tampered_method), MatchDayRelativeLabel)
+
+
+def test_world_context_v3_season_bound_tampering_fails_on_decode() -> None:
+    serialized = canonical_json(_world())
+    tampered = json.loads(serialized)
+    tampered["payload"]["session"]["season_context"]["end_date"] = "2026-09-10"
+
+    with pytest.raises(ValueError, match="invalid .*payload"):
+        from_canonical_json(json.dumps(tampered), FootballWorldContext)
+
+
+def test_world_context_v3_conflicting_season_context_tampering_fails_on_decode() -> None:
+    serialized = canonical_json(_world())
+    tampered = json.loads(serialized)
+    tampered["payload"]["season_context"]["end_date"] = "2027-06-01"
+
+    with pytest.raises(ValueError, match="invalid .*payload"):
+        from_canonical_json(json.dumps(tampered), FootballWorldContext)
+
+
+def test_world_context_v3_exposure_duration_tampering_fails_on_decode() -> None:
+    match_world = _world(TARGET_MATCH, exposure=MATCH_EXPOSURE, microcycle_context=None)
+    training_world = _world(TRAINING_SESSION, exposure=TRAINING_EXPOSURE, microcycle_context=None)
+
+    for world in (match_world, training_world):
+        serialized = canonical_json(world)
+        tampered = json.loads(serialized)
+        tampered["payload"]["exposure"]["observed_duration_seconds"] = 7200.1
+
+        with pytest.raises(ValueError, match="invalid .*payload"):
+            from_canonical_json(json.dumps(tampered), FootballWorldContext)
 
 
 def test_world_context_rejects_microcycle_for_a_different_session() -> None:

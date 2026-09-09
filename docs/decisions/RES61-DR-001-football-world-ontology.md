@@ -322,3 +322,34 @@ The full repository suite remains the authority for historical compatibility.
 
 No scientific numerical formula or measurement-engine authority changed in this
 unit.
+
+## Review-driven hardening closeout
+
+### Explicit season chronology
+
+- `SeasonContext` bounds become active deterministic chronology constraints when
+  supplied.
+- Unknown bounds remain unknown; no missing season date is invented from a
+  display label or another timestamp.
+- Session timestamps must lie within every supplied authoritative context. The
+  check uses the calendar date represented under the timezone carried by each
+  aware timestamp, including an explicit session end when present; no season
+  timezone is inferred.
+- A world-level `SeasonContext` validates the embedded session, and conflicting
+  duplicated world/session season contexts fail closed by requiring exact
+  dataclass equality.
+- Display labels still provide no inferred dates.
+
+### Exposure temporal consistency
+
+- Exposure and session existence remain independent; constructing a session
+  never creates athlete exposure.
+- When an explicit session end exists, attached observed exposure cannot exceed
+  the known session duration computed by Python datetime subtraction.
+- When no session end exists, no upper bound is invented and the observed
+  duration remains independently representable.
+
+### Compatibility
+
+- No historical wire type changed; `SERIALIZATION_VERSION` remains `3`.
+- No scientific numerical measurement authority changed.

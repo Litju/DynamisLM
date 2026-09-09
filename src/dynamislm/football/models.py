@@ -275,6 +275,33 @@ class SeasonContext:
         return self.evidence_references
 
 
+def _validate_session_within_season_context(
+    start_at: datetime_module.datetime,
+    end_at: datetime_module.datetime | None,
+    season_context: SeasonContext | None,
+) -> None:
+    """Validate session chronology against any explicit season calendar bounds."""
+
+    if end_at is not None and end_at < start_at:
+        raise ValueError("end_at must be on or after start_at")
+    if season_context is None:
+        return
+
+    session_start_date = start_at.date()
+    session_end_date = end_at.date() if end_at is not None else None
+
+    if season_context.start_date is not None:
+        if session_start_date < season_context.start_date:
+            raise ValueError("session start date must be on or after season start_date")
+        if session_end_date is not None and session_end_date < season_context.start_date:
+            raise ValueError("session end date must be on or after season start_date")
+    if season_context.end_date is not None:
+        if session_start_date > season_context.end_date:
+            raise ValueError("session start date must be on or before season end_date")
+        if session_end_date is not None and session_end_date > season_context.end_date:
+            raise ValueError("session end date must be on or before season end_date")
+
+
 @register_serializable_type
 @dataclass(frozen=True, slots=True, kw_only=True)
 class FootballSession:
@@ -301,13 +328,16 @@ class FootballSession:
         _require_aware_datetime(self.start_at, "start_at")
         if self.end_at is not None:
             _require_aware_datetime(self.end_at, "end_at")
-            if self.end_at < self.start_at:
-                raise ValueError("end_at must be on or after start_at")
         if self.season_context is not None:
             if not isinstance(self.season_context, SeasonContext):
                 raise ValueError("season_context must be a SeasonContext when present")
             if not _same_season(self.season, self.season_context.season_identity):
                 raise ValueError("season_context must identify the session season")
+        _validate_session_within_season_context(
+            self.start_at,
+            self.end_at,
+            self.season_context,
+        )
         _require_registry_references(self.evidence_references, "evidence_references")
         _require_metadata_entries(self.environment, "environment")
         _require_registry_references(self.provider_references, "provider_references")
@@ -756,6 +786,17 @@ class FootballWorldContext:
                 raise ValueError("season_context must be a SeasonContext when present")
             if not _same_season(self.season, self.season_context.season_identity):
                 raise ValueError("world season must match season_context")
+            _validate_session_within_season_context(
+                self.session.start_at,
+                self.session.end_at,
+                self.season_context,
+            )
+        if (
+            self.season_context is not None
+            and self.session.season_context is not None
+            and self.season_context != self.session.season_context
+        ):
+            raise ValueError("world and session season_context must match exactly")
         if self.squad_participation is not None:
             if not isinstance(self.squad_participation, SquadParticipationContext):
                 raise ValueError(
@@ -798,13 +839,19 @@ class FootballWorldContext:
                 raise ValueError("match exposure match_id must match world match session")
             if exposure.match_session_id != self.session.session_id:
                 raise ValueError("match exposure session must match world session")
-            return
-        if isinstance(exposure, TrainingExposure):
+        elif isinstance(exposure, TrainingExposure):
             if not isinstance(self.session, TrainingSession):
                 raise ValueError("TrainingExposure can attach only to TrainingSession")
             if exposure.training_session_id != self.session.session_id:
                 raise ValueError("training exposure session must match world session")
-            return
+
+        if (
+            exposure.observed_duration_seconds is not None
+            and self.session.end_at is not None
+            and exposure.observed_duration_seconds
+            > (self.session.end_at - self.session.start_at).total_seconds()
+        ):
+            raise ValueError("observed exposure duration cannot exceed known session duration")
 
     @property
     def world_context_id(self) -> InstanceIdentifier:
