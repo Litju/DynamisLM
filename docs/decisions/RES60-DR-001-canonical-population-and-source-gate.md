@@ -192,3 +192,30 @@ CMJ/V1 historical hash assertions remain the regression authority.
 - Typed contracts: `src/dynamislm/population/models.py`
 - Deterministic authority: `src/dynamislm/population/qualification.py`
 - Focused tests: `tests/test_population.py`
+
+## RES-60 integrity hardening closeout
+
+The RES-60 closeout seals the authority-integrity boundary identified during
+independent review. Authoritative population and source decision records are
+derived records, not caller-authoritative DTOs. Their embedded population or
+source is the authoritative input, and every derivative field is
+deterministically recomputed and checked on normal construction,
+`dataclasses.replace(...)`, and canonical V3 decoding.
+
+The pure RES-60 authority computation is shared by the public qualification
+constructors and the decision self-validation path. Population clauses and
+source requirements are checked against their canonical definitions, including
+status, observed values, evidence, missing information, reason codes,
+provenance, registered method identity, and hash-derived decision identity.
+Structurally valid but semantically inconsistent wire payloads therefore fail
+closed. A synthetic source cannot retain `ACTUAL_OBSERVED_DATA=PASS`, and a
+noncanonical population cannot retain `POPULATION_MATCH=PASS`.
+
+`V2EvidenceApplicability` retains explicit claim-relative classification while
+rejecting inconsistent class/role pairs and contradictory target-population
+decisions. It does not infer indirect applicability from a failed canonical
+gate.
+
+No serialization-version change was made: `SERIALIZATION_VERSION` remains
+`3`. Historical Observation/V1 and Evidence/V1 wire shapes and locked CMJ
+serialization hashes remain unchanged. `SCIENTIFIC_NUMERICAL_AUTHORITY_CHANGED=NO`.

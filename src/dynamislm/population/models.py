@@ -12,6 +12,12 @@ from dynamislm.measurement.identity import (
     ScientificIdentifier,
     require_tuple,
 )
+from dynamislm.population._authority import (
+    compute_population_authority,
+    compute_source_authority,
+    validate_population_decision,
+    validate_source_decision,
+)
 from dynamislm.refusal.models import RefusalClass, RefusalReasonCode
 from dynamislm.serialization import register_serializable_type
 
@@ -187,6 +193,19 @@ class EvidenceApplicabilityRole(StrEnum):
     INDIRECT_MEASUREMENT_METHOD = "INDIRECT_MEASUREMENT_METHOD"
     NONCANONICAL_CONTEXT = "NONCANONICAL_CONTEXT"
     REJECTED_OR_UNRESOLVED = "REJECTED_OR_UNRESOLVED"
+
+
+_EVIDENCE_ROLE_BY_CLASS: dict[EvidenceClass, EvidenceApplicabilityRole] = {
+    EvidenceClass.CANONICAL_EMPIRICAL_TARGET: EvidenceApplicabilityRole.TARGET_WORLD_EMPIRICAL,
+    EvidenceClass.DIRECT_TARGET_POPULATION_EVIDENCE: (
+        EvidenceApplicabilityRole.DIRECT_TARGET_POPULATION_METHOD
+    ),
+    EvidenceClass.INDIRECT_MEASUREMENT_EVIDENCE: (
+        EvidenceApplicabilityRole.INDIRECT_MEASUREMENT_METHOD
+    ),
+    EvidenceClass.NONCANONICAL_CONTEXT_ONLY: EvidenceApplicabilityRole.NONCANONICAL_CONTEXT,
+    EvidenceClass.REJECTED_OR_UNRESOLVED: EvidenceApplicabilityRole.REJECTED_OR_UNRESOLVED,
+}
 
 
 class CanonicalSourceStatus(StrEnum):
@@ -399,36 +418,30 @@ class CanonicalPopulationDecision:
     reason_codes: tuple[RefusalReasonCode, ...]
 
     def __post_init__(self) -> None:
+        if not isinstance(self.decision_id, ScientificIdentifier):
+            raise ValueError("decision_id must be a ScientificIdentifier")
+        if not isinstance(self.population, PopulationIdentity):
+            raise ValueError("population must be a PopulationIdentity")
         if not isinstance(self.status, CanonicalPopulationStatus):
             raise ValueError("status must be a CanonicalPopulationStatus")
         require_tuple(self.clauses, "clauses")
+        if any(not isinstance(clause, PopulationClauseDecision) for clause in self.clauses):
+            raise ValueError("clauses must contain PopulationClauseDecision values")
         if tuple(clause.dimension for clause in self.clauses) != CANONICAL_POPULATION_DIMENSIONS:
             raise ValueError("clauses must contain the six canonical dimensions in order")
-        expected_failed = tuple(
-            clause.dimension for clause in self.clauses if clause.status is ClauseStatus.FAIL
-        )
-        expected_unresolved = tuple(
-            clause.dimension for clause in self.clauses if clause.status is ClauseStatus.UNRESOLVED
-        )
         require_tuple(self.failed_clauses, "failed_clauses")
         require_tuple(self.unresolved_clauses, "unresolved_clauses")
-        if self.failed_clauses != expected_failed:
-            raise ValueError("failed_clauses must match clause results")
-        if self.unresolved_clauses != expected_unresolved:
-            raise ValueError("unresolved_clauses must match clause results")
-        expected_status = (
-            CanonicalPopulationStatus.NONCANONICAL
-            if expected_failed
-            else CanonicalPopulationStatus.UNRESOLVED
-            if expected_unresolved
-            else CanonicalPopulationStatus.PASS
-        )
-        if self.status is not expected_status:
-            raise ValueError("population status must follow clause statuses")
+        if any(not isinstance(item, PopulationDimension) for item in self.failed_clauses):
+            raise ValueError("failed_clauses must contain PopulationDimension values")
+        if any(not isinstance(item, PopulationDimension) for item in self.unresolved_clauses):
+            raise ValueError("unresolved_clauses must contain PopulationDimension values")
         require_tuple(self.missing_information, "missing_information")
         _require_string_tuple(self.missing_information, "missing_information")
         require_tuple(self.supporting_evidence, "supporting_evidence")
+        if not isinstance(self.method_reference, RegistryReference):
+            raise ValueError("method_reference must be a RegistryReference")
         object.__setattr__(self, "reason_codes", _normalise_reason_codes(self.reason_codes))
+        validate_population_decision(self, compute_population_authority(self.population))
 
     @property
     def overall_status(self) -> CanonicalPopulationStatus:
@@ -579,49 +592,38 @@ class CanonicalSourceDecision:
     reason_codes: tuple[RefusalReasonCode, ...]
 
     def __post_init__(self) -> None:
+        if not isinstance(self.decision_id, ScientificIdentifier):
+            raise ValueError("decision_id must be a ScientificIdentifier")
+        if not isinstance(self.source, CanonicalSource):
+            raise ValueError("source must be a CanonicalSource")
+        if not isinstance(self.population_decision, CanonicalPopulationDecision):
+            raise ValueError("population_decision must be a CanonicalPopulationDecision")
         if not isinstance(self.status, CanonicalSourceStatus):
             raise ValueError("status must be a CanonicalSourceStatus")
         if not isinstance(self.evidence_class, EvidenceClass):
             raise ValueError("evidence_class must be an EvidenceClass")
         require_tuple(self.requirements, "requirements")
+        if any(not isinstance(item, SourceRequirementDecision) for item in self.requirements):
+            raise ValueError("requirements must contain SourceRequirementDecision values")
         if tuple(item.requirement for item in self.requirements) != CANONICAL_SOURCE_REQUIREMENTS:
             raise ValueError("requirements must contain the source requirements in order")
-        expected_failed = tuple(
-            item.requirement for item in self.requirements if item.status is ClauseStatus.FAIL
-        )
-        expected_unresolved = tuple(
-            item.requirement for item in self.requirements if item.status is ClauseStatus.UNRESOLVED
-        )
         require_tuple(self.failed_requirements, "failed_requirements")
         require_tuple(self.unresolved_requirements, "unresolved_requirements")
-        if self.failed_requirements != expected_failed:
-            raise ValueError("failed_requirements must match requirement results")
-        if self.unresolved_requirements != expected_unresolved:
-            raise ValueError("unresolved_requirements must match requirement results")
-        expected_status = (
-            CanonicalSourceStatus.CANONICAL_ELIGIBILITY_FAILED
-            if expected_failed
-            else CanonicalSourceStatus.UNRESOLVED
-            if expected_unresolved
-            else CanonicalSourceStatus.CANONICAL_EMPIRICAL_TARGET
-        )
-        if self.status is not expected_status:
-            raise ValueError("source status must follow requirement statuses")
-        expected_class = (
-            EvidenceClass.CANONICAL_EMPIRICAL_TARGET
-            if self.status is CanonicalSourceStatus.CANONICAL_EMPIRICAL_TARGET
-            else EvidenceClass.REJECTED_OR_UNRESOLVED
-        )
-        if self.evidence_class is not expected_class:
-            raise ValueError("source evidence class must not infer indirect applicability")
-        if self.source.license_reuse != self.license_reuse:
-            raise ValueError("decision license metadata must match the source")
-        if self.population_decision.population != self.source.population:
-            raise ValueError("population decision must evaluate the source population")
+        if any(not isinstance(item, SourceRequirement) for item in self.failed_requirements):
+            raise ValueError("failed_requirements must contain SourceRequirement values")
+        if any(not isinstance(item, SourceRequirement) for item in self.unresolved_requirements):
+            raise ValueError("unresolved_requirements must contain SourceRequirement values")
         require_tuple(self.missing_information, "missing_information")
         _require_string_tuple(self.missing_information, "missing_information")
         require_tuple(self.supporting_evidence, "supporting_evidence")
+        if not isinstance(self.method_reference, RegistryReference):
+            raise ValueError("method_reference must be a RegistryReference")
+        if not isinstance(self.qualification_provenance, SourceQualificationProvenance):
+            raise ValueError("qualification_provenance must be a SourceQualificationProvenance")
+        if not isinstance(self.license_reuse, LicenseReuseMetadata):
+            raise ValueError("license_reuse must be a LicenseReuseMetadata")
         object.__setattr__(self, "reason_codes", _normalise_reason_codes(self.reason_codes))
+        validate_source_decision(self, compute_source_authority(self.source))
 
     @property
     def overall_status(self) -> CanonicalSourceStatus:
@@ -665,6 +667,22 @@ class V2EvidenceApplicability:
             raise ValueError("role must be an EvidenceApplicabilityRole")
         if not isinstance(self.decision, ApplicabilityDecision):
             raise ValueError("decision must be an ApplicabilityDecision")
+        if self.population_decision is not None and not isinstance(
+            self.population_decision, CanonicalPopulationDecision
+        ):
+            raise ValueError("population_decision must be a CanonicalPopulationDecision")
+        if _EVIDENCE_ROLE_BY_CLASS[self.evidence_class] is not self.role:
+            raise ValueError("evidence class and applicability role are inconsistent")
+        if (
+            self.population_decision is not None
+            and self.evidence_class
+            in (
+                EvidenceClass.CANONICAL_EMPIRICAL_TARGET,
+                EvidenceClass.DIRECT_TARGET_POPULATION_EVIDENCE,
+            )
+            and self.population_decision.status is not CanonicalPopulationStatus.PASS
+        ):
+            raise ValueError("target-population evidence requires a passing population decision")
         require_tuple(self.conditions, "conditions")
         _require_string_tuple(self.conditions, "conditions")
         require_tuple(self.evidence_references, "evidence_references")
