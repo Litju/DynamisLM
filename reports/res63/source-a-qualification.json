@@ -1,0 +1,36 @@
+{
+  "source_id": "unifesp-brazil-serie-a-v1",
+  "source_version": "1.0",
+  "source_persistent_identifier": "hdl:20.500.12682/rdp/GMXME8",
+  "population_decision_id": "dynamislm:canonical-population-decision:98a575eadfc0df63d06c15d2448a23ab1cc49610bdf6ca200dd58b14fa67fe0f@1.0.0",
+  "source_decision_id": "dynamislm:canonical-source-decision:94ec2e06bbabc543d560f6622af2826c8962a6c31352716604a8cfba3f032c89@1.0.0",
+  "candidate_role": "CANONICAL_EMPIRICAL_TARGET",
+  "population_status": "PASS",
+  "population_clauses": {
+    "SEX": "MALE",
+    "AGE_CLASS": "SENIOR",
+    "SPORT": "ASSOCIATION_FOOTBALL",
+    "PROFESSIONAL_STATUS": "PROFESSIONAL",
+    "SQUAD_LEVEL": "FIRST_TEAM",
+    "COMPETITION_TIER": "TOP_DOMESTIC_DIVISION"
+  },
+  "source_status": "CANONICAL_EMPIRICAL_TARGET",
+  "source_requirements": {
+    "POPULATION_MATCH": "PASS",
+    "ACTUAL_OBSERVED_DATA": "PASS",
+    "TARGET_SUBGROUP_SCOPE": "PASS",
+    "SOURCE_IDENTITY_AND_PROVENANCE": "PASS",
+    "DATA_GRANULARITY": "PASS"
+  },
+  "actual_observed_data": true,
+  "performance_science_relevance": true,
+  "license": "CC-BY-NC-4.0",
+  "model_training_use": "NOT_AUTHORIZED_BY_RES63",
+  "football_mapping": "PASS_FOR_SOURCE_SUPPORTED_ATHLETE_DATE_COMPETITION_POSITION_CONTEXT",
+  "lineage": "PASS",
+  "privacy": {
+    "source_local_athlete_id_retained": true,
+    "real_world_player_name_resolution": false,
+    "dateofbirth_canonical_output": "SOURCE_ONLY"
+  }
+}

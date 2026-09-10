@@ -87,6 +87,11 @@ CMJ is no longer merely the next authorized unit. The repository contains substa
 
 Additional CMJ force, power, RFD, RSI-mod and asymmetry completion work belongs downstream under RES-65. No metric is implied here beyond what the existing registered implementation and tests establish.
 
+RES-75 hosted CI and repository governance is sealed. RES-63 implements the
+canonical empirical ingestion boundary; real source bytes and full canonical
+tables remain outside Git under `~/data/dynamislm`. Empirical data use for
+model training remains blocked by `MODEL_TRAINING_USE=NOT_AUTHORIZED_BY_RES63`.
+
 ## Architecture
 
 ```text
@@ -138,7 +143,7 @@ No operational model, inference, baseline-inference benchmark, paid GPU qualific
 ## Current limitations
 
 - No trained checkpoint, model weights, corpus, database, API, frontend, GPU runtime, or deployment is included.
-- The other performance-test families, external-load/exposure engine, canonical dataset qualification and scientific-engine qualification remain downstream work in the RES-63→RES-71 sequence.
+- The other performance-test families, external-load/exposure engine and scientific-engine qualification remain downstream work in the RES-64→RES-71 sequence; RES-63 dataset qualification is limited to its current ingestion boundary.
 - The current CMJ implementation is not a complete CMJ science program; additional force, power, RFD, RSI-mod and asymmetry methods remain downstream under RES-65.
 - The generic kernel and CMJ vertical slice represent registered contracts and provenance; they are not a complete persistence layer or clinical/return-to-play authority.
 - Comparability without a registered deterministic rule remains explicitly unresolved/insufficient.

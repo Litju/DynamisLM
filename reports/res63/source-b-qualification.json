@@ -1,0 +1,15 @@
+{
+  "source_id": "mendeley-rpl-v1",
+  "source_version": "1",
+  "candidate_role": "CANONICAL_EMPIRICAL_TARGET",
+  "status": "QUARANTINED",
+  "population": "UNRESOLVED",
+  "variable_identity": "UNRESOLVED_FOR_PROMOTION",
+  "football_mapping": "UNRESOLVED_FOR_PROMOTION",
+  "lineage": "RAW_BYTES_VERIFIED_BUT_NOT_PROMOTED",
+  "reason_codes": ["UNRESOLVED_SEX_EVIDENCE", "UNRESOLVED_FIRST_TEAM_STATUS", "POPULATION_SCOPE_UNRESOLVED"],
+  "missing_information": ["explicit male-sex evidence for the exact workbook cohort", "explicit first-team status for the exact workbook cohort"],
+  "doi": "10.17632/spkmxfsmhv.1",
+  "license": "CC-BY-4.0",
+  "model_training_use": "NOT_AUTHORIZED_BY_RES63"
+}

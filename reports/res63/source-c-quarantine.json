@@ -1,0 +1,20 @@
+{
+  "source_id": "mendeley-turkish-super-league-instat-v1",
+  "source_version": "1",
+  "doi": "10.17632/xmzc44rptr.1",
+  "status": "QUARANTINED",
+  "granularity": "TEAM",
+  "raw_artifact_sha256": "sha256:966b1c40a5d4e7ce50d6df6edc41e83f3e2ce6eb51b43ed8df37b44d2b632517",
+  "reason_codes": [
+    "UNRESOLVED_RECORD_GRANULARITY",
+    "TEAM_AGGREGATE_NOT_CANONICAL_ATHLETE_RECORD",
+    "UNRESOLVED_SEX_EVIDENCE",
+    "UNRESOLVED_FIRST_TEAM_STATUS"
+  ],
+  "missing_information": [
+    "proof that every retained record is an athlete-level first-team observation",
+    "explicit male-sex evidence for the exact source cohort"
+  ],
+  "schema_sha256": "sha256:5bd97512162d681d8dbb7a34592f366ebfa0de399595c3c24f74bd574d1e7520",
+  "model_training_use": "NOT_AUTHORIZED_BY_RES63"
+}

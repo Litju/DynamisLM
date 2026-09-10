@@ -1,0 +1,14 @@
+{
+  "source_id": "unifesp-brazil-serie-a-v1",
+  "source_version": "1.0",
+  "conflict_count": 5,
+  "conflicts": [
+    {"field":"participant_count","claims":[98,90],"verified_file_fact":98,"resolution":"UNRESOLVED_PROVIDER_CLAIMS"},
+    {"field":"match_count","claims":[295,351],"verified_file_fact":361,"verified_fact_label":"distinct Gamedate values, not official match count","resolution":"UNRESOLVED_PROVIDER_CLAIMS"},
+    {"field":"case_count","claims":[5203,5202],"verified_file_fact":5202,"resolution":"UNRESOLVED_PROVIDER_CLAIMS"},
+    {"field":"file_size","claims":[1028925,1029382],"verified_file_fact":1029382,"resolution":"UNRESOLVED_PROVIDER_CLAIMS"},
+    {"field":"provider_md5","claims":["93951f1b28240cfaa9c31d075824cb36","4ea0e3fa58f06df42667049148f79e18"],"verified_file_fact":"4ea0e3fa58f06df42667049148f79e18","resolution":"UNRESOLVED_PROVIDER_CLAIMS_PROVIDER_HASH_IS_SUPPLEMENTARY"}
+  ],
+  "byte_authority": "DYNAMISLM_SHA256",
+  "provider_claims_are_not_file_truth": true
+}

@@ -1,0 +1,31 @@
+{
+  "source_id": "mendeley-rpl-v1",
+  "source_version": "1",
+  "raw_artifact_sha256": "sha256:f0f6bbf4882eaa43d13ef81d53062fd70aa7becb0d252dd523d2a623470cee4c",
+  "worksheet": "Limpio",
+  "rows": 115,
+  "columns": 16,
+  "distinct_athlete_ids": 24,
+  "distinct_match_or_date_ids": 14,
+  "missing_values_preserved": true,
+  "missing_counts": "all 16 columns: 0",
+  "headers": [
+    "Match",
+    "Player",
+    "Minutes played",
+    "Total distance",
+    "Total distance per minute",
+    "Total Maximum Speed",
+    "High-Speed Running",
+    "Mean Posterior-inferior temperature (MD -1)",
+    "Mean Posterior-inferior muscle temperature (MD -1)",
+    "Hamstring temperature (MD -1)",
+    "Mean Calf temperature (MD -1)",
+    "Mean Posterior-inferior temperature (MD +1)",
+    "Mean Posterior-inferior muscle temperature (MD +1)",
+    "Hamstring temperature (MD +1)",
+    "Mean Calf temperature (MD +1)",
+    "Sprint +24"
+  ],
+  "schema_sha256": "sha256:84ea3b215345aca74beaa6ac469d71aa57a49b8eb8e23b545baab272ff1c9a56"
+}
