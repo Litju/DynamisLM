@@ -9,7 +9,10 @@ from dynamislm.measurement.identity import (
     InstanceIdentifier,
     MeasurementIdentity,
     MetadataEntry,
-    require_tuple,
+    _require_instance,
+    _require_optional_instance,
+    _require_text,
+    _require_tuple_items,
 )
 from dynamislm.measurement.result import MeasurementResult
 from dynamislm.provenance.models import (
@@ -22,11 +25,6 @@ from dynamislm.provenance.models import (
     SourceArtifact,
 )
 from dynamislm.serialization import register_serializable_type
-
-
-def _require_text(value: str, field_name: str) -> None:
-    if not value or not value.strip():
-        raise ValueError(f"{field_name} must not be empty")
 
 
 @register_serializable_type
@@ -45,11 +43,28 @@ class ObservationContext:
     context_metadata: tuple[MetadataEntry, ...] = ()
 
     def __post_init__(self) -> None:
+        _require_instance(self.context_id, InstanceIdentifier, "context_id")
+        if self.context_id.instance_type != "context":
+            raise ValueError("context_id must identify a context")
+        _require_instance(self.athlete_id, InstanceIdentifier, "athlete_id")
+        if self.athlete_id.instance_type != "athlete":
+            raise ValueError("athlete_id must identify an athlete")
+        _require_instance(self.session_id, InstanceIdentifier, "session_id")
+        if self.session_id.instance_type != "session":
+            raise ValueError("session_id must identify a session")
+        _require_instance(self.test_instance_id, InstanceIdentifier, "test_instance_id")
+        if self.test_instance_id.instance_type != "test-instance":
+            raise ValueError("test_instance_id must identify a test-instance")
+        _require_optional_instance(self.trial_id, InstanceIdentifier, "trial_id")
+        if self.trial_id is not None and self.trial_id.instance_type != "trial":
+            raise ValueError("trial_id must identify a trial")
+        if not isinstance(self.observed_at, datetime_module.datetime):
+            raise ValueError("observed_at must be a datetime")
         if self.observed_at.tzinfo is None or self.observed_at.utcoffset() is None:
             raise ValueError("observed_at must include an explicit timezone")
         _require_text(self.population_context, "population_context")
-        require_tuple(self.environment, "environment")
-        require_tuple(self.context_metadata, "context_metadata")
+        _require_tuple_items(self.environment, MetadataEntry, "environment")
+        _require_tuple_items(self.context_metadata, MetadataEntry, "context_metadata")
 
 
 @register_serializable_type
@@ -64,10 +79,15 @@ class ScientificMeasurementObservation:
     provenance: Provenance
 
     def __post_init__(self) -> None:
+        _require_instance(self.observation_id, InstanceIdentifier, "observation_id")
         if self.observation_id.instance_type != "observation":
             raise ValueError(
                 "scientific measurement observation ID must have instance_type observation"
             )
+        _require_instance(self.context, ObservationContext, "context")
+        _require_instance(self.identity, MeasurementIdentity, "identity")
+        _require_instance(self.result, MeasurementResult, "result")
+        _require_instance(self.provenance, Provenance, "provenance")
 
 
 def create_derived_observation(

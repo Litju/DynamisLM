@@ -10,6 +10,12 @@ from dynamislm.measurement.identity import (
     InstanceIdentifier,
     RegistryReference,
     UnitReference,
+    _require_enum,
+    _require_instance,
+    _require_number,
+    _require_optional_instance,
+    _require_text,
+    _require_tuple_items,
     require_tuple,
 )
 from dynamislm.measurement.taxonomy import ScientificClassification
@@ -33,6 +39,8 @@ class ScalarValue:
         return "scalar"
 
     def __post_init__(self) -> None:
+        if not isinstance(self.value, str | int | float | bool):
+            raise ValueError("scalar value must be a scalar JSON-compatible value")
         if isinstance(self.value, float):
             _finite(self.value, "scalar value")
 
@@ -49,7 +57,9 @@ class VectorValue:
     def __post_init__(self) -> None:
         require_tuple(self.values, "values")
         for value in self.values:
-            _finite(value, "vector value")
+            if isinstance(value, bool) or not isinstance(value, int | float):
+                raise ValueError("vector values must be numeric")
+            _finite(float(value), "vector value")
 
 
 @register_serializable_type
@@ -65,8 +75,10 @@ class IntervalValue:
         return "interval"
 
     def __post_init__(self) -> None:
-        _finite(self.lower, "interval lower")
-        _finite(self.upper, "interval upper")
+        _require_number(self.lower, "interval lower")
+        _require_number(self.upper, "interval upper")
+        _finite(float(self.lower), "interval lower")
+        _finite(float(self.upper), "interval upper")
         if self.lower > self.upper:
             raise ValueError("interval lower must not exceed upper")
 
@@ -82,10 +94,10 @@ class CategoricalValue:
         return "categorical_or_ordinal"
 
     def __post_init__(self) -> None:
-        if not self.category.strip():
-            raise ValueError("category must not be empty")
-        if isinstance(self.ordinal, float):
-            _finite(self.ordinal, "ordinal")
+        _require_text(self.category, "category")
+        if self.ordinal is not None:
+            _require_number(self.ordinal, "ordinal")
+            _finite(float(self.ordinal), "ordinal")
 
 
 @register_serializable_type
@@ -102,6 +114,8 @@ class StructuredOutputReference:
         return "structured_reference"
 
     def __post_init__(self) -> None:
+        _require_instance(self.artifact_id, InstanceIdentifier, "artifact_id")
+        _require_instance(self.schema, RegistryReference, "schema")
         if self.uri is not None and not self.uri.strip():
             raise ValueError("uri must not be empty when present")
 
@@ -140,7 +154,8 @@ class MeasurementQuality:
     note: str | None = None
 
     def __post_init__(self) -> None:
-        require_tuple(self.flags, "flags")
+        _require_enum(self.status, QualityStatus, "status")
+        _require_tuple_items(self.flags, str, "flags")
         if any(not flag.strip() for flag in self.flags):
             raise ValueError("quality flags must not contain empty strings")
         if self.note is not None and not self.note.strip():
@@ -157,6 +172,8 @@ class UncertaintyMetadata:
     description: str | None = None
 
     def __post_init__(self) -> None:
+        _require_enum(self.status, UncertaintyStatus, "status")
+        _require_optional_instance(self.model_reference, RegistryReference, "model_reference")
         if self.description is not None and not self.description.strip():
             raise ValueError("uncertainty description must not be empty when present")
 
@@ -173,3 +190,20 @@ class MeasurementResult:
     quality: MeasurementQuality = MeasurementQuality()
     uncertainty: UncertaintyMetadata = UncertaintyMetadata()
     status: ResultStatus = ResultStatus.VALID
+
+    def __post_init__(self) -> None:
+        _require_instance(self.result_id, InstanceIdentifier, "result_id")
+        if not isinstance(
+            self.value,
+            ScalarValue
+            | VectorValue
+            | IntervalValue
+            | CategoricalValue
+            | StructuredOutputReference,
+        ):
+            raise ValueError("value must be a registered ResultValue")
+        _require_optional_instance(self.unit, UnitReference, "unit")
+        _require_instance(self.classification, ScientificClassification, "classification")
+        _require_instance(self.quality, MeasurementQuality, "quality")
+        _require_instance(self.uncertainty, UncertaintyMetadata, "uncertainty")
+        _require_enum(self.status, ResultStatus, "status")

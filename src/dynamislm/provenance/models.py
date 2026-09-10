@@ -11,14 +11,13 @@ from dynamislm.measurement.identity import (
     MetadataEntry,
     RegistryReference,
     SamplingCharacteristics,
-    require_tuple,
+    _require_enum,
+    _require_instance,
+    _require_optional_instance,
+    _require_text,
+    _require_tuple_items,
 )
 from dynamislm.serialization import register_serializable_type
-
-
-def _require_text(value: str, field_name: str) -> None:
-    if not value or not value.strip():
-        raise ValueError(f"{field_name} must not be empty")
 
 
 class LineageRelation(StrEnum):
@@ -38,8 +37,13 @@ class SourceArtifact:
     immutable: bool = True
 
     def __post_init__(self) -> None:
+        _require_instance(self.artifact_id, InstanceIdentifier, "artifact_id")
+        if self.artifact_id.instance_type != "artifact":
+            raise ValueError("artifact_id must identify an artifact")
         _require_text(self.content_digest, "content_digest")
         _require_text(self.media_type, "media_type")
+        if not isinstance(self.immutable, bool):
+            raise ValueError("immutable must be a boolean")
 
 
 @register_serializable_type
@@ -54,8 +58,26 @@ class AcquisitionRecord:
     hardware_firmware: RegistryReference | None = None
 
     def __post_init__(self) -> None:
+        _require_instance(self.acquisition_id, InstanceIdentifier, "acquisition_id")
+        if self.acquisition_id.instance_type != "acquisition":
+            raise ValueError("acquisition_id must identify an acquisition")
+        _require_instance(self.device, RegistryReference, "device")
+        _require_instance(self.source_artifact_id, InstanceIdentifier, "source_artifact_id")
+        if self.source_artifact_id.instance_type != "artifact":
+            raise ValueError("source_artifact_id must identify an artifact")
         if self.sensor_channel is not None:
             _require_text(self.sensor_channel, "sensor_channel")
+        _require_optional_instance(self.sampling, SamplingCharacteristics, "sampling")
+        _require_optional_instance(
+            self.calibration_reference,
+            RegistryReference,
+            "calibration_reference",
+        )
+        _require_optional_instance(
+            self.hardware_firmware,
+            RegistryReference,
+            "hardware_firmware",
+        )
 
 
 @register_serializable_type
@@ -69,13 +91,18 @@ class ProcessingRun:
     output_entity_id: InstanceIdentifier
 
     def __post_init__(self) -> None:
+        _require_instance(self.processing_run_id, InstanceIdentifier, "processing_run_id")
+        if self.processing_run_id.instance_type != "processing-run":
+            raise ValueError("processing_run_id must identify a processing run")
         if not self.source_artifact_ids:
             raise ValueError("processing run must reference at least one source artifact")
-        require_tuple(self.source_artifact_ids, "source_artifact_ids")
-        require_tuple(self.parameters, "parameters")
+        _require_tuple_items(self.source_artifact_ids, InstanceIdentifier, "source_artifact_ids")
+        if any(item.instance_type != "artifact" for item in self.source_artifact_ids):
+            raise ValueError("source_artifact_ids must identify artifacts")
+        _require_instance(self.method, RegistryReference, "method")
+        _require_tuple_items(self.parameters, MetadataEntry, "parameters")
         _require_text(self.software_version, "software_version")
-        if not isinstance(self.output_entity_id, InstanceIdentifier):
-            raise ValueError("output_entity_id must be an InstanceIdentifier")
+        _require_instance(self.output_entity_id, InstanceIdentifier, "output_entity_id")
 
 
 @register_serializable_type
@@ -85,6 +112,7 @@ class EvidenceReference:
     applicability_note: str | None = None
 
     def __post_init__(self) -> None:
+        _require_instance(self.reference, RegistryReference, "reference")
         if self.applicability_note is not None:
             _require_text(self.applicability_note, "applicability_note")
 
@@ -99,6 +127,7 @@ class LineageEdge:
     def __post_init__(self) -> None:
         _require_text(self.from_id, "from_id")
         _require_text(self.to_id, "to_id")
+        _require_enum(self.relation, LineageRelation, "relation")
         if self.from_id == self.to_id:
             raise ValueError("lineage edge cannot point to itself")
 
@@ -118,15 +147,24 @@ class Provenance:
     recorded_at: datetime_module.datetime | None = None
 
     def __post_init__(self) -> None:
-        for field_name, value in (
-            ("source_artifacts", self.source_artifacts),
-            ("acquisitions", self.acquisitions),
-            ("processing_runs", self.processing_runs),
-            ("lineage_edges", self.lineage_edges),
-            ("evidence_references", self.evidence_references),
-            ("metrological_traceability", self.metrological_traceability),
+        _require_instance(self.provenance_id, InstanceIdentifier, "provenance_id")
+        if self.provenance_id.instance_type != "provenance":
+            raise ValueError("provenance_id must identify provenance")
+        _require_tuple_items(self.source_artifacts, SourceArtifact, "source_artifacts")
+        _require_tuple_items(self.acquisitions, AcquisitionRecord, "acquisitions")
+        _require_tuple_items(self.processing_runs, ProcessingRun, "processing_runs")
+        _require_tuple_items(self.lineage_edges, LineageEdge, "lineage_edges")
+        _require_tuple_items(self.evidence_references, EvidenceReference, "evidence_references")
+        _require_tuple_items(
+            self.metrological_traceability,
+            RegistryReference,
+            "metrological_traceability",
+        )
+        if self.recorded_at is not None and not isinstance(
+            self.recorded_at,
+            datetime_module.datetime,
         ):
-            require_tuple(value, field_name)
+            raise ValueError("recorded_at must be a datetime")
         if self.recorded_at is not None and (
             self.recorded_at.tzinfo is None or self.recorded_at.utcoffset() is None
         ):

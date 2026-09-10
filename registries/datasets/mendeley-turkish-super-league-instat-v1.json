@@ -1,0 +1,56 @@
+{
+  "schema_version": "1.0.0",
+  "source_id": "mendeley-turkish-super-league-instat-v1",
+  "provider": "Mendeley Data",
+  "title": "2022-2023 Turkish Football League Fitness Data Set",
+  "landing_page_uri": "https://data.mendeley.com/datasets/xmzc44rptr/1",
+  "persistent_identifier": "10.17632/xmzc44rptr.1",
+  "version": {
+    "repository_version": "1",
+    "version_specific_persistent_identifier": "10.17632/xmzc44rptr.1",
+    "published_at": "2025-02-05T20:02:41+00:00"
+  },
+  "license": {
+    "spdx_expression": "CC-BY-4.0",
+    "canonical_uri": "https://creativecommons.org/licenses/by/4.0/",
+    "assertion_source_uri": "https://data.mendeley.com/datasets/xmzc44rptr/1",
+    "attribution_required": true,
+    "noncommercial_restriction": false,
+    "notes": "Mendeley Data page identifies CC BY 4.0."
+  },
+  "files": [
+    {
+      "file_id": "802415b5-7797-44eb-b70c-ae9ed00facef",
+      "filename": "2022-2023 SÜPER LİG VERİLERİ SET.xlsx",
+      "media_type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      "download_url": "https://data.mendeley.com/public-files/datasets/xmzc44rptr/files/802415b5-7797-44eb-b70c-ae9ed00facef/file_downloaded",
+      "sha256": "sha256:966b1c40a5d4e7ce50d6df6edc41e83f3e2ce6eb51b43ed8df37b44d2b632517",
+      "byte_size": 129622,
+      "provider_hash": "966b1c40a5d4e7ce50d6df6edc41e83f3e2ce6eb51b43ed8df37b44d2b632517",
+      "provider_hash_algorithm": "sha256"
+    }
+  ],
+  "metadata_snapshot_sha256": "sha256:1cb223c3dea0e9c5326d420ee75b0bd0fa156b404968fafdc7586b6b403fc13a",
+  "candidate_role": "CANONICAL_EMPIRICAL_TARGET",
+  "qualification_state": "QUARANTINED",
+  "quarantine_reason_codes": [
+    "UNRESOLVED_RECORD_GRANULARITY",
+    "TEAM_AGGREGATE_NOT_CANONICAL_ATHLETE_RECORD",
+    "UNRESOLVED_SEX_EVIDENCE",
+    "UNRESOLVED_FIRST_TEAM_STATUS"
+  ],
+  "model_training_use": "NOT_AUTHORIZED_BY_RES63",
+  "verified_workbook_facts": {
+    "total_worksheets": 3,
+    "data_worksheets": 1,
+    "observed_team_match_rows": 252,
+    "observed_graph_rows": 407,
+    "observed_rows_all_worksheets": 659,
+    "player_identifier_columns": 0,
+    "team_identifier_columns": 1,
+    "match_or_date_columns": 2
+  },
+  "verified_schema_sha256": "sha256:5bd97512162d681d8dbb7a34592f366ebfa0de399595c3c24f74bd574d1e7520",
+  "granularity": "TEAM",
+  "reason": "The verified workbook exposes team/match aggregates and no player identifier; top-flight competition does not turn a team aggregate into a canonical athlete record."
+}

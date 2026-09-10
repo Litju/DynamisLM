@@ -1,0 +1,372 @@
+"""Deterministic streamed acquisition and metadata-snapshot operations."""
+
+from __future__ import annotations
+
+import datetime as datetime_module
+import hashlib
+import json
+import os
+import re
+import tempfile
+import urllib.parse
+import urllib.request
+from collections.abc import Callable, Iterable
+from pathlib import Path
+from typing import Any
+
+from dynamislm.ingestion.contracts import (
+    ArtifactAcquisitionReceipt,
+    DatasetSourceIdentity,
+    DatasetVersionIdentity,
+    SourceVersionConflict,
+    VerifiedRawArtifact,
+)
+from dynamislm.ingestion.storage import (
+    ensure_data_tree,
+    relative_data_path,
+    store_verified_temporary_file,
+    write_external_json,
+)
+from dynamislm.measurement.identity import InstanceIdentifier
+
+
+class AcquisitionError(ValueError):
+    """Raised when a public acquisition cannot be verified and stored."""
+
+
+_SAFE_SLUG_RE = re.compile(r"[^A-Za-z0-9._-]+")
+
+
+def _safe_slug(value: str) -> str:
+    slug = _SAFE_SLUG_RE.sub("-", value).strip("-")
+    return slug or "artifact"
+
+
+def _normalise_digest(value: str) -> str:
+    digest = value.removeprefix("sha256:").lower()
+    if len(digest) != 64 or any(character not in "0123456789abcdef" for character in digest):
+        raise AcquisitionError("expected_sha256 must be a SHA-256 hexadecimal value")
+    return f"sha256:{digest}"
+
+
+def _timeout(timeout: float) -> float:
+    if isinstance(timeout, bool) or not isinstance(timeout, int | float) or timeout <= 0:
+        raise AcquisitionError("timeout must be finite and positive")
+    if not float(timeout) < float("inf"):
+        raise AcquisitionError("timeout must be finite and positive")
+    return float(timeout)
+
+
+def _header_value(headers: Any, name: str) -> str | None:
+    value = headers.get(name)
+    return str(value) if value is not None else None
+
+
+def _content_type(headers: Any, fallback: str) -> str:
+    try:
+        value = headers.get_content_type()
+    except AttributeError:
+        value = None
+    if value:
+        return str(value)
+    return fallback
+
+
+def _filename_from_url(url: str) -> str:
+    filename = Path(urllib.parse.unquote(urllib.parse.urlparse(url).path)).name
+    return filename or "downloaded-artifact"
+
+
+def _receipt_path(data_root: Path, source_id: str, source_version: str, suffix: str) -> str:
+    return f"receipts/{_safe_slug(source_id)}-{_safe_slug(source_version)}-{suffix}.json"
+
+
+def _record_source_version_conflict(
+    data_root: Path,
+    source: DatasetSourceIdentity,
+    version: DatasetVersionIdentity,
+    expected_sha256: str,
+    actual_sha256: str,
+    expected_byte_size: int | None,
+    actual_byte_size: int,
+) -> SourceVersionConflict:
+    conflict = SourceVersionConflict(
+        source_id=source.source_id,
+        source_version=version.repository_version,
+        expected_sha256=expected_sha256,
+        actual_sha256=actual_sha256,
+        expected_byte_size=expected_byte_size,
+        actual_byte_size=actual_byte_size,
+    )
+    write_external_json(
+        data_root,
+        _receipt_path(data_root, source.source_id, version.repository_version, "version-conflict"),
+        conflict,
+    )
+    return conflict
+
+
+def _store_acquisition(
+    chunks: Iterable[bytes],
+    *,
+    source: DatasetSourceIdentity,
+    version: DatasetVersionIdentity,
+    requested_url: str,
+    resolved_url: str,
+    original_filename: str,
+    media_type: str,
+    provider_hash: str | None,
+    provider_hash_algorithm: str | None,
+    etag: str | None,
+    last_modified: str | None,
+    metadata_snapshot_sha256: str | None,
+    expected_sha256: str | None,
+    expected_byte_size: int | None,
+    data_root: Path,
+    repository_root: Path | None,
+) -> VerifiedRawArtifact:
+    resolved_data_root = ensure_data_tree(data_root, repository_root=repository_root)
+    expected_digest = _normalise_digest(expected_sha256) if expected_sha256 is not None else None
+    if expected_byte_size is not None:
+        if isinstance(expected_byte_size, bool) or not isinstance(expected_byte_size, int):
+            raise AcquisitionError("expected_byte_size must be an integer when present")
+        if expected_byte_size < 0:
+            raise AcquisitionError("expected_byte_size must not be negative")
+
+    temporary_path: Path | None = None
+    digest = hashlib.sha256()
+    byte_size = 0
+    temp_directory = resolved_data_root / "tmp" / "acquisition"
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="wb",
+            dir=temp_directory,
+            prefix=".download-",
+            suffix=".part",
+            delete=False,
+        ) as temporary:
+            temporary_path = Path(temporary.name)
+            for chunk in chunks:
+                if not isinstance(chunk, bytes):
+                    raise AcquisitionError("acquisition stream must yield bytes")
+                temporary.write(chunk)
+                digest.update(chunk)
+                byte_size += len(chunk)
+            temporary.flush()
+            os.fsync(temporary.fileno())
+
+        actual_digest = f"sha256:{digest.hexdigest()}"
+        if expected_digest is not None and actual_digest != expected_digest:
+            _record_source_version_conflict(
+                resolved_data_root,
+                source,
+                version,
+                expected_digest,
+                actual_digest,
+                expected_byte_size,
+                byte_size,
+            )
+            raise AcquisitionError("downloaded bytes conflict with the registered source version")
+        if expected_byte_size is not None and byte_size != expected_byte_size:
+            raise AcquisitionError("downloaded byte count does not match the registered size")
+
+        object_path = store_verified_temporary_file(
+            temporary_path,
+            data_root=resolved_data_root,
+            expected_sha256=actual_digest,
+            expected_byte_size=byte_size,
+        )
+        temporary_path = None
+        receipt = ArtifactAcquisitionReceipt(
+            source_id=source.source_id,
+            source_version=version.repository_version,
+            requested_url=requested_url,
+            resolved_url=resolved_url,
+            original_filename=original_filename,
+            media_type=media_type,
+            byte_size=byte_size,
+            sha256=actual_digest,
+            retrieved_at=datetime_module.datetime.now(datetime_module.UTC),
+            provider_hash=provider_hash,
+            provider_hash_algorithm=provider_hash_algorithm,
+            etag=etag,
+            last_modified=last_modified,
+            metadata_snapshot_sha256=metadata_snapshot_sha256,
+            storage_relative_path=relative_data_path(resolved_data_root, object_path),
+        )
+        receipt_path = write_external_json(
+            resolved_data_root,
+            _receipt_path(
+                resolved_data_root,
+                source.source_id,
+                version.repository_version,
+                "acquisition",
+            ),
+            receipt,
+        )
+        artifact = VerifiedRawArtifact(
+            artifact_id=InstanceIdentifier("artifact", actual_digest),
+            sha256=actual_digest,
+            byte_size=byte_size,
+            media_type=media_type,
+            relative_path=relative_data_path(resolved_data_root, object_path),
+            acquisition_receipt=receipt,
+        )
+        # The receipt itself is the committed/external evidence; keep the path
+        # construction above deterministic without adding it to semantic data.
+        if not receipt_path.is_file():
+            raise AcquisitionError("acquisition receipt was not stored")
+        return artifact
+    except Exception:
+        if temporary_path is not None:
+            try:
+                temporary_path.unlink()
+            except FileNotFoundError:
+                pass
+        raise
+
+
+def acquire_url(
+    source: DatasetSourceIdentity,
+    version: DatasetVersionIdentity,
+    url: str,
+    *,
+    expected_sha256: str | None = None,
+    expected_byte_size: int | None = None,
+    provider_hash: str | None = None,
+    provider_hash_algorithm: str | None = None,
+    metadata_snapshot_sha256: str | None = None,
+    original_filename: str | None = None,
+    media_type: str = "application/octet-stream",
+    timeout: float = 30.0,
+    data_root: Path | None = None,
+    repository_root: Path | None = None,
+    opener: Callable[..., Any] = urllib.request.urlopen,
+) -> VerifiedRawArtifact:
+    """Acquire one HTTPS URL by streaming and verifying its exact bytes."""
+
+    if not isinstance(source, DatasetSourceIdentity):
+        raise AcquisitionError("source must be a DatasetSourceIdentity")
+    if not isinstance(version, DatasetVersionIdentity):
+        raise AcquisitionError("version must be a DatasetVersionIdentity")
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme != "https" or not parsed.netloc:
+        raise AcquisitionError("public acquisition requires an HTTPS URL")
+    request_timeout = _timeout(timeout)
+    resolved_data_root = ensure_data_tree(data_root, repository_root=repository_root)
+    request = urllib.request.Request(
+        url,
+        headers={"User-Agent": "DynamisLM-RES63/1.0"},
+    )
+    chosen_filename = original_filename or _filename_from_url(url)
+    with opener(request, timeout=request_timeout) as response:
+        resolved_url = response.geturl()
+        if urllib.parse.urlparse(resolved_url).scheme != "https":
+            raise AcquisitionError("resolved acquisition URL must remain HTTPS")
+        response_headers = response.headers
+        chunks = iter(lambda: response.read(1024 * 1024), b"")
+        return _store_acquisition(
+            chunks,
+            source=source,
+            version=version,
+            requested_url=url,
+            resolved_url=resolved_url,
+            original_filename=chosen_filename,
+            media_type=_content_type(response_headers, media_type),
+            provider_hash=provider_hash,
+            provider_hash_algorithm=provider_hash_algorithm,
+            etag=_header_value(response_headers, "ETag"),
+            last_modified=_header_value(response_headers, "Last-Modified"),
+            metadata_snapshot_sha256=metadata_snapshot_sha256,
+            expected_sha256=expected_sha256,
+            expected_byte_size=expected_byte_size,
+            data_root=resolved_data_root,
+            repository_root=repository_root,
+        )
+
+
+def acquire_bytes(
+    source: DatasetSourceIdentity,
+    version: DatasetVersionIdentity,
+    content: bytes,
+    *,
+    requested_url: str = "https://synthetic.invalid/artifact",
+    resolved_url: str | None = None,
+    original_filename: str = "synthetic-artifact",
+    media_type: str = "application/octet-stream",
+    expected_sha256: str | None = None,
+    expected_byte_size: int | None = None,
+    provider_hash: str | None = None,
+    provider_hash_algorithm: str | None = None,
+    metadata_snapshot_sha256: str | None = None,
+    data_root: Path | None = None,
+    repository_root: Path | None = None,
+) -> VerifiedRawArtifact:
+    """Acquire in-memory bytes for deterministic tests and local fixtures."""
+
+    if not isinstance(content, bytes):
+        raise AcquisitionError("content must be bytes")
+    parsed = urllib.parse.urlparse(requested_url)
+    if parsed.scheme != "https" or not parsed.netloc:
+        raise AcquisitionError("synthetic acquisition URL must be HTTPS")
+    if resolved_url is not None:
+        resolved_parsed = urllib.parse.urlparse(resolved_url)
+        if resolved_parsed.scheme != "https" or not resolved_parsed.netloc:
+            raise AcquisitionError("synthetic resolved acquisition URL must be HTTPS")
+    return _store_acquisition(
+        (content,),
+        source=source,
+        version=version,
+        requested_url=requested_url,
+        resolved_url=resolved_url or requested_url,
+        original_filename=original_filename,
+        media_type=media_type,
+        provider_hash=provider_hash,
+        provider_hash_algorithm=provider_hash_algorithm,
+        etag=None,
+        last_modified=None,
+        metadata_snapshot_sha256=metadata_snapshot_sha256,
+        expected_sha256=expected_sha256,
+        expected_byte_size=expected_byte_size,
+        data_root=data_root or Path.home() / "data" / "dynamislm",
+        repository_root=repository_root,
+    )
+
+
+def capture_metadata_snapshot(
+    source: DatasetSourceIdentity,
+    version: DatasetVersionIdentity,
+    metadata: object,
+    *,
+    data_root: Path | None = None,
+    repository_root: Path | None = None,
+) -> str:
+    """Canonicalize and store provider metadata, returning its distinct digest."""
+
+    if not isinstance(source, DatasetSourceIdentity):
+        raise AcquisitionError("source must be a DatasetSourceIdentity")
+    if not isinstance(version, DatasetVersionIdentity):
+        raise AcquisitionError("version must be a DatasetVersionIdentity")
+    resolved_data_root = ensure_data_tree(data_root, repository_root=repository_root)
+    serialized = json.dumps(
+        metadata,
+        ensure_ascii=False,
+        allow_nan=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    digest = f"sha256:{hashlib.sha256(serialized.encode('utf-8')).hexdigest()}"
+    relative_path = (
+        f"metadata/{_safe_slug(source.source_id)}-{_safe_slug(version.repository_version)}-"
+        f"{digest.removeprefix('sha256:')}.json"
+    )
+    write_external_json(resolved_data_root, relative_path, metadata)
+    return digest
+
+
+__all__ = [
+    "AcquisitionError",
+    "acquire_bytes",
+    "acquire_url",
+    "capture_metadata_snapshot",
+]
