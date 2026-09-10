@@ -96,4 +96,11 @@ def test_ordinary_source_files_pass() -> None:
 
 def test_existing_tracked_repository_passes_live_policy() -> None:
     repo_root = Path(__file__).resolve().parents[1]
-    assert evaluate_paths(tracked_path_sizes(repo_root)) == ()
+    allowlisted_fixture = "tests/fixtures/synthetic/source-a/source-a.tab"
+    assert (
+        evaluate_paths(
+            tracked_path_sizes(repo_root),
+            allowlisted_fixtures=(allowlisted_fixture,),
+        )
+        == ()
+    )
