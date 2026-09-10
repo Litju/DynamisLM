@@ -153,9 +153,16 @@ An available natural key is additional metadata only. Do not assume
 `AthleteID + Gamedate` is unique.
 
 Every adapter names a stable mapping version, for example
-`unifesp-serie-a-mapping@1.0.0`. Same raw bytes with a changed mapping version
+`unifesp-serie-a-mapping@1.1.0`. Same raw bytes with a changed mapping version
 can produce a different canonical artifact; that is a new explicit output and
 never an overwrite of an earlier mapping result.
+
+The committed registry produces a typed `RegisteredDatasetFileIdentity` for
+each source file. Its expected SHA-256, byte size, representation, filename,
+media type, and provider identifiers are not populated from live metadata.
+Live provider metadata is an observation checked against that identity. Source
+A uses `ARCHIVAL_TAB`; a Dataverse `SAVED_ORIGINAL` download is a separate,
+noncanonical diagnostic representation.
 
 ## Quarantine and promotion
 
@@ -176,7 +183,8 @@ SOURCE_VERSION_CONFLICT
 FOOTBALL_CONTEXT_UNRESOLVED
 ```
 
-The sole promotion authority requires all of these gates:
+The sole promotion authority derives all of these gates from a typed
+`PromotionEvidence` tree:
 
 ```text
 runtime integrity
@@ -190,33 +198,56 @@ football-world mapping resolved
 complete lineage
 ```
 
-No `force=True`, `manual_override=True`, or owner override exists. A qualified
-source does not qualify every variable. Unresolved variable semantics remain
-quarantined.
+There is no public nine-boolean promotion API and no `force=True`,
+`manual_override=True`, or owner override. `PromotionDecision` recomputes its
+status, reason codes, and content-derived decision ID from nested evidence.
+A qualified source does not qualify every variable. Unresolved variable
+semantics remain quarantined.
 
 ## Canonical replay
 
 Full real canonical output is JSONL under `canonical/` in the data root. It is
 UTF-8, uses sorted JSON keys and explicit LF line endings, orders records by
-source row and exact original variable name, and has a deterministic SHA-256.
-Acquisition timestamps are excluded from semantic content. Full qualification
-decisions are stored once in external receipts and canonical rows reference
-their stable IDs.
+source row and the registered source-variable order, and has a deterministic
+SHA-256. The production writer is streaming and fails if its iterator is out of
+order; it does not materialize a full record tuple or giant string/bytes value.
+Complete source-variable identities are stored once in an external registry
+sidecar and rows carry only `source_variable_id`. Acquisition timestamps are
+excluded from semantic content. Full qualification decisions are stored once
+in external receipts and canonical rows reference their stable IDs.
 
 Replay the same verified bytes with the same registered metadata and mapping
-version. Require identical record count, ordering, canonical SHA-256,
-population decisions, variable identities, metadata-conflict receipts, and
-quarantine decisions. A transform never calls the network or depends on
-filesystem enumeration or Python hash ordering.
+version using the offline entry point:
+
+```bash
+uv run python scripts/res63_replay.py \
+  --source unifesp-brazil-serie-a-v1 \
+  --data-root "$DYNAMISLM_DATA_ROOT" \
+  --report-dir /tmp/res63-reports \
+  --verify
+```
+
+Require identical record count, ordering, canonical SHA-256, variable-registry
+SHA, mapping version, population/source decisions, variable identities,
+metadata-conflict receipts, and quarantine decisions. Ordinary replay does not
+refresh network metadata. A transform never depends on filesystem enumeration
+or Python hash ordering.
 
 ## Initial sources
 
 Source A (`unifesp-brazil-serie-a-v1`) is qualified and promoted from its
-verified official `.tab` bytes. Source B (`mendeley-rpl-v1`) is quarantined
+verified official `ARCHIVAL_TAB` bytes. The source claim graph keeps separate
+the Dataverse version description, Domus collection description, paper
+abstract, paper Methods 2.1, paper main-team/professional-adult context, and
+verified file facts. The paper's 98-player abstract claim and 99-player
+Methods claim remain distinct from the separate Domus 90-player claim. Source
+B (`mendeley-rpl-v1`) is quarantined
 because the exact captured evidence does not establish the male-sex or
 first-team clauses.
 Source C (`mendeley-turkish-super-league-instat-v1`) is quarantined because the
-verified workbook is team-level aggregate data without player identifiers.
+verified workbook is resolved `TEAM`-level aggregate data without player
+identifiers; its quarantine reason is
+`TEAM_AGGREGATE_NOT_CANONICAL_ATHLETE_RECORD`, not unresolved granularity.
 Source D (`zenodo-ekstraklasa-training-adaptation`) is quarantined pending
 publication/provenance and first-team-status proof.
 

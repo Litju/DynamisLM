@@ -261,7 +261,7 @@ key repeats.
 Each adapter has an explicit mapping version. For example:
 
 ```text
-unifesp-serie-a-mapping@1.0.0
+unifesp-serie-a-mapping@1.1.0
 ```
 
 The canonical path is:
@@ -288,7 +288,7 @@ when available, failed stage, exact reason codes, missing information,
 evidence, affected rows/variables, and requalification requirements.
 
 There is exactly one promotion authority. A record/source can promote only
-when every mandatory term is true:
+when every mandatory term is derived from a validated typed evidence tree:
 
 ```text
 RUNTIME_INTEGRITY_PASS
@@ -302,21 +302,27 @@ AND FOOTBALL_WORLD_MAPPING_RESOLVED
 AND LINEAGE_COMPLETE
 ```
 
-There is no `force`, `manual_override`, or owner override. A qualified source
-does not automatically qualify every variable. Unresolved variable semantics
-remain quarantined and do not enter canonical JSONL.
+There is no public boolean-gate constructor, `force`, `manual_override`, or
+owner override. `PromotionDecision` recomputes its status, reason codes, and
+content-derived decision ID from `PromotionEvidence` during construction and
+deserialization. A qualified source does not automatically qualify every
+variable. Unresolved variable semantics remain quarantined and do not enter
+canonical JSONL.
 
 ## Canonical artifact and replay decision
 
 Full canonical empirical output is deterministic JSONL under
 `canonical/` in the external root. UTF-8, stable key ordering, explicit `\n`
-newline behavior, stable raw-row/variable ordering, and a content SHA-256 are
-fixed. Acquisition timestamps are not semantic canonical content.
+newline behavior, source-row order, registered source-variable order, and a
+content SHA-256 are fixed. Acquisition timestamps are not semantic canonical
+content. The writer streams one validated record at a time to a temporary file,
+updates the digest and count, fsyncs, and atomically replaces the target.
 
 The JSONL payload is privacy-minimized and references full source/population
-decisions by stable IDs; full decision trees remain in external qualification
-receipts. No row, DOB list, raw byte, or full canonical table is committed to
-Git.
+decisions by stable IDs plus a stable `source_variable_id`; complete
+`SourceVariableIdentity` values are stored once in an external variable
+registry sidecar. The canonical receipt records that registry digest/path.
+No row, DOB list, raw byte, or full canonical table is committed to Git.
 
 ## Initial source decisions
 
@@ -329,15 +335,23 @@ content-addressed SHA and has 5,202 rows and 28 columns, 98 distinct source
 athlete IDs, 361 distinct date values, zero duplicate raw rows, and zero
 candidate natural-key duplicates.
 
-Official/provider participant, match, case, file-size, and provider-MD5 claims
-are retained as five explicit conflict receipts. The current exact downloaded
-bytes are authoritative under SHA-256; the provider MD5/size are supplementary
-claims and are not silently substituted.
+The claim conflict receipt contains three fields: participant count, match
+count, and case count. It retains the Domus version description, the separate
+Domus collection description, and the paper's abstract/Methods claims with
+their exact source locations. The file fact is labelled
+`DISTINCT_SOURCE_ATHLETE_IDS=98`; 361 distinct dates are not treated as an
+official-match count. The selected input is the `ARCHIVAL_TAB` representation
+with SHA-256 over the exact bytes. Dataverse's provider MD5 is verified as the
+`SAVED_ORIGINAL` diagnostic representation (Raw data.xlsx, 1,124,197 bytes),
+not as the archival-tab authority. The representation difference is recorded
+separately, not as a false claim conflict.
 
 The source-variable registry preserves the exact threshold labels, provider
 methods, Catapult VECTOR7 metadata, and provider-derived status. Date of birth
 is excluded from canonical output. The canonical artifact has 140,454
-row-variable records under `unifesp-serie-a-mapping@1.0.0` and is replay-stable.
+row-variable records under `unifesp-serie-a-mapping@1.1.0`, includes explicit
+Brazilian Serie A season identities for 2020-2024 derived from `Gamedate`, and
+is replay-stable.
 
 ### Source B — Mendeley Russian Premier League
 
@@ -354,7 +368,6 @@ so no canonical records are promoted.
 `mendeley-turkish-super-league-instat-v1` is acquired and quarantined after
 granularity audit. The data sheet exposes team/match aggregates and no player
 identifier; the verified classification is `TEAM`. Reasons are
-`UNRESOLVED_RECORD_GRANULARITY`,
 `TEAM_AGGREGATE_NOT_CANONICAL_ATHLETE_RECORD`,
 `UNRESOLVED_SEX_EVIDENCE`, and `UNRESOLVED_FIRST_TEAM_STATUS`.
 
@@ -410,3 +423,41 @@ infrastructure.
 
 `RES64_FORMULAS_IMPLEMENTED=NO` and `SCIENTIFIC_NUMERICAL_AUTHORITY_CHANGED=NO`.
 CMJ numerical science and all historical V3 hashes remain unchanged.
+
+## Review-fix authority notes
+
+The committed registry is the expected source-version authority. Live provider
+metadata is retained as an observation and must agree with the registered file
+identity where the provider exposes the relevant field; it never supplies the
+expected SHA-256 or byte size. Source A metadata is fetched from the explicit
+Dataverse version-1.0 Native API endpoint and the returned dataset version,
+dataset persistent ID, file ID, and file persistent ID are checked before
+acquisition. Dataverse's official Data Access documentation distinguishes the
+default archival tabular representation from `format=original`, the saved
+original uploaded file:
+
+- <https://guides.dataverse.org/en/latest/api/native-api.html>
+- <https://guides.dataverse.org/en/latest/api/dataaccess.html>
+
+The supported license identities bind SPDX, canonical URI, and restriction
+flags. The canonical Creative Commons references are:
+
+- <https://creativecommons.org/licenses/by/4.0/>
+- <https://creativecommons.org/licenses/by-nc/4.0/>
+
+Offline replay and report regeneration use only the committed registry, the
+verified external raw object, and the mapping implementation. Ordinary replay
+does not refresh network metadata:
+
+```bash
+uv run python scripts/res63_replay.py \
+  --source unifesp-brazil-serie-a-v1 \
+  --data-root "$DYNAMISLM_DATA_ROOT" \
+  --report-dir /tmp/res63-reports \
+  --verify
+```
+
+The mapping implementation fails closed for Source A dates outside the
+registered 2020-2024 seasons. Source C's `TEAM` granularity is resolved and
+quarantined with `TEAM_AGGREGATE_NOT_CANONICAL_ATHLETE_RECORD`; the unresolved
+granularity reason is reserved for an actually unresolved classification.

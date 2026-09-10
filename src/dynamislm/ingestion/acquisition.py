@@ -18,13 +18,18 @@ from dynamislm.ingestion.contracts import (
     ArtifactAcquisitionReceipt,
     DatasetSourceIdentity,
     DatasetVersionIdentity,
+    FileRepresentation,
+    RegisteredDatasetFileIdentity,
     SourceVersionConflict,
+    SourceVersionVerificationReceipt,
     VerifiedRawArtifact,
 )
 from dynamislm.ingestion.storage import (
     ensure_data_tree,
     relative_data_path,
+    resolve_data_root,
     store_verified_temporary_file,
+    verify_file,
     write_external_json,
 )
 from dynamislm.measurement.identity import InstanceIdentifier
@@ -122,10 +127,34 @@ def _store_acquisition(
     metadata_snapshot_sha256: str | None,
     expected_sha256: str | None,
     expected_byte_size: int | None,
+    registered_file_identity: RegisteredDatasetFileIdentity | None,
+    representation: FileRepresentation,
+    provider_file_id: str | int | None,
     data_root: Path,
     repository_root: Path | None,
 ) -> VerifiedRawArtifact:
     resolved_data_root = ensure_data_tree(data_root, repository_root=repository_root)
+    if registered_file_identity is not None:
+        if source.source_id != registered_file_identity.source_id:
+            raise AcquisitionError("source does not match registered file identity")
+        if version.repository_version != registered_file_identity.source_version:
+            raise AcquisitionError("version does not match registered file identity")
+        if representation is not registered_file_identity.representation:
+            raise AcquisitionError("representation does not match registered file identity")
+        if expected_sha256 is not None and _normalise_digest(expected_sha256) != (
+            registered_file_identity.expected_sha256
+        ):
+            raise AcquisitionError("caller expected SHA-256 differs from registry authority")
+        if expected_byte_size is not None and expected_byte_size != (
+            registered_file_identity.expected_byte_size
+        ):
+            raise AcquisitionError("caller expected byte size differs from registry authority")
+        expected_sha256 = registered_file_identity.expected_sha256
+        expected_byte_size = registered_file_identity.expected_byte_size
+        if original_filename != registered_file_identity.filename:
+            raise AcquisitionError("download filename differs from registered file identity")
+        if media_type != registered_file_identity.media_type:
+            raise AcquisitionError("download media type differs from registered file identity")
     expected_digest = _normalise_digest(expected_sha256) if expected_sha256 is not None else None
     if expected_byte_size is not None:
         if isinstance(expected_byte_size, bool) or not isinstance(expected_byte_size, int):
@@ -193,6 +222,8 @@ def _store_acquisition(
             last_modified=last_modified,
             metadata_snapshot_sha256=metadata_snapshot_sha256,
             storage_relative_path=relative_data_path(resolved_data_root, object_path),
+            representation=representation,
+            provider_file_id=provider_file_id,
         )
         receipt_path = write_external_json(
             resolved_data_root,
@@ -211,6 +242,7 @@ def _store_acquisition(
             media_type=media_type,
             relative_path=relative_data_path(resolved_data_root, object_path),
             acquisition_receipt=receipt,
+            representation=representation,
         )
         # The receipt itself is the committed/external evidence; keep the path
         # construction above deterministic without adding it to semantic data.
@@ -233,8 +265,12 @@ def acquire_url(
     *,
     expected_sha256: str | None = None,
     expected_byte_size: int | None = None,
+    registered_file_identity: RegisteredDatasetFileIdentity | None = None,
+    representation: FileRepresentation = FileRepresentation.PROVIDER_FILE,
+    provider_file_id: str | int | None = None,
     provider_hash: str | None = None,
     provider_hash_algorithm: str | None = None,
+    provider_hash_representation: FileRepresentation | None = None,
     metadata_snapshot_sha256: str | None = None,
     original_filename: str | None = None,
     media_type: str = "application/octet-stream",
@@ -280,6 +316,9 @@ def acquire_url(
             metadata_snapshot_sha256=metadata_snapshot_sha256,
             expected_sha256=expected_sha256,
             expected_byte_size=expected_byte_size,
+            registered_file_identity=registered_file_identity,
+            representation=representation,
+            provider_file_id=provider_file_id,
             data_root=resolved_data_root,
             repository_root=repository_root,
         )
@@ -296,8 +335,12 @@ def acquire_bytes(
     media_type: str = "application/octet-stream",
     expected_sha256: str | None = None,
     expected_byte_size: int | None = None,
+    registered_file_identity: RegisteredDatasetFileIdentity | None = None,
+    representation: FileRepresentation = FileRepresentation.PROVIDER_FILE,
+    provider_file_id: str | int | None = None,
     provider_hash: str | None = None,
     provider_hash_algorithm: str | None = None,
+    provider_hash_representation: FileRepresentation | None = None,
     metadata_snapshot_sha256: str | None = None,
     data_root: Path | None = None,
     repository_root: Path | None = None,
@@ -328,9 +371,36 @@ def acquire_bytes(
         metadata_snapshot_sha256=metadata_snapshot_sha256,
         expected_sha256=expected_sha256,
         expected_byte_size=expected_byte_size,
-        data_root=data_root or Path.home() / "data" / "dynamislm",
+        registered_file_identity=registered_file_identity,
+        representation=representation,
+        provider_file_id=provider_file_id,
+        data_root=data_root or resolve_data_root(repository_root=repository_root),
         repository_root=repository_root,
     )
+
+
+def verify_registered_artifact(
+    registered_file_identity: RegisteredDatasetFileIdentity,
+    verified_artifact: VerifiedRawArtifact,
+    *,
+    data_root: Path | None = None,
+    repository_root: Path | None = None,
+) -> SourceVersionVerificationReceipt:
+    """Return a receipt only after registry/artifact identity comparisons pass."""
+
+    try:
+        resolved_data_root = resolve_data_root(data_root, repository_root=repository_root)
+        artifact_path = resolved_data_root / verified_artifact.relative_path
+        verify_file(
+            artifact_path,
+            expected_sha256=registered_file_identity.expected_sha256,
+            expected_byte_size=registered_file_identity.expected_byte_size,
+        )
+        return SourceVersionVerificationReceipt(registered_file_identity, verified_artifact)
+    except ValueError as exc:
+        raise AcquisitionError(
+            "verified artifact does not match registered source identity"
+        ) from exc
 
 
 def capture_metadata_snapshot(
@@ -369,4 +439,5 @@ __all__ = [
     "acquire_bytes",
     "acquire_url",
     "capture_metadata_snapshot",
+    "verify_registered_artifact",
 ]

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import datetime as datetime_module
 from pathlib import Path
 from typing import Any
 
@@ -13,11 +12,17 @@ from dynamislm.ingestion.adapters.mendeley_rpl import (
     stable_mendeley_file_metadata,
 )
 from dynamislm.ingestion.contracts import (
-    DatasetLicenseIdentity,
-    DatasetSourceIdentity,
-    DatasetVersionIdentity,
+    FileRepresentation,
     QuarantineReceipt,
     WorkbookSchema,
+)
+from dynamislm.ingestion.registry import (
+    dataset_license_identity,
+    dataset_source_identity,
+    dataset_version_identity,
+    load_dataset_registry,
+    registered_dataset_file_identity,
+    verify_live_provider_file_observation,
 )
 from dynamislm.ingestion.storage import file_digest_and_size
 
@@ -27,26 +32,12 @@ SOURCE_C_PROVIDER = "Mendeley Data"
 SOURCE_C_LANDING_PAGE = "https://data.mendeley.com/datasets/xmzc44rptr/1"
 SOURCE_C_MAPPING_VERSION = "mendeley-turkish-super-league-mapping@1.0.0"
 
-SOURCE_C_SOURCE = DatasetSourceIdentity(
-    source_id=SOURCE_C_ID,
-    provider=SOURCE_C_PROVIDER,
-    title="2022-2023 Turkish Football League Fitness Data Set",
-    landing_page_uri=SOURCE_C_LANDING_PAGE,
-    persistent_identifier=SOURCE_C_DOI,
-)
-SOURCE_C_VERSION = DatasetVersionIdentity(
-    repository_version="1",
-    version_specific_persistent_identifier=SOURCE_C_DOI,
-    published_at=datetime_module.datetime(2025, 2, 5, 20, 2, 41, tzinfo=datetime_module.UTC),
-)
-SOURCE_C_LICENSE = DatasetLicenseIdentity(
-    spdx_expression="CC-BY-4.0",
-    canonical_uri="https://creativecommons.org/licenses/by/4.0/",
-    assertion_source_uri=SOURCE_C_LANDING_PAGE,
-    attribution_required=True,
-    noncommercial_restriction=False,
-    notes="Mendeley Data page identifies CC BY 4.0.",
-)
+SOURCE_C_REGISTRY_DOCUMENT = load_dataset_registry(SOURCE_C_ID)
+SOURCE_C_REGISTERED_FILE = registered_dataset_file_identity(SOURCE_C_REGISTRY_DOCUMENT)
+
+SOURCE_C_SOURCE = dataset_source_identity(SOURCE_C_REGISTRY_DOCUMENT)
+SOURCE_C_VERSION = dataset_version_identity(SOURCE_C_REGISTRY_DOCUMENT)
+SOURCE_C_LICENSE = dataset_license_identity(SOURCE_C_REGISTRY_DOCUMENT)
 
 
 def source_c_file_metadata() -> dict[str, Any]:
@@ -75,19 +66,29 @@ def acquire_source_c(
     if not isinstance(details, dict):
         raise ValueError("Mendeley Source C file metadata lacks content_details")
     download_url = details.get("download_url")
-    expected_sha256 = details.get("sha256_hash")
+    live_provider_sha256 = details.get("sha256_hash")
     byte_size = metadata.get("size")
-    if not isinstance(download_url, str) or not isinstance(expected_sha256, str):
+    if not isinstance(download_url, str) or not isinstance(live_provider_sha256, str):
         raise ValueError("Mendeley Source C file metadata lacks public URL or SHA-256")
     if isinstance(byte_size, bool) or not isinstance(byte_size, int):
         raise ValueError("Mendeley Source C file metadata lacks byte size")
+    provider_file_id = metadata.get("id", metadata.get("file_id"))
+    verify_live_provider_file_observation(
+        SOURCE_C_REGISTERED_FILE,
+        provider_sha256=live_provider_sha256,
+        provider_hash=live_provider_sha256,
+        provider_hash_algorithm="sha256",
+        provider_byte_size=byte_size,
+        provider_file_id=provider_file_id if provider_file_id is not None else None,
+    )
     return acquire_url(
         SOURCE_C_SOURCE,
         SOURCE_C_VERSION,
         download_url,
-        expected_sha256=expected_sha256,
-        expected_byte_size=byte_size,
-        provider_hash=expected_sha256,
+        registered_file_identity=SOURCE_C_REGISTERED_FILE,
+        representation=FileRepresentation.PROVIDER_FILE,
+        provider_file_id=provider_file_id if provider_file_id is not None else None,
+        provider_hash=live_provider_sha256,
         provider_hash_algorithm="sha256",
         metadata_snapshot_sha256=snapshot_sha256,
         original_filename=str(metadata.get("filename", "source-c.xlsx")),
@@ -146,10 +147,14 @@ def source_c_quarantine(
 
     granularity = classify_source_c_granularity(schema) if schema is not None else "UNRESOLVED"
     reasons: list[str] = []
-    if granularity != "PLAYER":
+    if granularity == "UNRESOLVED":
         reasons.append("UNRESOLVED_RECORD_GRANULARITY")
     if granularity == "TEAM":
         reasons.append("TEAM_AGGREGATE_NOT_CANONICAL_ATHLETE_RECORD")
+    elif granularity == "MATCH":
+        reasons.append("MATCH_LEVEL_NOT_CANONICAL_ATHLETE_RECORD")
+    elif granularity == "MIXED":
+        reasons.append("MIXED_OR_SUBGROUP_RECORDS_NOT_CANONICAL_ATHLETE_RECORD")
     reasons.extend(("UNRESOLVED_SEX_EVIDENCE", "UNRESOLVED_FIRST_TEAM_STATUS"))
     return QuarantineReceipt(
         source_id=SOURCE_C_ID,

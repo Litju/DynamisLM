@@ -15,31 +15,24 @@ from dynamislm.ingestion.contracts import (
     DatasetVersionIdentity,
     SourceSchema,
     SourceVariableIdentity,
+    SourceVariableRegistry,
+    SourceVariableRegistryEntry,
     SourceVariableRole,
     VariableResolutionStatus,
+    stable_source_variable_id,
 )
+from dynamislm.ingestion.storage import file_digest_and_size
 from dynamislm.measurement.identity import MetadataEntry, RegistryReference, ScientificIdentifier
 from dynamislm.population.models import (
-    AgeClass,
     CanonicalSource,
     CohortScope,
     CohortScopeType,
-    CompetitionIdentity,
-    CompetitionTier,
     DataGranularity,
     EvidenceClass,
     LicenseReuseMetadata,
-    PopulationDimension,
-    PopulationEvidenceBinding,
-    PopulationEvidenceStatus,
     PopulationIdentity,
-    ProfessionalStatus,
     ReuseStatus,
-    SeasonIdentity,
-    Sex,
     SourceDataOrigin,
-    Sport,
-    SquadLevel,
     SubgroupSeparability,
 )
 from dynamislm.population.qualification import (
@@ -130,6 +123,9 @@ def inspect_tabular_schema(
 ) -> SourceSchema:
     """Compute schema, missingness, duplicate, and structural type facts."""
 
+    actual_artifact_sha256, _ = file_digest_and_size(path)
+    if actual_artifact_sha256 != ("sha256:" + raw_artifact_sha256.removeprefix("sha256:").lower()):
+        raise ValueError("tabular source bytes do not match the verified artifact digest")
     header = tab_header(path)
     positions = {name: index for index, name in enumerate(header)}
     missing = [0 for _ in header]
@@ -229,7 +225,10 @@ def source_variable_identities(
             if isinstance(missing_information_value, tuple | list)
             else ()
         )
-        resolution_value = definition.get("resolution_status", "RESOLVED")
+        resolution_value = definition.get(
+            "resolution_status",
+            "UNRESOLVED" if variable_role is SourceVariableRole.UNRESOLVED else "RESOLVED",
+        )
         try:
             resolution_status = VariableResolutionStatus(str(resolution_value))
         except ValueError:
@@ -275,40 +274,25 @@ def source_variable_identities(
     return tuple(identities)
 
 
-def canonical_population_identity(
-    evidence_reference: RegistryReference,
-    *,
-    competition_identity: CompetitionIdentity | None = None,
-    season_identity: SeasonIdentity | None = None,
-) -> PopulationIdentity:
-    """Create the exact V2 target identity with explicit evidence bindings."""
+def build_source_variable_registry(
+    source_id: str,
+    source_version: str,
+    mapping_version: str,
+    identities: tuple[SourceVariableIdentity, ...],
+) -> SourceVariableRegistry:
+    """Store complete source-variable identities once in deterministic order."""
 
-    bindings = tuple(
-        PopulationEvidenceBinding(
-            dimension=dimension,
-            value=value,
-            evidence_reference=evidence_reference,
-            status=PopulationEvidenceStatus.ESTABLISHED,
-        )
-        for dimension, value in (
-            (PopulationDimension.SEX, Sex.MALE),
-            (PopulationDimension.AGE_CLASS, AgeClass.SENIOR),
-            (PopulationDimension.SPORT, Sport.ASSOCIATION_FOOTBALL),
-            (PopulationDimension.PROFESSIONAL_STATUS, ProfessionalStatus.PROFESSIONAL),
-            (PopulationDimension.SQUAD_LEVEL, SquadLevel.FIRST_TEAM),
-            (PopulationDimension.COMPETITION_TIER, CompetitionTier.TOP_DOMESTIC_DIVISION),
-        )
-    )
-    return PopulationIdentity(
-        sex=Sex.MALE,
-        age_class=AgeClass.SENIOR,
-        sport=Sport.ASSOCIATION_FOOTBALL,
-        professional_status=ProfessionalStatus.PROFESSIONAL,
-        squad_level=SquadLevel.FIRST_TEAM,
-        competition_tier=CompetitionTier.TOP_DOMESTIC_DIVISION,
-        competition_identity=competition_identity,
-        season=season_identity,
-        evidence_bindings=bindings,
+    return SourceVariableRegistry(
+        source_id=source_id,
+        source_version=source_version,
+        mapping_version=mapping_version,
+        entries=tuple(
+            SourceVariableRegistryEntry(
+                variable_id=stable_source_variable_id(identity),
+                identity=identity,
+            )
+            for identity in identities
+        ),
     )
 
 
@@ -364,13 +348,15 @@ def qualify_dataset(
     canonical_source: CanonicalSource,
     *,
     artifact_sha256: str | None,
-    license_captured: bool,
+    license_identity: DatasetLicenseIdentity,
     variable_identities: tuple[SourceVariableIdentity, ...],
     football_mapping_status: VariableResolutionStatus,
     evidence: tuple[str, ...],
 ) -> DatasetQualificationReceipt:
     """Apply RES-60 and row-boundary gates to one source qualification receipt."""
 
+    if not isinstance(license_identity, DatasetLicenseIdentity):
+        raise ValueError("license_identity must be a DatasetLicenseIdentity")
     population_decision = qualify_canonical_population(population)
     source_decision = qualify_canonical_source(canonical_source)
     statuses = {
@@ -398,7 +384,7 @@ def qualify_dataset(
         reasons.append("SOURCE_GATE_FAILED")
     if artifact_sha256 is None:
         reasons.append("RAW_BYTES_UNVERIFIED")
-    if not license_captured:
+    if license_identity is None:
         reasons.append("LICENSE_NOT_CAPTURED")
     if variable_status is VariableResolutionStatus.UNRESOLVED:
         reasons.append("VARIABLE_IDENTITY_UNRESOLVED")
@@ -421,9 +407,7 @@ def qualify_dataset(
             if source_decision.passed
             else EvidenceClass.REJECTED_OR_UNRESOLVED
         ),
-        actual_observed_data=True,
-        performance_science_relevance=True,
-        license_captured=license_captured,
+        license_identity=license_identity,
         variable_identity_status=variable_status,
         football_mapping_status=football_mapping_status,
         reason_codes=tuple(reasons),
@@ -435,7 +419,7 @@ def qualify_dataset(
 __all__ = [
     "TabRow",
     "build_canonical_source",
-    "canonical_population_identity",
+    "build_source_variable_registry",
     "inspect_tabular_schema",
     "iter_tab_rows",
     "qualify_dataset",

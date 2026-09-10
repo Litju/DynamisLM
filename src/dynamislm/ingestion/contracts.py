@@ -13,6 +13,7 @@ import math
 import re
 from dataclasses import dataclass
 from enum import StrEnum
+from pathlib import PurePosixPath
 
 from dynamislm.measurement.identity import (
     InstanceIdentifier,
@@ -31,7 +32,7 @@ from dynamislm.population.models import (
     EvidenceClass,
     SeasonIdentity,
 )
-from dynamislm.serialization import register_serializable_type
+from dynamislm.serialization import canonical_hash, register_serializable_type
 
 type JSONScalar = str | int | float | bool | None
 
@@ -76,8 +77,13 @@ def _text_tuple(value: object, field_name: str) -> None:
 def _relative_path(value: object, field_name: str) -> None:
     _require_text(value, field_name)
     assert isinstance(value, str)
-    if value.startswith("/") or ":\\" in value or "\\" in value:
+    if "\\" in value:
         raise ValueError(f"{field_name} must be a repository-external relative path")
+    normalized = PurePosixPath(value).as_posix()
+    if value != normalized or PurePosixPath(value).is_absolute():
+        raise ValueError(f"{field_name} must be a canonical relative POSIX path")
+    if any(part in {".", ".."} for part in PurePosixPath(value).parts):
+        raise ValueError(f"{field_name} must not contain traversal segments")
     if not value.startswith(_RELATIVE_PATH_PREFIXES):
         raise ValueError(f"{field_name} must be relative to DYNAMISLM_DATA_ROOT")
 
@@ -106,6 +112,14 @@ class PromotionStatus(StrEnum):
     PROMOTED = "PROMOTED"
     QUARANTINED = "QUARANTINED"
     REJECTED = "REJECTED"
+
+
+class FileRepresentation(StrEnum):
+    """Identity of the exact provider representation being handled."""
+
+    PROVIDER_FILE = "PROVIDER_FILE"
+    ARCHIVAL_TAB = "ARCHIVAL_TAB"
+    SAVED_ORIGINAL = "SAVED_ORIGINAL"
 
 
 @register_serializable_type
@@ -162,6 +176,69 @@ class DatasetVersionIdentity:
 
 @register_serializable_type
 @dataclass(frozen=True, slots=True)
+class RegisteredDatasetFileIdentity:
+    """Registry-anchored file identity; live provider state cannot populate it."""
+
+    source_id: str
+    source_version: str
+    representation: FileRepresentation
+    filename: str
+    media_type: str
+    expected_sha256: str
+    expected_byte_size: int
+    provider_file_id: str | int | None = None
+    file_persistent_identifier: str | None = None
+    provider_hash: str | None = None
+    provider_hash_algorithm: str | None = None
+    provider_declared_byte_size: int | None = None
+    provider_hash_representation: FileRepresentation | None = None
+
+    def __post_init__(self) -> None:
+        for field_name, value in (
+            ("source_id", self.source_id),
+            ("source_version", self.source_version),
+            ("filename", self.filename),
+            ("media_type", self.media_type),
+        ):
+            _require_text(value, field_name)
+        _require_enum(self.representation, FileRepresentation, "representation")
+        object.__setattr__(
+            self,
+            "expected_sha256",
+            _digest(self.expected_sha256, "expected_sha256"),
+        )
+        _nonnegative_int(self.expected_byte_size, "expected_byte_size")
+        if self.provider_file_id is not None:
+            if isinstance(self.provider_file_id, bool) or not isinstance(
+                self.provider_file_id, str | int
+            ):
+                raise ValueError("provider_file_id must be a string, integer, or None")
+            if isinstance(self.provider_file_id, str):
+                _require_text(self.provider_file_id, "provider_file_id")
+        if self.file_persistent_identifier is not None:
+            _require_text(self.file_persistent_identifier, "file_persistent_identifier")
+        if self.provider_hash is not None:
+            _require_text(self.provider_hash, "provider_hash")
+            if self.provider_hash_algorithm is None:
+                raise ValueError("provider_hash_algorithm is required with provider_hash")
+        if self.provider_hash_algorithm is not None:
+            _require_text(self.provider_hash_algorithm, "provider_hash_algorithm")
+        if self.provider_declared_byte_size is not None:
+            _nonnegative_int(self.provider_declared_byte_size, "provider_declared_byte_size")
+        if self.provider_hash_representation is not None:
+            _require_enum(
+                self.provider_hash_representation,
+                FileRepresentation,
+                "provider_hash_representation",
+            )
+
+    @property
+    def file_id(self) -> str | int | None:
+        return self.provider_file_id
+
+
+@register_serializable_type
+@dataclass(frozen=True, slots=True)
 class DatasetLicenseIdentity:
     """Small machine-readable license contract for currently supported licenses."""
 
@@ -173,8 +250,21 @@ class DatasetLicenseIdentity:
     notes: str | None = None
 
     def __post_init__(self) -> None:
+        supported = {
+            "CC-BY-4.0": (
+                "https://creativecommons.org/licenses/by/4.0/",
+                True,
+                False,
+            ),
+            "CC-BY-NC-4.0": (
+                "https://creativecommons.org/licenses/by-nc/4.0/",
+                True,
+                True,
+            ),
+        }
         _require_text(self.spdx_expression, "spdx_expression")
-        if self.spdx_expression not in {"CC-BY-4.0", "CC-BY-NC-4.0"}:
+        expected = supported.get(self.spdx_expression)
+        if expected is None:
             raise ValueError("unsupported license SPDX expression")
         _require_text(self.canonical_uri, "canonical_uri")
         _require_text(self.assertion_source_uri, "assertion_source_uri")
@@ -182,9 +272,13 @@ class DatasetLicenseIdentity:
             raise ValueError("attribution_required must be a boolean")
         if not isinstance(self.noncommercial_restriction, bool):
             raise ValueError("noncommercial_restriction must be a boolean")
-        expected_noncommercial = self.spdx_expression == "CC-BY-NC-4.0"
-        if self.noncommercial_restriction is not expected_noncommercial:
+        if (
+            self.attribution_required is not expected[1]
+            or self.noncommercial_restriction is not expected[2]
+        ):
             raise ValueError("license restriction flags do not match SPDX expression")
+        if self.canonical_uri != expected[0]:
+            raise ValueError("license canonical URI does not match SPDX expression")
         if self.notes is not None:
             _require_text(self.notes, "notes")
 
@@ -221,6 +315,8 @@ class ArtifactAcquisitionReceipt:
     last_modified: str | None = None
     metadata_snapshot_sha256: str | None = None
     storage_relative_path: str = ""
+    representation: FileRepresentation = FileRepresentation.PROVIDER_FILE
+    provider_file_id: str | int | None = None
 
     def __post_init__(self) -> None:
         for field_name, value in (
@@ -246,6 +342,14 @@ class ArtifactAcquisitionReceipt:
             _require_text(self.etag, "etag")
         if self.last_modified is not None:
             _require_text(self.last_modified, "last_modified")
+        _require_enum(self.representation, FileRepresentation, "representation")
+        if self.provider_file_id is not None:
+            if isinstance(self.provider_file_id, bool) or not isinstance(
+                self.provider_file_id, str | int
+            ):
+                raise ValueError("provider_file_id must be a string, integer, or None")
+            if isinstance(self.provider_file_id, str):
+                _require_text(self.provider_file_id, "provider_file_id")
         object.__setattr__(
             self,
             "metadata_snapshot_sha256",
@@ -270,12 +374,15 @@ class VerifiedRawArtifact:
     media_type: str
     relative_path: str
     acquisition_receipt: ArtifactAcquisitionReceipt
+    representation: FileRepresentation = FileRepresentation.PROVIDER_FILE
 
     def __post_init__(self) -> None:
         _require_instance(self.artifact_id, InstanceIdentifier, "artifact_id")
         if self.artifact_id.instance_type != "artifact":
             raise ValueError("artifact_id must identify an artifact")
         object.__setattr__(self, "sha256", _digest(self.sha256, "sha256"))
+        if self.artifact_id.value != self.sha256:
+            raise ValueError("artifact_id must be content-derived from sha256")
         _nonnegative_int(self.byte_size, "byte_size")
         _require_text(self.media_type, "media_type")
         _relative_path(self.relative_path, "relative_path")
@@ -284,6 +391,9 @@ class VerifiedRawArtifact:
             ArtifactAcquisitionReceipt,
             "acquisition_receipt",
         )
+        _require_enum(self.representation, FileRepresentation, "representation")
+        if self.acquisition_receipt.representation is not self.representation:
+            raise ValueError("artifact representation must match acquisition receipt")
         if self.acquisition_receipt.sha256 != self.sha256:
             raise ValueError("artifact digest must match acquisition receipt")
         if self.acquisition_receipt.byte_size != self.byte_size:
@@ -297,6 +407,63 @@ class VerifiedRawArtifact:
     @property
     def raw_artifact_sha256(self) -> str:
         return self.sha256
+
+
+@register_serializable_type
+@dataclass(frozen=True, slots=True)
+class SourceVersionVerificationReceipt:
+    """Derived proof that one verified artifact matches its registered file."""
+
+    registered_file_identity: RegisteredDatasetFileIdentity
+    verified_artifact: VerifiedRawArtifact
+
+    def __post_init__(self) -> None:
+        _require_instance(
+            self.registered_file_identity,
+            RegisteredDatasetFileIdentity,
+            "registered_file_identity",
+        )
+        _require_instance(self.verified_artifact, VerifiedRawArtifact, "verified_artifact")
+        registered = self.registered_file_identity
+        artifact = self.verified_artifact
+        receipt = artifact.acquisition_receipt
+        if receipt.source_id != registered.source_id:
+            raise ValueError("registered source ID does not match verified artifact")
+        if receipt.source_version != registered.source_version:
+            raise ValueError("registered source version does not match verified artifact")
+        if artifact.representation is not registered.representation:
+            raise ValueError("registered representation does not match verified artifact")
+        if artifact.sha256 != registered.expected_sha256:
+            raise ValueError("verified artifact SHA-256 does not match registered identity")
+        if artifact.byte_size != registered.expected_byte_size:
+            raise ValueError("verified artifact byte size does not match registered identity")
+        if artifact.acquisition_receipt.original_filename != registered.filename:
+            raise ValueError("verified filename does not match registered identity")
+        if artifact.acquisition_receipt.media_type != registered.media_type:
+            raise ValueError("verified media type does not match registered identity")
+        if (
+            registered.provider_file_id is not None
+            and receipt.provider_file_id != registered.provider_file_id
+        ):
+            raise ValueError("verified provider file ID does not match registered identity")
+
+    @property
+    def verified(self) -> bool:
+        """Compatibility/readability property derived from successful construction."""
+
+        return True
+
+    @property
+    def source_id(self) -> str:
+        return self.registered_file_identity.source_id
+
+    @property
+    def source_version(self) -> str:
+        return self.registered_file_identity.source_version
+
+    @property
+    def representation(self) -> FileRepresentation:
+        return self.registered_file_identity.representation
 
 
 @register_serializable_type
@@ -506,6 +673,67 @@ class SourceVariableIdentity:
             raise ValueError("an unresolved source variable cannot have RESOLVED status")
 
 
+def stable_source_variable_id(identity: SourceVariableIdentity) -> str:
+    """Return the stable content-derived ID used by compact canonical rows."""
+
+    _require_instance(identity, SourceVariableIdentity, "identity")
+    return f"source-variable:{canonical_hash(identity).removeprefix('sha256:')}"
+
+
+@register_serializable_type
+@dataclass(frozen=True, slots=True)
+class SourceVariableRegistryEntry:
+    """One complete source-variable identity stored outside repeated row payloads."""
+
+    variable_id: str
+    identity: SourceVariableIdentity
+
+    def __post_init__(self) -> None:
+        _require_text(self.variable_id, "variable_id")
+        _require_instance(self.identity, SourceVariableIdentity, "identity")
+        expected = stable_source_variable_id(self.identity)
+        if self.variable_id != expected:
+            raise ValueError("variable_id must be content-derived from identity")
+
+
+@register_serializable_type
+@dataclass(frozen=True, slots=True)
+class SourceVariableRegistry:
+    """Deterministic ordered registry of complete source-variable identities."""
+
+    source_id: str
+    source_version: str
+    mapping_version: str
+    entries: tuple[SourceVariableRegistryEntry, ...]
+
+    def __post_init__(self) -> None:
+        _require_text(self.source_id, "source_id")
+        _require_text(self.source_version, "source_version")
+        _require_text(self.mapping_version, "mapping_version")
+        _require_tuple_items(self.entries, SourceVariableRegistryEntry, "entries")
+        ids = tuple(entry.variable_id for entry in self.entries)
+        if len(set(ids)) != len(ids):
+            raise ValueError("source variable registry IDs must be unique")
+        identities = tuple(entry.identity.original_column_name for entry in self.entries)
+        if len(set(identities)) != len(identities):
+            raise ValueError("source variable registry columns must be unique")
+
+    @property
+    def sha256(self) -> str:
+        return canonical_hash(self)
+
+    @property
+    def variable_ids(self) -> tuple[str, ...]:
+        return tuple(entry.variable_id for entry in self.entries)
+
+    def entry_for(self, identity: SourceVariableIdentity) -> SourceVariableRegistryEntry:
+        variable_id = stable_source_variable_id(identity)
+        for entry in self.entries:
+            if entry.variable_id == variable_id and entry.identity == identity:
+                return entry
+        raise ValueError("source variable is not present in the registry")
+
+
 @register_serializable_type
 @dataclass(frozen=True, slots=True)
 class CanonicalFootballContext:
@@ -587,9 +815,7 @@ class DatasetQualificationReceipt:
     source_decision: CanonicalSourceDecision | None = None
     artifact_sha256: str | None = None
     evidence_class: EvidenceClass | None = None
-    actual_observed_data: bool = False
-    performance_science_relevance: bool = False
-    license_captured: bool = False
+    license_identity: DatasetLicenseIdentity | None = None
     variable_identity_status: VariableResolutionStatus = VariableResolutionStatus.UNRESOLVED
     football_mapping_status: VariableResolutionStatus = VariableResolutionStatus.UNRESOLVED
     reason_codes: tuple[str, ...] = ()
@@ -611,12 +837,8 @@ class DatasetQualificationReceipt:
         )
         if self.evidence_class is not None:
             _require_enum(self.evidence_class, EvidenceClass, "evidence_class")
-        if not isinstance(self.actual_observed_data, bool):
-            raise ValueError("actual_observed_data must be a boolean")
-        if not isinstance(self.performance_science_relevance, bool):
-            raise ValueError("performance_science_relevance must be a boolean")
-        if not isinstance(self.license_captured, bool):
-            raise ValueError("license_captured must be a boolean")
+        if self.license_identity is not None:
+            _require_instance(self.license_identity, DatasetLicenseIdentity, "license_identity")
         _require_enum(
             self.variable_identity_status,
             VariableResolutionStatus,
@@ -630,6 +852,25 @@ class DatasetQualificationReceipt:
         _text_tuple(self.reason_codes, "reason_codes")
         _text_tuple(self.missing_information, "missing_information")
         _text_tuple(self.evidence, "evidence")
+
+    @property
+    def actual_observed_data(self) -> bool:
+        return bool(
+            self.source_decision is not None
+            and any(
+                requirement.requirement.value == "ACTUAL_OBSERVED_DATA"
+                and requirement.status.value == "PASS"
+                for requirement in self.source_decision.requirements
+            )
+        )
+
+    @property
+    def performance_science_relevance(self) -> bool:
+        return self.actual_observed_data and self.source_decision is not None
+
+    @property
+    def license_captured(self) -> bool:
+        return self.license_identity is not None
 
 
 @register_serializable_type
@@ -777,6 +1018,8 @@ class CanonicalEmpiricalArtifactReceipt:
     mapping_version: str
     relative_path: str
     metadata_snapshot_sha256: str | None = None
+    variable_registry_sha256: str | None = None
+    variable_registry_relative_path: str | None = None
 
     def __post_init__(self) -> None:
         _require_text(self.source_id, "source_id")
@@ -797,57 +1040,275 @@ class CanonicalEmpiricalArtifactReceipt:
             "metadata_snapshot_sha256",
             _optional_digest(self.metadata_snapshot_sha256, "metadata_snapshot_sha256"),
         )
+        object.__setattr__(
+            self,
+            "variable_registry_sha256",
+            _optional_digest(self.variable_registry_sha256, "variable_registry_sha256"),
+        )
+        if self.variable_registry_relative_path is not None:
+            _relative_path(self.variable_registry_relative_path, "variable_registry_relative_path")
+
+
+RES63_RUNTIME_AUTHORITY_ID = "dynamislm:res63-runtime-authority@1.0.0"
+
+
+@register_serializable_type
+@dataclass(frozen=True, slots=True)
+class RuntimeAuthorityIdentity:
+    """Fixed internal RES-63 runtime authority identity."""
+
+    authority_id: str = RES63_RUNTIME_AUTHORITY_ID
+
+    def __post_init__(self) -> None:
+        _require_text(self.authority_id, "authority_id")
+        if self.authority_id != RES63_RUNTIME_AUTHORITY_ID:
+            raise ValueError("runtime authority identity is not the fixed RES-63 authority")
+
+
+@register_serializable_type
+@dataclass(frozen=True, slots=True)
+class CanonicalValidationReceipt:
+    """Derived validation evidence for the exact compact canonical stream."""
+
+    source_id: str
+    source_version: str
+    raw_source_sha256: str
+    mapping_version: str
+    canonical_artifact_sha256: str
+    canonical_record_count: int
+    variable_registry_sha256: str
+    included_variable_ids: tuple[str, ...]
+    record_lineage_digest: str
+    football_context_digest: str
+
+    def __post_init__(self) -> None:
+        for field_name, value in (
+            ("source_id", self.source_id),
+            ("source_version", self.source_version),
+            ("mapping_version", self.mapping_version),
+        ):
+            _require_text(value, field_name)
+        object.__setattr__(
+            self,
+            "raw_source_sha256",
+            _digest(self.raw_source_sha256, "raw_source_sha256"),
+        )
+        object.__setattr__(
+            self,
+            "canonical_artifact_sha256",
+            _digest(self.canonical_artifact_sha256, "canonical_artifact_sha256"),
+        )
+        _nonnegative_int(self.canonical_record_count, "canonical_record_count")
+        object.__setattr__(
+            self,
+            "variable_registry_sha256",
+            _digest(self.variable_registry_sha256, "variable_registry_sha256"),
+        )
+        _text_tuple(self.included_variable_ids, "included_variable_ids")
+        object.__setattr__(
+            self,
+            "record_lineage_digest",
+            _digest(self.record_lineage_digest, "record_lineage_digest"),
+        )
+        object.__setattr__(
+            self,
+            "football_context_digest",
+            _digest(self.football_context_digest, "football_context_digest"),
+        )
+
+
+@register_serializable_type
+@dataclass(frozen=True, slots=True)
+class PromotionEvidence:
+    """Typed evidence tree from which every promotion gate is derived."""
+
+    qualification: DatasetQualificationReceipt
+    registered_file_identity: RegisteredDatasetFileIdentity
+    verified_raw_artifact: VerifiedRawArtifact
+    source_version_verification: SourceVersionVerificationReceipt
+    license_identity: DatasetLicenseIdentity
+    variable_registry: SourceVariableRegistry
+    canonical_validation: CanonicalValidationReceipt
+    runtime_authority: RuntimeAuthorityIdentity
+
+    def __post_init__(self) -> None:
+        _require_instance(self.qualification, DatasetQualificationReceipt, "qualification")
+        _require_instance(
+            self.registered_file_identity,
+            RegisteredDatasetFileIdentity,
+            "registered_file_identity",
+        )
+        _require_instance(self.verified_raw_artifact, VerifiedRawArtifact, "verified_raw_artifact")
+        _require_instance(
+            self.source_version_verification,
+            SourceVersionVerificationReceipt,
+            "source_version_verification",
+        )
+        _require_instance(self.license_identity, DatasetLicenseIdentity, "license_identity")
+        _require_instance(self.variable_registry, SourceVariableRegistry, "variable_registry")
+        _require_instance(
+            self.canonical_validation,
+            CanonicalValidationReceipt,
+            "canonical_validation",
+        )
+        _require_instance(self.runtime_authority, RuntimeAuthorityIdentity, "runtime_authority")
+        registered = self.registered_file_identity
+        artifact = self.verified_raw_artifact
+        receipt = self.source_version_verification
+        if receipt.registered_file_identity != registered or receipt.verified_artifact != artifact:
+            raise ValueError("promotion evidence contains inconsistent source-version evidence")
+        if self.qualification.source_id != registered.source_id:
+            raise ValueError("promotion qualification source does not match registered identity")
+        if self.qualification.source_version != registered.source_version:
+            raise ValueError("promotion qualification version does not match registered identity")
+        validation = self.canonical_validation
+        if validation.source_id != registered.source_id:
+            raise ValueError("canonical validation source does not match registered identity")
+        if validation.source_version != registered.source_version:
+            raise ValueError("canonical validation version does not match registered identity")
+        if validation.raw_source_sha256 != registered.expected_sha256:
+            raise ValueError("canonical validation raw digest does not match registered identity")
+        if validation.variable_registry_sha256 != self.variable_registry.sha256:
+            raise ValueError(
+                "canonical validation variable registry digest does not match evidence"
+            )
+        if self.variable_registry.source_id != registered.source_id:
+            raise ValueError("variable registry source does not match registered identity")
+        if self.variable_registry.source_version != registered.source_version:
+            raise ValueError("variable registry version does not match registered identity")
+        if self.qualification.license_identity != self.license_identity:
+            raise ValueError("promotion license evidence does not match qualification")
+
+
+def _promotion_gate_results(evidence: PromotionEvidence) -> tuple[tuple[str, bool], ...]:
+    qualification = evidence.qualification
+    source_decision = qualification.source_decision
+    population_decision = qualification.population_decision
+    validation = evidence.canonical_validation
+    registry_ids = set(evidence.variable_registry.variable_ids)
+    included_ids = set(validation.included_variable_ids)
+    registry_resolved = all(
+        entry.variable_id in included_ids
+        and entry.identity.resolution_status
+        not in (VariableResolutionStatus.UNRESOLVED, VariableResolutionStatus.QUARANTINED)
+        for entry in evidence.variable_registry.entries
+        if entry.variable_id in included_ids
+    )
+    source_qualified = bool(
+        qualification.status is DatasetQualificationStatus.QUALIFIED
+        and source_decision is not None
+        and source_decision.passed
+        and qualification.actual_observed_data
+    )
+    population_qualified = bool(population_decision is not None and population_decision.passed)
+    raw_bytes_verified = bool(
+        evidence.verified_raw_artifact.sha256 == evidence.registered_file_identity.expected_sha256
+        and evidence.verified_raw_artifact.byte_size
+        == evidence.registered_file_identity.expected_byte_size
+    )
+    source_version_verified = evidence.source_version_verification.verified
+    license_captured = bool(
+        qualification.license_identity == evidence.license_identity
+        and evidence.license_identity.spdx_expression in {"CC-BY-4.0", "CC-BY-NC-4.0"}
+    )
+    variable_identity_resolved = bool(
+        qualification.variable_identity_status is VariableResolutionStatus.RESOLVED
+        and included_ids <= registry_ids
+        and registry_resolved
+    )
+    football_world_mapping_resolved = bool(validation.football_context_digest)
+    lineage_complete = bool(
+        validation.record_lineage_digest and validation.canonical_record_count > 0
+    )
+    runtime_integrity = evidence.runtime_authority.authority_id == RES63_RUNTIME_AUTHORITY_ID
+    return (
+        ("RUNTIME_INTEGRITY", runtime_integrity),
+        ("SOURCE_QUALIFIED", source_qualified),
+        ("POPULATION_QUALIFIED", population_qualified),
+        ("RAW_BYTES_VERIFIED", raw_bytes_verified),
+        ("SOURCE_VERSION_VERIFIED", source_version_verified),
+        ("LICENSE_CAPTURED", license_captured),
+        ("VARIABLE_IDENTITY_RESOLVED", variable_identity_resolved),
+        ("FOOTBALL_WORLD_MAPPING_RESOLVED", football_world_mapping_resolved),
+        ("LINEAGE_COMPLETE", lineage_complete),
+    )
+
+
+def _promotion_decision_material(evidence: PromotionEvidence) -> dict[str, object]:
+    """Select stable evidence fields; acquisition timestamps are not decision authority."""
+
+    registered = evidence.registered_file_identity
+    artifact = evidence.verified_raw_artifact
+    return {
+        "qualification": evidence.qualification,
+        "registered_file_identity": registered,
+        "verified_raw_artifact": {
+            "sha256": artifact.sha256,
+            "byte_size": artifact.byte_size,
+            "media_type": artifact.media_type,
+            "relative_path": artifact.relative_path,
+            "representation": artifact.representation,
+        },
+        "source_version_verification": {
+            "source_id": evidence.source_version_verification.source_id,
+            "source_version": evidence.source_version_verification.source_version,
+            "representation": evidence.source_version_verification.representation,
+            "expected_sha256": registered.expected_sha256,
+            "expected_byte_size": registered.expected_byte_size,
+            "provider_file_id": registered.provider_file_id,
+        },
+        "license_identity": evidence.license_identity,
+        "variable_registry": evidence.variable_registry,
+        "canonical_validation": evidence.canonical_validation,
+        "runtime_authority": evidence.runtime_authority,
+    }
+
+
+def promotion_gate_results(evidence: PromotionEvidence) -> tuple[tuple[str, bool], ...]:
+    """Derive promotion gates from typed evidence; no caller truth is accepted."""
+
+    _require_instance(evidence, PromotionEvidence, "evidence")
+    return _promotion_gate_results(evidence)
 
 
 @register_serializable_type
 @dataclass(frozen=True, slots=True)
 class PromotionDecision:
-    """The sole deterministic conjunctive promotion authority."""
+    """The sole promotion authority, self-validating from its evidence tree."""
 
     decision_id: ScientificIdentifier
     status: PromotionStatus
-    can_promote: bool
-    runtime_integrity_pass: bool
-    source_qualified: bool
-    population_qualified: bool
-    raw_bytes_verified: bool
-    source_version_verified: bool
-    license_captured: bool
-    variable_identity_resolved: bool
-    football_world_mapping_resolved: bool
-    lineage_complete: bool
-    reason_codes: tuple[str, ...] = ()
+    reason_codes: tuple[str, ...]
+    evidence: PromotionEvidence
 
     def __post_init__(self) -> None:
         _require_instance(self.decision_id, ScientificIdentifier, "decision_id")
         _require_enum(self.status, PromotionStatus, "status")
-        flags = (
-            self.runtime_integrity_pass,
-            self.source_qualified,
-            self.population_qualified,
-            self.raw_bytes_verified,
-            self.source_version_verified,
-            self.license_captured,
-            self.variable_identity_resolved,
-            self.football_world_mapping_resolved,
-            self.lineage_complete,
-        )
-        if any(not isinstance(flag, bool) for flag in flags) or not isinstance(
-            self.can_promote,
-            bool,
-        ):
-            raise ValueError("promotion gates must be booleans")
-        expected = all(flags)
-        if self.can_promote is not expected:
-            raise ValueError("can_promote must equal the deterministic gate conjunction")
-        expected_status = PromotionStatus.PROMOTED if expected else self.status
-        if expected and self.status is not PromotionStatus.PROMOTED:
-            raise ValueError("a passing promotion decision must be PROMOTED")
-        if not expected and self.status is PromotionStatus.PROMOTED:
-            raise ValueError("a failing promotion decision cannot be PROMOTED")
-        if expected_status is PromotionStatus.PROMOTED and self.reason_codes:
-            raise ValueError("a promoted decision cannot carry failure reason codes")
+        _require_instance(self.evidence, PromotionEvidence, "evidence")
         _text_tuple(self.reason_codes, "reason_codes")
+        gates = _promotion_gate_results(self.evidence)
+        passed = all(value for _, value in gates)
+        expected_status = PromotionStatus.PROMOTED if passed else PromotionStatus.QUARANTINED
+        expected_reasons = tuple(f"{name}_FAILED" for name, value in gates if not value)
+        if self.status is not expected_status:
+            raise ValueError("promotion status does not match derived evidence")
+        if self.reason_codes != expected_reasons:
+            raise ValueError("promotion reason codes do not match derived evidence")
+        decision_key = canonical_hash(
+            {"evidence": _promotion_decision_material(self.evidence), "gates": gates}
+        ).removeprefix("sha256:")
+        expected_id = ScientificIdentifier(
+            "dynamislm",
+            "promotion-decision",
+            decision_key,
+            "1.1.0",
+        )
+        if self.decision_id != expected_id:
+            raise ValueError("promotion decision ID does not match derived evidence")
+
+    @property
+    def can_promote(self) -> bool:
+        return self.status is PromotionStatus.PROMOTED
 
     @property
     def promoted(self) -> bool:
@@ -891,30 +1352,40 @@ CanonicalEmpiricalContext = CanonicalFootballContext
 
 
 __all__ = [
+    "RES63_RUNTIME_AUTHORITY_ID",
     "ArtifactAcquisitionReceipt",
     "CanonicalEmpiricalArtifactReceipt",
     "CanonicalEmpiricalContext",
     "CanonicalEmpiricalRecord",
     "CanonicalFootballContext",
+    "CanonicalValidationReceipt",
     "DatasetLicense",
     "DatasetLicenseIdentity",
     "DatasetQualificationReceipt",
     "DatasetQualificationStatus",
     "DatasetSourceIdentity",
     "DatasetVersionIdentity",
+    "FileRepresentation",
     "JSONScalar",
     "PromotionDecision",
+    "PromotionEvidence",
     "PromotionStatus",
     "QuarantineReceipt",
     "RawRowIdentity",
+    "RegisteredDatasetFileIdentity",
+    "RuntimeAuthorityIdentity",
     "SourceMetadataClaim",
     "SourceMetadataConflict",
     "SourceSchema",
     "SourceVariableIdentity",
+    "SourceVariableRegistry",
+    "SourceVariableRegistryEntry",
     "SourceVariableRole",
     "SourceVersionConflict",
+    "SourceVersionVerificationReceipt",
     "VariableResolutionStatus",
     "VerifiedRawArtifact",
     "WorkbookSchema",
     "WorkbookSheetSchema",
+    "stable_source_variable_id",
 ]

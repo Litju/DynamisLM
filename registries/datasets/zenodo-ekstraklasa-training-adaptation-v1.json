@@ -21,6 +21,7 @@
   "files": [
     {
       "file_id": "b725d387-0318-4032-ad26-a8956a5118d5",
+      "representation": "PROVIDER_FILE",
       "filename": "StudyPackage_Training_Adaptation.zip",
       "media_type": "application/zip",
       "download_url": "https://zenodo.org/api/records/15205417/files/StudyPackage_Training_Adaptation.zip/content",

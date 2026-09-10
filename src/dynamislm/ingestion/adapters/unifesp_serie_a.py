@@ -5,6 +5,7 @@ from __future__ import annotations
 import datetime as datetime_module
 import json
 import urllib.request
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
@@ -12,25 +13,35 @@ from dynamislm.ingestion.acquisition import acquire_url, capture_metadata_snapsh
 from dynamislm.ingestion.contracts import (
     CanonicalEmpiricalRecord,
     CanonicalFootballContext,
-    DatasetLicenseIdentity,
     DatasetSourceIdentity,
     DatasetVersionIdentity,
+    FileRepresentation,
     RawRowIdentity,
+    RegisteredDatasetFileIdentity,
     SourceMetadataClaim,
     SourceMetadataConflict,
     SourceSchema,
     SourceVariableIdentity,
+    SourceVariableRegistry,
     SourceVariableRole,
     VariableResolutionStatus,
 )
 from dynamislm.ingestion.promotion import build_raw_to_canonical_lineage
 from dynamislm.ingestion.qualification import (
     build_canonical_source,
-    canonical_population_identity,
+    build_source_variable_registry,
     inspect_tabular_schema,
     iter_tab_rows,
     source_variable_identities,
     tab_header,
+)
+from dynamislm.ingestion.registry import (
+    dataset_license_identity,
+    dataset_source_identity,
+    dataset_version_identity,
+    load_dataset_registry,
+    registered_dataset_file_identity,
+    verify_live_provider_file_observation,
 )
 from dynamislm.ingestion.storage import file_digest_and_size
 from dynamislm.measurement.identity import (
@@ -39,9 +50,19 @@ from dynamislm.measurement.identity import (
     ScientificIdentifier,
 )
 from dynamislm.population.models import (
+    AgeClass,
     CanonicalPopulationDecision,
     CanonicalSourceDecision,
     CompetitionIdentity,
+    CompetitionTier,
+    PopulationDimension,
+    PopulationEvidenceBinding,
+    PopulationIdentity,
+    ProfessionalStatus,
+    SeasonIdentity,
+    Sex,
+    Sport,
+    SquadLevel,
 )
 from dynamislm.population.qualification import (
     qualify_canonical_population,
@@ -49,45 +70,34 @@ from dynamislm.population.qualification import (
 )
 
 SOURCE_A_ID = "unifesp-brazil-serie-a-v1"
-SOURCE_A_MAPPING_VERSION = "unifesp-serie-a-mapping@1.0.0"
+SOURCE_A_MAPPING_VERSION = "unifesp-serie-a-mapping@1.1.0"
 SOURCE_A_PROVIDER = "UNIFESP Domus Dados / Dataverse"
 SOURCE_A_LANDING_PAGE = (
     "https://domusdados.unifesp.br/dataset.xhtml?persistentId=hdl%3A20.500.12682%2Frdp%2FGMXME8"
 )
 SOURCE_A_METADATA_URL = (
-    "https://domusdados.unifesp.br/api/datasets/export?exporter=dataverse_json&"
-    "persistentId=hdl%3A20.500.12682%2Frdp%2FGMXME8"
+    "https://domusdados.unifesp.br/api/datasets/:persistentId/versions/1.0?"
+    "persistentId=hdl%3A20.500.12682%2Frdp%2FGMXME8&excludeFiles=false"
 )
+SOURCE_A_COLLECTION_DESCRIPTION_URI = "https://domusdados.unifesp.br/dataverse/eappefp"
 SOURCE_A_FILE_NAME = (
     "Physical performance data. Data on contextual factors related to physical performance..tab"
 )
-SOURCE_A_EXPECTED_SHA256 = "sha256:f00cf3f32caa76c392e608630d3f2f30a2789c25446702678f7a268a622bf8e5"
-SOURCE_A_EXPECTED_BYTE_SIZE = 1029382
+SOURCE_A_REGISTRY_DOCUMENT = load_dataset_registry(SOURCE_A_ID)
+SOURCE_A_REGISTERED_FILE: RegisteredDatasetFileIdentity = registered_dataset_file_identity(
+    SOURCE_A_REGISTRY_DOCUMENT,
+    representation=FileRepresentation.ARCHIVAL_TAB,
+)
+SOURCE_A_EXPECTED_SHA256 = SOURCE_A_REGISTERED_FILE.expected_sha256
+SOURCE_A_EXPECTED_BYTE_SIZE = SOURCE_A_REGISTERED_FILE.expected_byte_size
 
-SOURCE_A_SOURCE = DatasetSourceIdentity(
-    source_id=SOURCE_A_ID,
-    provider=SOURCE_A_PROVIDER,
-    title="Raw data on physical performance of elite athletes in soccer matches",
-    landing_page_uri=SOURCE_A_LANDING_PAGE,
-    persistent_identifier="hdl:20.500.12682/rdp/GMXME8",
-)
-SOURCE_A_VERSION = DatasetVersionIdentity(
-    repository_version="1.0",
-    version_specific_persistent_identifier="hdl:20.500.12682/rdp/GMXME8/DO2C67",
-    published_at=datetime_module.date(2025, 7, 7),
-)
+SOURCE_A_SOURCE = dataset_source_identity(SOURCE_A_REGISTRY_DOCUMENT)
+SOURCE_A_VERSION = dataset_version_identity(SOURCE_A_REGISTRY_DOCUMENT)
 SOURCE_A_COMPETITION = CompetitionIdentity(
     identifier=ScientificIdentifier("dynamislm", "competition", "brazil-serie-a", "1.0.0"),
     display_label="Brazilian Serie A",
 )
-SOURCE_A_LICENSE = DatasetLicenseIdentity(
-    spdx_expression="CC-BY-NC-4.0",
-    canonical_uri="https://creativecommons.org/licenses/by-nc/4.0/",
-    assertion_source_uri=SOURCE_A_LANDING_PAGE,
-    attribution_required=True,
-    noncommercial_restriction=True,
-    notes="Official Domus Dados metadata identifies CC BY-NC 4.0.",
-)
+SOURCE_A_LICENSE = dataset_license_identity(SOURCE_A_REGISTRY_DOCUMENT)
 
 
 def source_a_variable_definitions() -> dict[str, dict[str, object]]:
@@ -238,8 +248,19 @@ def source_a_variable_identities(
     )
 
 
+def source_a_variable_registry(
+    columns: tuple[str, ...],
+) -> SourceVariableRegistry:
+    return build_source_variable_registry(
+        SOURCE_A_ID,
+        SOURCE_A_VERSION.repository_version,
+        SOURCE_A_MAPPING_VERSION,
+        source_a_variable_identities(columns),
+    )
+
+
 def fetch_source_a_metadata() -> dict[str, Any]:
-    """Fetch the official Dataverse JSON export for dataset/file identity."""
+    """Fetch the official Dataverse metadata for the explicitly pinned version 1.0."""
 
     request = urllib.request.Request(
         SOURCE_A_METADATA_URL,
@@ -253,17 +274,40 @@ def fetch_source_a_metadata() -> dict[str, Any]:
 
 
 def source_a_file_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
-    """Extract the one published archival tab file from official metadata."""
+    """Extract and verify the registered file from Dataverse version 1.0 metadata."""
 
-    dataset_version = metadata.get("datasetVersion")
+    data = metadata.get("data")
+    if isinstance(data, dict) and isinstance(data.get("datasetVersion"), dict):
+        dataset_version = data["datasetVersion"]
+    elif isinstance(data, dict) and isinstance(data.get("files"), list):
+        dataset_version = data
+    else:
+        dataset_version = metadata.get("datasetVersion")
     if not isinstance(dataset_version, dict):
         raise ValueError("Source A metadata lacks datasetVersion")
+    if dataset_version.get("datasetPersistentId") != SOURCE_A_SOURCE.persistent_identifier:
+        raise ValueError("Source A Dataverse metadata identifies the wrong dataset")
+    version_number = dataset_version.get("versionNumber")
+    version_minor_number = dataset_version.get("versionMinorNumber")
+    returned_version = (
+        f"{version_number}.{version_minor_number}"
+        if version_minor_number is not None
+        else str(version_number)
+    )
+    if returned_version not in {"1", "1.0"}:
+        raise ValueError("Source A Dataverse metadata is not version 1.0")
     files = dataset_version.get("files")
     if not isinstance(files, list) or len(files) != 1 or not isinstance(files[0], dict):
         raise ValueError("Source A metadata must expose exactly one published file")
     data_file = files[0].get("dataFile")
     if not isinstance(data_file, dict):
         raise ValueError("Source A metadata lacks dataFile identity")
+    if data_file.get("id") != SOURCE_A_REGISTERED_FILE.provider_file_id:
+        raise ValueError("Source A Dataverse version 1.0 lacks the registered file ID")
+    if data_file.get("persistentId") != SOURCE_A_REGISTERED_FILE.file_persistent_identifier:
+        raise ValueError("Source A Dataverse version 1.0 lacks the registered file PID")
+    if data_file.get("filename") != SOURCE_A_REGISTERED_FILE.filename:
+        raise ValueError("Source A Dataverse version 1.0 returned the wrong file")
     return data_file
 
 
@@ -290,15 +334,24 @@ def acquire_source_a(
         raise ValueError("Source A metadata lacks numeric data-file ID")
     if not isinstance(provider_md5, str) or not provider_md5.strip():
         raise ValueError("Source A metadata lacks provider MD5")
+    verify_live_provider_file_observation(
+        SOURCE_A_REGISTERED_FILE,
+        provider_hash=provider_md5,
+        provider_hash_algorithm="md5",
+        provider_hash_representation=FileRepresentation.SAVED_ORIGINAL,
+        provider_file_id=file_id,
+    )
     download_url = f"https://domusdados.unifesp.br/api/access/datafile/{file_id}"
     return acquire_url(
         SOURCE_A_SOURCE,
         SOURCE_A_VERSION,
         download_url,
-        expected_sha256=SOURCE_A_EXPECTED_SHA256,
-        expected_byte_size=SOURCE_A_EXPECTED_BYTE_SIZE,
+        registered_file_identity=SOURCE_A_REGISTERED_FILE,
+        representation=FileRepresentation.ARCHIVAL_TAB,
+        provider_file_id=file_id,
         provider_hash=provider_md5,
         provider_hash_algorithm="md5",
+        provider_hash_representation=FileRepresentation.SAVED_ORIGINAL,
         metadata_snapshot_sha256=snapshot_sha256,
         original_filename=str(data_file.get("filename", SOURCE_A_FILE_NAME)),
         media_type=str(data_file.get("contentType", "text/tab-separated-values")),
@@ -315,7 +368,7 @@ def source_a_metadata_conflicts(
     verified_byte_size: int,
     verified_provider_md5: str,
 ) -> tuple[SourceMetadataConflict, ...]:
-    """Retain conflicting official/provider claims beside verified file facts."""
+    """Retain claim conflicts; representation differences are reported separately."""
 
     claims = {
         "participant_count": (
@@ -323,15 +376,29 @@ def source_a_metadata_conflicts(
                 SOURCE_A_ID,
                 "participant_count",
                 98,
-                SOURCE_A_LANDING_PAGE,
-                "dataset description participant count",
+                SOURCE_A_METADATA_URL,
+                "Dataverse version 1.0 description participant count",
             ),
             SourceMetadataClaim(
                 SOURCE_A_ID,
                 "participant_count",
                 90,
+                SOURCE_A_COLLECTION_DESCRIPTION_URI,
+                "Domus collection description participant count",
+            ),
+            SourceMetadataClaim(
+                SOURCE_A_ID,
+                "participant_count",
+                98,
                 "https://doi.org/10.3390/jfmk10040385",
-                "associated publication participant count",
+                "paper abstract participant count",
+            ),
+            SourceMetadataClaim(
+                SOURCE_A_ID,
+                "participant_count",
+                99,
+                "https://doi.org/10.3390/jfmk10040385",
+                "paper Methods 2.1 participant count",
             ),
         ),
         "match_count": (
@@ -339,15 +406,29 @@ def source_a_metadata_conflicts(
                 SOURCE_A_ID,
                 "match_count",
                 295,
-                SOURCE_A_LANDING_PAGE,
-                "dataset description match count",
+                SOURCE_A_METADATA_URL,
+                "Dataverse version 1.0 description match count",
+            ),
+            SourceMetadataClaim(
+                SOURCE_A_ID,
+                "match_count",
+                351,
+                SOURCE_A_COLLECTION_DESCRIPTION_URI,
+                "Domus collection description official match count",
             ),
             SourceMetadataClaim(
                 SOURCE_A_ID,
                 "match_count",
                 351,
                 "https://doi.org/10.3390/jfmk10040385",
-                "associated publication match count",
+                "paper abstract official match count",
+            ),
+            SourceMetadataClaim(
+                SOURCE_A_ID,
+                "match_count",
+                351,
+                "https://doi.org/10.3390/jfmk10040385",
+                "paper Methods 2.1 official match count",
             ),
         ),
         "case_count": (
@@ -355,56 +436,29 @@ def source_a_metadata_conflicts(
                 SOURCE_A_ID,
                 "case_count",
                 5203,
-                SOURCE_A_LANDING_PAGE,
-                "dataset abstract case count",
+                SOURCE_A_METADATA_URL,
+                "Dataverse version 1.0 description case count",
             ),
             SourceMetadataClaim(
                 SOURCE_A_ID,
                 "case_count",
-                5202,
-                SOURCE_A_LANDING_PAGE,
-                "published file case count",
-            ),
-        ),
-        "file_size": (
-            SourceMetadataClaim(
-                SOURCE_A_ID,
-                "file_size",
-                1028925,
-                SOURCE_A_METADATA_URL,
-                "official data-file metadata size",
+                5203,
+                "https://doi.org/10.3390/jfmk10040385",
+                "paper abstract and Methods case count",
             ),
             SourceMetadataClaim(
                 SOURCE_A_ID,
-                "file_size",
-                verified_byte_size,
+                "case_count",
+                verified_row_count,
                 SOURCE_A_METADATA_URL,
-                "verified downloaded byte size",
-            ),
-        ),
-        "provider_md5": (
-            SourceMetadataClaim(
-                SOURCE_A_ID,
-                "provider_md5",
-                "93951f1b28240cfaa9c31d075824cb36",
-                SOURCE_A_METADATA_URL,
-                "official provider MD5",
-            ),
-            SourceMetadataClaim(
-                SOURCE_A_ID,
-                "provider_md5",
-                verified_provider_md5,
-                SOURCE_A_METADATA_URL,
-                "MD5 of verified download, supplementary only",
+                "verified table rows",
             ),
         ),
     }
-    verified_facts: dict[str, str | int] = {
+    verified_facts: dict[str, str | int | None] = {
         "participant_count": verified_distinct_athletes,
-        "match_count": verified_distinct_game_dates,
+        "match_count": None,
         "case_count": verified_row_count,
-        "file_size": verified_byte_size,
-        "provider_md5": verified_provider_md5,
     }
     return tuple(
         SourceMetadataConflict(
@@ -419,23 +473,149 @@ def source_a_metadata_conflicts(
     )
 
 
+def source_a_representation_audit(
+    *,
+    verified_archival_sha256: str,
+    verified_archival_byte_size: int,
+    verified_saved_original_md5: str,
+    verified_saved_original_byte_size: int,
+) -> dict[str, object]:
+    """Record Dataverse archival-vs-original provenance without conflating bytes."""
+
+    return {
+        "classification": "FILE_REPRESENTATION_DIFFERENCE",
+        "selected_ingestion_representation": FileRepresentation.ARCHIVAL_TAB.value,
+        "provider_hash": SOURCE_A_REGISTERED_FILE.provider_hash,
+        "provider_hash_role": FileRepresentation.SAVED_ORIGINAL.value,
+        "provider_hash_verified": (
+            verified_saved_original_md5.lower()
+            == (SOURCE_A_REGISTERED_FILE.provider_hash or "").lower()
+        ),
+        "provider_declared_byte_size": SOURCE_A_REGISTERED_FILE.provider_declared_byte_size,
+        "archival_tab": {
+            "sha256": verified_archival_sha256,
+            "byte_size": verified_archival_byte_size,
+        },
+        "saved_original": {
+            "filename": "Raw data.xlsx",
+            "md5": verified_saved_original_md5,
+            "byte_size": verified_saved_original_byte_size,
+            "stored": False,
+            "canonical": False,
+        },
+    }
+
+
+def source_a_population_identity() -> PopulationIdentity:
+    """Build Source A population identity from dimension-specific official evidence."""
+
+    paper_uri = "https://doi.org/10.3390/jfmk10040385"
+
+    def evidence(key: str, label: str, uri: str, location: str) -> RegistryReference:
+        return RegistryReference(
+            identifier=ScientificIdentifier("dynamislm", "evidence", key, "1.1.0"),
+            display_label=label,
+            reference_ids=(uri,),
+        )
+
+    bindings = (
+        PopulationEvidenceBinding(
+            PopulationDimension.SEX,
+            Sex.MALE,
+            evidence(
+                "source-a-paper-methods-sex",
+                "Source A paper Methods 2.1: 99 male professional football players",
+                paper_uri,
+                "Methods 2.1 Subjects",
+            ),
+            source_note="Methods 2.1 explicitly states male participants.",
+        ),
+        PopulationEvidenceBinding(
+            PopulationDimension.AGE_CLASS,
+            AgeClass.SENIOR,
+            evidence(
+                "source-a-paper-methods-age",
+                "Source A paper Methods 2.1: age 18 to 40 years",
+                paper_uri,
+                "Methods 2.1 Subjects",
+            ),
+            source_note="The reported cohort range is adult/senior, not U23 or youth.",
+        ),
+        PopulationEvidenceBinding(
+            PopulationDimension.SPORT,
+            Sport.ASSOCIATION_FOOTBALL,
+            evidence(
+                "source-a-paper-methods-sport",
+                "Source A paper Methods 2.1: Brazilian First Division football",
+                paper_uri,
+                "Methods 2.1 Subjects",
+            ),
+            source_note="The paper identifies football match performance.",
+        ),
+        PopulationEvidenceBinding(
+            PopulationDimension.PROFESSIONAL_STATUS,
+            ProfessionalStatus.PROFESSIONAL,
+            evidence(
+                "source-a-paper-methods-professional",
+                "Source A paper Methods 2.1: professional football players",
+                paper_uri,
+                "Methods 2.1 Subjects",
+            ),
+            source_note="The paper uses the exact professional-player wording.",
+        ),
+        PopulationEvidenceBinding(
+            PopulationDimension.SQUAD_LEVEL,
+            SquadLevel.FIRST_TEAM,
+            evidence(
+                "source-a-paper-main-team",
+                "Source A paper Section 5: main team (professional adult)",
+                paper_uri,
+                "Section 5 Conclusions",
+            ),
+            source_note="Exact main-team/professional-adult wording supports first-team status.",
+        ),
+        PopulationEvidenceBinding(
+            PopulationDimension.COMPETITION_TIER,
+            CompetitionTier.TOP_DOMESTIC_DIVISION,
+            evidence(
+                "source-a-paper-first-division",
+                "Source A paper Methods 2.1: Brazilian First Division",
+                paper_uri,
+                "Methods 2.1 Subjects",
+            ),
+            source_note="Brazilian First Division is the source-supported top domestic tier.",
+        ),
+    )
+    return PopulationIdentity(
+        sex=Sex.MALE,
+        age_class=AgeClass.SENIOR,
+        sport=Sport.ASSOCIATION_FOOTBALL,
+        professional_status=ProfessionalStatus.PROFESSIONAL,
+        squad_level=SquadLevel.FIRST_TEAM,
+        competition_tier=CompetitionTier.TOP_DOMESTIC_DIVISION,
+        competition_identity=SOURCE_A_COMPETITION,
+        evidence_bindings=bindings,
+    )
+
+
 def source_a_population_and_source_decisions() -> tuple[
     CanonicalPopulationDecision, CanonicalSourceDecision
 ]:
     """Build Source A's exact target decisions through the existing RES-60 authority."""
 
-    evidence = RegistryReference(
-        identifier=ScientificIdentifier("dynamislm", "evidence", "source-a-population", "1.0.0"),
-        display_label="UNIFESP Source A population metadata",
-        reference_ids=(SOURCE_A_LANDING_PAGE,),
+    population = source_a_population_identity()
+    evidence_references = tuple(
+        binding.evidence_reference
+        for binding in population.evidence_bindings
+        if binding.evidence_reference is not None
     )
-    population = canonical_population_identity(evidence)
+    assert all(reference is not None for reference in evidence_references)
     source = build_canonical_source(
         SOURCE_A_SOURCE,
         SOURCE_A_VERSION,
         population,
         license_identity=SOURCE_A_LICENSE,
-        evidence_references=(evidence,),
+        evidence_references=evidence_references,
         publication_reference=RegistryReference(
             ScientificIdentifier("dynamislm", "publication", "source-a-paper", "1.0.0"),
             "The Aging Curve: How Age Affects Physical Performance in Elite Football",
@@ -475,6 +655,24 @@ def _source_value(value: str) -> str | int | float | None:
     return integer
 
 
+def source_a_season_identity(observed_date: datetime_module.date) -> SeasonIdentity:
+    """Map only the registered 2020-2024 Brazilian Serie A seasons."""
+
+    if observed_date.year not in {2020, 2021, 2022, 2023, 2024}:
+        raise ValueError(
+            f"Source A date {observed_date.isoformat()} is outside the registered 2020-2024 seasons"
+        )
+    return SeasonIdentity(
+        identifier=ScientificIdentifier(
+            "dynamislm",
+            "season",
+            f"brazil-serie-a-{observed_date.year}",
+            "1.0.0",
+        ),
+        display_label=f"Brazilian Serie A {observed_date.year}",
+    )
+
+
 def map_source_a_records(
     path: Path,
     *,
@@ -487,7 +685,7 @@ def map_source_a_records(
     version: DatasetVersionIdentity = SOURCE_A_VERSION,
     competition_identity: CompetitionIdentity = SOURCE_A_COMPETITION,
     include_source_only_context: bool = False,
-) -> tuple[CanonicalEmpiricalRecord, ...]:
+) -> Iterator[CanonicalEmpiricalRecord]:
     """Map verified Source A rows without deriving any external-load metric."""
 
     if not population_decision.passed or not source_decision.passed:
@@ -495,9 +693,13 @@ def map_source_a_records(
     actual_digest, _ = file_digest_and_size(path)
     if actual_digest != raw_artifact_sha256:
         raise ValueError("Source A adapter received bytes with the wrong SHA-256 digest")
+    actual_schema = inspect_source_a(path, raw_artifact_sha256)
+    if actual_schema.schema_sha256 != schema_sha256:
+        raise ValueError("Source A adapter received the wrong schema identity")
+    if acquisition_receipt_id != f"acquisition:{raw_artifact_sha256}":
+        raise ValueError("Source A adapter received the wrong acquisition receipt identity")
     columns = tab_header(path)
     identities = {item.original_column_name: item for item in source_a_variable_identities(columns)}
-    records: list[CanonicalEmpiricalRecord] = []
     for row_number, row in iter_tab_rows(path):
         values = dict(zip(columns, row, strict=True))
         athlete_value = values.get("AthleteID", "").strip()
@@ -514,6 +716,7 @@ def map_source_a_records(
             session_id=session_id,
             observed_date=observed_date,
             competition_identity=competition_identity,
+            season_identity=source_a_season_identity(observed_date),
             position=position,
         )
         natural_key = "|".join(values.get(column, "") for column in ("AthleteID", "Gamedate"))
@@ -542,21 +745,18 @@ def map_source_a_records(
                 mapping_version=SOURCE_A_MAPPING_VERSION,
                 canonical_record_id=canonical_key,
             )
-            records.append(
-                CanonicalEmpiricalRecord(
-                    source_identity=source,
-                    version_identity=version,
-                    raw_row_identity=row_identity,
-                    football_context=football_context,
-                    variable_identity=variable_identity,
-                    source_reported_value=_source_value(values[column]),
-                    population_decision=population_decision,
-                    source_decision=source_decision,
-                    mapping_version=SOURCE_A_MAPPING_VERSION,
-                    lineage=lineage,
-                )
+            yield CanonicalEmpiricalRecord(
+                source_identity=source,
+                version_identity=version,
+                raw_row_identity=row_identity,
+                football_context=football_context,
+                variable_identity=variable_identity,
+                source_reported_value=_source_value(values[column]),
+                population_decision=population_decision,
+                source_decision=source_decision,
+                mapping_version=SOURCE_A_MAPPING_VERSION,
+                lineage=lineage,
             )
-    return tuple(records)
 
 
 def inspect_source_a(path: Path, raw_artifact_sha256: str) -> SourceSchema:
@@ -572,6 +772,7 @@ def inspect_source_a(path: Path, raw_artifact_sha256: str) -> SourceSchema:
 
 
 __all__ = [
+    "SOURCE_A_COLLECTION_DESCRIPTION_URI",
     "SOURCE_A_COMPETITION",
     "SOURCE_A_EXPECTED_BYTE_SIZE",
     "SOURCE_A_EXPECTED_SHA256",
@@ -582,6 +783,7 @@ __all__ = [
     "SOURCE_A_MAPPING_VERSION",
     "SOURCE_A_METADATA_URL",
     "SOURCE_A_PROVIDER",
+    "SOURCE_A_REGISTERED_FILE",
     "SOURCE_A_SOURCE",
     "SOURCE_A_VERSION",
     "acquire_source_a",
@@ -591,6 +793,10 @@ __all__ = [
     "source_a_file_metadata",
     "source_a_metadata_conflicts",
     "source_a_population_and_source_decisions",
+    "source_a_population_identity",
+    "source_a_representation_audit",
+    "source_a_season_identity",
     "source_a_variable_definitions",
     "source_a_variable_identities",
+    "source_a_variable_registry",
 ]

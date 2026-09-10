@@ -36,6 +36,7 @@ from dynamislm.ingestion.adapters.mendeley_turkish_super_league import (
     source_c_quarantine,
 )
 from dynamislm.ingestion.adapters.unifesp_serie_a import (
+    SOURCE_A_COLLECTION_DESCRIPTION_URI,
     SOURCE_A_COMPETITION,
     SOURCE_A_EXPECTED_BYTE_SIZE,
     SOURCE_A_EXPECTED_SHA256,
@@ -46,6 +47,7 @@ from dynamislm.ingestion.adapters.unifesp_serie_a import (
     SOURCE_A_MAPPING_VERSION,
     SOURCE_A_METADATA_URL,
     SOURCE_A_PROVIDER,
+    SOURCE_A_REGISTERED_FILE,
     SOURCE_A_SOURCE,
     SOURCE_A_VERSION,
     fetch_source_a_metadata,
@@ -54,8 +56,12 @@ from dynamislm.ingestion.adapters.unifesp_serie_a import (
     source_a_file_metadata,
     source_a_metadata_conflicts,
     source_a_population_and_source_decisions,
+    source_a_population_identity,
+    source_a_representation_audit,
+    source_a_season_identity,
     source_a_variable_definitions,
     source_a_variable_identities,
+    source_a_variable_registry,
 )
 from dynamislm.ingestion.adapters.zenodo_ekstraklasa import (
     SOURCE_D_DOI,
@@ -74,6 +80,7 @@ from dynamislm.ingestion.adapters.zenodo_ekstraklasa import (
 )
 
 __all__ = [
+    "SOURCE_A_COLLECTION_DESCRIPTION_URI",
     "SOURCE_A_COMPETITION",
     "SOURCE_A_EXPECTED_BYTE_SIZE",
     "SOURCE_A_EXPECTED_SHA256",
@@ -84,6 +91,7 @@ __all__ = [
     "SOURCE_A_MAPPING_VERSION",
     "SOURCE_A_METADATA_URL",
     "SOURCE_A_PROVIDER",
+    "SOURCE_A_REGISTERED_FILE",
     "SOURCE_A_SOURCE",
     "SOURCE_A_VERSION",
     "SOURCE_B_DOI",
@@ -126,8 +134,12 @@ __all__ = [
     "source_a_file_metadata",
     "source_a_metadata_conflicts",
     "source_a_population_and_source_decisions",
+    "source_a_population_identity",
+    "source_a_representation_audit",
+    "source_a_season_identity",
     "source_a_variable_definitions",
     "source_a_variable_identities",
+    "source_a_variable_registry",
     "source_b_canonical_source",
     "source_b_file_metadata",
     "source_b_population",

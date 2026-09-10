@@ -6,7 +6,6 @@
   "granularity": "TEAM",
   "raw_artifact_sha256": "sha256:966b1c40a5d4e7ce50d6df6edc41e83f3e2ce6eb51b43ed8df37b44d2b632517",
   "reason_codes": [
-    "UNRESOLVED_RECORD_GRANULARITY",
     "TEAM_AGGREGATE_NOT_CANONICAL_ATHLETE_RECORD",
     "UNRESOLVED_SEX_EVIDENCE",
     "UNRESOLVED_FIRST_TEAM_STATUS"

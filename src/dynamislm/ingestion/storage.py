@@ -6,7 +6,7 @@ import hashlib
 import json
 import os
 import subprocess
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from dynamislm.serialization import canonical_json
 
@@ -22,6 +22,25 @@ DATA_ROOT_DIRECTORIES = (
     ACQUISITION_TEMP_RELATIVE,
 )
 _CHUNK_SIZE = 1024 * 1024
+_DATA_RELATIVE_PREFIXES = (
+    "objects/",
+    "metadata/",
+    "receipts/",
+    "canonical/",
+    "quarantine/",
+)
+
+
+def _validate_relative_data_name(relative_path: str) -> None:
+    if not relative_path or "\\" in relative_path:
+        raise ValueError("external data path must be canonical POSIX relative text")
+    pure = PurePosixPath(relative_path)
+    if pure.is_absolute() or pure.as_posix() != relative_path:
+        raise ValueError("external data path must be canonical POSIX relative text")
+    if any(part in {".", ".."} for part in pure.parts):
+        raise ValueError("external data path must not contain traversal segments")
+    if not relative_path.startswith(_DATA_RELATIVE_PREFIXES):
+        raise ValueError("external data path uses an uncontrolled prefix")
 
 
 def resolve_repository_root(start: Path | None = None) -> Path:
@@ -189,6 +208,7 @@ def store_verified_temporary_file(
 def write_external_json(data_root: Path, relative_path: str, value: object) -> Path:
     """Write a deterministic JSON receipt/report under the external data root."""
 
+    _validate_relative_data_name(relative_path)
     target = (data_root / relative_path).resolve(strict=False)
     relative_data_path(data_root, target)
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -220,6 +240,13 @@ def count_files(relative_directory: Path, data_root: Path) -> int:
     return sum(1 for path in directory.rglob("*") if path.is_file())
 
 
+def count_files_with_suffix(relative_directory: Path, data_root: Path, suffix: str) -> int:
+    directory = data_root / relative_directory
+    if not directory.exists():
+        return 0
+    return sum(1 for path in directory.rglob(f"*{suffix}") if path.is_file())
+
+
 def data_root_inventory(data_root: Path) -> dict[str, int]:
     """Return deterministic category counts and total bytes for handoff evidence."""
 
@@ -230,7 +257,12 @@ def data_root_inventory(data_root: Path) -> dict[str, int]:
         "DATA_ROOT_OBJECT_COUNT": count_files(Path("objects"), resolved_root),
         "DATA_ROOT_METADATA_COUNT": count_files(Path("metadata"), resolved_root),
         "DATA_ROOT_RECEIPT_COUNT": count_files(Path("receipts"), resolved_root),
-        "DATA_ROOT_CANONICAL_ARTIFACT_COUNT": count_files(Path("canonical"), resolved_root),
+        "DATA_ROOT_CANONICAL_ARTIFACT_COUNT": count_files_with_suffix(
+            Path("canonical"), resolved_root, ".jsonl"
+        ),
+        "DATA_ROOT_VARIABLE_REGISTRY_COUNT": count_files_with_suffix(
+            Path("canonical"), resolved_root, "-variables.json"
+        ),
         "DATA_ROOT_QUARANTINE_COUNT": count_files(Path("quarantine"), resolved_root),
     }
 
@@ -306,6 +338,7 @@ __all__ = [
     "assert_external_data_root",
     "content_addressed_object_path",
     "count_files",
+    "count_files_with_suffix",
     "data_root_inventory",
     "ensure_data_tree",
     "file_digest_and_size",

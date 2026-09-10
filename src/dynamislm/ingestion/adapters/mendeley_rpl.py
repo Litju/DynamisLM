@@ -13,9 +13,7 @@ from openpyxl import load_workbook  # type: ignore[import-untyped]
 
 from dynamislm.ingestion.acquisition import acquire_url, capture_metadata_snapshot
 from dynamislm.ingestion.contracts import (
-    DatasetLicenseIdentity,
-    DatasetSourceIdentity,
-    DatasetVersionIdentity,
+    FileRepresentation,
     QuarantineReceipt,
     SourceVariableIdentity,
     SourceVariableRole,
@@ -24,6 +22,14 @@ from dynamislm.ingestion.contracts import (
     WorkbookSheetSchema,
 )
 from dynamislm.ingestion.qualification import source_variable_identities
+from dynamislm.ingestion.registry import (
+    dataset_license_identity,
+    dataset_source_identity,
+    dataset_version_identity,
+    load_dataset_registry,
+    registered_dataset_file_identity,
+    verify_live_provider_file_observation,
+)
 from dynamislm.ingestion.storage import file_digest_and_size
 from dynamislm.measurement.identity import MetadataEntry, RegistryReference, ScientificIdentifier
 from dynamislm.population.models import (
@@ -60,26 +66,12 @@ SOURCE_B_FILE_METADATA_URL = (
     "https://data.mendeley.com/public-api/datasets/spkmxfsmhv/files?folder_id=root&version=1"
 )
 
-SOURCE_B_SOURCE = DatasetSourceIdentity(
-    source_id=SOURCE_B_ID,
-    provider=SOURCE_B_PROVIDER,
-    title="Skin Temperature Football Players during a season",
-    landing_page_uri=SOURCE_B_LANDING_PAGE,
-    persistent_identifier=SOURCE_B_DOI,
-)
-SOURCE_B_VERSION = DatasetVersionIdentity(
-    repository_version="1",
-    version_specific_persistent_identifier=SOURCE_B_DOI,
-    published_at=datetime_module.datetime(2023, 11, 15, 8, 0, 13, tzinfo=datetime_module.UTC),
-)
-SOURCE_B_LICENSE = DatasetLicenseIdentity(
-    spdx_expression="CC-BY-4.0",
-    canonical_uri="https://creativecommons.org/licenses/by/4.0/",
-    assertion_source_uri=SOURCE_B_LANDING_PAGE,
-    attribution_required=True,
-    noncommercial_restriction=False,
-    notes="Mendeley Data page and DataCite metadata identify CC BY 4.0.",
-)
+SOURCE_B_REGISTRY_DOCUMENT = load_dataset_registry(SOURCE_B_ID)
+SOURCE_B_REGISTERED_FILE = registered_dataset_file_identity(SOURCE_B_REGISTRY_DOCUMENT)
+
+SOURCE_B_SOURCE = dataset_source_identity(SOURCE_B_REGISTRY_DOCUMENT)
+SOURCE_B_VERSION = dataset_version_identity(SOURCE_B_REGISTRY_DOCUMENT)
+SOURCE_B_LICENSE = dataset_license_identity(SOURCE_B_REGISTRY_DOCUMENT)
 
 
 def fetch_mendeley_file_metadata(
@@ -150,23 +142,33 @@ def acquire_source_b(
     if not isinstance(details, dict):
         raise ValueError("Mendeley Source B file metadata lacks content_details")
     download_url = details.get("download_url")
-    expected_sha256 = details.get("sha256_hash")
+    live_provider_sha256 = details.get("sha256_hash")
     byte_size = metadata.get("size")
     if not all(
-        isinstance(value, str) and value.strip() for value in (download_url, expected_sha256)
+        isinstance(value, str) and value.strip() for value in (download_url, live_provider_sha256)
     ):
         raise ValueError("Mendeley Source B file metadata lacks public URL or SHA-256")
     assert isinstance(download_url, str)
-    assert isinstance(expected_sha256, str)
+    assert isinstance(live_provider_sha256, str)
     if isinstance(byte_size, bool) or not isinstance(byte_size, int):
         raise ValueError("Mendeley Source B file metadata lacks byte size")
+    provider_file_id = metadata.get("id", metadata.get("file_id"))
+    verify_live_provider_file_observation(
+        SOURCE_B_REGISTERED_FILE,
+        provider_sha256=live_provider_sha256,
+        provider_hash=live_provider_sha256,
+        provider_hash_algorithm="sha256",
+        provider_byte_size=byte_size,
+        provider_file_id=provider_file_id if provider_file_id is not None else None,
+    )
     return acquire_url(
         SOURCE_B_SOURCE,
         SOURCE_B_VERSION,
         download_url,
-        expected_sha256=expected_sha256,
-        expected_byte_size=byte_size,
-        provider_hash=expected_sha256,
+        registered_file_identity=SOURCE_B_REGISTERED_FILE,
+        representation=FileRepresentation.PROVIDER_FILE,
+        provider_file_id=provider_file_id if provider_file_id is not None else None,
+        provider_hash=live_provider_sha256,
         provider_hash_algorithm="sha256",
         metadata_snapshot_sha256=snapshot_sha256,
         original_filename=SOURCE_B_FILE_NAME,
@@ -214,6 +216,10 @@ def inspect_workbook(
 
     if raw_artifact_sha256 is None:
         raw_artifact_sha256, _ = file_digest_and_size(path)
+    else:
+        actual_digest, _ = file_digest_and_size(path)
+        if actual_digest != "sha256:" + raw_artifact_sha256.removeprefix("sha256:").lower():
+            raise ValueError("workbook bytes do not match the verified artifact digest")
     # Content-addressed objects intentionally have digest-only filenames, so
     # provide a binary stream instead of relying on an ``.xlsx`` suffix.
     workbook_bytes = path.open("rb")

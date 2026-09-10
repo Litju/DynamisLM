@@ -1,14 +1,108 @@
 {
+  "byte_authority": "DYNAMISLM_SHA256",
+  "conflict_count": 3,
+  "conflict_kind": "CLAIM_CONFLICT",
+  "conflicts": [
+    {
+      "claims": [
+        {
+          "label": "Dataverse version 1.0 description participant count",
+          "source": "https://domusdados.unifesp.br/api/datasets/:persistentId/versions/1.0?persistentId=hdl%3A20.500.12682%2Frdp%2FGMXME8&excludeFiles=false",
+          "value": 98
+        },
+        {
+          "label": "Domus collection description participant count",
+          "source": "https://domusdados.unifesp.br/dataverse/eappefp",
+          "value": 90
+        },
+        {
+          "label": "paper abstract participant count",
+          "source": "https://doi.org/10.3390/jfmk10040385",
+          "value": 98
+        },
+        {
+          "label": "paper Methods 2.1 participant count",
+          "source": "https://doi.org/10.3390/jfmk10040385",
+          "value": 99
+        }
+      ],
+      "field": "participant_count",
+      "resolution": "UNRESOLVED_PROVIDER_CLAIMS",
+      "verified_file_fact": 98
+    },
+    {
+      "claims": [
+        {
+          "label": "Dataverse version 1.0 description match count",
+          "source": "https://domusdados.unifesp.br/api/datasets/:persistentId/versions/1.0?persistentId=hdl%3A20.500.12682%2Frdp%2FGMXME8&excludeFiles=false",
+          "value": 295
+        },
+        {
+          "label": "Domus collection description official match count",
+          "source": "https://domusdados.unifesp.br/dataverse/eappefp",
+          "value": 351
+        },
+        {
+          "label": "paper abstract official match count",
+          "source": "https://doi.org/10.3390/jfmk10040385",
+          "value": 351
+        },
+        {
+          "label": "paper Methods 2.1 official match count",
+          "source": "https://doi.org/10.3390/jfmk10040385",
+          "value": 351
+        }
+      ],
+      "field": "match_count",
+      "resolution": "UNRESOLVED_PROVIDER_CLAIMS",
+      "verified_file_fact": null
+    },
+    {
+      "claims": [
+        {
+          "label": "Dataverse version 1.0 description case count",
+          "source": "https://domusdados.unifesp.br/api/datasets/:persistentId/versions/1.0?persistentId=hdl%3A20.500.12682%2Frdp%2FGMXME8&excludeFiles=false",
+          "value": 5203
+        },
+        {
+          "label": "paper abstract and Methods case count",
+          "source": "https://doi.org/10.3390/jfmk10040385",
+          "value": 5203
+        },
+        {
+          "label": "verified table rows",
+          "source": "https://domusdados.unifesp.br/api/datasets/:persistentId/versions/1.0?persistentId=hdl%3A20.500.12682%2Frdp%2FGMXME8&excludeFiles=false",
+          "value": 5202
+        }
+      ],
+      "field": "case_count",
+      "resolution": "UNRESOLVED_PROVIDER_CLAIMS",
+      "verified_file_fact": 5202
+    }
+  ],
+  "distinct_game_date_values": 361,
+  "distinct_source_athlete_ids": 98,
+  "provider_claims_are_not_file_truth": true,
+  "representation_audit": {
+    "archival_tab": {
+      "byte_size": 1029382,
+      "sha256": "sha256:f00cf3f32caa76c392e608630d3f2f30a2789c25446702678f7a268a622bf8e5"
+    },
+    "classification": "FILE_REPRESENTATION_DIFFERENCE",
+    "provider_declared_byte_size": 1028925,
+    "provider_hash": "93951f1b28240cfaa9c31d075824cb36",
+    "provider_hash_role": "SAVED_ORIGINAL",
+    "provider_hash_verified": true,
+    "saved_original": {
+      "byte_size": 1124197,
+      "canonical": false,
+      "filename": "Raw data.xlsx",
+      "md5": "93951f1b28240cfaa9c31d075824cb36",
+      "stored": false
+    },
+    "selected_ingestion_representation": "ARCHIVAL_TAB"
+  },
   "source_id": "unifesp-brazil-serie-a-v1",
   "source_version": "1.0",
-  "conflict_count": 5,
-  "conflicts": [
-    {"field":"participant_count","claims":[98,90],"verified_file_fact":98,"resolution":"UNRESOLVED_PROVIDER_CLAIMS"},
-    {"field":"match_count","claims":[295,351],"verified_file_fact":361,"verified_fact_label":"distinct Gamedate values, not official match count","resolution":"UNRESOLVED_PROVIDER_CLAIMS"},
-    {"field":"case_count","claims":[5203,5202],"verified_file_fact":5202,"resolution":"UNRESOLVED_PROVIDER_CLAIMS"},
-    {"field":"file_size","claims":[1028925,1029382],"verified_file_fact":1029382,"resolution":"UNRESOLVED_PROVIDER_CLAIMS"},
-    {"field":"provider_md5","claims":["93951f1b28240cfaa9c31d075824cb36","4ea0e3fa58f06df42667049148f79e18"],"verified_file_fact":"4ea0e3fa58f06df42667049148f79e18","resolution":"UNRESOLVED_PROVIDER_CLAIMS_PROVIDER_HASH_IS_SUPPLEMENTARY"}
-  ],
-  "byte_authority": "DYNAMISLM_SHA256",
-  "provider_claims_are_not_file_truth": true
+  "verified_official_match_count": null
 }

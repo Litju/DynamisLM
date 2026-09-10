@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import datetime as datetime_module
 import json
 import urllib.request
 from pathlib import Path
@@ -10,10 +9,16 @@ from typing import Any
 
 from dynamislm.ingestion.acquisition import acquire_url, capture_metadata_snapshot
 from dynamislm.ingestion.contracts import (
-    DatasetLicenseIdentity,
-    DatasetSourceIdentity,
-    DatasetVersionIdentity,
+    FileRepresentation,
     QuarantineReceipt,
+)
+from dynamislm.ingestion.registry import (
+    dataset_license_identity,
+    dataset_source_identity,
+    dataset_version_identity,
+    load_dataset_registry,
+    registered_dataset_file_identity,
+    verify_live_provider_file_observation,
 )
 
 SOURCE_D_ID = "zenodo-ekstraklasa-training-adaptation"
@@ -23,29 +28,12 @@ SOURCE_D_LANDING_PAGE = "https://zenodo.org/records/15205417"
 SOURCE_D_MAPPING_VERSION = "zenodo-ekstraklasa-training-adaptation-mapping@1.0.0"
 SOURCE_D_FILE_NAME = "StudyPackage_Training_Adaptation.zip"
 
-SOURCE_D_SOURCE = DatasetSourceIdentity(
-    source_id=SOURCE_D_ID,
-    provider=SOURCE_D_PROVIDER,
-    title=(
-        "Short- and Mid-Term Adaptations to Plyometric vs. Strength Training in Elite Soccer: "
-        "A Randomized Crossover Study With Follow-Up and Machine Learning Classification"
-    ),
-    landing_page_uri=SOURCE_D_LANDING_PAGE,
-    persistent_identifier=SOURCE_D_DOI,
-)
-SOURCE_D_VERSION = DatasetVersionIdentity(
-    repository_version="1.0",
-    version_specific_persistent_identifier=SOURCE_D_DOI,
-    published_at=datetime_module.date(2025, 4, 13),
-)
-SOURCE_D_LICENSE = DatasetLicenseIdentity(
-    spdx_expression="CC-BY-4.0",
-    canonical_uri="https://creativecommons.org/licenses/by/4.0/",
-    assertion_source_uri=SOURCE_D_LANDING_PAGE,
-    attribution_required=True,
-    noncommercial_restriction=False,
-    notes="Zenodo metadata identifies CC-BY 4.0.",
-)
+SOURCE_D_REGISTRY_DOCUMENT = load_dataset_registry(SOURCE_D_ID)
+SOURCE_D_REGISTERED_FILE = registered_dataset_file_identity(SOURCE_D_REGISTRY_DOCUMENT)
+
+SOURCE_D_SOURCE = dataset_source_identity(SOURCE_D_REGISTRY_DOCUMENT)
+SOURCE_D_VERSION = dataset_version_identity(SOURCE_D_REGISTRY_DOCUMENT)
+SOURCE_D_LICENSE = dataset_license_identity(SOURCE_D_REGISTRY_DOCUMENT)
 
 
 def fetch_zenodo_metadata(record_id: int = 15205417) -> dict[str, Any]:
@@ -99,11 +87,20 @@ def acquire_source_d(
     if isinstance(size, bool) or not isinstance(size, int):
         raise ValueError("Zenodo Source D lacks a byte size")
     provider_hash = str(checksum).removeprefix("md5:") if checksum is not None else None
+    verify_live_provider_file_observation(
+        SOURCE_D_REGISTERED_FILE,
+        provider_hash=provider_hash,
+        provider_hash_algorithm="md5" if provider_hash is not None else None,
+        provider_byte_size=size,
+        provider_file_id=file_metadata.get("id", file_metadata.get("file_id")),
+    )
     return acquire_url(
         SOURCE_D_SOURCE,
         SOURCE_D_VERSION,
         download_url,
-        expected_byte_size=size,
+        registered_file_identity=SOURCE_D_REGISTERED_FILE,
+        representation=FileRepresentation.PROVIDER_FILE,
+        provider_file_id=file_metadata.get("id", file_metadata.get("file_id")),
         provider_hash=provider_hash,
         provider_hash_algorithm="md5" if provider_hash is not None else None,
         metadata_snapshot_sha256=snapshot_sha256,

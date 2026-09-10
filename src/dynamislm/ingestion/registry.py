@@ -11,6 +11,8 @@ from dynamislm.ingestion.contracts import (
     DatasetLicenseIdentity,
     DatasetSourceIdentity,
     DatasetVersionIdentity,
+    FileRepresentation,
+    RegisteredDatasetFileIdentity,
 )
 
 REGISTRY_RELATIVE_ROOT = Path("registries") / "datasets"
@@ -181,11 +183,134 @@ def registry_file_entries(document: dict[str, Any]) -> tuple[dict[str, Any], ...
     return tuple(entries)
 
 
+def registered_dataset_file_identity(
+    document: dict[str, Any],
+    *,
+    file_index: int = 0,
+    representation: FileRepresentation | None = None,
+) -> RegisteredDatasetFileIdentity:
+    """Build the expected file identity strictly from committed registry data."""
+
+    source_id = _required_string(document, "source_id")
+    version = dataset_version_identity(document)
+    entries = registry_file_entries(document)
+    if isinstance(file_index, bool) or not isinstance(file_index, int) or file_index < 0:
+        raise ValueError("file_index must be a non-negative integer")
+    if representation is None:
+        if len(entries) != 1:
+            raise ValueError("representation is required for registries with multiple files")
+        selected = entries[file_index] if file_index < len(entries) else None
+    else:
+        selected = next(
+            (entry for entry in entries if entry.get("representation") == representation.value),
+            None,
+        )
+    if selected is None:
+        raise ValueError("registered dataset file identity was not found")
+    selected_representation = selected.get("representation")
+    if not isinstance(selected_representation, str):
+        raise ValueError("registry file representation must be explicit")
+    try:
+        parsed_representation = FileRepresentation(selected_representation)
+    except ValueError as exc:
+        raise ValueError("registry file representation is unsupported") from exc
+    if representation is not None and parsed_representation is not representation:
+        raise ValueError("registry file representation does not match request")
+
+    expected_sha256 = selected.get("sha256")
+    expected_byte_size = selected.get("byte_size")
+    if not isinstance(expected_sha256, str):
+        raise ValueError("registry file sha256 is required")
+    if isinstance(expected_byte_size, bool) or not isinstance(expected_byte_size, int):
+        raise ValueError("registry file byte_size is required")
+    provider_declared_byte_size = selected.get("provider_declared_byte_size")
+    if provider_declared_byte_size is not None and (
+        isinstance(provider_declared_byte_size, bool)
+        or not isinstance(provider_declared_byte_size, int)
+    ):
+        raise ValueError("registry provider_declared_byte_size must be an integer")
+    provider_hash_representation_value = selected.get("provider_hash_representation")
+    provider_hash_representation = None
+    if provider_hash_representation_value is not None:
+        try:
+            provider_hash_representation = FileRepresentation(provider_hash_representation_value)
+        except ValueError as exc:
+            raise ValueError("registry provider hash representation is unsupported") from exc
+    return RegisteredDatasetFileIdentity(
+        source_id=source_id,
+        source_version=version.repository_version,
+        representation=parsed_representation,
+        provider_file_id=selected.get("file_id", selected.get("provider_file_id")),
+        file_persistent_identifier=(
+            str(selected["file_persistent_identifier"])
+            if selected.get("file_persistent_identifier") is not None
+            else None
+        ),
+        filename=_required_string(selected, "filename"),
+        media_type=_required_string(selected, "media_type"),
+        expected_sha256=expected_sha256,
+        expected_byte_size=expected_byte_size,
+        provider_hash=_optional_string(selected, "provider_hash"),
+        provider_hash_algorithm=_optional_string(selected, "provider_hash_algorithm"),
+        provider_declared_byte_size=provider_declared_byte_size,
+        provider_hash_representation=provider_hash_representation,
+    )
+
+
+def verify_live_provider_file_observation(
+    registered: RegisteredDatasetFileIdentity,
+    *,
+    provider_sha256: str | None = None,
+    provider_hash: str | None = None,
+    provider_hash_algorithm: str | None = None,
+    provider_byte_size: int | None = None,
+    provider_file_id: str | int | None = None,
+    provider_hash_representation: FileRepresentation | None = None,
+) -> None:
+    """Compare live metadata to the registry without promoting it to authority."""
+
+    if registered.provider_file_id is not None and provider_file_id is None:
+        raise ValueError("SOURCE_VERSION_CONFLICT: live provider file ID is missing")
+    if provider_file_id is not None and registered.provider_file_id != provider_file_id:
+        raise ValueError("SOURCE_VERSION_CONFLICT: live provider file ID differs from registry")
+    if (
+        provider_byte_size is not None
+        and registered.representation is not FileRepresentation.ARCHIVAL_TAB
+    ):
+        if provider_byte_size != registered.expected_byte_size:
+            raise ValueError(
+                "SOURCE_VERSION_CONFLICT: live provider byte size differs from registry"
+            )
+    if provider_sha256 is not None and provider_sha256.removeprefix("sha256:").lower() != (
+        registered.expected_sha256.removeprefix("sha256:").lower()
+    ):
+        raise ValueError("SOURCE_VERSION_CONFLICT: live provider SHA-256 differs from registry")
+    if registered.provider_hash is not None and provider_hash is None:
+        raise ValueError("SOURCE_VERSION_CONFLICT: live provider hash is missing")
+    if registered.provider_hash is not None and provider_hash is not None:
+        if provider_hash.lower() != registered.provider_hash.lower():
+            raise ValueError("SOURCE_VERSION_CONFLICT: live provider hash differs from registry")
+        if registered.provider_hash_algorithm is not None and provider_hash_algorithm is None:
+            raise ValueError("SOURCE_VERSION_CONFLICT: live provider hash algorithm is missing")
+        if (
+            registered.provider_hash_algorithm is not None
+            and provider_hash_algorithm is not None
+            and provider_hash_algorithm.lower() != registered.provider_hash_algorithm.lower()
+        ):
+            raise ValueError("SOURCE_VERSION_CONFLICT: live provider hash algorithm differs")
+        if (
+            registered.provider_hash_representation is not None
+            and provider_hash_representation is not registered.provider_hash_representation
+        ):
+            raise ValueError("SOURCE_VERSION_CONFLICT: live provider hash representation differs")
+
+
 # Short aliases used by operational callers.
 load_registry = load_dataset_registry
 source_identity_from_registry = dataset_source_identity
 version_identity_from_registry = dataset_version_identity
 license_identity_from_registry = dataset_license_identity
+registered_file_identity_from_registry = registered_dataset_file_identity
 
 
 __all__ = [
@@ -197,8 +322,11 @@ __all__ = [
     "load_all_dataset_registries",
     "load_dataset_registry",
     "load_registry",
+    "registered_dataset_file_identity",
+    "registered_file_identity_from_registry",
     "registry_file_entries",
     "registry_root",
     "source_identity_from_registry",
+    "verify_live_provider_file_observation",
     "version_identity_from_registry",
 ]
