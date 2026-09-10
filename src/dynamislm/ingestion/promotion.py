@@ -21,9 +21,9 @@ from dynamislm.ingestion.contracts import (
     stable_source_variable_id,
 )
 from dynamislm.ingestion.storage import (
+    assert_data_path_contained,
     ensure_data_tree,
     file_digest_and_size,
-    relative_data_path,
     verify_file,
     write_external_json,
 )
@@ -238,11 +238,15 @@ def write_canonical_jsonl(
     safe_source = _safe_component(source_id)
     safe_mapping = _safe_component(mapping_version)
     relative_path = f"canonical/{safe_source}-{source_version}-{safe_mapping}.jsonl"
-    target = (resolved_data_root / relative_path).resolve(strict=False)
-    if relative_data_path(resolved_data_root, target) != relative_path:
-        raise ValueError("canonical artifact path escaped DYNAMISLM_DATA_ROOT")
+    target = assert_data_path_contained(resolved_data_root, resolved_data_root / relative_path)
+    assert_data_path_contained(resolved_data_root, target.parent)
     target.parent.mkdir(parents=True, exist_ok=True)
+    assert_data_path_contained(resolved_data_root, target.parent)
+    assert_data_path_contained(resolved_data_root, target)
     temporary = target.with_name(f".{target.name}.tmp-{os.getpid()}")
+    assert_data_path_contained(resolved_data_root, temporary)
+    if temporary.exists():
+        raise ValueError("canonical artifact temporary path already exists")
     digest = hashlib.sha256()
     record_count = 0
     previous_key: tuple[int, int | str] | None = None
@@ -274,6 +278,9 @@ def write_canonical_jsonl(
             output.flush()
             os.fsync(output.fileno())
         canonical_digest = f"sha256:{digest.hexdigest()}"
+        assert_data_path_contained(resolved_data_root, temporary)
+        assert_data_path_contained(resolved_data_root, target.parent)
+        assert_data_path_contained(resolved_data_root, target)
         if target.exists():
             existing_digest, _ = file_digest_and_size(target)
             if existing_digest != canonical_digest:
@@ -282,6 +289,7 @@ def write_canonical_jsonl(
             temporary.unlink()
         else:
             os.replace(temporary, target)
+            assert_data_path_contained(resolved_data_root, target)
 
         if variable_registry is None:
             from dynamislm.ingestion.contracts import SourceVariableRegistryEntry

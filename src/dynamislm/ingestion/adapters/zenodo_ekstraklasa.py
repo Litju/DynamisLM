@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import urllib.request
+import zipfile
 from pathlib import Path
 from typing import Any
 
@@ -20,6 +21,7 @@ from dynamislm.ingestion.registry import (
     registered_dataset_file_identity,
     verify_live_provider_file_observation,
 )
+from dynamislm.ingestion.storage import file_digest_and_size
 
 SOURCE_D_ID = "zenodo-ekstraklasa-training-adaptation"
 SOURCE_D_DOI = "10.5281/zenodo.15205417"
@@ -142,6 +144,43 @@ def source_d_quarantine(artifact_sha256: str | None = None) -> QuarantineReceipt
     )
 
 
+def inspect_source_d_archive(
+    path: Path,
+    *,
+    raw_artifact_sha256: str,
+) -> dict[str, object]:
+    """Inspect the registered archive inventory from the verified ZIP bytes."""
+
+    actual_digest, _ = file_digest_and_size(path)
+    if actual_digest != raw_artifact_sha256:
+        raise ValueError("Source D archive bytes do not match the verified artifact digest")
+    expected_inventory = SOURCE_D_REGISTRY_DOCUMENT.get("archive_inventory")
+    if not isinstance(expected_inventory, dict):
+        raise ValueError("Source D registry lacks archive inventory")
+    expected_data_member = expected_inventory.get("data_member")
+    expected_readme_member = expected_inventory.get("README_member")
+    if not isinstance(expected_data_member, str) or not isinstance(expected_readme_member, str):
+        raise ValueError("Source D archive inventory lacks named members")
+    try:
+        with zipfile.ZipFile(path) as archive:
+            names = tuple(info.filename for info in archive.infolist())
+    except (OSError, zipfile.BadZipFile) as exc:
+        raise ValueError("Source D verified artifact is not a readable ZIP archive") from exc
+    inventory: dict[str, object] = {
+        "member_count": len(names),
+        "data_member": expected_data_member if expected_data_member in names else None,
+        "README_member": expected_readme_member if expected_readme_member in names else None,
+        "figures_present": any(name.lower().endswith(".png") for name in names),
+    }
+    if inventory["member_count"] != expected_inventory.get("member_count"):
+        raise ValueError("Source D archive member count differs from the registry")
+    if inventory["data_member"] is None or inventory["README_member"] is None:
+        raise ValueError("Source D archive inventory is missing a registered member")
+    if inventory["figures_present"] is not expected_inventory.get("figures_present"):
+        raise ValueError("Source D archive figure inventory differs from the registry")
+    return inventory
+
+
 __all__ = [
     "SOURCE_D_DOI",
     "SOURCE_D_FILE_NAME",
@@ -154,6 +193,7 @@ __all__ = [
     "SOURCE_D_VERSION",
     "acquire_source_d",
     "fetch_zenodo_metadata",
+    "inspect_source_d_archive",
     "source_d_quarantine",
     "zenodo_file_metadata",
 ]

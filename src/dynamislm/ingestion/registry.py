@@ -236,6 +236,29 @@ def registered_dataset_file_identity(
             provider_hash_representation = FileRepresentation(provider_hash_representation_value)
         except ValueError as exc:
             raise ValueError("registry provider hash representation is unsupported") from exc
+    provider_hash = _optional_string(selected, "provider_hash")
+    provider_hash_algorithm = _optional_string(selected, "provider_hash_algorithm")
+    saved_original_filename = selected.get("saved_original_filename")
+    saved_original_byte_size = selected.get("saved_original_byte_size")
+    saved_original_provider_hash = selected.get("saved_original_provider_hash")
+    if provider_hash_representation is FileRepresentation.SAVED_ORIGINAL:
+        if provider_hash is None or provider_hash_algorithm is None:
+            raise ValueError("saved-original registry hash identity is incomplete")
+        if provider_hash_algorithm.lower() != "md5":
+            raise ValueError("saved-original registry hash algorithm must be md5")
+        if not isinstance(saved_original_filename, str) or not saved_original_filename.strip():
+            raise ValueError("saved-original registry filename is required")
+        if isinstance(saved_original_byte_size, bool) or not isinstance(
+            saved_original_byte_size, int
+        ):
+            raise ValueError("saved-original registry byte size is required")
+        if (
+            not isinstance(saved_original_provider_hash, str)
+            or not saved_original_provider_hash.strip()
+        ):
+            raise ValueError("saved-original registry provider hash is required")
+        if saved_original_provider_hash.lower() != provider_hash.lower():
+            raise ValueError("saved-original registry provider hashes differ")
     return RegisteredDatasetFileIdentity(
         source_id=source_id,
         source_version=version.repository_version,
@@ -250,8 +273,8 @@ def registered_dataset_file_identity(
         media_type=_required_string(selected, "media_type"),
         expected_sha256=expected_sha256,
         expected_byte_size=expected_byte_size,
-        provider_hash=_optional_string(selected, "provider_hash"),
-        provider_hash_algorithm=_optional_string(selected, "provider_hash_algorithm"),
+        provider_hash=provider_hash,
+        provider_hash_algorithm=provider_hash_algorithm,
         provider_declared_byte_size=provider_declared_byte_size,
         provider_hash_representation=provider_hash_representation,
     )

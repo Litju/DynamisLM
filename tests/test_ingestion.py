@@ -4,6 +4,7 @@ import datetime as datetime_module
 import hashlib
 from dataclasses import replace
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -22,6 +23,7 @@ from dynamislm.ingestion import (
     RawRowIdentity,
     RegisteredDatasetFileIdentity,
     RuntimeAuthorityIdentity,
+    SavedOriginalVerificationReceipt,
     SourceMetadataClaim,
     SourceMetadataConflict,
     SourceVariableIdentity,
@@ -37,10 +39,13 @@ from dynamislm.ingestion import (
     canonical_replay_digest,
     inspect_tabular_schema,
     promotion_from_evidence,
+    qualify_dataset,
     resolve_data_root,
     validate_canonical_records,
     validate_canonical_replay,
     verify_registered_artifact,
+    verify_saved_original_url,
+    write_external_json,
 )
 from dynamislm.ingestion.adapters.mendeley_rpl import (
     source_b_population,
@@ -51,6 +56,8 @@ from dynamislm.ingestion.adapters.mendeley_turkish_super_league import (
     source_c_quarantine,
 )
 from dynamislm.ingestion.adapters.unifesp_serie_a import (
+    SOURCE_A_EXPECTED_BYTE_SIZE,
+    SOURCE_A_EXPECTED_SHA256,
     SOURCE_A_ID,
     SOURCE_A_LICENSE,
     SOURCE_A_REGISTERED_FILE,
@@ -58,6 +65,7 @@ from dynamislm.ingestion.adapters.unifesp_serie_a import (
     SOURCE_A_VERSION,
     source_a_population_and_source_decisions,
     source_a_population_identity,
+    source_a_representation_audit,
     source_a_season_identity,
     source_a_variable_identities,
 )
@@ -80,7 +88,11 @@ from dynamislm.measurement import (
     ValueOrigin,
     VersionIdentity,
 )
-from dynamislm.population.models import EvidenceClass
+from dynamislm.population.models import EvidenceClass, SeasonIdentity
+from dynamislm.population.qualification import (
+    qualify_canonical_population,
+    qualify_canonical_source,
+)
 from dynamislm.provenance import ProcessingRun, Provenance, SourceArtifact
 from dynamislm.serialization import canonical_hash, canonical_json, from_canonical_json
 
@@ -576,6 +588,9 @@ def test_typed_promotion_authority_cannot_be_forged(tmp_path: Path) -> None:
     unresolved = replace(
         decision.evidence.qualification,
         status=DatasetQualificationStatus.QUARANTINED,
+        evidence_class=EvidenceClass.REJECTED_OR_UNRESOLVED,
+        reason_codes=("FOOTBALL_CONTEXT_UNRESOLVED",),
+        missing_information=("football context evidence",),
     )
     with pytest.raises(ValueError):
         replace(decision, evidence=replace(decision.evidence, qualification=unresolved))
@@ -777,3 +792,310 @@ def test_tab_schema_inspection_preserves_header_and_counts() -> None:
     assert schema.distinct_athlete_ids == 2
     assert schema.distinct_game_dates == 2
     assert size > 0
+
+
+def test_qualified_receipt_requires_football_mapping_and_self_consistent_decisions(
+    tmp_path: Path,
+) -> None:
+    evidence = _promotion_evidence(tmp_path)
+    with pytest.raises(ValueError, match="resolved football mapping"):
+        replace(
+            evidence.qualification,
+            football_mapping_status=VariableResolutionStatus.UNRESOLVED,
+        )
+
+    source_decision = evidence.qualification.source_decision
+    assert source_decision is not None
+    with pytest.raises(ValueError, match="bound to another source"):
+        replace(
+            evidence.qualification,
+            source_decision=qualify_canonical_source(
+                replace(
+                    source_decision.source,
+                    source_id=RegistryReference(
+                        ScientificIdentifier(
+                            "dynamislm",
+                            "dataset",
+                            "another-source",
+                            "1.0.0",
+                        ),
+                        "Another source",
+                    ),
+                )
+            ),
+        )
+
+    with pytest.raises(ValueError, match="bound to another version"):
+        replace(
+            evidence.qualification,
+            source_decision=qualify_canonical_source(
+                replace(source_decision.source, source_revision="another-version")
+            ),
+        )
+
+    changed_population = replace(
+        evidence.qualification.population_decision.population
+        if evidence.qualification.population_decision is not None
+        else source_decision.population_decision.population,
+        season=SeasonIdentity(
+            ScientificIdentifier("dynamislm", "season", "synthetic-season", "1.0.0"),
+            "Synthetic season",
+        ),
+    )
+    changed_population_decision = qualify_canonical_population(changed_population)
+    with pytest.raises(ValueError, match="decisions differ"):
+        replace(evidence.qualification, population_decision=changed_population_decision)
+
+
+def test_promotion_evidence_rejects_cross_bound_artifact_and_mapping(tmp_path: Path) -> None:
+    evidence = _promotion_evidence(tmp_path)
+    with pytest.raises(ValueError, match="qualification artifact"):
+        replace(
+            evidence,
+            qualification=replace(
+                evidence.qualification,
+                artifact_sha256="sha256:" + "c" * 64,
+            ),
+        )
+    with pytest.raises(ValueError, match="mapping"):
+        replace(
+            evidence,
+            canonical_validation=replace(
+                evidence.canonical_validation,
+                mapping_version="other-mapping@1.0.0",
+            ),
+        )
+
+
+def test_qualify_dataset_rejects_cross_bound_source_population_version_and_license() -> None:
+    population_decision, source_decision = source_a_population_and_source_decisions()
+    identities = source_a_variable_identities(("AthleteID",))
+    common: dict[str, Any] = {
+        "artifact_sha256": "sha256:" + "a" * 64,
+        "license_identity": SOURCE_A_LICENSE,
+        "variable_identities": identities,
+        "football_mapping_status": VariableResolutionStatus.RESOLVED,
+        "evidence": ("synthetic qualification evidence",),
+    }
+    changed_population = replace(
+        population_decision.population,
+        season=SeasonIdentity(
+            ScientificIdentifier("dynamislm", "season", "qualification-test", "1.0.0"),
+            "Qualification test season",
+        ),
+    )
+    with pytest.raises(ValueError, match="population"):
+        qualify_dataset(
+            SOURCE_A_SOURCE,
+            SOURCE_A_VERSION,
+            changed_population,
+            replace(source_decision.source, population=population_decision.population),
+            **common,
+        )
+    with pytest.raises(ValueError, match="source"):
+        qualify_dataset(
+            SOURCE_A_SOURCE,
+            SOURCE_A_VERSION,
+            population_decision.population,
+            replace(
+                source_decision.source,
+                source_id=RegistryReference(
+                    ScientificIdentifier("dynamislm", "dataset", "other", "1.0.0"),
+                    "Other",
+                ),
+            ),
+            **common,
+        )
+    with pytest.raises(ValueError, match="revision"):
+        qualify_dataset(
+            SOURCE_A_SOURCE,
+            SOURCE_A_VERSION,
+            population_decision.population,
+            replace(source_decision.source, source_revision="2.0"),
+            **common,
+        )
+    with pytest.raises(ValueError, match="license"):
+        qualify_dataset(
+            SOURCE_A_SOURCE,
+            SOURCE_A_VERSION,
+            population_decision.population,
+            source_decision.source,
+            **{
+                **common,
+                "license_identity": _license("CC-BY-4.0"),
+            },
+        )
+
+
+def test_representation_audit_uses_persisted_saved_original_observations() -> None:
+    verification = SavedOriginalVerificationReceipt(
+        source_id=SOURCE_A_ID,
+        source_version=SOURCE_A_VERSION.repository_version,
+        provider_file_id=1513,
+        file_persistent_identifier="hdl:20.500.12682/rdp/GMXME8/DO2C67",
+        representation=FileRepresentation.SAVED_ORIGINAL,
+        provider_hash="93951f1b28240cfaa9c31d075824cb36",
+        provider_hash_algorithm="md5",
+        observed_md5="93951f1b28240cfaa9c31d075824cb36",
+        observed_sha256="sha256:" + "a" * 64,
+        observed_byte_size=1124197,
+        metadata_snapshot_sha256="sha256:360e006156b81f0a25c4a5c25f350ce6f46f9084028d1938f35e998d45d3f856",
+    )
+    audit = source_a_representation_audit(
+        verified_archival_sha256=SOURCE_A_EXPECTED_SHA256,
+        verified_archival_byte_size=SOURCE_A_EXPECTED_BYTE_SIZE,
+        saved_original_verification=verification,
+    )
+    assert audit["provider_hash_verified"] is True
+    mismatched = replace(verification, metadata_snapshot_sha256="sha256:" + "b" * 64)
+    assert (
+        source_a_representation_audit(
+            verified_archival_sha256=SOURCE_A_EXPECTED_SHA256,
+            verified_archival_byte_size=SOURCE_A_EXPECTED_BYTE_SIZE,
+            saved_original_verification=mismatched,
+        )["provider_hash_verified"]
+        is False
+    )
+
+
+def test_empty_included_variables_and_forged_promotion_cannot_promote(tmp_path: Path) -> None:
+    evidence = _promotion_evidence(tmp_path)
+    empty_variables = replace(
+        evidence,
+        canonical_validation=replace(
+            evidence.canonical_validation,
+            included_variable_ids=(),
+        ),
+    )
+    decision = promotion_from_evidence(empty_variables)
+    assert not decision.can_promote
+    assert "VARIABLE_IDENTITY_RESOLVED_FAILED" in decision.reason_codes
+    with pytest.raises(ValueError, match="promotion status"):
+        replace(decision, status=PromotionStatus.PROMOTED)
+
+
+def test_saved_original_verification_is_streamed_and_has_no_success_boolean(
+    tmp_path: Path,
+) -> None:
+    source = _source()
+    version = _version()
+    archival = b"archival bytes"
+    saved_original = b"saved-original bytes"
+    registered = RegisteredDatasetFileIdentity(
+        source_id=source.source_id,
+        source_version=version.repository_version,
+        representation=FileRepresentation.ARCHIVAL_TAB,
+        filename="archival.tab",
+        media_type="text/tab-separated-values",
+        expected_sha256="sha256:" + hashlib.sha256(archival).hexdigest(),
+        expected_byte_size=len(archival),
+        provider_file_id="file-1",
+        file_persistent_identifier="pid:1",
+        provider_hash=hashlib.md5(saved_original).hexdigest(),
+        provider_hash_algorithm="md5",
+        provider_hash_representation=FileRepresentation.SAVED_ORIGINAL,
+    )
+
+    class Response:
+        def __init__(self) -> None:
+            self._chunks = iter((saved_original[:5], saved_original[5:]))
+
+        def __enter__(self) -> Response:
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            return None
+
+        def geturl(self) -> str:
+            return "https://example.invalid/datafile/file-1?format=original"
+
+        def read(self, size: int) -> bytes:
+            del size
+            return next(self._chunks, b"")
+
+    receipt = verify_saved_original_url(
+        source,
+        version,
+        "https://example.invalid/datafile/file-1?format=original",
+        registered_file_identity=registered,
+        file_persistent_identifier="pid:1",
+        provider_file_id="file-1",
+        expected_byte_size=len(saved_original),
+        metadata_snapshot_sha256="sha256:" + "d" * 64,
+        data_root=tmp_path / "data",
+        repository_root=REPO_ROOT,
+        opener=lambda request, timeout: Response(),
+    )
+    assert receipt.observed_md5 == hashlib.md5(saved_original).hexdigest()
+    assert receipt.observed_sha256 == "sha256:" + hashlib.sha256(saved_original).hexdigest()
+    assert receipt.observed_byte_size == len(saved_original)
+    assert "verified" not in canonical_json(receipt)
+    assert from_canonical_json(canonical_json(receipt), SavedOriginalVerificationReceipt) == receipt
+    assert data_root_inventory(tmp_path / "data")["DATA_ROOT_OBJECT_COUNT"] == 0
+
+
+@pytest.mark.parametrize("descendant", ("objects", "tmp/acquisition"))
+@pytest.mark.parametrize("outside_target", ("repository", "directory"))
+def test_nested_data_root_symlink_escape_is_blocked_before_acquisition_bytes(
+    tmp_path: Path,
+    descendant: str,
+    outside_target: str,
+) -> None:
+    data_root = tmp_path / f"data-{descendant.replace('/', '-')}-{outside_target}"
+    data_root.mkdir()
+    outside = REPO_ROOT if outside_target == "repository" else tmp_path / "outside-directory"
+    if outside_target == "directory":
+        outside.mkdir()
+    link = data_root / descendant
+    link.parent.mkdir(parents=True, exist_ok=True)
+    link.symlink_to(outside, target_is_directory=True)
+    with pytest.raises(ValueError, match="escapes"):
+        acquire_bytes(
+            _source(),
+            _version(),
+            b"must not escape",
+            data_root=data_root,
+            repository_root=REPO_ROOT,
+        )
+    if outside_target == "directory":
+        assert tuple(outside.iterdir()) == ()
+
+
+def test_digest_target_symlink_escape_is_blocked_before_move(tmp_path: Path) -> None:
+    data_root = tmp_path / "data"
+    data_root.mkdir()
+    content = b"content addressed bytes"
+    digest = hashlib.sha256(content).hexdigest()
+    object_parent = data_root / "objects" / "sha256" / digest[:2]
+    object_parent.mkdir(parents=True)
+    outside_target = tmp_path / "outside-object"
+    outside_target.write_bytes(b"untouched")
+    target = object_parent / digest
+    target.symlink_to(outside_target)
+    with pytest.raises(ValueError, match="escapes"):
+        acquire_bytes(
+            _source(),
+            _version(),
+            content,
+            expected_sha256=digest,
+            expected_byte_size=len(content),
+            data_root=data_root,
+            repository_root=REPO_ROOT,
+        )
+    assert outside_target.read_bytes() == b"untouched"
+    assert target.is_symlink()
+
+
+@pytest.mark.parametrize("descendant", ("metadata", "receipts", "canonical", "quarantine"))
+def test_nested_data_root_symlink_escape_is_blocked_for_json_writes(
+    tmp_path: Path,
+    descendant: str,
+) -> None:
+    data_root = tmp_path / "data"
+    data_root.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (data_root / descendant).symlink_to(outside, target_is_directory=True)
+    with pytest.raises(ValueError, match="escapes"):
+        write_external_json(data_root, f"{descendant}/receipt.json", {"value": "blocked"})
+    assert not (outside / "receipt.json").exists()

@@ -1,20 +1,21 @@
 {
-  "source_id": "zenodo-ekstraklasa-training-adaptation",
-  "source_version": "1.0",
+  "archive_member_count": 9,
   "doi": "10.5281/zenodo.15205417",
-  "status": "QUARANTINED",
+  "missing_information": [
+    "independent manuscript/publication provenance for the exact package contents",
+    "explicit evidence linking every retained athlete row to a senior first-team top-domestic-division cohort",
+    "raw-vs-derived status for jump-test, GPS, strength, HRV, and RPE fields"
+  ],
+  "model_training_use": "NOT_AUTHORIZED_BY_RES63",
   "provenance": "UNRESOLVED",
-  "raw_artifact_sha256": "sha256:8659ea07afe7ce6e6409fc684fa339e9552b78739380c29c19a826ac925ad395",
   "provider_hash": "c33f2f14a356d6ea10c6ed7e5ac53cde",
   "provider_hash_algorithm": "md5",
+  "raw_artifact_sha256": "sha256:8659ea07afe7ce6e6409fc684fa339e9552b78739380c29c19a826ac925ad395",
   "reason_codes": [
     "UNRESOLVED_PUBLICATION_PROVENANCE",
     "UNRESOLVED_FIRST_TEAM_STATUS"
   ],
-  "missing_information": [
-    "independent manuscript/publication provenance for the exact package contents",
-    "raw-versus-derived field provenance"
-  ],
-  "archive_member_count": 9,
-  "model_training_use": "NOT_AUTHORIZED_BY_RES63"
+  "source_id": "zenodo-ekstraklasa-training-adaptation",
+  "source_version": "1.0",
+  "status": "QUARANTINED"
 }

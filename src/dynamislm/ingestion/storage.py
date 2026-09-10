@@ -29,6 +29,7 @@ _DATA_RELATIVE_PREFIXES = (
     "canonical/",
     "quarantine/",
 )
+_ACQUISITION_RELATIVE_PREFIX = ("tmp", "acquisition")
 
 
 def _validate_relative_data_name(relative_path: str) -> None:
@@ -39,7 +40,7 @@ def _validate_relative_data_name(relative_path: str) -> None:
         raise ValueError("external data path must be canonical POSIX relative text")
     if any(part in {".", ".."} for part in pure.parts):
         raise ValueError("external data path must not contain traversal segments")
-    if not relative_path.startswith(_DATA_RELATIVE_PREFIXES):
+    if not pure.parts or pure.parts[0] not in {prefix[:-1] for prefix in _DATA_RELATIVE_PREFIXES}:
         raise ValueError("external data path uses an uncontrolled prefix")
 
 
@@ -114,8 +115,13 @@ def ensure_data_tree(
         repository_root=repository_root,
         project_context=project_context,
     )
-    for relative_directory in DATA_ROOT_DIRECTORIES:
-        (data_root / relative_directory).mkdir(parents=True, exist_ok=True)
+    directories = tuple(
+        assert_data_path_contained(data_root, data_root / relative_directory)
+        for relative_directory in DATA_ROOT_DIRECTORIES
+    )
+    for directory in directories:
+        directory.mkdir(parents=True, exist_ok=True)
+        assert_data_path_contained(data_root, directory)
     return data_root
 
 
@@ -126,18 +132,38 @@ def _digest_hex(digest: str) -> str:
     return value
 
 
+def assert_data_path_contained(data_root: Path, path: Path) -> Path:
+    """Prove a data-root path remains inside the resolved canonical root."""
+
+    resolved_root = data_root.expanduser().resolve(strict=False)
+    candidate = path.expanduser()
+    if not candidate.is_absolute():
+        candidate = resolved_root / candidate
+    resolved_candidate = candidate.resolve(strict=False)
+    if not resolved_candidate.is_relative_to(resolved_root):
+        raise ValueError("external data path escapes DYNAMISLM_DATA_ROOT")
+    return candidate
+
+
 def content_addressed_object_path(data_root: Path, digest: str) -> Path:
     """Return ``objects/sha256/<first-two>/<full-digest>`` for a digest."""
 
     digest_hex = _digest_hex(digest)
-    return data_root.resolve(strict=False) / "objects" / "sha256" / digest_hex[:2] / digest_hex
+    target = (
+        data_root.expanduser().resolve(strict=False)
+        / "objects"
+        / "sha256"
+        / digest_hex[:2]
+        / digest_hex
+    )
+    return assert_data_path_contained(data_root, target)
 
 
 def relative_data_path(data_root: Path, path: Path) -> str:
     """Return a portable data-root-relative POSIX path and reject escapes."""
 
     resolved_root = data_root.expanduser().resolve(strict=False)
-    resolved_path = path.expanduser().resolve(strict=False)
+    resolved_path = assert_data_path_contained(resolved_root, path).resolve(strict=False)
     try:
         relative = resolved_path.relative_to(resolved_root)
     except ValueError as exc:
@@ -175,7 +201,7 @@ def store_verified_temporary_file(
     if expected_byte_size < 0:
         raise ValueError("expected_byte_size must not be negative")
     temporary_relative = relative_data_path(data_root, temporary_path)
-    if not temporary_relative.startswith("tmp/acquisition/"):
+    if PurePosixPath(temporary_relative).parts[:2] != _ACQUISITION_RELATIVE_PREFIX:
         raise ValueError("temporary acquisition must be under tmp/acquisition")
     actual_digest, actual_size = file_digest_and_size(temporary_path)
     if actual_digest != expected_digest or actual_size != expected_byte_size:
@@ -186,7 +212,10 @@ def store_verified_temporary_file(
         raise ValueError("downloaded bytes do not match the expected SHA-256 digest and byte size")
 
     target = content_addressed_object_path(data_root, expected_digest)
+    assert_data_path_contained(data_root, target.parent)
     target.parent.mkdir(parents=True, exist_ok=True)
+    assert_data_path_contained(data_root, target.parent)
+    assert_data_path_contained(data_root, target)
     if target.exists():
         existing_digest, existing_size = file_digest_and_size(target)
         if existing_digest != expected_digest or existing_size != expected_byte_size:
@@ -198,7 +227,11 @@ def store_verified_temporary_file(
         temporary_path.unlink()
         return target
 
+    assert_data_path_contained(data_root, temporary_path)
+    assert_data_path_contained(data_root, target.parent)
+    assert_data_path_contained(data_root, target)
     os.replace(temporary_path, target)
+    assert_data_path_contained(data_root, target)
     stored_digest, stored_size = file_digest_and_size(target)
     if stored_digest != expected_digest or stored_size != expected_byte_size:
         raise ValueError("atomically stored object failed digest or size verification")
@@ -209,9 +242,11 @@ def write_external_json(data_root: Path, relative_path: str, value: object) -> P
     """Write a deterministic JSON receipt/report under the external data root."""
 
     _validate_relative_data_name(relative_path)
-    target = (data_root / relative_path).resolve(strict=False)
-    relative_data_path(data_root, target)
+    target = assert_data_path_contained(data_root, data_root / relative_path)
+    assert_data_path_contained(data_root, target.parent)
     target.parent.mkdir(parents=True, exist_ok=True)
+    assert_data_path_contained(data_root, target.parent)
+    assert_data_path_contained(data_root, target)
     serialized = (
         canonical_json(value)
         if not isinstance(value, dict | list)
@@ -224,12 +259,19 @@ def write_external_json(data_root: Path, relative_path: str, value: object) -> P
         )
     )
     temporary = target.with_name(f".{target.name}.tmp-{os.getpid()}")
-    with temporary.open("w", encoding="utf-8", newline="\n") as output:
+    assert_data_path_contained(data_root, temporary)
+    if temporary.exists():
+        raise ValueError("external data temporary path already exists")
+    with temporary.open("x", encoding="utf-8", newline="\n") as output:
         output.write(serialized)
         output.write("\n")
         output.flush()
         os.fsync(output.fileno())
+    assert_data_path_contained(data_root, temporary)
+    assert_data_path_contained(data_root, target.parent)
+    assert_data_path_contained(data_root, target)
     os.replace(temporary, target)
+    assert_data_path_contained(data_root, target)
     return target
 
 
@@ -335,6 +377,7 @@ __all__ = [
     "DATA_ROOT_DIRECTORIES",
     "DATA_ROOT_ENVIRONMENT_VARIABLE",
     "DEFAULT_DATA_ROOT_RELATIVE",
+    "assert_data_path_contained",
     "assert_external_data_root",
     "content_addressed_object_path",
     "count_files",

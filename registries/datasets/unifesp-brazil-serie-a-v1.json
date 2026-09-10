@@ -70,7 +70,7 @@
   "representation_audit": {
     "selected_ingestion_representation": "ARCHIVAL_TAB",
     "provider_hash_role": "SAVED_ORIGINAL",
-    "provider_hash_verified": true,
+    "provider_verification_receipt": "receipts/unifesp-brazil-serie-a-v1-1.0-saved-original-verification.json",
     "provider_declared_byte_size": 1028925,
     "saved_original_filename": "Raw data.xlsx",
     "saved_original_byte_size": 1124197,

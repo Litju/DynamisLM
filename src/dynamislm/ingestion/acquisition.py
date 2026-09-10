@@ -20,11 +20,13 @@ from dynamislm.ingestion.contracts import (
     DatasetVersionIdentity,
     FileRepresentation,
     RegisteredDatasetFileIdentity,
+    SavedOriginalVerificationReceipt,
     SourceVersionConflict,
     SourceVersionVerificationReceipt,
     VerifiedRawArtifact,
 )
 from dynamislm.ingestion.storage import (
+    assert_data_path_contained,
     ensure_data_tree,
     relative_data_path,
     resolve_data_root,
@@ -166,6 +168,12 @@ def _store_acquisition(
     digest = hashlib.sha256()
     byte_size = 0
     temp_directory = resolved_data_root / "tmp" / "acquisition"
+    if not temp_directory.is_dir():
+        raise AcquisitionError("temporary acquisition directory is not a directory")
+    try:
+        assert_data_path_contained(resolved_data_root, temp_directory)
+    except ValueError as exc:
+        raise AcquisitionError("temporary acquisition directory escaped data root") from exc
     try:
         with tempfile.NamedTemporaryFile(
             mode="wb",
@@ -301,6 +309,10 @@ def acquire_url(
             raise AcquisitionError("resolved acquisition URL must remain HTTPS")
         response_headers = response.headers
         chunks = iter(lambda: response.read(1024 * 1024), b"")
+        observed_media_type = _content_type(response_headers, media_type)
+        chosen_media_type = (
+            media_type if media_type != "application/octet-stream" else observed_media_type
+        )
         return _store_acquisition(
             chunks,
             source=source,
@@ -308,7 +320,7 @@ def acquire_url(
             requested_url=url,
             resolved_url=resolved_url,
             original_filename=chosen_filename,
-            media_type=_content_type(response_headers, media_type),
+            media_type=chosen_media_type,
             provider_hash=provider_hash,
             provider_hash_algorithm=provider_hash_algorithm,
             etag=_header_value(response_headers, "ETag"),
@@ -379,6 +391,108 @@ def acquire_bytes(
     )
 
 
+def verify_saved_original_url(
+    source: DatasetSourceIdentity,
+    version: DatasetVersionIdentity,
+    url: str,
+    *,
+    registered_file_identity: RegisteredDatasetFileIdentity,
+    file_persistent_identifier: str,
+    provider_file_id: str | int,
+    expected_byte_size: int,
+    metadata_snapshot_sha256: str,
+    data_root: Path | None = None,
+    repository_root: Path | None = None,
+    timeout: float = 45.0,
+    opener: Callable[..., Any] = urllib.request.urlopen,
+) -> SavedOriginalVerificationReceipt:
+    """Stream a provider's saved-original bytes and persist only observations."""
+
+    if not isinstance(source, DatasetSourceIdentity):
+        raise AcquisitionError("source must be a DatasetSourceIdentity")
+    if not isinstance(version, DatasetVersionIdentity):
+        raise AcquisitionError("version must be a DatasetVersionIdentity")
+    if not isinstance(registered_file_identity, RegisteredDatasetFileIdentity):
+        raise AcquisitionError("registered_file_identity must be a RegisteredDatasetFileIdentity")
+    registered = registered_file_identity
+    if source.source_id != registered.source_id:
+        raise AcquisitionError("saved-original source does not match registered identity")
+    if version.repository_version != registered.source_version:
+        raise AcquisitionError("saved-original version does not match registered identity")
+    if registered.provider_hash is None:
+        raise AcquisitionError("registered saved-original provider hash is missing")
+    if (
+        registered.provider_hash_algorithm is None
+        or registered.provider_hash_algorithm.lower() != "md5"
+    ):
+        raise AcquisitionError("registered saved-original provider hash algorithm must be md5")
+    if registered.provider_hash_representation is not FileRepresentation.SAVED_ORIGINAL:
+        raise AcquisitionError("registered provider hash is not for SAVED_ORIGINAL")
+    if registered.provider_file_id != provider_file_id:
+        raise AcquisitionError("saved-original provider file ID does not match registry")
+    if registered.file_persistent_identifier != file_persistent_identifier:
+        raise AcquisitionError("saved-original file PID does not match registry")
+    if not isinstance(expected_byte_size, int) or isinstance(expected_byte_size, bool):
+        raise AcquisitionError("saved-original expected byte size must be an integer")
+    if expected_byte_size < 0:
+        raise AcquisitionError("saved-original expected byte size must not be negative")
+    if not isinstance(metadata_snapshot_sha256, str) or not metadata_snapshot_sha256.strip():
+        raise AcquisitionError("saved-original metadata snapshot digest is required")
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme != "https" or not parsed.netloc:
+        raise AcquisitionError("saved-original acquisition requires an HTTPS URL")
+    if parsed.path.rstrip("/").split("/")[-1] != str(provider_file_id):
+        raise AcquisitionError("saved-original URL is not bound to the registered file ID")
+    query = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
+    if query.get("format") != ["original"]:
+        raise AcquisitionError("saved-original acquisition URL must request format=original")
+    request_timeout = _timeout(timeout)
+    resolved_data_root = ensure_data_tree(data_root, repository_root=repository_root)
+    request = urllib.request.Request(url, headers={"User-Agent": "DynamisLM-RES63/1.0"})
+    observed_md5 = hashlib.md5()
+    observed_sha256 = hashlib.sha256()
+    observed_byte_size = 0
+    with opener(request, timeout=request_timeout) as response:
+        resolved_url = response.geturl()
+        if urllib.parse.urlparse(resolved_url).scheme != "https":
+            raise AcquisitionError("saved-original resolved URL must remain HTTPS")
+        while chunk := response.read(1024 * 1024):
+            if not isinstance(chunk, bytes):
+                raise AcquisitionError("saved-original stream must yield bytes")
+            observed_md5.update(chunk)
+            observed_sha256.update(chunk)
+            observed_byte_size += len(chunk)
+    observed_md5_hex = observed_md5.hexdigest()
+    if observed_md5_hex.lower() != registered.provider_hash.lower():
+        raise AcquisitionError("saved-original bytes do not match the registered provider MD5")
+    if observed_byte_size != expected_byte_size:
+        raise AcquisitionError("saved-original byte count does not match the registered size")
+    receipt = SavedOriginalVerificationReceipt(
+        source_id=source.source_id,
+        source_version=version.repository_version,
+        provider_file_id=provider_file_id,
+        file_persistent_identifier=file_persistent_identifier,
+        representation=FileRepresentation.SAVED_ORIGINAL,
+        provider_hash_algorithm="md5",
+        provider_hash=registered.provider_hash,
+        observed_md5=observed_md5_hex,
+        observed_sha256=f"sha256:{observed_sha256.hexdigest()}",
+        observed_byte_size=observed_byte_size,
+        metadata_snapshot_sha256=metadata_snapshot_sha256,
+    )
+    write_external_json(
+        resolved_data_root,
+        _receipt_path(
+            resolved_data_root,
+            source.source_id,
+            version.repository_version,
+            "saved-original-verification",
+        ),
+        receipt,
+    )
+    return receipt
+
+
 def verify_registered_artifact(
     registered_file_identity: RegisteredDatasetFileIdentity,
     verified_artifact: VerifiedRawArtifact,
@@ -390,7 +504,10 @@ def verify_registered_artifact(
 
     try:
         resolved_data_root = resolve_data_root(data_root, repository_root=repository_root)
-        artifact_path = resolved_data_root / verified_artifact.relative_path
+        artifact_path = assert_data_path_contained(
+            resolved_data_root,
+            resolved_data_root / verified_artifact.relative_path,
+        )
         verify_file(
             artifact_path,
             expected_sha256=registered_file_identity.expected_sha256,
@@ -440,4 +557,5 @@ __all__ = [
     "acquire_url",
     "capture_metadata_snapshot",
     "verify_registered_artifact",
+    "verify_saved_original_url",
 ]

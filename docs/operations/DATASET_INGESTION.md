@@ -26,6 +26,12 @@ configured path, resolves symlinks, and fails if the data root equals the
 repository or is beneath it. This guard applies even when a path is ignored by
 Git.
 
+Every fixed descendant write uses the same resolved-path containment invariant.
+The target, parent, temporary acquisition path, and final replacement target
+are checked before directory creation or byte movement and checked again before
+replacement. A descendant symlink to the repository or another outside
+directory therefore fails closed before external bytes are written.
+
 ## External tree
 
 After the containment check, create the tree with:
@@ -82,6 +88,17 @@ silently change the source version. Provider hashes remain supplementary:
 PROVIDER_HASH != DYNAMISLM_SHA256
 ETAG != CRYPTOGRAPHIC_AUTHORITY
 ```
+
+Source A has two Dataverse representations. The canonical `ARCHIVAL_TAB` file
+is acquired into the content-addressed object store. During explicit online
+acquisition, the same registered file is also requested with
+`?format=original`; that response is streamed without storage while MD5,
+diagnostic SHA-256, and byte count are computed. The provider MD5, `md5`
+algorithm, `SAVED_ORIGINAL` representation, byte count, file identity, and
+metadata-snapshot digest are persisted in
+`receipts/unifesp-brazil-serie-a-v1-1.0-saved-original-verification.json`.
+The receipt contains observations, not an independent success boolean. The
+saved original is never used as canonical input and is not stored.
 
 ## Metadata snapshots and registries
 
@@ -201,8 +218,12 @@ complete lineage
 There is no public nine-boolean promotion API and no `force=True`,
 `manual_override=True`, or owner override. `PromotionDecision` recomputes its
 status, reason codes, and content-derived decision ID from nested evidence.
-A qualified source does not qualify every variable. Unresolved variable
-semantics remain quarantined.
+A `QUALIFIED` receipt is accepted only when its source and population decisions,
+artifact, license, variable identity, football mapping, reasons, and missing
+information are internally consistent. Promotion repeats the source,
+population, artifact, mapping-version, and variable-registry bindings at the
+`PromotionEvidence` boundary. A qualified source does not qualify every
+variable. Unresolved variable semantics remain quarantined.
 
 ## Canonical replay
 
@@ -227,11 +248,17 @@ uv run python scripts/res63_replay.py \
   --verify
 ```
 
-Require identical record count, ordering, canonical SHA-256, variable-registry
-SHA, mapping version, population/source decisions, variable identities,
-metadata-conflict receipts, and quarantine decisions. Ordinary replay does not
-refresh network metadata. A transform never depends on filesystem enumeration
-or Python hash ordering.
+With `--verify`, `REPORT_REPLAY` means byte-for-byte regeneration of every
+committed RES-63 report: the five Source A reports, the two Source B reports,
+the Source C quarantine report, and the Source D quarantine report. Source B
+and C re-inspect their persisted verified workbooks; Source D verifies its
+persisted ZIP and archive member count. Replay consumes the real persisted
+acquisition receipts and metadata snapshots, including Source A's saved-
+original observation receipt. It does not synthesize acquisition timestamps or
+refresh network metadata. It also checks the Source A registry's canonical
+artifact SHA, record count, mapping version, variable-registry SHA, and
+relative paths against the newly replayed artifact. A transform never depends
+on filesystem enumeration or Python hash ordering.
 
 ## Initial sources
 

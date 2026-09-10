@@ -9,7 +9,11 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
-from dynamislm.ingestion.acquisition import acquire_url, capture_metadata_snapshot
+from dynamislm.ingestion.acquisition import (
+    acquire_url,
+    capture_metadata_snapshot,
+    verify_saved_original_url,
+)
 from dynamislm.ingestion.contracts import (
     CanonicalEmpiricalRecord,
     CanonicalFootballContext,
@@ -18,6 +22,7 @@ from dynamislm.ingestion.contracts import (
     FileRepresentation,
     RawRowIdentity,
     RegisteredDatasetFileIdentity,
+    SavedOriginalVerificationReceipt,
     SourceMetadataClaim,
     SourceMetadataConflict,
     SourceSchema,
@@ -41,6 +46,7 @@ from dynamislm.ingestion.registry import (
     dataset_version_identity,
     load_dataset_registry,
     registered_dataset_file_identity,
+    registry_file_entries,
     verify_live_provider_file_observation,
 )
 from dynamislm.ingestion.storage import file_digest_and_size
@@ -90,6 +96,9 @@ SOURCE_A_REGISTERED_FILE: RegisteredDatasetFileIdentity = registered_dataset_fil
 )
 SOURCE_A_EXPECTED_SHA256 = SOURCE_A_REGISTERED_FILE.expected_sha256
 SOURCE_A_EXPECTED_BYTE_SIZE = SOURCE_A_REGISTERED_FILE.expected_byte_size
+_SOURCE_A_FILE_REGISTRY_ENTRY = registry_file_entries(SOURCE_A_REGISTRY_DOCUMENT)[0]
+SOURCE_A_SAVED_ORIGINAL_FILENAME = str(_SOURCE_A_FILE_REGISTRY_ENTRY["saved_original_filename"])
+SOURCE_A_SAVED_ORIGINAL_BYTE_SIZE = int(_SOURCE_A_FILE_REGISTRY_ENTRY["saved_original_byte_size"])
 
 SOURCE_A_SOURCE = dataset_source_identity(SOURCE_A_REGISTRY_DOCUMENT)
 SOURCE_A_VERSION = dataset_version_identity(SOURCE_A_REGISTRY_DOCUMENT)
@@ -341,6 +350,21 @@ def acquire_source_a(
         provider_hash_representation=FileRepresentation.SAVED_ORIGINAL,
         provider_file_id=file_id,
     )
+    saved_original_url = (
+        f"https://domusdados.unifesp.br/api/access/datafile/{file_id}?format=original"
+    )
+    verify_saved_original_url(
+        SOURCE_A_SOURCE,
+        SOURCE_A_VERSION,
+        saved_original_url,
+        registered_file_identity=SOURCE_A_REGISTERED_FILE,
+        file_persistent_identifier=str(data_file.get("persistentId")),
+        provider_file_id=file_id,
+        expected_byte_size=SOURCE_A_SAVED_ORIGINAL_BYTE_SIZE,
+        metadata_snapshot_sha256=snapshot_sha256,
+        data_root=data_root,
+        repository_root=repository_root,
+    )
     download_url = f"https://domusdados.unifesp.br/api/access/datafile/{file_id}"
     return acquire_url(
         SOURCE_A_SOURCE,
@@ -477,29 +501,59 @@ def source_a_representation_audit(
     *,
     verified_archival_sha256: str,
     verified_archival_byte_size: int,
-    verified_saved_original_md5: str,
-    verified_saved_original_byte_size: int,
+    saved_original_verification: SavedOriginalVerificationReceipt,
+    registered_file_identity: RegisteredDatasetFileIdentity = SOURCE_A_REGISTERED_FILE,
 ) -> dict[str, object]:
-    """Record Dataverse archival-vs-original provenance without conflating bytes."""
+    """Record Dataverse archival-vs-original provenance from persisted observations."""
+
+    if not isinstance(saved_original_verification, SavedOriginalVerificationReceipt):
+        raise ValueError("saved-original verification must be a typed persisted observation")
+    if not isinstance(registered_file_identity, RegisteredDatasetFileIdentity):
+        raise ValueError("registered_file_identity must be a RegisteredDatasetFileIdentity")
+    registered_entry = _SOURCE_A_FILE_REGISTRY_ENTRY
+    expected_metadata_snapshot = SOURCE_A_REGISTRY_DOCUMENT.get("metadata_snapshot_sha256")
+    provider_hash_verified = bool(
+        verified_archival_sha256 == registered_file_identity.expected_sha256
+        and verified_archival_byte_size == registered_file_identity.expected_byte_size
+        and registered_file_identity.representation is FileRepresentation.ARCHIVAL_TAB
+        and registered_file_identity.provider_hash is not None
+        and registered_file_identity.provider_hash_algorithm is not None
+        and registered_file_identity.provider_hash_algorithm.lower() == "md5"
+        and registered_file_identity.provider_hash_representation
+        is FileRepresentation.SAVED_ORIGINAL
+        and saved_original_verification.source_id == registered_file_identity.source_id
+        and saved_original_verification.source_version == registered_file_identity.source_version
+        and saved_original_verification.provider_file_id
+        == registered_file_identity.provider_file_id
+        and saved_original_verification.file_persistent_identifier
+        == registered_file_identity.file_persistent_identifier
+        and saved_original_verification.provider_hash.lower()
+        == registered_file_identity.provider_hash.lower()
+        and saved_original_verification.observed_md5.lower()
+        == registered_file_identity.provider_hash.lower()
+        and saved_original_verification.provider_hash_algorithm.lower() == "md5"
+        and saved_original_verification.representation is FileRepresentation.SAVED_ORIGINAL
+        and saved_original_verification.observed_byte_size
+        == int(registered_entry["saved_original_byte_size"])
+        and saved_original_verification.metadata_snapshot_sha256 == expected_metadata_snapshot
+    )
 
     return {
         "classification": "FILE_REPRESENTATION_DIFFERENCE",
         "selected_ingestion_representation": FileRepresentation.ARCHIVAL_TAB.value,
-        "provider_hash": SOURCE_A_REGISTERED_FILE.provider_hash,
+        "provider_hash": registered_file_identity.provider_hash,
         "provider_hash_role": FileRepresentation.SAVED_ORIGINAL.value,
-        "provider_hash_verified": (
-            verified_saved_original_md5.lower()
-            == (SOURCE_A_REGISTERED_FILE.provider_hash or "").lower()
-        ),
-        "provider_declared_byte_size": SOURCE_A_REGISTERED_FILE.provider_declared_byte_size,
+        "provider_hash_verified": provider_hash_verified,
+        "provider_declared_byte_size": registered_file_identity.provider_declared_byte_size,
         "archival_tab": {
             "sha256": verified_archival_sha256,
             "byte_size": verified_archival_byte_size,
         },
         "saved_original": {
-            "filename": "Raw data.xlsx",
-            "md5": verified_saved_original_md5,
-            "byte_size": verified_saved_original_byte_size,
+            "filename": str(registered_entry["saved_original_filename"]),
+            "md5": saved_original_verification.observed_md5,
+            "sha256": saved_original_verification.observed_sha256,
+            "byte_size": saved_original_verification.observed_byte_size,
             "stored": False,
             "canonical": False,
         },
@@ -784,6 +838,8 @@ __all__ = [
     "SOURCE_A_METADATA_URL",
     "SOURCE_A_PROVIDER",
     "SOURCE_A_REGISTERED_FILE",
+    "SOURCE_A_SAVED_ORIGINAL_BYTE_SIZE",
+    "SOURCE_A_SAVED_ORIGINAL_FILENAME",
     "SOURCE_A_SOURCE",
     "SOURCE_A_VERSION",
     "acquire_source_a",

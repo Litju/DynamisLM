@@ -85,6 +85,13 @@ root equal to or beneath the repository. The guard therefore rejects
 `repo/data`, `repo/.data`, `repo/datasets`, and symlinks that point into the
 repository. It does not rely on `.gitignore`.
 
+The same resolved-path relationship is the invariant for every external write:
+fixed descendants, temporary acquisition files, content-addressed object
+parents and targets, metadata/receipt/quarantine paths, canonical artifacts,
+and atomic replacement targets are checked before writing and immediately
+before replacement. An existing descendant symlink that resolves outside the
+data root fails closed; lexical prefix checks are not containment authority.
+
 The invariant is:
 
 ```text
@@ -113,8 +120,9 @@ home directory.
 The pre-ingestion seal closes the direct-construction/V3-decode asymmetry for
 the generic leaf boundary. Narrow constructor checks now validate nested
 instances, immutable tuples, enum values, scalar result variants, explicit
-timezone values, provenance nodes, and lineage types. No dataclass fields,
-wire shape, serialization version, or historical valid hash is changed.
+timezone values, provenance nodes, and lineage types. Existing contract fields,
+wire shape, serialization version, and historical valid hashes remain unchanged;
+the saved-original observation is a separate typed receipt.
 
 The promotion boundary requires runtime integrity before any record can be
 promoted. No pydantic, typeguard, beartype, or generic runtime type system is
@@ -281,6 +289,15 @@ The mapping depends only on verified raw bytes, registered metadata, and the
 mapping version. Wall clock, network access at transform time, filesystem
 enumeration order, and Python hash ordering are not transform inputs.
 
+Source A's provider MD5 is an observation about Dataverse's saved-original
+representation, not the canonical archival-tab byte authority. Explicit online
+acquisition streams `?format=original` and persists MD5, diagnostic SHA-256,
+byte count, provider file ID/PID, representation, algorithm, and metadata
+snapshot digest in the external saved-original verification receipt. No saved-
+original bytes are retained. Replay requires that receipt and the exact
+persisted metadata snapshot; it recomputes the provider-hash pass from their
+fields and the committed registry rather than trusting a stored success flag.
+
 ## Qualification, quarantine, and promotion decision
 
 `QuarantineReceipt` is first-class and records source/version, artifact digest
@@ -308,6 +325,12 @@ content-derived decision ID from `PromotionEvidence` during construction and
 deserialization. A qualified source does not automatically qualify every
 variable. Unresolved variable semantics remain quarantined and do not enter
 canonical JSONL.
+A `QUALIFIED` `DatasetQualificationReceipt` is itself self-consistent: it
+binds the passing population and source decisions, source ID/revision, artifact
+digest, canonical evidence class, license, resolved variable and football
+mappings, and empty failure fields. `PromotionEvidence` repeats the artifact,
+source, population, mapping-version, and variable-registry bindings before any
+gate is derived.
 
 ## Canonical artifact and replay decision
 
@@ -446,8 +469,28 @@ flags. The canonical Creative Commons references are:
 - <https://creativecommons.org/licenses/by-nc/4.0/>
 
 Offline replay and report regeneration use only the committed registry, the
-verified external raw object, and the mapping implementation. Ordinary replay
-does not refresh network metadata:
+verified external raw objects, persisted acquisition receipts and metadata
+snapshots, and deterministic adapter implementations. Ordinary replay does not
+refresh network metadata. `REPORT_REPLAY` covers all nine committed RES-63
+reports, not only the Source A report family:
+
+```text
+Source A: source-a-artifact-receipt.json
+          source-a-metadata-conflicts.json
+          source-a-qualification.json
+          source-a-schema.json
+          source-a-variable-identities.json
+Source B: source-b-qualification.json
+          source-b-schema.json
+Source C: source-c-quarantine.json
+Source D: source-d-quarantine.json
+```
+
+Source B and C workbooks are re-inspected from their verified persisted
+objects. Source D's verified ZIP is deterministically inspected, including the
+registered member count. The regenerated files are compared byte-for-byte with
+the committed reports, and Source A's registry canonical-artifact block is
+compared with the replay receipt:
 
 ```bash
 uv run python scripts/res63_replay.py \

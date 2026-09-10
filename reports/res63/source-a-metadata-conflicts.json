@@ -98,6 +98,7 @@
       "canonical": false,
       "filename": "Raw data.xlsx",
       "md5": "93951f1b28240cfaa9c31d075824cb36",
+      "sha256": "sha256:84ba4d6e358f5ca8a43db67b7a97a13c88b19465e7f740656f1d839bb1a109b4",
       "stored": false
     },
     "selected_ingestion_representation": "ARCHIVAL_TAB"

@@ -9,6 +9,7 @@ DynamisLM-derived measurement result.
 from __future__ import annotations
 
 import datetime as datetime_module
+import hashlib
 import math
 import re
 from dataclasses import dataclass
@@ -37,7 +38,9 @@ from dynamislm.serialization import canonical_hash, register_serializable_type
 type JSONScalar = str | int | float | bool | None
 
 _SHA256_RE = re.compile(r"^[0-9a-fA-F]{64}$")
+_MD5_RE = re.compile(r"^[0-9a-fA-F]{32}$")
 _RELATIVE_PATH_PREFIXES = ("objects/", "metadata/", "receipts/", "canonical/", "quarantine/")
+_EMPTY_SHA256 = f"sha256:{hashlib.sha256(b'').hexdigest()}"
 
 
 def _digest(value: object, field_name: str) -> str:
@@ -84,7 +87,9 @@ def _relative_path(value: object, field_name: str) -> None:
         raise ValueError(f"{field_name} must be a canonical relative POSIX path")
     if any(part in {".", ".."} for part in PurePosixPath(value).parts):
         raise ValueError(f"{field_name} must not contain traversal segments")
-    if not value.startswith(_RELATIVE_PATH_PREFIXES):
+    if not PurePosixPath(value).parts or PurePosixPath(value).parts[0] not in {
+        prefix[:-1] for prefix in _RELATIVE_PATH_PREFIXES
+    }:
         raise ValueError(f"{field_name} must be relative to DYNAMISLM_DATA_ROOT")
 
 
@@ -235,6 +240,68 @@ class RegisteredDatasetFileIdentity:
     @property
     def file_id(self) -> str | int | None:
         return self.provider_file_id
+
+
+@register_serializable_type
+@dataclass(frozen=True, slots=True)
+class SavedOriginalVerificationReceipt:
+    """Streamed observation of a provider's saved-original representation.
+
+    The receipt contains observations only.  Its validity is established by
+    checking the observed values against the registered file identity and the
+    exact persisted metadata snapshot; no stored success flag is authoritative.
+    """
+
+    source_id: str
+    source_version: str
+    provider_file_id: str | int
+    file_persistent_identifier: str
+    representation: FileRepresentation
+    provider_hash_algorithm: str
+    provider_hash: str
+    observed_md5: str
+    observed_sha256: str
+    observed_byte_size: int
+    metadata_snapshot_sha256: str
+
+    def __post_init__(self) -> None:
+        for field_name, value in (
+            ("source_id", self.source_id),
+            ("source_version", self.source_version),
+            ("file_persistent_identifier", self.file_persistent_identifier),
+            ("provider_hash_algorithm", self.provider_hash_algorithm),
+            ("provider_hash", self.provider_hash),
+            ("observed_md5", self.observed_md5),
+        ):
+            _require_text(value, field_name)
+        if isinstance(self.provider_file_id, bool) or not isinstance(
+            self.provider_file_id, str | int
+        ):
+            raise ValueError("provider_file_id must be a string or integer")
+        if isinstance(self.provider_file_id, str):
+            _require_text(self.provider_file_id, "provider_file_id")
+        _require_enum(self.representation, FileRepresentation, "representation")
+        if self.representation is not FileRepresentation.SAVED_ORIGINAL:
+            raise ValueError("saved-original verification must identify SAVED_ORIGINAL")
+        if self.provider_hash_algorithm.lower() != "md5":
+            raise ValueError("saved-original provider hash algorithm must be md5")
+        if _MD5_RE.fullmatch(self.provider_hash) is None:
+            raise ValueError("provider_hash must be an MD5 hexadecimal value")
+        if _MD5_RE.fullmatch(self.observed_md5) is None:
+            raise ValueError("observed_md5 must be an MD5 hexadecimal value")
+        if self.provider_hash.lower() != self.observed_md5.lower():
+            raise ValueError("observed_md5 does not match provider_hash")
+        object.__setattr__(
+            self,
+            "observed_sha256",
+            _digest(self.observed_sha256, "observed_sha256"),
+        )
+        _nonnegative_int(self.observed_byte_size, "observed_byte_size")
+        object.__setattr__(
+            self,
+            "metadata_snapshot_sha256",
+            _digest(self.metadata_snapshot_sha256, "metadata_snapshot_sha256"),
+        )
 
 
 @register_serializable_type
@@ -852,6 +919,34 @@ class DatasetQualificationReceipt:
         _text_tuple(self.reason_codes, "reason_codes")
         _text_tuple(self.missing_information, "missing_information")
         _text_tuple(self.evidence, "evidence")
+        if self.status is DatasetQualificationStatus.QUALIFIED:
+            if self.population_decision is None or not self.population_decision.passed:
+                raise ValueError("QUALIFIED receipt requires a passing population decision")
+            if self.source_decision is None or not self.source_decision.passed:
+                raise ValueError("QUALIFIED receipt requires a passing source decision")
+            if self.source_decision.population_decision != self.population_decision:
+                raise ValueError("QUALIFIED receipt source and population decisions differ")
+            if self.source_decision.source.source_id.identifier.key != self.source_id:
+                raise ValueError("QUALIFIED receipt source decision is bound to another source")
+            if self.source_decision.source.source_revision != self.source_version:
+                raise ValueError("QUALIFIED receipt source decision is bound to another version")
+            if self.artifact_sha256 is None:
+                raise ValueError("QUALIFIED receipt requires artifact_sha256")
+            if self.evidence_class is not EvidenceClass.CANONICAL_EMPIRICAL_TARGET:
+                raise ValueError("QUALIFIED receipt requires canonical empirical evidence")
+            if self.license_identity is None:
+                raise ValueError("QUALIFIED receipt requires license_identity")
+            if self.variable_identity_status is not VariableResolutionStatus.RESOLVED:
+                raise ValueError("QUALIFIED receipt requires resolved variable identities")
+            if self.football_mapping_status is not VariableResolutionStatus.RESOLVED:
+                raise ValueError("QUALIFIED receipt requires resolved football mapping")
+            if self.reason_codes != () or self.missing_information != ():
+                raise ValueError("QUALIFIED receipt cannot contain failure reasons")
+        else:
+            if self.evidence_class is EvidenceClass.CANONICAL_EMPIRICAL_TARGET:
+                raise ValueError("non-qualified receipt cannot claim canonical evidence")
+            if not self.reason_codes and not self.missing_information:
+                raise ValueError("non-qualified receipt requires a failure reason or missing data")
 
     @property
     def actual_observed_data(self) -> bool:
@@ -1161,6 +1256,30 @@ class PromotionEvidence:
             raise ValueError("promotion qualification source does not match registered identity")
         if self.qualification.source_version != registered.source_version:
             raise ValueError("promotion qualification version does not match registered identity")
+        if self.qualification.artifact_sha256 != registered.expected_sha256:
+            raise ValueError("promotion qualification artifact does not match registered identity")
+        if artifact.sha256 != registered.expected_sha256:
+            raise ValueError("promotion raw artifact SHA-256 does not match registered identity")
+        if artifact.byte_size != registered.expected_byte_size:
+            raise ValueError("promotion raw artifact byte size does not match registered identity")
+        if (
+            self.qualification.source_decision is None
+            or self.qualification.source_decision.source.source_id.identifier.key
+            != registered.source_id
+        ):
+            raise ValueError("promotion source decision source does not match registered identity")
+        if (
+            self.qualification.source_decision is None
+            or self.qualification.source_decision.source.source_revision
+            != registered.source_version
+        ):
+            raise ValueError("promotion source decision version does not match registered identity")
+        if (
+            self.qualification.source_decision is None
+            or self.qualification.source_decision.population_decision
+            != self.qualification.population_decision
+        ):
+            raise ValueError("promotion source and qualification population decisions differ")
         validation = self.canonical_validation
         if validation.source_id != registered.source_id:
             raise ValueError("canonical validation source does not match registered identity")
@@ -1172,6 +1291,12 @@ class PromotionEvidence:
             raise ValueError(
                 "canonical validation variable registry digest does not match evidence"
             )
+        if validation.mapping_version != self.variable_registry.mapping_version:
+            raise ValueError("canonical validation mapping does not match variable registry")
+        if validation.source_id != self.variable_registry.source_id:
+            raise ValueError("canonical validation source does not match variable registry")
+        if validation.source_version != self.variable_registry.source_version:
+            raise ValueError("canonical validation version does not match variable registry")
         if self.variable_registry.source_id != registered.source_id:
             raise ValueError("variable registry source does not match registered identity")
         if self.variable_registry.source_version != registered.source_version:
@@ -1187,24 +1312,48 @@ def _promotion_gate_results(evidence: PromotionEvidence) -> tuple[tuple[str, boo
     validation = evidence.canonical_validation
     registry_ids = set(evidence.variable_registry.variable_ids)
     included_ids = set(validation.included_variable_ids)
-    registry_resolved = all(
-        entry.variable_id in included_ids
-        and entry.identity.resolution_status
-        not in (VariableResolutionStatus.UNRESOLVED, VariableResolutionStatus.QUARANTINED)
-        for entry in evidence.variable_registry.entries
-        if entry.variable_id in included_ids
+    included_entries = tuple(
+        entry for entry in evidence.variable_registry.entries if entry.variable_id in included_ids
+    )
+    registry_resolved = (not included_ids and validation.canonical_record_count == 0) or (
+        bool(included_entries)
+        and all(
+            entry.identity.resolution_status
+            not in (VariableResolutionStatus.UNRESOLVED, VariableResolutionStatus.QUARANTINED)
+            for entry in included_entries
+        )
     )
     source_qualified = bool(
         qualification.status is DatasetQualificationStatus.QUALIFIED
         and source_decision is not None
         and source_decision.passed
         and qualification.actual_observed_data
+        and qualification.source_id == evidence.registered_file_identity.source_id
+        and qualification.source_version == evidence.registered_file_identity.source_version
+        and source_decision.source.source_id.identifier.key == qualification.source_id
+        and source_decision.source.source_revision == qualification.source_version
+        and source_decision.population_decision == population_decision
+        and qualification.artifact_sha256 == evidence.registered_file_identity.expected_sha256
+        and qualification.evidence_class is EvidenceClass.CANONICAL_EMPIRICAL_TARGET
+        and qualification.license_identity == evidence.license_identity
+        and qualification.variable_identity_status is VariableResolutionStatus.RESOLVED
+        and qualification.football_mapping_status is VariableResolutionStatus.RESOLVED
+        and qualification.reason_codes == ()
+        and qualification.missing_information == ()
     )
-    population_qualified = bool(population_decision is not None and population_decision.passed)
+    population_qualified = bool(
+        population_decision is not None
+        and population_decision.passed
+        and source_decision is not None
+        and source_decision.passed
+        and source_decision.population_decision == population_decision
+    )
     raw_bytes_verified = bool(
         evidence.verified_raw_artifact.sha256 == evidence.registered_file_identity.expected_sha256
         and evidence.verified_raw_artifact.byte_size
         == evidence.registered_file_identity.expected_byte_size
+        and qualification.artifact_sha256 == evidence.registered_file_identity.expected_sha256
+        and qualification.artifact_sha256 == evidence.verified_raw_artifact.sha256
     )
     source_version_verified = evidence.source_version_verification.verified
     license_captured = bool(
@@ -1213,10 +1362,16 @@ def _promotion_gate_results(evidence: PromotionEvidence) -> tuple[tuple[str, boo
     )
     variable_identity_resolved = bool(
         qualification.variable_identity_status is VariableResolutionStatus.RESOLVED
+        and (validation.canonical_record_count == 0 or bool(validation.included_variable_ids))
         and included_ids <= registry_ids
         and registry_resolved
+        and validation.mapping_version == evidence.variable_registry.mapping_version
     )
-    football_world_mapping_resolved = bool(validation.football_context_digest)
+    football_world_mapping_resolved = bool(
+        qualification.football_mapping_status is VariableResolutionStatus.RESOLVED
+        and validation.canonical_record_count > 0
+        and validation.football_context_digest != _EMPTY_SHA256
+    )
     lineage_complete = bool(
         validation.record_lineage_digest and validation.canonical_record_count > 0
     )
@@ -1374,6 +1529,7 @@ __all__ = [
     "RawRowIdentity",
     "RegisteredDatasetFileIdentity",
     "RuntimeAuthorityIdentity",
+    "SavedOriginalVerificationReceipt",
     "SourceMetadataClaim",
     "SourceMetadataConflict",
     "SourceSchema",

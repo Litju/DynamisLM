@@ -355,8 +355,46 @@ def qualify_dataset(
 ) -> DatasetQualificationReceipt:
     """Apply RES-60 and row-boundary gates to one source qualification receipt."""
 
+    if not isinstance(source, DatasetSourceIdentity):
+        raise ValueError("source must be a DatasetSourceIdentity")
+    if not isinstance(version, DatasetVersionIdentity):
+        raise ValueError("version must be a DatasetVersionIdentity")
+    if not isinstance(population, PopulationIdentity):
+        raise ValueError("population must be a PopulationIdentity")
     if not isinstance(license_identity, DatasetLicenseIdentity):
         raise ValueError("license_identity must be a DatasetLicenseIdentity")
+    if not isinstance(variable_identities, tuple) or any(
+        not isinstance(identity, SourceVariableIdentity) for identity in variable_identities
+    ):
+        raise ValueError("variable_identities must be a tuple of SourceVariableIdentity values")
+    if not isinstance(football_mapping_status, VariableResolutionStatus):
+        raise ValueError("football_mapping_status must be a VariableResolutionStatus")
+    if not isinstance(canonical_source, CanonicalSource):
+        raise ValueError("canonical_source must be a CanonicalSource")
+    if canonical_source.population != population:
+        raise ValueError("canonical source population does not match qualification population")
+    if canonical_source.source_id.identifier.key != source.source_id:
+        raise ValueError("canonical source ID does not match qualification source")
+    if canonical_source.source_revision != version.repository_version:
+        raise ValueError("canonical source revision does not match qualification version")
+    license_reuse = canonical_source.license_reuse
+    expected_reuse_status = (
+        ReuseStatus.RESTRICTED
+        if license_identity.noncommercial_restriction
+        else ReuseStatus.UNRESTRICTED
+    )
+    license_reference = license_reuse.license_reference
+    if license_reference is None:
+        raise ValueError("canonical source is missing its license identity reference")
+    if license_reference.identifier.key != license_identity.spdx_expression.lower():
+        raise ValueError("canonical source license reference does not match license identity")
+    if license_reference.display_label != license_identity.spdx_expression:
+        raise ValueError("canonical source license label does not match license identity")
+    if license_reuse.reuse_status is not expected_reuse_status:
+        raise ValueError("canonical source reuse status does not match license identity")
+    expected_conditions = ("attribution_required",) if license_identity.attribution_required else ()
+    if license_reuse.conditions != expected_conditions:
+        raise ValueError("canonical source license conditions do not match license identity")
     population_decision = qualify_canonical_population(population)
     source_decision = qualify_canonical_source(canonical_source)
     statuses = {
@@ -404,7 +442,7 @@ def qualify_dataset(
         artifact_sha256=artifact_sha256,
         evidence_class=(
             EvidenceClass.CANONICAL_EMPIRICAL_TARGET
-            if source_decision.passed
+            if not reasons
             else EvidenceClass.REJECTED_OR_UNRESOLVED
         ),
         license_identity=license_identity,
