@@ -50,7 +50,8 @@ implementation
   -> CodeRabbit review
   -> review fixes on the same mission branch
   -> CodeRabbit latest-head review
-  -> resolve or disposition every review thread
+  -> record disposition for every review finding
+  -> resolve every review thread
   -> final adversarial/scientific review
   -> squash merge
   -> delete the merged branch
