@@ -4,8 +4,10 @@
 
 Local hooks provide developer feedback. GitHub-hosted `ubuntu-24.04` CI runs
 the same full-QA command in a clean environment. The active `DynamisLM Main
-Authority` ruleset makes the app-bound `ci` check and the required CodeRabbit
-review layer merge gates for `main`; CodeRabbit does not replace deterministic
+Authority` ruleset currently makes the `ci` context a merge gate for `main`.
+After the human-gated RES-77 CodeRabbit installation, observed-check discovery,
+and ruleset readback, the ruleset target state adds the app-bound `ci` check and
+the required CodeRabbit review layer; CodeRabbit does not replace deterministic
 CI or scientific review.
 
 There is one workflow, one job, and one deterministic CI check. CI runs for
@@ -97,11 +99,16 @@ FINAL_SCIENTIFIC_REVIEW = scientific/adversarial disposition
 ## Ruleset relationship
 
 The `DynamisLM Main Authority` ruleset remains the root merge authority for
-the default branch. It requires a pull request, strict up-to-date required
-checks, the app-bound `ci` check, and the observed CodeRabbit check; it blocks
-force pushes and branch deletion, has no bypass actors, requires resolved
-review threads, and permits squash history only. Ruleset changes are an
-extension of this existing protection, not a second governance system.
+the default branch. Its RES-77 target state requires a pull request, strict
+up-to-date required checks, the app-bound `ci` check, and the observed
+CodeRabbit check; it blocks force pushes and branch deletion, has no bypass
+actors, requires resolved review threads, and permits squash history only.
+Those target-state protections become merge enforcement only after CodeRabbit
+is installed, a real check is observed, the ruleset is extended in place, and
+the complete API readback confirms every field. Until then, the live baseline
+must be read directly and must not be represented as the target state. Ruleset
+changes are an extension of this existing protection, not a second governance
+system.
 
 The required `ci` context is restricted to the GitHub Actions app, and the
 CodeRabbit context is restricted to the exact CodeRabbit app identity observed
