@@ -4,15 +4,11 @@
 
 Local hooks provide developer feedback. GitHub-hosted `ubuntu-24.04` CI runs
 the same full-QA command in a clean environment. The active `DynamisLM Main
-Authority` ruleset currently makes the `ci` context a merge gate for `main`.
-After the human-gated RES-77 CodeRabbit installation, observed-check discovery,
-and ruleset readback, the ruleset target state adds the app-bound `ci` check and
-the required CodeRabbit review layer; CodeRabbit does not replace deterministic
-CI or scientific review.
+Authority` ruleset makes the successful `ci` check the merge gate for `main`.
 
 There is one workflow, one job, and one deterministic CI check. CI runs for
 pull requests targeting `main` and for pushes to `main`; it has no secrets,
-cache, artifact upload, service container or deployment step.
+cache, artifact upload, service container, or deployment step.
 
 ## Branch-per-mission topology
 
@@ -29,9 +25,9 @@ Unrelated missions must not share a branch or pull request. Review fixes for
 the same mission remain on that mission branch and PR. A new mission starts
 from the current qualified `main`. Multiple branches do not require multiple
 worktrees; one canonical checkout may switch branches. Direct development on
-`main` is not part of the workflow. Stacked PRs are reserved for an
-independently useful prerequisite that genuinely needs its own merge decision,
-and trivial changes must not be fragmented into artificial PRs.
+`main` is not part of the workflow. Stacked PRs are exceptional and require an
+independently useful prerequisite with its own merge decision. Trivial cleanup
+must not be fragmented into artificial PRs.
 
 RES-63 is grandfathered on `work/res-63-canonical-dataset-ingestion` and PR
 `#24`; RES-64 starts fresh from `main` after RES-63 and RES-77 are sealed.
@@ -44,98 +40,54 @@ The normal lifecycle is:
 implementation
   -> local QA
   -> push
-  -> draft PR if scope is still being assembled
-  -> ready-for-review
+  -> PR
   -> hosted ci
-  -> CodeRabbit review
-  -> review fixes on the same mission branch
-  -> CodeRabbit latest-head review
-  -> record disposition for every review finding
-  -> resolve every review thread
-  -> final adversarial/scientific review
-  -> squash merge
+  -> adversarial review
+  -> repair on the same mission branch
+  -> rerun deterministic QA
+  -> final review of the current head
+  -> merge
   -> delete the merged branch
 ```
 
-The PR description must include the full Linear issue URL, the base and head
-SHAs, authority-impact declarations, deterministic QA evidence, CodeRabbit
-latest-head status, and review-finding disposition.
+The PR description records the full Linear issue URL, the base and head SHAs,
+authority-impact declarations, deterministic QA evidence, review findings,
+limitations, and the final qualification state. Every finding is verified
+against the current head before code changes are made. Blocking findings are
+resolved or explicitly dispositioned before merge.
 
-## CodeRabbit's role
+## Review layers
 
-CodeRabbit is an independent AI reviewer. It may inspect the PR and linked
-issue context, inspect GitHub Checks, leave inline findings, request changes,
-re-review new commits, resolve its addressed threads, and approve after its
-own review requirements are met. It is not the scientific authority, the
-deterministic authority, or the primary coding agent. It must not silently
-mutate code, generate unit-test or docstring PRs, automatically fix CI,
-automatically resolve merge conflicts, or become scientific truth authority.
-
-The repository configuration keeps CodeRabbit's finishing touches disabled.
-Its summaries belong in the walkthrough, not in the authoritative PR body.
-CodeRabbit's optional Linear context depends on an OAuth connection and the
-active plan; the repository must not pretend that connection exists when it
-does not.
-
-## Final review lifecycle
-
-CodeRabbit approval alone is not final scientific or merge authority. Explicit
-CodeRabbit commands such as `approve` or `resolve` can override or resolve its
-own review state, so they do not make the review unbypassable. The final
-decision still requires the deterministic root authority, disposition of all
-blocking findings and threads, and final adversarial or scientific review when
-the mission touches scientific, data, measurement, population, provenance, or
-comparability authority.
-
-The authority layers are:
+The repository review architecture is:
 
 ```text
 LOCAL_HOOKS = developer feedback
-HOSTED_CI = deterministic independent verification
-CODERABBIT = independent AI review
-GITHUB_RULESET = merge enforcement
-FINAL_SCIENTIFIC_REVIEW = scientific/adversarial disposition
+HOSTED_CI = independent deterministic verification
+GITHUB_RULESET = enforced merge authority
+AGENT_REVIEW = advisory/adversarial reasoning
+FINAL_SCIENTIFIC_REVIEW = project-process requirement for authority-changing scientific missions
 ```
+
+No external AI-review service is a required status check or merge dependency.
+Rate limits, SaaS outages, reviewer quotas, and plan changes must not block
+DynamisLM merge eligibility. AI review findings can be useful evidence, but
+they are not self-authenticating and do not replace deterministic CI or final
+scientific/adversarial review.
 
 ## Ruleset relationship
 
 The `DynamisLM Main Authority` ruleset remains the root merge authority for
-the default branch. Its RES-77 target state requires a pull request, strict
-up-to-date required checks, the app-bound `ci` check, and the observed
-CodeRabbit check; it blocks force pushes and branch deletion, has no bypass
-actors, requires resolved review threads, and permits squash history only.
-Those target-state protections become merge enforcement only after CodeRabbit
-is installed, a real check is observed, the ruleset is extended in place, and
-the complete API readback confirms every field. Until then, the live baseline
-must be read directly and must not be represented as the target state. Ruleset
-changes are an extension of this existing protection, not a second governance
-system.
+the default branch. It requires a pull request, strict up-to-date `ci`, blocks
+force pushes and branch deletion, has no bypass actors, and preserves the
+repository's existing merge and review settings. This mission removes an
+external review dependency without changing the ruleset authority.
 
-The required `ci` context is restricted to the GitHub Actions app, and the
-CodeRabbit context is restricted to the exact CodeRabbit app identity observed
-from a real check run. Never guess a check name, slug, or app ID.
+Read the live ruleset when diagnosing a merge decision:
 
-## CodeRabbit failure and rate-limit handling
-
-If CodeRabbit is unavailable, rate-limited, uninstalled, or fails to emit an
-identifiable check, record the exact state and stop the CodeRabbit-dependent
-qualification step. Do not fabricate a PASS, substitute a local imitation,
-weaken deterministic CI, or relax the ruleset. Use the repository PR checks and
-the documented commands to diagnose the condition, then retry after the
-service or authorization issue is resolved. CodeRabbit failure does not make
-the deterministic `ci` check optional.
-
-Manual review commands:
-
-```text
-@coderabbitai review
-@coderabbitai full review
-@coderabbitai configuration
-@coderabbitai rate limit
+```bash
+gh api repos/Litju/DynamisLM/rulesets
+gh api repos/Litju/DynamisLM/rulesets/<RULESET_ID>
 ```
-
-Installation and Linear OAuth are human actions in the CodeRabbit UI. Install
-only the intended repository when prompted; do not authorize all repositories.
 
 ## Local use
 
@@ -182,17 +134,12 @@ gh run view <RUN_ID> --log-failed
 gh run view <RUN_ID> --json jobs,headSha,status,conclusion
 ```
 
-The ruleset is intentionally the only merge-enforcement layer for this mission:
-
-```bash
-gh api repos/Litju/DynamisLM/rulesets
-gh api repos/Litju/DynamisLM/rulesets/<RULESET_ID>
-```
+The ruleset is intentionally the only merge-enforcement layer for this mission.
 
 ## Action pins and Dependabot
 
 Workflow Actions use full commit SHAs and same-line release comments. To
-update a pin safely, inspect the official Action repository’s current stable
+update a pin safely, inspect the official Action repository's current stable
 release, resolve its tag through the Git refs API, dereference annotated tags
 to the commit object, verify the commit belongs to the intended repository,
 update the SHA and release comment, and let the normal pull-request `ci` check
@@ -205,9 +152,9 @@ a normal pull request; do not auto-merge it.
 
 The policy reads tracked paths from `git ls-files`, not arbitrary ignored local
 files. It rejects data/model/checkpoint/corpus directories, large scientific
-data extensions and secret-like files. `.env.example` is explicitly allowed.
+data extensions, and secret-like files. `.env.example` is explicitly allowed.
 
-CSV, XLSX and ZIP are allowed only as small, clearly synthetic fixtures under
+CSV, XLSX, and ZIP are allowed only as small, clearly synthetic fixtures under
 `tests/fixtures/synthetic/` with an exact entry in
 `.repo-policy/allowed-fixtures.txt`. The maximum size is 1 MiB. The allowlist
 may remain empty while no controlled fixture exists. Real RES-63 source files
@@ -216,10 +163,11 @@ must never be added there.
 ## Scope boundaries
 
 The Actions SHA policy and ruleset may be modified only through an explicit
-future repository-governance issue. This mission has no self-hosted runner and
-no CD because neither is needed for the current verification boundary.
+repository-governance issue. This mission makes no workflow change, uses no
+self-hosted runner, and adds no CD because neither is needed for the current
+verification boundary.
 
 RES-63 remains responsible for canonical dataset qualification and source/data
-authority. RES-75 does not ingest or qualify a dataset and does not change
-scientific formulas, numerical authority, serialization version or historical
-hashes.
+authority. RES-75 established hosted CI and repository governance; it does not
+ingest or qualify a dataset and does not change scientific formulas, numerical
+authority, serialization version, or historical hashes.

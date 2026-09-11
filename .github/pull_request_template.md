@@ -7,7 +7,7 @@ Branch:
 Base head:
 Current head:
 Decision record:
-Mission scope isolated? YES/NO
+Mission scope isolated to this PR? YES/NO
 
 ## Authority impact
 
@@ -24,9 +24,9 @@ Model-training authority affected? YES/NO
 ## Qualification
 
 Local full QA:
-Hosted ci:
-CodeRabbit latest-head review:
-Final adversarial/scientific review:
+Hosted CI:
+Adversarial review:
+Scientific review if applicable:
 Test count:
 Repository policy:
 Tracked mutation:
@@ -34,8 +34,8 @@ Tracked mutation:
 ## Evidence invariants
 
 Expected hashes/counts changed? YES/NO
-If yes, exact reason:
-Real raw/canonical empirical data in Git? YES/NO
+If YES, exact reason:
+Real raw/canonical empirical data committed? YES/NO
 
 ## Review findings
 
@@ -51,13 +51,12 @@ Deferred work:
 ## Merge gate
 
 - [ ] Mission scope is isolated.
-- [ ] Branch is based on qualified `main`.
+- [ ] Branch originates from the correct qualified base.
 - [ ] Local deterministic QA passes.
-- [ ] Hosted `ci` passes.
-- [ ] Latest HEAD is reviewed by CodeRabbit.
-- [ ] CodeRabbit findings are dispositioned.
-- [ ] All review threads are resolved.
-- [ ] Final scientific/adversarial review is complete where applicable.
-- [ ] No blocking finding remains.
-- [ ] Data and model authority boundaries are maintained.
-- [ ] Branch is up to date with `main`.
+- [ ] Required hosted `ci` passes.
+- [ ] Review findings have been verified against current code.
+- [ ] Blocking review findings are resolved.
+- [ ] Final adversarial/scientific review is complete where applicable.
+- [ ] No unresolved blocker remains.
+- [ ] Data, model, and scientific authority boundaries remain satisfied.
+- [ ] Branch is up to date with required main state.
