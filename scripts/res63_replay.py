@@ -68,6 +68,7 @@ from dynamislm.ingestion.promotion import (
 )
 from dynamislm.ingestion.qualification import qualify_dataset
 from dynamislm.ingestion.registry import (
+    committed_qualification_receipt_identity,
     dataset_license_identity,
     load_dataset_registry,
     registry_file_entries,
@@ -671,9 +672,17 @@ def replay(data_root: Path, *, report_dir: Path | None, verify: bool) -> dict[st
         artifact_sha256=source_a_artifact.sha256,
         variable_registry=source_a_variables,
     )
+    qualification_identity = committed_qualification_receipt_identity(source_a_registry)
+    qualification_path = assert_data_path_contained(
+        resolved_root,
+        resolved_root / qualification_identity.relative_path,
+    )
+    qualification_sha256, _ = file_digest_and_size(qualification_path)
+    if qualification_sha256 != qualification_identity.sha256:
+        raise ValueError("Source A qualification receipt differs from committed identity")
     persisted_qualification = _read_typed(
         resolved_root,
-        "receipts/unifesp-brazil-serie-a-v1-qualification.json",
+        qualification_identity.relative_path,
         DatasetQualificationReceipt,
     )
     if persisted_qualification != qualification:

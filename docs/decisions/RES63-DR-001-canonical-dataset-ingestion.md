@@ -331,10 +331,14 @@ The boundary resolves the current committed Git `HEAD` and reads the exact
 registry blob using Git object plumbing. It derives
 `RegisteredDatasetFileIdentity` from that blob, requires the working-tree
 registry to match the blob byte-for-byte, and independently reloads the
-deterministic persisted acquisition and qualification receipts. It verifies the
-metadata snapshot, content-addressed raw bytes, source-version receipt,
+deterministic persisted acquisition and qualification receipts. The committed
+registry binds the qualification receipt's external relative path and exact
+content SHA-256; promotion re-reads those bytes, verifies the digest, and only
+then accepts typed equality with caller evidence. It verifies the metadata
+snapshot, content-addressed raw bytes, source-version receipt,
 variable-registry sidecar, persisted canonical receipt, and actual canonical
-JSONL digest/count. Thus:
+JSONL digest/count plus its recomputed variable, lineage, and football-context
+semantics. Thus:
 
 ```text
 COMMITTED GIT HEAD REGISTRY

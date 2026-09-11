@@ -55,6 +55,7 @@ from dynamislm.ingestion.promotion import (
     promotion_from_evidence,
     validate_canonical_records,
     validate_canonical_replay,
+    validate_persisted_canonical_artifact,
     verify_canonical_artifact,
     write_canonical_jsonl,
 )
@@ -69,6 +70,8 @@ from dynamislm.ingestion.qualification import (
 )
 from dynamislm.ingestion.registry import (
     CommittedDatasetRegistry,
+    CommittedQualificationReceiptIdentity,
+    committed_qualification_receipt_identity,
     dataset_license_identity,
     dataset_source_identity,
     dataset_version_identity,
@@ -120,6 +123,7 @@ __all__ = [
     "CanonicalFootballContext",
     "CanonicalValidationReceipt",
     "CommittedDatasetRegistry",
+    "CommittedQualificationReceiptIdentity",
     "DatasetLicense",
     "DatasetLicenseIdentity",
     "DatasetQualificationReceipt",
@@ -160,6 +164,7 @@ __all__ = [
     "canonical_record_payload",
     "canonical_replay_digest",
     "capture_metadata_snapshot",
+    "committed_qualification_receipt_identity",
     "content_addressed_object_path",
     "data_root_inventory",
     "dataset_license_identity",
@@ -192,6 +197,7 @@ __all__ = [
     "tab_header",
     "validate_canonical_records",
     "validate_canonical_replay",
+    "validate_persisted_canonical_artifact",
     "verify_canonical_artifact",
     "verify_file",
     "verify_live_provider_file_observation",

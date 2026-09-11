@@ -39,6 +39,10 @@
     }
   ],
   "metadata_snapshot_sha256": "sha256:360e006156b81f0a25c4a5c25f350ce6f46f9084028d1938f35e998d45d3f856",
+  "qualification_receipt": {
+    "relative_path": "receipts/unifesp-brazil-serie-a-v1-qualification.json",
+    "sha256": "sha256:eb7e8225859cf42b4925a39b400336fd4237f8b0369e051ecc2d69dee0812761"
+  },
   "candidate_role": "CANONICAL_EMPIRICAL_TARGET",
   "qualification_state": "QUALIFIED",
   "model_training_use": "NOT_AUTHORIZED_BY_RES63",

@@ -6,6 +6,7 @@ import json
 import subprocess
 from dataclasses import dataclass, replace
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -36,6 +37,7 @@ from dynamislm.ingestion import (
     promotion_from_evidence,
     qualify_dataset,
     validate_canonical_records,
+    validate_persisted_canonical_artifact,
     verify_registered_artifact,
     write_canonical_jsonl,
     write_external_json,
@@ -66,6 +68,7 @@ class PromotionFixture:
     registered: RegisteredDatasetFileIdentity
     evidence: PromotionEvidence
     metadata_snapshot_sha256: str
+    qualification_relative_path: str
     canonical_relative_path: str
     variable_registry_relative_path: str
     canonical_receipt_relative_path: str
@@ -141,11 +144,11 @@ def _version() -> DatasetVersionIdentity:
 
 def _license() -> DatasetLicenseIdentity:
     return DatasetLicenseIdentity(
-        spdx_expression="CC-BY-4.0",
-        canonical_uri="https://creativecommons.org/licenses/by/4.0/",
+        spdx_expression="CC-BY-NC-4.0",
+        canonical_uri="https://creativecommons.org/licenses/by-nc/4.0/",
         assertion_source_uri="https://example.invalid/synthetic-license",
         attribution_required=True,
-        noncommercial_restriction=False,
+        noncommercial_restriction=True,
     )
 
 
@@ -280,6 +283,11 @@ def _fixture(tmp_path: Path) -> PromotionFixture:
         source_reported_unit="arbitrary source unit",
         source_definition_reference="https://example.invalid/synthetic-definition",
     )
+    unused_variable = replace(
+        variable,
+        original_column_name="UnusedMetric",
+        source_label="UnusedMetric",
+    )
     qualification = qualify_dataset(
         source,
         version,
@@ -304,7 +312,7 @@ def _fixture(tmp_path: Path) -> PromotionFixture:
         source.source_id,
         version.repository_version,
         "synthetic-authority-mapping@1.0.0",
-        (variable,),
+        (variable, unused_variable),
     )
     validation = validate_canonical_records(
         records,
@@ -328,12 +336,17 @@ def _fixture(tmp_path: Path) -> PromotionFixture:
     assert canonical_receipt.canonical_artifact_sha256 == validation.canonical_artifact_sha256
     assert canonical_receipt.canonical_record_count == validation.canonical_record_count
     assert canonical_receipt.variable_registry_relative_path is not None
+    qualification_relative_path = "receipts/synthetic-authority-source-qualification.json"
+    qualification_sha256 = (
+        "sha256:"
+        + hashlib.sha256((canonical_json(qualification) + "\n").encode("utf-8")).hexdigest()
+    )
     canonical_receipt_relative_path = (
         "receipts/synthetic-authority-source-1-synthetic-authority-mapping-1.0.0-canonical.json"
     )
     write_external_json(
         data_root,
-        "receipts/synthetic-authority-source-qualification.json",
+        qualification_relative_path,
         qualification,
     )
 
@@ -371,6 +384,10 @@ def _fixture(tmp_path: Path) -> PromotionFixture:
             }
         ],
         "metadata_snapshot_sha256": metadata_snapshot_sha256,
+        "qualification_receipt": {
+            "relative_path": qualification_relative_path,
+            "sha256": qualification_sha256,
+        },
         "qualification_state": "QUALIFIED",
         "model_training_use": "NOT_AUTHORIZED_BY_RES63",
         "canonical_artifact": {
@@ -411,6 +428,7 @@ def _fixture(tmp_path: Path) -> PromotionFixture:
         registered=registered,
         evidence=evidence,
         metadata_snapshot_sha256=metadata_snapshot_sha256,
+        qualification_relative_path=qualification_relative_path,
         canonical_relative_path=canonical_receipt.relative_path,
         variable_registry_relative_path=canonical_receipt.variable_registry_relative_path,
         canonical_receipt_relative_path=canonical_receipt_relative_path,
@@ -505,6 +523,66 @@ def _promote(
     )
 
 
+def _read_json_object(path: Path) -> dict[str, Any]:
+    value = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(value, dict):
+        raise AssertionError(f"expected JSON object: {path}")
+    return value
+
+
+def _write_json_object(path: Path, value: dict[str, Any]) -> None:
+    path.write_text(
+        json.dumps(value, ensure_ascii=False, separators=(",", ":"), sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+
+def _mutate_first_canonical_payload(fixture: PromotionFixture, mutation: str) -> None:
+    path = fixture.data_root / fixture.canonical_relative_path
+    documents: list[dict[str, Any]] = []
+    for line in path.read_bytes().splitlines():
+        value = json.loads(line)
+        if not isinstance(value, dict):
+            raise AssertionError("canonical fixture line is not an object")
+        documents.append(value)
+    payload = documents[0].get("payload")
+    if not isinstance(payload, dict):
+        raise AssertionError("canonical fixture payload is not an object")
+    if mutation == "variable":
+        unused_variable_id = fixture.evidence.variable_registry.variable_ids[1]
+        payload["source_variable_id"] = unused_variable_id
+        lineage = payload.get("lineage")
+        if not isinstance(lineage, list):
+            raise AssertionError("canonical fixture lineage is not an array")
+        lineage[7] = (
+            f"canonical-record:{fixture.source.source_id}:{fixture.version.repository_version}:"
+            "1:UnusedMetric"
+        )
+    elif mutation == "lineage":
+        lineage = payload.get("lineage")
+        if not isinstance(lineage, list):
+            raise AssertionError("canonical fixture lineage is not an array")
+        lineage[5] = "source-row:999"
+    elif mutation == "context":
+        payload["position"] = "tampered-position"
+    else:
+        raise AssertionError(f"unknown canonical mutation: {mutation}")
+    path.write_bytes(
+        b"".join(
+            (
+                json.dumps(
+                    document,
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                    sort_keys=True,
+                ).encode("utf-8")
+                + b"\n"
+            )
+            for document in documents
+        )
+    )
+
+
 def test_committed_registry_loader_is_exact_head_authority(tmp_path: Path) -> None:
     fixture = _fixture(tmp_path)
     binding = load_committed_dataset_registry(
@@ -532,6 +610,230 @@ def test_operational_promotion_passes_full_synthetic_git_evidence_graph(tmp_path
     assert decision.can_promote
     assert decision.evidence == fixture.evidence
     assert from_canonical_json(canonical_json(decision), PromotionDecision) == decision
+
+
+def test_persisted_validation_recomputes_the_in_memory_semantics(tmp_path: Path) -> None:
+    fixture = _fixture(tmp_path)
+    recomputed = validate_persisted_canonical_artifact(
+        fixture.data_root / fixture.canonical_relative_path,
+        variable_registry=fixture.evidence.variable_registry,
+        source_id=fixture.source.source_id,
+        source_version=fixture.version.repository_version,
+        raw_source_sha256=fixture.registered.expected_sha256,
+        mapping_version=fixture.evidence.variable_registry.mapping_version,
+    )
+    assert recomputed == fixture.evidence.canonical_validation
+
+
+def test_committed_license_authority_blocks_synchronized_substitution(tmp_path: Path) -> None:
+    fixture = _fixture(tmp_path)
+    caller_license = DatasetLicenseIdentity(
+        spdx_expression="CC-BY-4.0",
+        canonical_uri="https://creativecommons.org/licenses/by/4.0/",
+        assertion_source_uri="https://example.invalid/synthetic-license",
+        attribution_required=True,
+        noncommercial_restriction=False,
+    )
+    qualification = replace(
+        fixture.evidence.qualification,
+        license_identity=caller_license,
+    )
+    evidence = replace(
+        fixture.evidence,
+        qualification=qualification,
+        license_identity=caller_license,
+    )
+    write_external_json(
+        fixture.data_root,
+        fixture.qualification_relative_path,
+        qualification,
+    )
+    with pytest.raises(ValueError, match="COMMITTED_LICENSE_AUTHORITY"):
+        _promote(fixture, evidence)
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        "spdx_expression",
+        "canonical_uri",
+        "assertion_source_uri",
+        "attribution_required",
+        "noncommercial_restriction",
+    ),
+)
+def test_qualification_license_components_cannot_be_substituted(
+    tmp_path: Path,
+    mutation: str,
+) -> None:
+    fixture = _fixture(tmp_path)
+    document = _read_json_object(fixture.data_root / fixture.qualification_relative_path)
+    payload = document["payload"]
+    assert isinstance(payload, dict)
+    license_payload = payload["license_identity"]
+    assert isinstance(license_payload, dict)
+    if mutation == "spdx_expression":
+        license_payload.update(
+            {
+                "spdx_expression": "CC-BY-4.0",
+                "canonical_uri": "https://creativecommons.org/licenses/by/4.0/",
+                "noncommercial_restriction": False,
+            }
+        )
+    elif mutation == "canonical_uri":
+        license_payload["canonical_uri"] = "https://creativecommons.org/licenses/by/4.0/"
+    elif mutation == "assertion_source_uri":
+        license_payload["assertion_source_uri"] = "https://example.invalid/forged-license"
+    elif mutation == "attribution_required":
+        license_payload["attribution_required"] = False
+    elif mutation == "noncommercial_restriction":
+        license_payload["noncommercial_restriction"] = False
+    else:
+        raise AssertionError(f"unknown license mutation: {mutation}")
+    _write_json_object(fixture.data_root / fixture.qualification_relative_path, document)
+    with pytest.raises(ValueError):
+        _promote(fixture)
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        "license",
+        "population",
+        "source",
+        "evidence_class",
+        "artifact",
+        "football_status",
+        "variable_status",
+        "evidence",
+        "reason_codes",
+        "missing_information",
+    ),
+)
+def test_qualification_receipt_content_binding_blocks_mutations(
+    tmp_path: Path,
+    mutation: str,
+) -> None:
+    fixture = _fixture(tmp_path)
+    path = fixture.data_root / fixture.qualification_relative_path
+    document = _read_json_object(path)
+    payload = document["payload"]
+    assert isinstance(payload, dict)
+    if mutation == "license":
+        license_payload = payload["license_identity"]
+        assert isinstance(license_payload, dict)
+        license_payload["assertion_source_uri"] = "https://example.invalid/changed-license"
+    elif mutation == "population":
+        population = payload["population_decision"]
+        assert isinstance(population, dict)
+        decision_id = population["decision_id"]
+        assert isinstance(decision_id, dict)
+        decision_id["key"] = "forged-population-decision"
+    elif mutation == "source":
+        source = payload["source_decision"]
+        assert isinstance(source, dict)
+        decision_id = source["decision_id"]
+        assert isinstance(decision_id, dict)
+        decision_id["key"] = "forged-source-decision"
+    elif mutation == "evidence_class":
+        payload["evidence_class"] = "REJECTED_OR_UNRESOLVED"
+    elif mutation == "artifact":
+        payload["artifact_sha256"] = "sha256:" + "0" * 64
+    elif mutation == "football_status":
+        payload["football_mapping_status"] = "UNRESOLVED"
+    elif mutation == "variable_status":
+        payload["variable_identity_status"] = "UNRESOLVED"
+    elif mutation == "evidence":
+        evidence = payload["evidence"]
+        assert isinstance(evidence, list)
+        evidence.append("https://example.invalid/changed-evidence")
+    elif mutation == "reason_codes":
+        payload["reason_codes"] = ["FORGED_REASON"]
+    elif mutation == "missing_information":
+        payload["missing_information"] = ["forged missing information"]
+    else:
+        raise AssertionError(f"unknown qualification mutation: {mutation}")
+    _write_json_object(path, document)
+    with pytest.raises(ValueError):
+        _promote(fixture)
+
+
+def test_qualification_path_substitution_is_blocked(tmp_path: Path) -> None:
+    fixture = _fixture(tmp_path)
+    original = fixture.data_root / fixture.qualification_relative_path
+    substitute = fixture.data_root / "receipts/caller-selected-qualification.json"
+    substitute.write_bytes(original.read_bytes())
+    original.unlink()
+    with pytest.raises(ValueError, match="qualification receipt"):
+        _promote(fixture)
+
+
+def test_qualification_receipt_missing_is_blocked(tmp_path: Path) -> None:
+    fixture = _fixture(tmp_path)
+    (fixture.data_root / fixture.qualification_relative_path).unlink()
+    with pytest.raises(ValueError, match="qualification receipt"):
+        _promote(fixture)
+
+
+@pytest.mark.parametrize(
+    ("field", "forged_value"),
+    (
+        ("included_variable_ids", ()),
+        ("included_variable_ids", "unused"),
+        ("included_variable_ids", "reordered"),
+        ("included_variable_ids", "unregistered"),
+        ("record_lineage_digest", "sha256:" + "0" * 64),
+        ("football_context_digest", "sha256:" + "0" * 64),
+    ),
+)
+def test_canonical_validation_semantic_forgery_is_blocked(
+    tmp_path: Path,
+    field: str,
+    forged_value: object,
+) -> None:
+    fixture = _fixture(tmp_path)
+    if field == "included_variable_ids":
+        used, unused = fixture.evidence.variable_registry.variable_ids
+        value: tuple[str, ...]
+        if forged_value == "unused":
+            value = (used, unused)
+        elif forged_value == "reordered":
+            value = (unused, used)
+        elif forged_value == "unregistered":
+            value = ("source-variable:" + "f" * 64,)
+        else:
+            value = ()
+        forged_validation = replace(
+            fixture.evidence.canonical_validation,
+            included_variable_ids=value,
+        )
+    elif field == "record_lineage_digest":
+        assert isinstance(forged_value, str)
+        forged_validation = replace(
+            fixture.evidence.canonical_validation,
+            record_lineage_digest=forged_value,
+        )
+    else:
+        assert field == "football_context_digest"
+        assert isinstance(forged_value, str)
+        forged_validation = replace(
+            fixture.evidence.canonical_validation,
+            football_context_digest=forged_value,
+        )
+    evidence = replace(fixture.evidence, canonical_validation=forged_validation)
+    with pytest.raises(ValueError, match="CANONICAL_VALIDATION_RECOMPUTED_FROM_BYTES"):
+        _promote(fixture, evidence)
+
+
+@pytest.mark.parametrize("mutation", ("variable", "lineage", "context"))
+def test_canonical_jsonl_semantic_tampering_is_blocked(
+    tmp_path: Path,
+    mutation: str,
+) -> None:
+    fixture = _fixture(tmp_path)
+    _mutate_first_canonical_payload(fixture, mutation)
+    with pytest.raises(ValueError):
+        _promote(fixture)
 
 
 def test_fallback_committed_registry_name_is_supported(tmp_path: Path) -> None:

@@ -5,9 +5,10 @@ from __future__ import annotations
 import datetime as datetime_module
 import hashlib
 import json
+import re
 import subprocess
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, cast
 
 from dynamislm.ingestion.contracts import (
@@ -23,6 +24,7 @@ REGISTRY_RELATIVE_ROOT = Path("registries") / "datasets"
 _FORBIDDEN_REGISTRY_KEYS = frozenset(
     {"raw_rows", "canonical_rows", "athlete_rows", "dob_table", "credentials"}
 )
+_SHA256_RE = re.compile(r"^[0-9a-fA-F]{64}$")
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,6 +44,37 @@ class CommittedDatasetRegistry:
     registry_git_blob_oid: str
     registry_blob_sha256: str
     working_tree_matches_head: bool
+
+
+@dataclass(frozen=True, slots=True)
+class CommittedQualificationReceiptIdentity:
+    """Content identity for the external qualification receipt in ``HEAD``."""
+
+    relative_path: str
+    sha256: str
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.relative_path, str) or not self.relative_path:
+            raise ValueError("qualification receipt relative_path must be non-empty text")
+        pure = PurePosixPath(self.relative_path)
+        if (
+            "\\" in self.relative_path
+            or pure.is_absolute()
+            or pure.as_posix() != self.relative_path
+            or any(part in {".", ".."} for part in pure.parts)
+            or pure.parts[:1] != ("receipts",)
+            or len(pure.parts) < 2
+            or pure.suffix != ".json"
+        ):
+            raise ValueError(
+                "qualification receipt relative_path must be a canonical receipts JSON path"
+            )
+        if not isinstance(self.sha256, str):
+            raise ValueError("qualification receipt sha256 must be a SHA-256 digest")
+        digest = self.sha256.removeprefix("sha256:")
+        if _SHA256_RE.fullmatch(digest) is None:
+            raise ValueError("qualification receipt sha256 must be a SHA-256 digest")
+        object.__setattr__(self, "sha256", f"sha256:{digest.lower()}")
 
 
 def _repository_root() -> Path:
@@ -307,6 +340,21 @@ def dataset_license_identity(document: dict[str, Any]) -> DatasetLicenseIdentity
     )
 
 
+def committed_qualification_receipt_identity(
+    document: dict[str, Any],
+) -> CommittedQualificationReceiptIdentity:
+    """Build the external qualification-receipt identity from committed metadata."""
+
+    block = document.get("qualification_receipt")
+    if not isinstance(block, dict):
+        raise ValueError("committed registry lacks qualification_receipt identity")
+    relative_path = block.get("relative_path")
+    sha256 = block.get("sha256")
+    if not isinstance(relative_path, str) or not isinstance(sha256, str):
+        raise ValueError("committed registry qualification_receipt identity is incomplete")
+    return CommittedQualificationReceiptIdentity(relative_path=relative_path, sha256=sha256)
+
+
 def registry_file_entries(document: dict[str, Any]) -> tuple[dict[str, Any], ...]:
     """Return public file identities in the deterministic registry order."""
 
@@ -477,6 +525,8 @@ registered_file_identity_from_registry = registered_dataset_file_identity
 __all__ = [
     "REGISTRY_RELATIVE_ROOT",
     "CommittedDatasetRegistry",
+    "CommittedQualificationReceiptIdentity",
+    "committed_qualification_receipt_identity",
     "dataset_license_identity",
     "dataset_source_identity",
     "dataset_version_identity",

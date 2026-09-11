@@ -246,12 +246,18 @@ committed registry and the deterministic persisted acquisition and
 qualification receipts, verifies the metadata snapshot, re-derives the
 content-addressed raw-object path from the committed SHA-256, recomputes the
 actual raw digest and byte size, and re-runs registered-artifact verification.
-It then binds the actual variable-registry sidecar and canonical JSONL artifact
-to the committed paths, digests, counts, and mapping version. A
-`QUALIFIED` receipt is accepted only when its source and population decisions,
-artifact, license, variable identity, football mapping, reasons, and missing
-information are internally consistent. A qualified source does not qualify
-every variable. Unresolved variable semantics remain quarantined.
+The registry also commits the exact external qualification-receipt path and
+content SHA-256; promotion reads that object, checks its digest, and then
+requires typed equality with caller evidence. It then binds the actual
+variable-registry sidecar and canonical JSONL artifact to the committed paths,
+digests, counts, and mapping version. The canonical JSONL is streamed and its
+source/version/raw/mapping links, variable usage, eight-step lineage, and
+football context are recomputed into a complete `CanonicalValidationReceipt`
+before evidence equality is accepted. A `QUALIFIED` receipt is accepted only
+when its source and population decisions, artifact, license, variable
+identity, football mapping, reasons, and missing information are internally
+consistent. A qualified source does not qualify every variable. Unresolved
+variable semantics remain quarantined.
 
 This is an integrity and provenance authority rooted in the committed checkout
 and external `DYNAMISLM_DATA_ROOT`; it is not cryptographic signing and does

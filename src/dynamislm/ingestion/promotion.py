@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import datetime as datetime_module
 import hashlib
 import json
+import math
 import os
+import re
 from collections.abc import Iterable, Iterator
 from pathlib import Path, PurePosixPath
-from typing import Any
+from typing import Any, cast
 
 from dynamislm.ingestion.acquisition import (
     _receipt_path,
@@ -18,6 +21,7 @@ from dynamislm.ingestion.contracts import (
     ArtifactAcquisitionReceipt,
     CanonicalEmpiricalArtifactReceipt,
     CanonicalEmpiricalRecord,
+    CanonicalFootballContext,
     CanonicalValidationReceipt,
     DatasetQualificationReceipt,
     FileRepresentation,
@@ -28,12 +32,15 @@ from dynamislm.ingestion.contracts import (
     SavedOriginalVerificationReceipt,
     SourceVariableIdentity,
     SourceVariableRegistry,
+    SourceVariableRegistryEntry,
     VariableResolutionStatus,
     _promotion_decision_material,
     stable_source_variable_id,
 )
 from dynamislm.ingestion.registry import (
     CommittedDatasetRegistry,
+    committed_qualification_receipt_identity,
+    dataset_license_identity,
     load_committed_dataset_registry,
     registered_dataset_file_identity,
     registry_file_entries,
@@ -49,14 +56,60 @@ from dynamislm.ingestion.storage import (
     verify_file,
     write_external_json,
 )
-from dynamislm.measurement.identity import ScientificIdentifier
-from dynamislm.serialization import canonical_hash, canonical_json, from_canonical_json
+from dynamislm.measurement.identity import (
+    InstanceIdentifier,
+    ScientificIdentifier,
+)
+from dynamislm.population.models import CompetitionIdentity, SeasonIdentity
+from dynamislm.serialization import (
+    SERIALIZATION_VERSION,
+    canonical_hash,
+    canonical_json,
+    from_canonical_json,
+    type_identifier,
+)
 
 MAPPING_VERSION_PREFIX = "mapping@"
 CANONICAL_JSONL_NEWLINE = "\n"
 _EXTERNAL_DATA_ROOT_COMPONENTS = frozenset(
     {"objects", "metadata", "receipts", "canonical", "quarantine"}
 )
+_CANONICAL_RECORD_PAYLOAD_KEYS = frozenset(
+    {
+        "source_id",
+        "source_persistent_identifier",
+        "source_version",
+        "version_persistent_identifier",
+        "raw_artifact_sha256",
+        "source_row_number",
+        "natural_source_key",
+        "athlete_id",
+        "session_id",
+        "observed_date",
+        "competition_identity",
+        "season_identity",
+        "position",
+        "session_kind",
+        "source_variable_id",
+        "source_reported_value",
+        "population_decision_id",
+        "source_decision_id",
+        "mapping_version",
+        "lineage",
+    }
+)
+_CANONICAL_ENVELOPE_KEYS = frozenset({"payload", "serialization_version", "type"})
+_LINEAGE_PREFIXES = (
+    "dataset-source:",
+    "dataset-version:",
+    "verified-raw-artifact:",
+    "acquisition-receipt:",
+    "source-schema:",
+    "source-row:",
+    "mapping-version:",
+    "canonical-record:",
+)
+_SHA256_HEX_RE = re.compile(r"^[0-9a-fA-F]{64}$")
 
 
 def build_raw_to_canonical_lineage(
@@ -84,20 +137,25 @@ def build_raw_to_canonical_lineage(
     )
 
 
-def _lineage_is_complete(record: CanonicalEmpiricalRecord) -> bool:
-    required_prefixes = (
-        "dataset-source:",
-        "dataset-version:",
-        "verified-raw-artifact:",
-        "acquisition-receipt:",
-        "source-schema:",
-        "source-row:",
-        "mapping-version:",
-        "canonical-record:",
+def _lineage_has_required_prefixes(lineage: tuple[str, ...]) -> bool:
+    return len(lineage) == len(_LINEAGE_PREFIXES) and all(
+        value.startswith(prefix) for value, prefix in zip(lineage, _LINEAGE_PREFIXES, strict=True)
     )
-    return len(record.lineage) == len(required_prefixes) and all(
-        value.startswith(prefix)
-        for value, prefix in zip(record.lineage, required_prefixes, strict=True)
+
+
+def _lineage_is_complete(record: CanonicalEmpiricalRecord) -> bool:
+    return _lineage_has_required_prefixes(record.lineage)
+
+
+def _canonical_validation_semantic_bytes(
+    lineage: tuple[str, ...],
+    football_context: CanonicalFootballContext,
+) -> tuple[bytes, bytes]:
+    """Return the exact lineage/context bytes used by every validator."""
+
+    return (
+        (canonical_json(lineage) + CANONICAL_JSONL_NEWLINE).encode("utf-8"),
+        (canonical_json(football_context) + CANONICAL_JSONL_NEWLINE).encode("utf-8"),
     )
 
 
@@ -405,8 +463,12 @@ def validate_canonical_records(
     ):
         line = (serialized + CANONICAL_JSONL_NEWLINE).encode("utf-8")
         digest.update(line)
-        lineage_digest.update((canonical_json(record.lineage) + "\n").encode("utf-8"))
-        context_digest.update((canonical_json(record.football_context) + "\n").encode("utf-8"))
+        lineage_bytes, context_bytes = _canonical_validation_semantic_bytes(
+            record.lineage,
+            record.football_context,
+        )
+        lineage_digest.update(lineage_bytes)
+        context_digest.update(context_bytes)
         if variable_id not in included_set:
             included_set.add(variable_id)
             included.append(variable_id)
@@ -415,6 +477,385 @@ def validate_canonical_records(
         source_id=source_id,
         source_version=source_version,
         raw_source_sha256=raw_source_sha256,
+        mapping_version=mapping_version,
+        canonical_artifact_sha256=f"sha256:{digest.hexdigest()}",
+        canonical_record_count=count,
+        variable_registry_sha256=variable_registry.sha256,
+        included_variable_ids=tuple(included),
+        record_lineage_digest=f"sha256:{lineage_digest.hexdigest()}",
+        football_context_digest=f"sha256:{context_digest.hexdigest()}",
+    )
+
+
+def _reject_duplicate_json_keys(
+    pairs: list[tuple[str, object]],
+) -> dict[str, object]:
+    result: dict[str, object] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError(f"canonical JSON contains duplicate key: {key}")
+        result[key] = value
+    return result
+
+
+def _reject_nonfinite_json_constant(value: str) -> object:
+    raise ValueError(f"canonical JSON contains non-finite number: {value}")
+
+
+def _parse_persisted_canonical_line(line: bytes, *, line_number: int) -> dict[str, object]:
+    if not line.endswith(b"\n") or line.endswith(b"\r\n") or line == b"\n":
+        raise ValueError(f"canonical JSONL line {line_number} must end in one LF and contain data")
+    body = line[:-1]
+    try:
+        text = body.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValueError(f"canonical JSONL line {line_number} is not UTF-8") from exc
+    try:
+        decoded = json.loads(
+            text,
+            object_pairs_hook=_reject_duplicate_json_keys,
+            parse_constant=_reject_nonfinite_json_constant,
+        )
+    except (TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise ValueError(f"canonical JSONL line {line_number} is not deterministic JSON") from exc
+    if not isinstance(decoded, dict):
+        raise ValueError(f"canonical JSONL line {line_number} envelope is not an object")
+    envelope = cast(dict[str, object], decoded)
+    if set(envelope) != _CANONICAL_ENVELOPE_KEYS:
+        raise ValueError(f"canonical JSONL line {line_number} envelope fields are invalid")
+    serialization_version = envelope["serialization_version"]
+    if (
+        isinstance(serialization_version, bool)
+        or not isinstance(serialization_version, int)
+        or serialization_version != SERIALIZATION_VERSION
+    ):
+        raise ValueError(
+            f"canonical JSONL line {line_number} has an unsupported serialization version"
+        )
+    if envelope["type"] != type_identifier(dict):
+        raise ValueError(f"canonical JSONL line {line_number} has an invalid envelope type")
+    payload_value = envelope["payload"]
+    if not isinstance(payload_value, dict):
+        raise ValueError(f"canonical JSONL line {line_number} payload is not an object")
+    payload = cast(dict[str, object], payload_value)
+    if set(payload) != _CANONICAL_RECORD_PAYLOAD_KEYS:
+        raise ValueError(f"canonical JSONL line {line_number} payload fields are invalid")
+    try:
+        canonical_body = json.dumps(
+            envelope,
+            ensure_ascii=False,
+            allow_nan=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"canonical JSONL line {line_number} is not canonically encoded") from exc
+    if canonical_body != body:
+        raise ValueError(f"canonical JSONL line {line_number} is not canonically encoded")
+    return payload
+
+
+def _persisted_payload_text(payload: dict[str, object], field_name: str) -> str:
+    value = payload[field_name]
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"canonical payload field {field_name!r} must be non-empty text")
+    return value
+
+
+def _persisted_payload_optional_text(payload: dict[str, object], field_name: str) -> str | None:
+    value = payload[field_name]
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"canonical payload field {field_name!r} must be non-empty text or null")
+    return value
+
+
+def _persisted_payload_instance_identifier(
+    payload: dict[str, object],
+    field_name: str,
+    instance_type: str,
+) -> InstanceIdentifier:
+    qualified = _persisted_payload_text(payload, field_name)
+    prefix = f"{instance_type}:"
+    if not qualified.startswith(prefix) or qualified == prefix:
+        raise ValueError(f"canonical payload field {field_name!r} has an invalid instance identity")
+    return InstanceIdentifier(instance_type, qualified.removeprefix(prefix))
+
+
+def _persisted_scientific_identifier(value: object, *, field_name: str) -> ScientificIdentifier:
+    if not isinstance(value, dict):
+        raise ValueError(f"canonical context field {field_name!r} identifier is not an object")
+    identity = cast(dict[str, object], value)
+    expected_keys = {"__type__", "namespace", "object_type", "key", "version"}
+    if set(identity) != expected_keys or identity.get("__type__") != type_identifier(
+        ScientificIdentifier
+    ):
+        raise ValueError(f"canonical context field {field_name!r} identifier is invalid")
+    return ScientificIdentifier(
+        namespace=_persisted_nested_text(identity, "namespace", field_name),
+        object_type=_persisted_nested_text(identity, "object_type", field_name),
+        key=_persisted_nested_text(identity, "key", field_name),
+        version=_persisted_nested_text(identity, "version", field_name),
+    )
+
+
+def _persisted_nested_text(
+    value: dict[str, object],
+    field_name: str,
+    parent_field_name: str,
+) -> str:
+    nested = value[field_name]
+    if not isinstance(nested, str) or not nested.strip():
+        raise ValueError(
+            f"canonical context field {parent_field_name!r} {field_name!r} must be non-empty text"
+        )
+    return nested
+
+
+def _persisted_context_reference_parts(
+    value: object,
+    *,
+    field_name: str,
+    expected_type: str,
+) -> tuple[ScientificIdentifier, str] | None:
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise ValueError(f"canonical context field {field_name!r} must be an object or null")
+    reference = cast(dict[str, object], value)
+    if set(reference) != {"__type__", "identifier", "display_label"}:
+        raise ValueError(f"canonical context field {field_name!r} has invalid fields")
+    if reference.get("__type__") != expected_type:
+        raise ValueError(f"canonical context field {field_name!r} has an invalid type")
+    identifier = _persisted_scientific_identifier(
+        reference["identifier"],
+        field_name=field_name,
+    )
+    display_label = _persisted_nested_text(reference, "display_label", field_name)
+    return identifier, display_label
+
+
+def _persisted_football_context(payload: dict[str, object]) -> CanonicalFootballContext:
+    observed_date_text = _persisted_payload_text(payload, "observed_date")
+    try:
+        observed_date = datetime_module.date.fromisoformat(observed_date_text)
+    except ValueError as exc:
+        raise ValueError("canonical payload observed_date is not an ISO calendar date") from exc
+    competition_parts = _persisted_context_reference_parts(
+        payload["competition_identity"],
+        field_name="competition_identity",
+        expected_type=type_identifier(CompetitionIdentity),
+    )
+    season_parts = _persisted_context_reference_parts(
+        payload["season_identity"],
+        field_name="season_identity",
+        expected_type=type_identifier(SeasonIdentity),
+    )
+    position = _persisted_payload_optional_text(payload, "position")
+    session_kind = _persisted_payload_text(payload, "session_kind")
+    return CanonicalFootballContext(
+        athlete_id=_persisted_payload_instance_identifier(payload, "athlete_id", "athlete"),
+        session_id=_persisted_payload_instance_identifier(payload, "session_id", "session"),
+        observed_date=observed_date,
+        competition_identity=(
+            CompetitionIdentity(*competition_parts) if competition_parts is not None else None
+        ),
+        season_identity=SeasonIdentity(*season_parts) if season_parts is not None else None,
+        position=position,
+        session_kind=session_kind,
+    )
+
+
+def _normalise_persisted_digest(value: object, *, field_name: str) -> str:
+    if not isinstance(value, str):
+        raise ValueError(f"canonical payload field {field_name!r} must be a SHA-256 digest")
+    digest = value.removeprefix("sha256:")
+    if _SHA256_HEX_RE.fullmatch(digest) is None:
+        raise ValueError(f"canonical payload field {field_name!r} must be a SHA-256 digest")
+    return f"sha256:{digest.lower()}"
+
+
+def _validate_persisted_lineage(
+    lineage_value: object,
+    *,
+    source_id: str,
+    source_version: str,
+    raw_source_sha256: str,
+    source_row_number: int,
+    mapping_version: str,
+    original_column_name: str,
+) -> tuple[str, ...]:
+    if not isinstance(lineage_value, list) or len(lineage_value) != len(_LINEAGE_PREFIXES):
+        raise ValueError("canonical record lineage must contain the complete eight-step chain")
+    if any(not isinstance(value, str) for value in lineage_value):
+        raise ValueError("canonical record lineage must contain only strings")
+    lineage = tuple(cast(str, value) for value in lineage_value)
+    if not _lineage_has_required_prefixes(lineage):
+        raise ValueError("canonical record lineage is incomplete")
+    if lineage[0] != f"dataset-source:{source_id}":
+        raise ValueError("canonical record lineage source ID is inconsistent")
+    if lineage[1] != f"dataset-version:{source_id}@{source_version}":
+        raise ValueError("canonical record lineage source version is inconsistent")
+    if lineage[2] != f"verified-raw-artifact:{raw_source_sha256}":
+        raise ValueError("canonical record lineage raw artifact is inconsistent")
+    acquisition_identity = lineage[3].removeprefix("acquisition-receipt:")
+    if not acquisition_identity or any(character.isspace() for character in acquisition_identity):
+        raise ValueError("canonical record lineage acquisition receipt is malformed")
+    schema_digest = lineage[4].removeprefix("source-schema:")
+    if _SHA256_HEX_RE.fullmatch(schema_digest.removeprefix("sha256:")) is None:
+        raise ValueError("canonical record lineage source schema is malformed")
+    if lineage[5] != f"source-row:{source_row_number}":
+        raise ValueError("canonical record lineage source row is inconsistent")
+    if lineage[6] != f"mapping-version:{mapping_version}":
+        raise ValueError("canonical record lineage mapping is inconsistent")
+    expected_canonical_id = (
+        f"{source_id}:{source_version}:{source_row_number}:{original_column_name}"
+    )
+    if lineage[7] != f"canonical-record:{expected_canonical_id}":
+        raise ValueError("canonical record lineage canonical-record identity is inconsistent")
+    return lineage
+
+
+def _validate_persisted_payload(
+    payload: dict[str, object],
+    *,
+    source_id: str,
+    source_version: str,
+    raw_source_sha256: str,
+    mapping_version: str,
+    variable_entries: dict[str, SourceVariableRegistryEntry],
+) -> tuple[int, str, tuple[str, ...], CanonicalFootballContext]:
+    if _persisted_payload_text(payload, "source_id") != source_id:
+        raise ValueError("canonical record source ID does not match committed source")
+    if _persisted_payload_text(payload, "source_version") != source_version:
+        raise ValueError("canonical record source version does not match committed source")
+    if (
+        _normalise_persisted_digest(
+            payload["raw_artifact_sha256"],
+            field_name="raw_artifact_sha256",
+        )
+        != raw_source_sha256
+    ):
+        raise ValueError("canonical record raw artifact does not match committed source")
+    if _persisted_payload_text(payload, "mapping_version") != mapping_version:
+        raise ValueError("canonical record mapping version does not match committed mapping")
+    source_row_number = payload["source_row_number"]
+    if isinstance(source_row_number, bool) or not isinstance(source_row_number, int):
+        raise ValueError("canonical record source row number must be an integer")
+    if source_row_number < 1:
+        raise ValueError("canonical record source row number must be positive")
+    natural_source_key = payload["natural_source_key"]
+    if natural_source_key is not None and (
+        not isinstance(natural_source_key, str) or not natural_source_key.strip()
+    ):
+        raise ValueError("canonical record natural source key must be non-empty text or null")
+    source_reported_value = payload["source_reported_value"]
+    if source_reported_value is not None and not isinstance(
+        source_reported_value,
+        str | int | float | bool,
+    ):
+        raise ValueError("canonical record source-reported value must be a JSON scalar")
+    if isinstance(source_reported_value, float) and not math.isfinite(source_reported_value):
+        raise ValueError("canonical record source-reported value must be finite")
+    _persisted_payload_text(payload, "source_persistent_identifier")
+    _persisted_payload_optional_text(payload, "version_persistent_identifier")
+    _persisted_payload_text(payload, "population_decision_id")
+    _persisted_payload_text(payload, "source_decision_id")
+    variable_id = _persisted_payload_text(payload, "source_variable_id")
+    entry = variable_entries.get(variable_id)
+    if entry is None:
+        raise ValueError(
+            "canonical record source variable is not in the verified variable registry"
+        )
+    if entry.identity.resolution_status in (
+        VariableResolutionStatus.UNRESOLVED,
+        VariableResolutionStatus.QUARANTINED,
+    ):
+        raise ValueError("canonical record source variable is not resolved in the registry")
+    lineage = _validate_persisted_lineage(
+        payload["lineage"],
+        source_id=source_id,
+        source_version=source_version,
+        raw_source_sha256=raw_source_sha256,
+        source_row_number=source_row_number,
+        mapping_version=mapping_version,
+        original_column_name=entry.identity.original_column_name,
+    )
+    context = _persisted_football_context(payload)
+    return source_row_number, variable_id, lineage, context
+
+
+def validate_persisted_canonical_artifact(
+    path: Path,
+    *,
+    variable_registry: SourceVariableRegistry,
+    source_id: str,
+    source_version: str,
+    raw_source_sha256: str,
+    mapping_version: str,
+) -> CanonicalValidationReceipt:
+    """Stream persisted canonical JSONL and recompute all validation semantics."""
+
+    if path.is_symlink() or not path.is_file():
+        raise ValueError("persisted canonical artifact is missing or is not a regular file")
+    normalized_raw_source_sha256 = _normalise_persisted_digest(
+        raw_source_sha256,
+        field_name="raw_source_sha256",
+    )
+    if (
+        variable_registry.source_id != source_id
+        or variable_registry.source_version != source_version
+        or variable_registry.mapping_version != mapping_version
+    ):
+        raise ValueError("verified variable registry is not bound to canonical validation inputs")
+    variable_entries: dict[str, SourceVariableRegistryEntry] = {
+        entry.variable_id: entry for entry in variable_registry.entries
+    }
+    digest = hashlib.sha256()
+    lineage_digest = hashlib.sha256()
+    context_digest = hashlib.sha256()
+    count = 0
+    included: list[str] = []
+    included_set: set[str] = set()
+    previous_key: tuple[int, int | str] | None = None
+    variable_order = _ordered_variable_index(variable_registry)
+    try:
+        with path.open("rb") as artifact:
+            for line_number, line in enumerate(artifact, start=1):
+                payload = _parse_persisted_canonical_line(line, line_number=line_number)
+                source_row_number, variable_id, lineage, context = _validate_persisted_payload(
+                    payload,
+                    source_id=source_id,
+                    source_version=source_version,
+                    raw_source_sha256=normalized_raw_source_sha256,
+                    mapping_version=mapping_version,
+                    variable_entries=variable_entries,
+                )
+                order_value: int | str = variable_order[variable_id]
+                key = (source_row_number, order_value)
+                if previous_key is not None and key < previous_key:
+                    raise ValueError(
+                        "persisted canonical record stream is not in monotonic source order"
+                    )
+                previous_key = key
+                digest.update(line)
+                lineage_bytes, context_bytes = _canonical_validation_semantic_bytes(
+                    lineage,
+                    context,
+                )
+                lineage_digest.update(lineage_bytes)
+                context_digest.update(context_bytes)
+                if variable_id not in included_set:
+                    included_set.add(variable_id)
+                    included.append(variable_id)
+                count += 1
+    except OSError as exc:
+        raise ValueError(f"could not read persisted canonical artifact: {path}") from exc
+    return CanonicalValidationReceipt(
+        source_id=source_id,
+        source_version=source_version,
+        raw_source_sha256=normalized_raw_source_sha256,
         mapping_version=mapping_version,
         canonical_artifact_sha256=f"sha256:{digest.hexdigest()}",
         canonical_record_count=count,
@@ -468,6 +909,34 @@ def _read_external_typed[T](
         _read_external_text(data_root, relative_path, label=label),
         expected_type,
     )
+
+
+def _read_external_typed_with_digest[T](
+    data_root: Path,
+    relative_path: str,
+    expected_type: type[T],
+    *,
+    label: str,
+    expected_sha256: str | None = None,
+) -> tuple[T, str]:
+    """Read one external typed object once, binding its bytes and decoded value."""
+
+    path = _external_regular_file(data_root, relative_path, label=label)
+    try:
+        raw = path.read_bytes()
+    except OSError as exc:
+        raise ValueError(f"{label} is unreadable: {relative_path}") from exc
+    digest = f"sha256:{hashlib.sha256(raw).hexdigest()}"
+    if expected_sha256 is not None and digest != expected_sha256:
+        raise ValueError(
+            "QUALIFICATION_RECEIPT_ROOT_BINDING: external receipt digest differs from HEAD"
+        )
+    try:
+        text = raw.decode("utf-8")
+        value = from_canonical_json(text, expected_type)
+    except (UnicodeDecodeError, ValueError) as exc:
+        raise ValueError(f"{label} is not a valid typed canonical object") from exc
+    return value, digest
 
 
 def _read_metadata_snapshot(
@@ -525,10 +994,6 @@ def _raw_identity_path(data_root: Path, expected_sha256: str) -> tuple[str, Path
     path = content_addressed_object_path(data_root, expected_sha256)
     relative_path = relative_data_path(data_root, path)
     return relative_path, path
-
-
-def _qualification_receipt_path(source_id: str) -> str:
-    return f"receipts/{_safe_slug(source_id)}-qualification.json"
 
 
 def _verify_persisted_acquisition(
@@ -664,6 +1129,11 @@ def _verify_committed_external_authority(
         ) from exc
     if evidence.registered_file_identity != registered:
         raise ValueError("REGISTERED_IDENTITY_SUBSTITUTION: evidence identity differs from HEAD")
+    committed_license = dataset_license_identity(committed.document)
+    if evidence.license_identity != committed_license:
+        raise ValueError("COMMITTED_LICENSE_AUTHORITY: evidence license differs from HEAD")
+    if evidence.qualification.license_identity != committed_license:
+        raise ValueError("COMMITTED_LICENSE_AUTHORITY: qualification license differs from HEAD")
     if evidence.qualification.source_id != registered.source_id:
         raise ValueError("promotion qualification source does not match committed registry")
     if evidence.qualification.source_version != registered.source_version:
@@ -729,12 +1199,13 @@ def _verify_committed_external_authority(
     if persisted_acquisition != artifact.acquisition_receipt:
         raise ValueError("verified artifact acquisition receipt is not persisted authority")
 
-    qualification_relative_path = _qualification_receipt_path(registered.source_id)
-    persisted_qualification = _read_external_typed(
+    qualification_identity = committed_qualification_receipt_identity(committed.document)
+    persisted_qualification, _ = _read_external_typed_with_digest(
         data_root,
-        qualification_relative_path,
+        qualification_identity.relative_path,
         DatasetQualificationReceipt,
         label="qualification receipt",
+        expected_sha256=qualification_identity.sha256,
     )
     if persisted_qualification != evidence.qualification:
         raise ValueError("persisted qualification receipt differs from evidence")
@@ -821,15 +1292,31 @@ def _verify_committed_external_authority(
     )
     if persisted_canonical_receipt != expected_canonical_receipt:
         raise ValueError("persisted canonical artifact receipt differs from committed registry")
-    _external_regular_file(data_root, canonical_relative_path, label="canonical artifact")
+    canonical_path = _external_regular_file(
+        data_root,
+        canonical_relative_path,
+        label="canonical artifact",
+    )
     try:
-        verify_canonical_artifact(
-            data_root / canonical_relative_path,
-            expected_sha256=canonical_sha256,
-            expected_record_count=canonical_record_count,
+        recomputed_validation = validate_persisted_canonical_artifact(
+            canonical_path,
+            variable_registry=variable_registry,
+            source_id=registered.source_id,
+            source_version=registered.source_version,
+            raw_source_sha256=registered.expected_sha256,
+            mapping_version=mapping_version,
         )
     except (OSError, ValueError) as exc:
-        raise ValueError("actual canonical artifact differs from committed registry") from exc
+        raise ValueError("PERSISTED_CANONICAL_VALIDATION=FAIL") from exc
+    if recomputed_validation != validation:
+        raise ValueError(
+            "CANONICAL_VALIDATION_RECOMPUTED_FROM_BYTES: persisted semantics differ from evidence"
+        )
+    if (
+        recomputed_validation.canonical_artifact_sha256 != canonical_sha256
+        or recomputed_validation.canonical_record_count != canonical_record_count
+    ):
+        raise ValueError("actual canonical artifact differs from committed registry")
 
 
 def _promotion_decision_from_validated_evidence(evidence: PromotionEvidence) -> PromotionDecision:
@@ -937,6 +1424,7 @@ __all__ = [
     "promotion_from_evidence",
     "validate_canonical_records",
     "validate_canonical_replay",
+    "validate_persisted_canonical_artifact",
     "verify_canonical_artifact",
     "write_canonical_jsonl",
 ]
