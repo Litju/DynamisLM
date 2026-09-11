@@ -1,0 +1,69 @@
+{
+  "candidate_role": "CANONICAL_EMPIRICAL_TARGET",
+  "football_mapping": "PASS_FOR_SOURCE_SUPPORTED_ATHLETE_DATE_SEASON_COMPETITION_POSITION_CONTEXT",
+  "license": "CC-BY-NC-4.0",
+  "lineage": "PASS",
+  "mapping_version": "unifesp-serie-a-mapping@1.1.0",
+  "model_training_use": "NOT_AUTHORIZED_BY_RES63",
+  "population_clauses": {
+    "AGE_CLASS": "SENIOR",
+    "COMPETITION_TIER": "TOP_DOMESTIC_DIVISION",
+    "PROFESSIONAL_STATUS": "PROFESSIONAL",
+    "SEX": "MALE",
+    "SPORT": "ASSOCIATION_FOOTBALL",
+    "SQUAD_LEVEL": "FIRST_TEAM"
+  },
+  "population_decision_id": "dynamislm:canonical-population-decision:cf7232829672897058bf51f3209e70e9c7f40b684e91de000d99f91f8132a840@1.0.0",
+  "population_evidence": [
+    {
+      "dimension": "SEX",
+      "note": "Methods 2.1 explicitly states male participants.",
+      "source": "https://doi.org/10.3390/jfmk10040385",
+      "value": "MALE"
+    },
+    {
+      "dimension": "AGE_CLASS",
+      "note": "The reported cohort range is adult/senior, not U23 or youth.",
+      "source": "https://doi.org/10.3390/jfmk10040385",
+      "value": "SENIOR"
+    },
+    {
+      "dimension": "SPORT",
+      "note": "The paper identifies football match performance.",
+      "source": "https://doi.org/10.3390/jfmk10040385",
+      "value": "ASSOCIATION_FOOTBALL"
+    },
+    {
+      "dimension": "PROFESSIONAL_STATUS",
+      "note": "The paper uses the exact professional-player wording.",
+      "source": "https://doi.org/10.3390/jfmk10040385",
+      "value": "PROFESSIONAL"
+    },
+    {
+      "dimension": "SQUAD_LEVEL",
+      "note": "Exact main-team/professional-adult wording supports first-team status.",
+      "source": "https://doi.org/10.3390/jfmk10040385",
+      "value": "FIRST_TEAM"
+    },
+    {
+      "dimension": "COMPETITION_TIER",
+      "note": "Brazilian First Division is the source-supported top domestic tier.",
+      "source": "https://doi.org/10.3390/jfmk10040385",
+      "value": "TOP_DOMESTIC_DIVISION"
+    }
+  ],
+  "population_status": "PASS",
+  "season_mapping": "2020-2024_FROM_GAMEDATE_YEAR",
+  "source_decision_id": "dynamislm:canonical-source-decision:49de88e49133d5396a211d685151332ad79eeaafced2abd748736e85726fe2a2@1.0.0",
+  "source_id": "unifesp-brazil-serie-a-v1",
+  "source_persistent_identifier": "hdl:20.500.12682/rdp/GMXME8",
+  "source_requirements": {
+    "ACTUAL_OBSERVED_DATA": "PASS",
+    "DATA_GRANULARITY": "PASS",
+    "POPULATION_MATCH": "PASS",
+    "SOURCE_IDENTITY_AND_PROVENANCE": "PASS",
+    "TARGET_SUBGROUP_SCOPE": "PASS"
+  },
+  "source_status": "CANONICAL_EMPIRICAL_TARGET",
+  "source_version": "1.0"
+}

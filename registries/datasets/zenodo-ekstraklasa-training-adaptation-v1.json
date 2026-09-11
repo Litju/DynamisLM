@@ -1,0 +1,50 @@
+{
+  "schema_version": "1.0.0",
+  "source_id": "zenodo-ekstraklasa-training-adaptation",
+  "provider": "Zenodo",
+  "title": "Short- and Mid-Term Adaptations to Plyometric vs. Strength Training in Elite Soccer: A Randomized Crossover Study With Follow-Up and Machine Learning Classification",
+  "landing_page_uri": "https://zenodo.org/records/15205417",
+  "persistent_identifier": "10.5281/zenodo.15205417",
+  "version": {
+    "repository_version": "1.0",
+    "version_specific_persistent_identifier": "10.5281/zenodo.15205417",
+    "published_at": "2025-04-13"
+  },
+  "license": {
+    "spdx_expression": "CC-BY-4.0",
+    "canonical_uri": "https://creativecommons.org/licenses/by/4.0/",
+    "assertion_source_uri": "https://zenodo.org/records/15205417",
+    "attribution_required": true,
+    "noncommercial_restriction": false,
+    "notes": "Zenodo metadata identifies CC-BY 4.0."
+  },
+  "files": [
+    {
+      "file_id": "b725d387-0318-4032-ad26-a8956a5118d5",
+      "representation": "PROVIDER_FILE",
+      "filename": "StudyPackage_Training_Adaptation.zip",
+      "media_type": "application/zip",
+      "download_url": "https://zenodo.org/api/records/15205417/files/StudyPackage_Training_Adaptation.zip/content",
+      "sha256": "sha256:8659ea07afe7ce6e6409fc684fa339e9552b78739380c29c19a826ac925ad395",
+      "byte_size": 833814,
+      "provider_hash": "c33f2f14a356d6ea10c6ed7e5ac53cde",
+      "provider_hash_algorithm": "md5"
+    }
+  ],
+  "metadata_snapshot_sha256": "sha256:75209f7de804e4a3567102bbab1ab6e58854ecacc7f8a67b92d9b959d7109cfb",
+  "candidate_role": "CANONICAL_EMPIRICAL_TARGET",
+  "qualification_state": "QUARANTINED",
+  "quarantine_reason_codes": [
+    "UNRESOLVED_PUBLICATION_PROVENANCE",
+    "UNRESOLVED_FIRST_TEAM_STATUS"
+  ],
+  "model_training_use": "NOT_AUTHORIZED_BY_RES63",
+  "archive_inventory": {
+    "member_count": 9,
+    "data_member": "Dane_crossover_mixed_HRV.xlsx",
+    "README_member": "README.txt",
+    "figures_present": true
+  },
+  "verified_archive_sha256": "sha256:8659ea07afe7ce6e6409fc684fa339e9552b78739380c29c19a826ac925ad395",
+  "reason": "The official package is downloadable and identifies an elite male top-division study, but RES-63 retains it in provenance audit until package-to-manuscript linkage and raw-versus-derived field provenance are independently resolved."
+}

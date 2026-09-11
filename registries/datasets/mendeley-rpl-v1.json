@@ -1,0 +1,53 @@
+{
+  "schema_version": "1.0.0",
+  "source_id": "mendeley-rpl-v1",
+  "provider": "Mendeley Data",
+  "title": "Skin Temperature Football Players during a season",
+  "landing_page_uri": "https://data.mendeley.com/datasets/spkmxfsmhv/1",
+  "persistent_identifier": "10.17632/spkmxfsmhv.1",
+  "version": {
+    "repository_version": "1",
+    "version_specific_persistent_identifier": "10.17632/spkmxfsmhv.1",
+    "published_at": "2023-11-15T08:00:13+00:00"
+  },
+  "license": {
+    "spdx_expression": "CC-BY-4.0",
+    "canonical_uri": "https://creativecommons.org/licenses/by/4.0/",
+    "assertion_source_uri": "https://data.mendeley.com/datasets/spkmxfsmhv/1",
+    "attribution_required": true,
+    "noncommercial_restriction": false,
+    "notes": "Mendeley Data page and DataCite metadata identify CC BY 4.0."
+  },
+  "files": [
+    {
+      "file_id": "9482a9ea-1952-409a-817b-c5afa84495e0",
+      "representation": "PROVIDER_FILE",
+      "filename": "HSR + 24 GPS (Dataset).xlsx",
+      "media_type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      "download_url": "https://data.mendeley.com/public-files/datasets/spkmxfsmhv/files/9482a9ea-1952-409a-817b-c5afa84495e0/file_downloaded",
+      "sha256": "sha256:f0f6bbf4882eaa43d13ef81d53062fd70aa7becb0d252dd523d2a623470cee4c",
+      "byte_size": 27077,
+      "provider_hash": "f0f6bbf4882eaa43d13ef81d53062fd70aa7becb0d252dd523d2a623470cee4c",
+      "provider_hash_algorithm": "sha256"
+    }
+  ],
+  "metadata_snapshot_sha256": "sha256:97e8107cc57727e579ba27eb4c141edc89492ad31ff3d39375d8ad7027794ebc",
+  "candidate_role": "CANONICAL_EMPIRICAL_TARGET",
+  "qualification_state": "QUARANTINED",
+  "quarantine_reason_codes": [
+    "UNRESOLVED_SEX_EVIDENCE",
+    "UNRESOLVED_FIRST_TEAM_STATUS",
+    "POPULATION_SCOPE_UNRESOLVED"
+  ],
+  "model_training_use": "NOT_AUTHORIZED_BY_RES63",
+  "verified_workbook_facts": {
+    "worksheet": "Limpio",
+    "rows": 115,
+    "columns": 16,
+    "distinct_athlete_ids": 24,
+    "distinct_match_or_date_ids": 14,
+    "missing_values_preserved": true
+  },
+  "verified_schema_sha256": "sha256:84ea3b215345aca74beaa6ac469d71aa57a49b8eb8e23b545baab272ff1c9a56",
+  "reason": "The provider page/paper establishes a professional Russian Premier League team and field-player GPS observations, but the exact source evidence captured here does not explicitly establish the male-sex or first-team clauses."
+}

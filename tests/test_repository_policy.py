@@ -59,6 +59,28 @@ def test_allowlisted_synthetic_csv_over_size_limit_is_rejected() -> None:
     ) == (f"OVERSIZED_FIXTURE={path}",)
 
 
+def test_allowlisted_synthetic_tab_within_size_limit_passes() -> None:
+    path = "tests/fixtures/synthetic/source-a/source-a.tab"
+    assert evaluate_paths(((path, MAX_FIXTURE_SIZE_BYTES),), allowlisted_fixtures=(path,)) == ()
+
+
+def test_real_tab_outside_synthetic_fixture_root_is_rejected() -> None:
+    path = "source.tab"
+    assert evaluate_paths(((path, 1),), allowlisted_fixtures=(path,)) == (
+        f"UNALLOWLISTED_FIXTURE={path}",
+    )
+
+
+def test_public_dataset_registry_json_is_narrowly_permitted() -> None:
+    path = "registries/datasets/source.json"
+    assert evaluate_paths(((path, 1),)) == ()
+
+
+def test_dataset_registry_tab_is_not_permitted_as_real_data() -> None:
+    path = "registries/datasets/source.tab"
+    assert evaluate_paths(((path, 1),)) == (f"FORBIDDEN_PATH={path}",)
+
+
 def test_ordinary_source_files_pass() -> None:
     assert (
         evaluate_paths(
@@ -74,4 +96,11 @@ def test_ordinary_source_files_pass() -> None:
 
 def test_existing_tracked_repository_passes_live_policy() -> None:
     repo_root = Path(__file__).resolve().parents[1]
-    assert evaluate_paths(tracked_path_sizes(repo_root)) == ()
+    allowlisted_fixture = "tests/fixtures/synthetic/source-a/source-a.tab"
+    assert (
+        evaluate_paths(
+            tracked_path_sizes(repo_root),
+            allowlisted_fixtures=(allowlisted_fixture,),
+        )
+        == ()
+    )

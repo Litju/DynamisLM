@@ -1,0 +1,2 @@
+# Only synthetic deterministic fixtures may use controlled tabular extensions.
+tests/fixtures/synthetic/source-a/source-a.tab

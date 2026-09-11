@@ -4,18 +4,22 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from enum import Enum
+from typing import Any
 
 from dynamislm.serialization import register_serializable_type
 
 type MetadataValue = str | int | float | bool | None
 
 
-def _require_text(value: str, field_name: str) -> None:
-    if not value or not value.strip():
+def _require_text(value: object, field_name: str) -> None:
+    if not isinstance(value, str) or not value.strip():
         raise ValueError(f"{field_name} must not be empty")
 
 
-def _validate_metadata_value(value: MetadataValue) -> None:
+def _validate_metadata_value(value: object) -> None:
+    if value is not None and not isinstance(value, str | int | float | bool):
+        raise ValueError("metadata values must be scalar JSON-compatible values")
     if isinstance(value, float) and not math.isfinite(value):
         raise ValueError("metadata values cannot be NaN or Infinity")
 
@@ -23,6 +27,42 @@ def _validate_metadata_value(value: MetadataValue) -> None:
 def require_tuple(value: object, field_name: str) -> None:
     if not isinstance(value, tuple):
         raise ValueError(f"{field_name} must be an immutable tuple")
+
+
+def _require_instance(value: object, expected_type: type[Any], field_name: str) -> None:
+    if not isinstance(value, expected_type):
+        raise ValueError(f"{field_name} must be a {expected_type.__name__}")
+
+
+def _require_optional_instance(
+    value: object,
+    expected_type: type[Any],
+    field_name: str,
+) -> None:
+    if value is not None:
+        _require_instance(value, expected_type, field_name)
+
+
+def _require_tuple_items(
+    value: object,
+    expected_type: type[Any],
+    field_name: str,
+) -> None:
+    require_tuple(value, field_name)
+    if not isinstance(value, tuple):
+        raise ValueError(f"{field_name} must be an immutable tuple")
+    if any(not isinstance(item, expected_type) for item in value):
+        raise ValueError(f"{field_name} must contain {expected_type.__name__} values")
+
+
+def _require_enum(value: object, expected_type: type[Enum], field_name: str) -> None:
+    if not isinstance(value, expected_type):
+        raise ValueError(f"{field_name} must be a {expected_type.__name__}")
+
+
+def _require_number(value: object, field_name: str) -> None:
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        raise ValueError(f"{field_name} must be numeric")
 
 
 @register_serializable_type
@@ -79,9 +119,10 @@ class RegistryReference:
     reference_ids: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
+        _require_instance(self.identifier, ScientificIdentifier, "identifier")
         _require_text(self.display_label, "display_label")
-        require_tuple(self.aliases, "aliases")
-        require_tuple(self.reference_ids, "reference_ids")
+        _require_tuple_items(self.aliases, str, "aliases")
+        _require_tuple_items(self.reference_ids, str, "reference_ids")
         if any(not alias.strip() for alias in self.aliases):
             raise ValueError("aliases must not contain empty strings")
         if any(not reference_id.strip() for reference_id in self.reference_ids):
@@ -115,11 +156,11 @@ class SamplingCharacteristics:
     sample_format: str | None = None
 
     def __post_init__(self) -> None:
-        if self.frequency_hz is not None and (
-            not math.isfinite(self.frequency_hz) or self.frequency_hz <= 0
-        ):
-            raise ValueError("frequency_hz must be finite and positive when present")
-        require_tuple(self.channels, "channels")
+        if self.frequency_hz is not None:
+            _require_number(self.frequency_hz, "frequency_hz")
+            if not math.isfinite(float(self.frequency_hz)) or self.frequency_hz <= 0:
+                raise ValueError("frequency_hz must be finite and positive when present")
+        _require_tuple_items(self.channels, str, "channels")
         if any(not channel.strip() for channel in self.channels):
             raise ValueError("sampling channels must not contain empty strings")
         if self.sample_format is not None:
@@ -135,6 +176,7 @@ class UnitReference:
     display_label: str
 
     def __post_init__(self) -> None:
+        _require_instance(self.identifier, ScientificIdentifier, "identifier")
         _require_text(self.display_label, "display_label")
 
 
@@ -147,6 +189,7 @@ class SignConvention:
     positive_direction: str | None = None
 
     def __post_init__(self) -> None:
+        _require_optional_instance(self.reference, RegistryReference, "reference")
         if self.positive_direction is not None:
             _require_text(self.positive_direction, "positive_direction")
 
@@ -161,9 +204,10 @@ class NormalizationSpec:
     description: str | None = None
 
     def __post_init__(self) -> None:
+        _require_optional_instance(self.method, RegistryReference, "method")
         if self.description is not None:
             _require_text(self.description, "description")
-        require_tuple(self.parameters, "parameters")
+        _require_tuple_items(self.parameters, MetadataEntry, "parameters")
 
 
 @register_serializable_type
@@ -176,6 +220,13 @@ class SemanticIdentity:
     protocol: RegistryReference | None
     measurand: RegistryReference
     metric_definition: RegistryReference
+
+    def __post_init__(self) -> None:
+        _require_instance(self.construct, RegistryReference, "construct")
+        _require_instance(self.test_family, RegistryReference, "test_family")
+        _require_optional_instance(self.protocol, RegistryReference, "protocol")
+        _require_instance(self.measurand, RegistryReference, "measurand")
+        _require_instance(self.metric_definition, RegistryReference, "metric_definition")
 
 
 @register_serializable_type
@@ -191,6 +242,19 @@ class AcquisitionIdentity:
     hardware_firmware: RegistryReference | None = None
 
     def __post_init__(self) -> None:
+        _require_optional_instance(self.device, RegistryReference, "device")
+        _require_optional_instance(self.raw_artifact, InstanceIdentifier, "raw_artifact")
+        _require_optional_instance(self.sampling, SamplingCharacteristics, "sampling")
+        _require_optional_instance(
+            self.calibration_reference,
+            RegistryReference,
+            "calibration_reference",
+        )
+        _require_optional_instance(
+            self.hardware_firmware,
+            RegistryReference,
+            "hardware_firmware",
+        )
         if self.sensor_channel is not None:
             _require_text(self.sensor_channel, "sensor_channel")
 
@@ -215,13 +279,27 @@ class ProcessingIdentity:
     aggregation: RegistryReference | None = None
 
     def __post_init__(self) -> None:
-        for field_name, value in (
-            ("event_definitions", self.event_definitions),
-            ("phase_definitions", self.phase_definitions),
-            ("method_parameters", self.method_parameters),
-            ("filtering", self.filtering),
-        ):
-            require_tuple(value, field_name)
+        _require_tuple_items(self.event_definitions, RegistryReference, "event_definitions")
+        _require_tuple_items(self.phase_definitions, RegistryReference, "phase_definitions")
+        _require_optional_instance(self.estimator, RegistryReference, "estimator")
+        _require_optional_instance(
+            self.registered_operation,
+            RegistryReference,
+            "registered_operation",
+        )
+        _require_tuple_items(self.method_parameters, MetadataEntry, "method_parameters")
+        _require_tuple_items(self.filtering, RegistryReference, "filtering")
+        _require_optional_instance(
+            self.differentiation_method,
+            RegistryReference,
+            "differentiation_method",
+        )
+        _require_optional_instance(self.integration_method, RegistryReference, "integration_method")
+        _require_optional_instance(self.unit, UnitReference, "unit")
+        _require_optional_instance(self.sign_convention, SignConvention, "sign_convention")
+        _require_optional_instance(self.normalization, NormalizationSpec, "normalization")
+        _require_optional_instance(self.trial_selection, RegistryReference, "trial_selection")
+        _require_optional_instance(self.aggregation, RegistryReference, "aggregation")
 
 
 @register_serializable_type
@@ -235,8 +313,14 @@ class VersionIdentity:
     hardware_firmware: RegistryReference | None = None
 
     def __post_init__(self) -> None:
+        _require_instance(self.processing_method, RegistryReference, "processing_method")
         _require_text(self.method_registry_version, "method_registry_version")
         _require_text(self.software_version, "software_version")
+        _require_optional_instance(
+            self.hardware_firmware,
+            RegistryReference,
+            "hardware_firmware",
+        )
 
 
 @register_serializable_type
@@ -249,6 +333,13 @@ class MeasurementIdentity:
     acquisition: AcquisitionIdentity
     processing: ProcessingIdentity
     version: VersionIdentity
+
+    def __post_init__(self) -> None:
+        _require_instance(self.identity_id, ScientificIdentifier, "identity_id")
+        _require_instance(self.semantic, SemanticIdentity, "semantic")
+        _require_instance(self.acquisition, AcquisitionIdentity, "acquisition")
+        _require_instance(self.processing, ProcessingIdentity, "processing")
+        _require_instance(self.version, VersionIdentity, "version")
 
     @property
     def display_label(self) -> str:

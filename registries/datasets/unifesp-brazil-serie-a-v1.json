@@ -1,0 +1,97 @@
+{
+  "schema_version": "1.0.0",
+  "source_id": "unifesp-brazil-serie-a-v1",
+  "provider": "UNIFESP Domus Dados / Dataverse",
+  "title": "Raw data on physical performance of elite athletes in soccer matches",
+  "landing_page_uri": "https://domusdados.unifesp.br/dataset.xhtml?persistentId=hdl%3A20.500.12682%2Frdp%2FGMXME8",
+  "persistent_identifier": "hdl:20.500.12682/rdp/GMXME8",
+  "version": {
+    "repository_version": "1.0",
+    "version_specific_persistent_identifier": "hdl:20.500.12682/rdp/GMXME8/DO2C67",
+    "published_at": "2025-07-07"
+  },
+  "license": {
+    "spdx_expression": "CC-BY-NC-4.0",
+    "canonical_uri": "https://creativecommons.org/licenses/by-nc/4.0/",
+    "assertion_source_uri": "https://domusdados.unifesp.br/dataset.xhtml?persistentId=hdl%3A20.500.12682%2Frdp%2FGMXME8",
+    "attribution_required": true,
+    "noncommercial_restriction": true,
+    "notes": "Official Domus Dados metadata identifies CC BY-NC 4.0."
+  },
+  "files": [
+    {
+      "file_id": 1513,
+      "file_persistent_identifier": "hdl:20.500.12682/rdp/GMXME8/DO2C67",
+      "representation": "ARCHIVAL_TAB",
+      "filename": "Physical performance data. Data on contextual factors related to physical performance..tab",
+      "media_type": "text/tab-separated-values",
+      "download_url": "https://domusdados.unifesp.br/api/access/datafile/1513",
+      "sha256": "sha256:f00cf3f32caa76c392e608630d3f2f30a2789c25446702678f7a268a622bf8e5",
+      "byte_size": 1029382,
+      "provider_hash": "93951f1b28240cfaa9c31d075824cb36",
+      "provider_hash_algorithm": "md5",
+      "provider_hash_representation": "SAVED_ORIGINAL",
+      "provider_declared_byte_size": 1028925,
+      "saved_original_filename": "Raw data.xlsx",
+      "saved_original_byte_size": 1124197,
+      "saved_original_provider_hash": "93951f1b28240cfaa9c31d075824cb36",
+      "provider_unf": "UNF:6:+sTB7S9l750RMBCr7OMEgw=="
+    }
+  ],
+  "metadata_snapshot_sha256": "sha256:360e006156b81f0a25c4a5c25f350ce6f46f9084028d1938f35e998d45d3f856",
+  "qualification_receipt": {
+    "relative_path": "receipts/unifesp-brazil-serie-a-v1-qualification.json",
+    "sha256": "sha256:eb7e8225859cf42b4925a39b400336fd4237f8b0369e051ecc2d69dee0812761"
+  },
+  "candidate_role": "CANONICAL_EMPIRICAL_TARGET",
+  "qualification_state": "QUALIFIED",
+  "model_training_use": "NOT_AUTHORIZED_BY_RES63",
+  "verified_file_facts": {
+    "rows": 5202,
+    "columns": 28,
+    "distinct_athlete_ids": 98,
+    "distinct_game_dates": 361,
+    "distinct_game_dates_semantic_label": "DISTINCT_GAME_DATE_VALUES",
+    "verified_official_match_count": null,
+    "duplicate_raw_rows": 0,
+    "candidate_natural_key_duplicates": 0
+  },
+  "verified_schema_sha256": "sha256:bcfc7aba6d90a323920e7e6a3806b6bf2d3025aa864df8fd9dbf14c049dde282",
+  "variable_identity_hash": "sha256:02e2019a112edf70bba425bf1f8ef719e4d03e8fb72d039c351f4f1e7754fcf0",
+  "canonical_artifact": {
+    "relative_path": "canonical/unifesp-brazil-serie-a-v1-1.0-unifesp-serie-a-mapping-1.1.0.jsonl",
+    "sha256": "sha256:7ef19b2b93ebd139d41cb63ecf1b5c57146f37af6d9652c943b886da7f92b98f",
+    "record_count": 140454,
+    "mapping_version": "unifesp-serie-a-mapping@1.1.0",
+    "variable_registry_sha256": "sha256:02e2019a112edf70bba425bf1f8ef719e4d03e8fb72d039c351f4f1e7754fcf0",
+    "variable_registry_relative_path": "canonical/unifesp-brazil-serie-a-v1-1.0-unifesp-serie-a-mapping-1.1.0-variables.json"
+  },
+  "provider_claims_retained_as_conflicts": [
+    "participant_count:90_vs_98_vs_99",
+    "match_count:295_vs_351",
+    "case_count:5203_vs_5202"
+  ],
+  "representation_audit": {
+    "selected_ingestion_representation": "ARCHIVAL_TAB",
+    "provider_hash_role": "SAVED_ORIGINAL",
+    "provider_verification_receipt": "receipts/unifesp-brazil-serie-a-v1-1.0-saved-original-verification.json",
+    "provider_declared_byte_size": 1028925,
+    "saved_original_filename": "Raw data.xlsx",
+    "saved_original_byte_size": 1124197,
+    "saved_original_md5": "93951f1b28240cfaa9c31d075824cb36",
+    "saved_original_stored": false
+  },
+  "source_variable_policy": {
+    "thresholds_are_identity_bearing": true,
+    "provider_derived_outputs_are_not_direct_physical_measurements": true,
+    "dateofbirth": "SOURCE_ONLY",
+    "raw_gnss_waveforms": "NOT_AVAILABLE",
+    "raw_imu_waveforms": "NOT_AVAILABLE"
+  },
+  "supported_football_context": [
+    "athlete_source_local_id",
+    "official_match_date_session_context",
+    "top_domestic_division_competition",
+    "position"
+  ]
+}

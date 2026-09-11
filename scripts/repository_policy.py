@@ -9,7 +9,8 @@ from pathlib import Path, PurePosixPath
 
 MAX_FIXTURE_SIZE_BYTES = 1 * 1024 * 1024
 APPROVED_FIXTURE_ROOT = "tests/fixtures/synthetic"
-CONTROLLED_FIXTURE_EXTENSIONS = frozenset({".csv", ".tsv", ".xlsx", ".zip"})
+APPROVED_DATASET_REGISTRY_ROOT = "registries/datasets"
+CONTROLLED_FIXTURE_EXTENSIONS = frozenset({".csv", ".tab", ".tsv", ".xlsx", ".zip"})
 FORBIDDEN_DIRECTORY_NAMES = frozenset(
     {
         "artifacts",
@@ -65,6 +66,10 @@ def _is_secret_like(path: str) -> bool:
     )
 
 
+def _is_public_dataset_registry(path: str) -> bool:
+    return _is_under(path, APPROVED_DATASET_REGISTRY_ROOT) and PurePosixPath(path).suffix == ".json"
+
+
 def _path_failures(
     path: str,
     size_bytes: int,
@@ -74,7 +79,9 @@ def _path_failures(
         return (f"MISSING_TRACKED_FILE={path}",)
 
     path_parts = PurePosixPath(path).parts
-    if any(part in FORBIDDEN_DIRECTORY_NAMES for part in path_parts):
+    if any(
+        part in FORBIDDEN_DIRECTORY_NAMES for part in path_parts
+    ) and not _is_public_dataset_registry(path):
         return (f"FORBIDDEN_PATH={path}",)
 
     suffix = PurePosixPath(path).suffix.lower()
