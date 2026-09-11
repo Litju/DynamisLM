@@ -18,7 +18,6 @@ from dynamislm.ingestion import (
     DatasetVersionIdentity,
     FileRepresentation,
     PromotionEvidence,
-    PromotionStatus,
     QuarantineReceipt,
     RawRowIdentity,
     RegisteredDatasetFileIdentity,
@@ -571,29 +570,27 @@ def test_direct_construction_v3_roundtrip_and_tamper_are_parity_safe() -> None:
 
 def test_typed_promotion_authority_cannot_be_forged(tmp_path: Path) -> None:
     import dynamislm.ingestion as ingestion
+    from dynamislm.ingestion.contracts import promotion_gate_results
 
     assert not hasattr(ingestion, "decide_promotion")
     evidence = _promotion_evidence(tmp_path)
-    decision = promotion_from_evidence(evidence)
-    assert decision.can_promote
-    assert decision.status is PromotionStatus.PROMOTED
-    assert from_canonical_json(canonical_json(decision), type(decision)) == decision
-    with pytest.raises(ValueError):
-        replace(decision, status=PromotionStatus.QUARANTINED)
-    with pytest.raises(ValueError):
-        replace(
-            decision,
-            decision_id=ScientificIdentifier("dynamislm", "promotion-decision", "forged", "1.1.0"),
+    with pytest.raises(ValueError, match="REGISTERED_IDENTITY_SUBSTITUTION"):
+        promotion_from_evidence(
+            evidence,
+            repository_root=REPO_ROOT,
+            data_root=tmp_path / "data",
         )
+    assert all(value for _, value in promotion_gate_results(evidence))
+
     unresolved = replace(
-        decision.evidence.qualification,
+        evidence.qualification,
         status=DatasetQualificationStatus.QUARANTINED,
         evidence_class=EvidenceClass.REJECTED_OR_UNRESOLVED,
         reason_codes=("FOOTBALL_CONTEXT_UNRESOLVED",),
         missing_information=("football context evidence",),
     )
-    with pytest.raises(ValueError):
-        replace(decision, evidence=replace(decision.evidence, qualification=unresolved))
+    unresolved_evidence = replace(evidence, qualification=unresolved)
+    assert not dict(promotion_gate_results(unresolved_evidence))["SOURCE_QUALIFIED"]
 
 
 def test_canonical_replay_is_independent_of_input_order_and_keeps_lineage() -> None:
@@ -959,6 +956,8 @@ def test_representation_audit_uses_persisted_saved_original_observations() -> No
 
 
 def test_empty_included_variables_and_forged_promotion_cannot_promote(tmp_path: Path) -> None:
+    from dynamislm.ingestion.contracts import promotion_gate_results
+
     evidence = _promotion_evidence(tmp_path)
     empty_variables = replace(
         evidence,
@@ -967,11 +966,8 @@ def test_empty_included_variables_and_forged_promotion_cannot_promote(tmp_path: 
             included_variable_ids=(),
         ),
     )
-    decision = promotion_from_evidence(empty_variables)
-    assert not decision.can_promote
-    assert "VARIABLE_IDENTITY_RESOLVED_FAILED" in decision.reason_codes
-    with pytest.raises(ValueError, match="promotion status"):
-        replace(decision, status=PromotionStatus.PROMOTED)
+    gates = dict(promotion_gate_results(empty_variables))
+    assert not gates["VARIABLE_IDENTITY_RESOLVED"]
 
 
 def test_saved_original_verification_is_streamed_and_has_no_success_boolean(

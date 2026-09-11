@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import datetime as datetime_module
+import hashlib
 import json
+import subprocess
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
 
@@ -14,11 +17,31 @@ from dynamislm.ingestion.contracts import (
     FileRepresentation,
     RegisteredDatasetFileIdentity,
 )
+from dynamislm.ingestion.storage import resolve_repository_root
 
 REGISTRY_RELATIVE_ROOT = Path("registries") / "datasets"
 _FORBIDDEN_REGISTRY_KEYS = frozenset(
     {"raw_rows", "canonical_rows", "athlete_rows", "dob_table", "credentials"}
 )
+
+
+@dataclass(frozen=True, slots=True)
+class CommittedDatasetRegistry:
+    """Exact registry bytes and Git identity read from the current ``HEAD``.
+
+    This is an in-process authority object, not a serialized evidence record.
+    Its document is parsed from the committed Git blob; callers must not replace
+    it with a working-tree document or a caller-created identity.
+    """
+
+    source_id: str
+    document: dict[str, Any]
+    repository_root: Path
+    repository_head_sha: str
+    registry_relative_path: str
+    registry_git_blob_oid: str
+    registry_blob_sha256: str
+    working_tree_matches_head: bool
 
 
 def _repository_root() -> Path:
@@ -43,6 +66,117 @@ def _assert_public_metadata(value: object, key_path: str = "") -> None:
             raise ValueError("registry must not contain resolved local paths")
 
 
+def _validate_source_id(source_id: str) -> None:
+    if not isinstance(source_id, str) or not source_id.strip():
+        raise ValueError("source_id must not be empty")
+    if Path(source_id).name != source_id or source_id in {".", ".."}:
+        raise ValueError("source_id must be a single registry filename component")
+
+
+def _registry_candidate_relative_paths(source_id: str) -> tuple[Path, ...]:
+    return (
+        REGISTRY_RELATIVE_ROOT / f"{source_id}.json",
+        REGISTRY_RELATIVE_ROOT / f"{source_id}-v1.json",
+    )
+
+
+def _read_registry_document(blob: bytes, *, source_id: str | None = None) -> dict[str, Any]:
+    try:
+        document = json.loads(blob.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("invalid dataset registry document in committed Git blob") from exc
+    if not isinstance(document, dict):
+        raise ValueError("dataset registry document must be an object")
+    _assert_public_metadata(document)
+    if source_id is not None and document.get("source_id") != source_id:
+        raise ValueError("dataset registry source_id does not match filename/request")
+    return cast(dict[str, Any], document)
+
+
+def load_committed_dataset_registry(
+    source_id: str,
+    *,
+    repository_root: Path,
+) -> CommittedDatasetRegistry:
+    """Load one registry from the exact blob at the repository's current ``HEAD``.
+
+    The working tree is inspected only for an equality diagnostic.  It is never
+    used as the source of the returned document or its derived file identity.
+    """
+
+    _validate_source_id(source_id)
+    real_repository_root = resolve_repository_root(repository_root)
+    head_result = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=real_repository_root,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    repository_head_sha = head_result.stdout.strip()
+    candidates: list[tuple[Path, bytes]] = []
+    for relative_path in _registry_candidate_relative_paths(source_id):
+        git_path = f"HEAD:{relative_path.as_posix()}"
+        exists = subprocess.run(
+            ["git", "cat-file", "-e", git_path],
+            cwd=real_repository_root,
+            check=False,
+            capture_output=True,
+        )
+        if exists.returncode != 0:
+            continue
+        object_type = subprocess.run(
+            ["git", "cat-file", "-t", git_path],
+            cwd=real_repository_root,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        if object_type.stdout.strip() != "blob":
+            raise ValueError(f"committed dataset registry path is not a blob: {relative_path}")
+        blob_result = subprocess.run(
+            ["git", "cat-file", "blob", git_path],
+            cwd=real_repository_root,
+            check=True,
+            capture_output=True,
+        )
+        candidates.append((relative_path, blob_result.stdout))
+
+    if not candidates:
+        raise ValueError(f"committed dataset registry was not found in HEAD: {source_id}")
+    if len(candidates) > 1:
+        paths = ", ".join(path.as_posix() for path, _ in candidates)
+        raise ValueError(f"FAIL_AMBIGUOUS_REGISTRY_IDENTITY: {paths}")
+
+    relative_path, blob = candidates[0]
+    git_path = f"HEAD:{relative_path.as_posix()}"
+    blob_oid_result = subprocess.run(
+        ["git", "rev-parse", git_path],
+        cwd=real_repository_root,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    registry_git_blob_oid = blob_oid_result.stdout.strip()
+    document = _read_registry_document(blob, source_id=source_id)
+    registry_blob_sha256 = f"sha256:{hashlib.sha256(blob).hexdigest()}"
+    working_tree_path = real_repository_root / relative_path
+    try:
+        working_tree_matches_head = working_tree_path.read_bytes() == blob
+    except OSError:
+        working_tree_matches_head = False
+    return CommittedDatasetRegistry(
+        source_id=source_id,
+        document=document,
+        repository_root=real_repository_root,
+        repository_head_sha=repository_head_sha,
+        registry_relative_path=relative_path.as_posix(),
+        registry_git_blob_oid=registry_git_blob_oid,
+        registry_blob_sha256=registry_blob_sha256,
+        working_tree_matches_head=working_tree_matches_head,
+    )
+
+
 def load_dataset_registry(
     source_id: str,
     *,
@@ -50,25 +184,11 @@ def load_dataset_registry(
 ) -> dict[str, Any]:
     """Load one committed source registry record without loading athlete rows."""
 
-    if not isinstance(source_id, str) or not source_id.strip():
-        raise ValueError("source_id must not be empty")
-    if Path(source_id).name != source_id or source_id in {".", ".."}:
-        raise ValueError("source_id must be a single registry filename component")
-    path = registry_root(repository_root) / f"{source_id}.json"
-    if not path.is_file():
-        versioned_path = registry_root(repository_root) / f"{source_id}-v1.json"
-        if versioned_path.is_file():
-            path = versioned_path
-    try:
-        document = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        raise ValueError(f"invalid dataset registry document: {path.name}") from exc
-    if not isinstance(document, dict):
-        raise ValueError("dataset registry document must be an object")
-    _assert_public_metadata(document)
-    if document.get("source_id") != source_id:
-        raise ValueError("dataset registry source_id does not match filename/request")
-    return cast(dict[str, Any], document)
+    binding = load_committed_dataset_registry(
+        source_id,
+        repository_root=repository_root or _repository_root(),
+    )
+    return dict(binding.document)
 
 
 def load_all_dataset_registries(
@@ -77,13 +197,31 @@ def load_all_dataset_registries(
 ) -> tuple[dict[str, Any], ...]:
     """Load all committed registry documents in stable filename order."""
 
+    real_repository_root = resolve_repository_root(repository_root or _repository_root())
+    result = subprocess.run(
+        [
+            "git",
+            "ls-tree",
+            "-r",
+            "--name-only",
+            "HEAD",
+            "--",
+            REGISTRY_RELATIVE_ROOT.as_posix(),
+        ],
+        cwd=real_repository_root,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
     documents: list[dict[str, Any]] = []
-    for path in sorted(registry_root(repository_root).glob("*.json")):
-        document = json.loads(path.read_text(encoding="utf-8"))
-        if not isinstance(document, dict):
-            raise ValueError(f"registry document must be an object: {path.name}")
-        _assert_public_metadata(document)
-        documents.append(cast(dict[str, Any], document))
+    for name in sorted(line for line in result.stdout.splitlines() if line.endswith(".json")):
+        blob_result = subprocess.run(
+            ["git", "cat-file", "blob", f"HEAD:{name}"],
+            cwd=real_repository_root,
+            check=True,
+            capture_output=True,
+        )
+        documents.append(_read_registry_document(blob_result.stdout))
     return tuple(documents)
 
 
@@ -338,11 +476,13 @@ registered_file_identity_from_registry = registered_dataset_file_identity
 
 __all__ = [
     "REGISTRY_RELATIVE_ROOT",
+    "CommittedDatasetRegistry",
     "dataset_license_identity",
     "dataset_source_identity",
     "dataset_version_identity",
     "license_identity_from_registry",
     "load_all_dataset_registries",
+    "load_committed_dataset_registry",
     "load_dataset_registry",
     "load_registry",
     "registered_dataset_file_identity",

@@ -181,6 +181,25 @@ Live provider metadata is an observation checked against that identity. Source
 A uses `ARCHIVAL_TAB`; a Dataverse `SAVED_ORIGINAL` download is a separate,
 noncanonical diagnostic representation.
 
+For operational authorization, the identity root is the exact registry blob at
+the current committed Git `HEAD`:
+
+```text
+COMMITTED GIT HEAD REGISTRY
+!= WORKING TREE REGISTRY
+!= CALLER-CONSTRUCTED RegisteredDatasetFileIdentity
+```
+
+`load_committed_dataset_registry(source_id, repository_root=...)` resolves the
+real Git root, reads only `HEAD:<registry-path>` with Git object plumbing, and
+records the repository HEAD SHA, registry path, Git blob OID, and SHA-256 of
+the exact blob. It accepts only the deterministic
+`registries/datasets/<source_id>.json` or fallback
+`registries/datasets/<source_id>-v1.json` names. Missing or ambiguous committed
+paths fail closed. The operational promotion path also requires the working
+tree file to equal that committed blob byte-for-byte; a modified or untracked
+working-tree file cannot redefine authority.
+
 ## Quarantine and promotion
 
 `QuarantineReceipt` must identify the source/version, artifact digest when
@@ -216,14 +235,28 @@ complete lineage
 ```
 
 There is no public nine-boolean promotion API and no `force=True`,
-`manual_override=True`, or owner override. `PromotionDecision` recomputes its
-status, reason codes, and content-derived decision ID from nested evidence.
-A `QUALIFIED` receipt is accepted only when its source and population decisions,
+`manual_override=True`, or owner override. `PromotionEvidence` is an immutable
+evidence representation and `PromotionDecision` is an immutable decision
+record; direct construction or deserialization of either is not an operational
+authorization event. The sole operational boundary is
+`promotion_from_evidence(evidence, repository_root=..., data_root=...)`.
+
+Before it constructs a decision, that boundary independently reloads the
+committed registry and the deterministic persisted acquisition and
+qualification receipts, verifies the metadata snapshot, re-derives the
+content-addressed raw-object path from the committed SHA-256, recomputes the
+actual raw digest and byte size, and re-runs registered-artifact verification.
+It then binds the actual variable-registry sidecar and canonical JSONL artifact
+to the committed paths, digests, counts, and mapping version. A
+`QUALIFIED` receipt is accepted only when its source and population decisions,
 artifact, license, variable identity, football mapping, reasons, and missing
-information are internally consistent. Promotion repeats the source,
-population, artifact, mapping-version, and variable-registry bindings at the
-`PromotionEvidence` boundary. A qualified source does not qualify every
-variable. Unresolved variable semantics remain quarantined.
+information are internally consistent. A qualified source does not qualify
+every variable. Unresolved variable semantics remain quarantined.
+
+This is an integrity and provenance authority rooted in the committed checkout
+and external `DYNAMISLM_DATA_ROOT`; it is not cryptographic signing and does
+not defend against an arbitrarily compromised Python process, operating system,
+or trusted checkout.
 
 ## Canonical replay
 

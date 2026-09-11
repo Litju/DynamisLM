@@ -1429,7 +1429,7 @@ def promotion_gate_results(evidence: PromotionEvidence) -> tuple[tuple[str, bool
 @register_serializable_type
 @dataclass(frozen=True, slots=True)
 class PromotionDecision:
-    """The sole promotion authority, self-validating from its evidence tree."""
+    """Immutable decision record; operational authority lives in promotion_from_evidence."""
 
     decision_id: ScientificIdentifier
     status: PromotionStatus

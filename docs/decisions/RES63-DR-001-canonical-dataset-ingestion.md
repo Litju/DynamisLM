@@ -305,7 +305,8 @@ when available, failed stage, exact reason codes, missing information,
 evidence, affected rows/variables, and requalification requirements.
 
 There is exactly one promotion authority. A record/source can promote only
-when every mandatory term is derived from a validated typed evidence tree:
+when every mandatory term is derived from a validated typed evidence tree and
+re-verified against the committed registry and external evidence:
 
 ```text
 RUNTIME_INTEGRITY_PASS
@@ -320,11 +321,32 @@ AND LINEAGE_COMPLETE
 ```
 
 There is no public boolean-gate constructor, `force`, `manual_override`, or
-owner override. `PromotionDecision` recomputes its status, reason codes, and
-content-derived decision ID from `PromotionEvidence` during construction and
-deserialization. A qualified source does not automatically qualify every
-variable. Unresolved variable semantics remain quarantined and do not enter
-canonical JSONL.
+owner override. `PromotionEvidence` is an immutable descriptive evidence
+representation and `PromotionDecision` is an immutable descriptive decision
+record. Direct construction or deserialization of those records is not an
+operational authorization event. The sole operational boundary is
+`promotion_from_evidence(evidence, repository_root=..., data_root=...)`.
+
+The boundary resolves the current committed Git `HEAD` and reads the exact
+registry blob using Git object plumbing. It derives
+`RegisteredDatasetFileIdentity` from that blob, requires the working-tree
+registry to match the blob byte-for-byte, and independently reloads the
+deterministic persisted acquisition and qualification receipts. It verifies the
+metadata snapshot, content-addressed raw bytes, source-version receipt,
+variable-registry sidecar, persisted canonical receipt, and actual canonical
+JSONL digest/count. Thus:
+
+```text
+COMMITTED GIT HEAD REGISTRY
+!= WORKING TREE REGISTRY
+!= CALLER-CONSTRUCTED RegisteredDatasetFileIdentity
+```
+
+Cryptographic file digests are identity and integrity checks, not signatures.
+This authority does not claim protection against an arbitrarily compromised
+Python process, operating system, or trusted repository checkout. A qualified
+source does not automatically qualify every variable. Unresolved variable
+semantics remain quarantined and do not enter canonical JSONL.
 A `QUALIFIED` `DatasetQualificationReceipt` is itself self-consistent: it
 binds the passing population and source decisions, source ID/revision, artifact
 digest, canonical evidence class, license, resolved variable and football
