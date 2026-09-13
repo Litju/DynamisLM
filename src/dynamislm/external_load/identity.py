@@ -61,6 +61,9 @@ class ExternalLoadMetricFamily(StrEnum):
     SPRINT_DISTANCE = "SPRINT_DISTANCE"
     SPRINT_TIME = "SPRINT_TIME"
     SPRINT_EVENT_COUNT = "SPRINT_EVENT_COUNT"
+    EXPLOSIVE_EFFORT_EVENT_COUNT = "EXPLOSIVE_EFFORT_EVENT_COUNT"
+    CHANGE_OF_DIRECTION_EVENT_COUNT = "CHANGE_OF_DIRECTION_EVENT_COUNT"
+    JUMP_EVENT_COUNT = "JUMP_EVENT_COUNT"
     ACCELERATION_EVENT_COUNT = "ACCELERATION_EVENT_COUNT"
     DECELERATION_EVENT_COUNT = "DECELERATION_EVENT_COUNT"
     REPEATED_HIGH_INTENSITY_EFFORT = "REPEATED_HIGH_INTENSITY_EFFORT"
@@ -633,6 +636,9 @@ class ExternalLoadMeasurementIdentity(MeasurementIdentity):
         return self.metric_family in {
             ExternalLoadMetricFamily.THRESHOLD_EVENT_COUNT,
             ExternalLoadMetricFamily.SPRINT_EVENT_COUNT,
+            ExternalLoadMetricFamily.EXPLOSIVE_EFFORT_EVENT_COUNT,
+            ExternalLoadMetricFamily.CHANGE_OF_DIRECTION_EVENT_COUNT,
+            ExternalLoadMetricFamily.JUMP_EVENT_COUNT,
             ExternalLoadMetricFamily.ACCELERATION_EVENT_COUNT,
             ExternalLoadMetricFamily.DECELERATION_EVENT_COUNT,
             ExternalLoadMetricFamily.REPEATED_HIGH_INTENSITY_EFFORT,

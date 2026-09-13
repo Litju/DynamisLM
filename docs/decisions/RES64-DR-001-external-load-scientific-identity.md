@@ -61,10 +61,27 @@ PROVIDER_DERIVED_OBSERVATION != DYNAMISLM_COMPUTATIONAL_AUTHORITY
   `src/dynamislm/provenance/`, `src/dynamislm/comparability/`,
   `src/dynamislm/refusal/`, and `src/dynamislm/serialization.py`.
 
-No broad literature review or external-data search was required. The
-architecture and RES-63 source records settle the identity boundary; this
-slice registers only deterministic unit conversion, duration normalization,
-and a raw velocity-series threshold summary with explicit method semantics.
+Targeted domain evidence was required because the identity and refusal
+dimensions in this slice are scientific requirements, not only software
+conventions. The review-fix evidence below is deliberately bounded to the
+decisions implemented here; it is not a general external-load literature
+review.
+
+## Targeted scientific evidence for identity and refusal boundaries
+
+| Decision dimension | Evidence | Implementation consequence |
+| --- | --- | --- |
+| Absolute and individualized speed thresholds | The systematic review by Gualtieri et al. reports non-standard, wide ranges of HSR and sprint thresholds and distinguishes absolute from individualized thresholds ([DOI](https://doi.org/10.3389/fspor.2023.1116293)). Clemente et al. map the methodological choices and evidence gaps for arbitrary versus individualized thresholds ([DOI](https://doi.org/10.5114/biolsport.2023.122480)). | Threshold value, unit, basis, and individualized reference are identity fields; 20, 25, and 30 km/h are not silently interchangeable. |
+| GNSS/LPS/optical comparability | The GNSS/LPS validation scoping review reports heterogeneous reference systems and methods and cautions against comparing results across validation studies ([DOI](https://doi.org/10.1136/bmjsem-2020-000794)). The team-sport tracking review reports differences between optical and GPS-derived distance/HSR and identifies sampling, satellite signal, and software filtering as material factors ([DOI](https://doi.org/10.1186/s40798-022-00408-z)). | Modality, measuring system, sampling, processing, and validated bridge status remain explicit; a unit match alone cannot authorize direct comparison. |
+| Filtering and minimum-effort duration | Varley et al. show that filtering choices and minimum effort durations materially change HSR, sprint, and acceleration event counts ([DOI](https://doi.org/10.1123/ijspp.2016-0534)). Delves et al. document substantial reporting gaps in acceleration/deceleration derivation and cleaning methods ([DOI](https://doi.org/10.1186/s40798-021-00332-8)). | The registered V1 event path records and executes its boundary, interpolation, dwell, gap, filtering, smoothing, and resampling semantics; unsupported variants refuse. |
+| Device/provider processing dependence | Malone et al. report substantial between-device variability in acceleration/deceleration occurrences and changes after software updates ([DOI](https://doi.org/10.1123/IJSPP.2013-0187)). | Provider, device, algorithm, software, and processing identity are retained and unresolved provider algorithms fail closed for comparability. |
+| PlayerLoad/provider-load limits | PlayerLoad is described as a Catapult proprietary accelerometer metric with limited methodological transparency and unresolved construct limitations ([PMC review](https://pmc.ncbi.nlm.nih.gov/articles/PMC7052708/)). | PlayerLoad remains `PROVIDER_DERIVED`, non-recomputable, and cannot acquire DynamisLM authority through relabelling. |
+| Metabolic-power limits | Buchheit et al. test the validity/reliability of GPS-estimated metabolic power in soccer-specific drills and identify limits of the estimate ([DOI](https://doi.org/10.1055/s-0035-1555927)). The systematic review finds unresolved effects of acceleration validity, sampling, filtering, walking/recovery, and context ([PMC review](https://pmc.ncbi.nlm.nih.gov/articles/PMC9596658/)). | Source A metabolic-power bands remain provider-derived identities; no metabolic-power algorithm is invented or recomputed here. |
+| Measurement-result and method context | The BIPM International Vocabulary of Metrology defines a measurement result as quantity values attributed to a measurand together with relevant information ([JCGM 200:2012](https://doi.org/10.59161/JCGM200-2012)). ISO 5725-1:2023 treats method/result accuracy under explicitly controlled measurement conditions and distinguishes trueness from precision ([ISO 5725-1:2023](https://www.iso.org/standard/69418.html)). | Numerical results are separated from identity, but typed result construction must retain the exact input observation/evidence, method, unit, context, and provenance. |
+| Source A system and acquisition | The primary UNIFESP/Domus Dados Source A documentation identifies Catapult VECTOR7 and reports GNSS (GPS/GLONASS/SBAS) at 18 Hz, Catapult ClearSky LPS at 10 Hz, accelerometer sampled at 1 kHz and provided at 100 Hz, and gyroscope/magnetometer at 100 Hz ([dataset documentation](https://domusdados.unifesp.br/dataset.xhtml?persistentId=hdl%3A20.500.12682%2Frdp%2FGMXME8)). It also describes the IMA, sprint, RHIE, metabolic-power, and PlayerLoad source variables. | The dataset/repository provider remains UNIFESP Domus Dados / Dataverse in the Source A variable identity, while the external measurement-system provider is Catapult and the device is VECTOR7. Known frequencies are structured; firmware, filtering, and proprietary algorithm details remain unknown. |
+
+These sources support the refusal dimensions without authorizing a new
+acceleration/deceleration, RHIE, PlayerLoad, or metabolic-power algorithm.
 
 ## Existing abstractions reused
 
@@ -159,11 +176,16 @@ not relabelled as a direct measurement or a DynamisLM derivation.
 
 ### System identity
 
-`ExternalLoadSystemIdentity` records provider, known device/system, model,
-`SamplingCharacteristics`, acquisition characteristics, firmware/software
-versions, and provider processing version when known. `None` means unknown
-where the field is material; it is never filled with a default sampling rate,
-device, or algorithm.
+`ExternalLoadSystemIdentity` records the measurement-system provider, known
+device/system, model, `SamplingCharacteristics`, acquisition characteristics,
+firmware/software versions, and provider processing version when known. For
+Source A, the dataset authority remains `UNIFESP Domus Dados / Dataverse` in
+the source-variable identity, while the measurement-system provider is
+`Catapult` and the device is `VECTOR7`. `None` means unknown where the field
+is material; it is never filled with a default sampling rate, device, or
+algorithm. Structured acquisition metadata distinguish sensor acquisition
+frequency from provider-delivered frequency; they do not assert an algorithm
+frequency.
 
 ### Threshold identity
 
@@ -233,13 +255,17 @@ For Source A:
   match-exposure semantics.
 - `TotalDistance(m)`, `Relativedistance(m/min)`, `Maxvelocity(km/h)`, exact
   threshold-distance columns, sprint, IMA, RHIE, and Playerload columns map
-  as `PROVIDER_DERIVED` observations with Catapult/Source A provider identity.
+  as `PROVIDER_DERIVED` observations with Catapult VECTOR7 measurement-system
+  identity. The original source-variable identity continues to retain
+  UNIFESP/Domus Dados as the dataset authority.
 - `Distance>20,0km/h(m)` and `Distance>25,0km/h(m)` are separate mappings and
   separate identities; no generic `HSR_DISTANCE` collapse is permitted.
 - Playerload, IMA, RHIE, and other provider outputs retain unresolved or
   partial proprietary processing metadata. Their values remain usable as
   source/provider observations but are not recomputable by DynamisLM from the
-  canonical table.
+  canonical table. Event-shaped IMA/RHIE outputs retain their dedicated
+  registered metric/event identities and count units where the Source A
+  definition supports them; this does not invent their algorithms.
 - No source mapping claims that the public table contains raw GNSS, optical,
   or inertial waveforms.
 
@@ -251,22 +277,29 @@ The following operations are registered:
    units, including `km/h ↔ m/s`, `minutes ↔ seconds`, `km ↔ m`, and the
    distance-rate units needed for relative distance. It rejects incompatible
    dimensions, non-finite values, and ambiguous units.
-2. **Duration-normalized distance.** For explicit finite distance `D` and
-   explicit finite positive valid duration `T`, the registered operation is
-   `D / T`, after unit conversion. Missing duration is not zero; zero duration
-   is a typed refusal. The result identity is `DYNAMISLM_DERIVED` and carries
-   the duration-normalization identity and operation/version.
+2. **Duration-normalized distance.** The authoritative operation consumes a
+   total-distance `ScientificMeasurementObservation` and a duration
+   `ScientificMeasurementObservation`. It extracts each value and unit from
+   the observation result, verifies metric family, measurand, unit, origin,
+   athlete/session/context, aggregation, and provenance bindings, and passes
+   only those extracted values to the pure `D / T` helper. Missing duration is
+   not zero; zero duration is a typed refusal. The derived identity includes
+   the exact denominator identity and the result retains both input
+   observations and a new derived observation/provenance lineage.
 3. **Velocity threshold summary from actual samples.** The only threshold
-   summary operation uses an immutable, timestamped velocity series, a
-   resolved threshold identity, explicit boundary semantics, explicit
-   processing/filtering status, and explicit aggregation identity. It uses
-   piecewise-linear interpolation between consecutive samples, integrates
-   time and speed over the portions satisfying the boundary, rejects
-   non-monotone/non-finite samples and undeclared gaps, and uses the event
-   definition exactly as supplied for event counts. The current registered
-   event-count path supports an explicit no-hysteresis declaration and uses
-   inclusive `duration >= minimum_duration` dwell semantics; a defined
-   hysteresis path remains unregistered and is refused. It does not infer a
+   summary operation accepts `ExternalLoadVelocitySeriesEvidence`, which
+   binds immutable timestamped samples to one measurement identity, context,
+   source artifact, acquisition, processing run, sampling declaration, and
+   provenance. A bare `VelocitySeries` or separately supplied identity is
+   refused. The operation requires the registered speed measurand, exact V1
+   event-definition/start/end references, explicit no-hysteresis semantics,
+   explicit processing/filtering status, and explicit aggregation identity.
+   It uses piecewise-linear interpolation between consecutive samples,
+   integrates time and speed over the portions satisfying the boundary,
+   rejects non-monotone/non-finite samples and undeclared gaps, and uses the
+   exact dwell/gap semantics for event counts. The result contains typed
+   DynamisLM-derived time, distance, and applicable event-count results; the
+   raw fields are compatibility views of those results. It does not infer a
    sampling rate, filtering, dwell, gap rule, or threshold.
 
 Acceleration/deceleration event algorithms, repeated-high-intensity effort
@@ -324,7 +357,9 @@ UNKNOWN_SESSION_SEGMENTATION
 
 Provider observations retain the existing source/canonical provenance and
 their exact source-variable identity. DynamisLM-derived results use a new
-processing run and output observation/result identity. Reprocessing or changed
+processing run and output observation/result identity. Relative-distance
+results retain the two source observations; threshold results retain the
+evidence-bound velocity series and its provenance. Reprocessing or changed
 parameters create a new output; prior results are not overwritten.
 
 All new public dataclasses use the existing V3 serializer. Existing valid
@@ -339,13 +374,14 @@ The realization is limited to:
 - `src/dynamislm/external_load/registry.py` — operation, unit, metric, and
   decision references;
 - `src/dynamislm/external_load/metrics.py` — deterministic unit,
-  normalization, and raw-series threshold operations;
+  evidence-bound normalization, velocity-series evidence, and typed threshold
+  output operations;
 - `src/dynamislm/external_load/comparability.py` — registered identity rule
   and granular fail-closed reasons;
 - `src/dynamislm/external_load/mapping.py` — Source A interpretation layer;
-- `tests/test_external_load.py` — construction, negative, mapping,
-  computation, provenance boundary, serialization, and historical-regression
-  tests.
+- `tests/test_external_load.py` — construction, adversarial negative,
+  mapping, computation, provenance boundary, serialization, and
+  historical-regression tests.
 
 No real raw bytes, canonical rows, model code, GPU code, or RES-65+ science is
 added.

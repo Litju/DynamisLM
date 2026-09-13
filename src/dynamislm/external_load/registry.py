@@ -46,11 +46,24 @@ EXTERNAL_LOAD_DISTANCE_MEASURAND = _reference(
     "measurand", "locomotor-distance", "Locomotor distance"
 )
 EXTERNAL_LOAD_DURATION_MEASURAND = _reference("measurand", "exposure-duration", "Exposure duration")
+EXTERNAL_LOAD_EVENT_COUNT_MEASURAND = _reference(
+    "measurand", "external-load-event-count", "External-load event count"
+)
 EXTERNAL_LOAD_ACCELERATION_MEASURAND = _reference(
     "measurand", "locomotor-acceleration", "Locomotor acceleration"
 )
 EXTERNAL_LOAD_DECELERATION_MEASURAND = _reference(
     "measurand", "locomotor-deceleration", "Locomotor deceleration"
+)
+EXTERNAL_LOAD_EXPLOSIVE_EFFORT_MEASURAND = _reference(
+    "measurand", "explosive-effort", "Explosive effort"
+)
+EXTERNAL_LOAD_CHANGE_OF_DIRECTION_MEASURAND = _reference(
+    "measurand", "change-of-direction", "Change of direction"
+)
+EXTERNAL_LOAD_JUMP_MEASURAND = _reference("measurand", "jump", "Jump")
+EXTERNAL_LOAD_RHIE_MEASURAND = _reference(
+    "measurand", "repeated-high-intensity-effort", "Repeated high-intensity effort"
 )
 EXTERNAL_LOAD_PROVIDER_LOAD_MEASURAND = _reference(
     "measurand", "provider-load-output", "Provider load output"
@@ -81,6 +94,23 @@ EXTERNAL_LOAD_SPRINT_DISTANCE_METRIC = _reference("metric", "sprint-distance", "
 EXTERNAL_LOAD_SPRINT_TIME_METRIC = _reference("metric", "sprint-time", "Sprint time")
 EXTERNAL_LOAD_SPRINT_EVENT_COUNT_METRIC = _reference(
     "metric", "sprint-event-count", "Sprint event count"
+)
+EXTERNAL_LOAD_EXPLOSIVE_EFFORT_EVENT_COUNT_METRIC = _reference(
+    "metric", "explosive-effort-event-count", "Explosive effort event count"
+)
+EXTERNAL_LOAD_CHANGE_OF_DIRECTION_LEFT_EVENT_COUNT_METRIC = _reference(
+    "metric", "change-of-direction-left-event-count", "Change-of-direction-left event count"
+)
+EXTERNAL_LOAD_CHANGE_OF_DIRECTION_RIGHT_EVENT_COUNT_METRIC = _reference(
+    "metric", "change-of-direction-right-event-count", "Change-of-direction-right event count"
+)
+EXTERNAL_LOAD_JUMP_EVENT_COUNT_METRIC = _reference("metric", "jump-event-count", "Jump event count")
+EXTERNAL_LOAD_RHIE_RECOVERY_TIME_METRIC = _reference(
+    "metric", "rhie-recovery-time", "RHIE bout recovery time"
+)
+EXTERNAL_LOAD_RHIE_BOUT_COUNT_METRIC = _reference("metric", "rhie-bout-count", "RHIE bout count")
+EXTERNAL_LOAD_RHIE_EFFORTS_PER_BOUT_METRIC = _reference(
+    "metric", "rhie-efforts-per-bout", "RHIE efforts per bout"
 )
 EXTERNAL_LOAD_ACCELERATION_EVENT_COUNT_METRIC = _reference(
     "metric", "acceleration-event-count", "Acceleration event count"
@@ -170,10 +200,22 @@ EXTERNAL_LOAD_SOURCE_A_DECELERATION_EVENT_DEFINITION = _reference(
 EXTERNAL_LOAD_SOURCE_A_RHIE_EVENT_DEFINITION = _reference(
     "event-definition", "source-a-rhie-provider-v1", "Source A provider RHIE event"
 )
-
-EXTERNAL_LOAD_SOURCE_A_VECTOR7 = _reference(
-    "device", "catapult-vector7", "Catapult VECTOR7 (Source A provider)"
+EXTERNAL_LOAD_SOURCE_A_EXPLOSIVE_EFFORT_EVENT_DEFINITION = _reference(
+    "event-definition",
+    "source-a-explosive-effort-provider-v1",
+    "Source A provider explosive-effort event",
 )
+EXTERNAL_LOAD_SOURCE_A_CHANGE_OF_DIRECTION_EVENT_DEFINITION = _reference(
+    "event-definition",
+    "source-a-change-of-direction-provider-v1",
+    "Source A provider change-of-direction event",
+)
+EXTERNAL_LOAD_SOURCE_A_JUMP_EVENT_DEFINITION = _reference(
+    "event-definition", "source-a-jump-provider-v1", "Source A provider jump event"
+)
+
+EXTERNAL_LOAD_SOURCE_A_VECTOR7 = _reference("device", "catapult-vector7", "Catapult VECTOR7")
+SOURCE_A_MEASUREMENT_PROVIDER = "Catapult"
 EXTERNAL_LOAD_SOURCE_A_GNSS_ALGORITHM = _reference(
     "provider-algorithm", "catapult-gnss-source-a", "Catapult GNSS provider processing"
 )
@@ -221,6 +263,9 @@ __all__ = [
     "COUNT",
     "EXTERNAL_LOAD_ACCELERATION_EVENT_COUNT_METRIC",
     "EXTERNAL_LOAD_ACCELERATION_MEASURAND",
+    "EXTERNAL_LOAD_CHANGE_OF_DIRECTION_LEFT_EVENT_COUNT_METRIC",
+    "EXTERNAL_LOAD_CHANGE_OF_DIRECTION_MEASURAND",
+    "EXTERNAL_LOAD_CHANGE_OF_DIRECTION_RIGHT_EVENT_COUNT_METRIC",
     "EXTERNAL_LOAD_COMPARABILITY_RULE",
     "EXTERNAL_LOAD_CONSTRUCT",
     "EXTERNAL_LOAD_COUNT",
@@ -228,7 +273,12 @@ __all__ = [
     "EXTERNAL_LOAD_DECELERATION_MEASURAND",
     "EXTERNAL_LOAD_DISTANCE_MEASURAND",
     "EXTERNAL_LOAD_DURATION_MEASURAND",
+    "EXTERNAL_LOAD_EVENT_COUNT_MEASURAND",
+    "EXTERNAL_LOAD_EXPLOSIVE_EFFORT_EVENT_COUNT_METRIC",
+    "EXTERNAL_LOAD_EXPLOSIVE_EFFORT_MEASURAND",
     "EXTERNAL_LOAD_INPUT_PROCESSING_METHOD",
+    "EXTERNAL_LOAD_JUMP_EVENT_COUNT_METRIC",
+    "EXTERNAL_LOAD_JUMP_MEASURAND",
     "EXTERNAL_LOAD_KILOMETER",
     "EXTERNAL_LOAD_KILOMETERS_PER_HOUR",
     "EXTERNAL_LOAD_LINEAR_INTERPOLATION",
@@ -249,12 +299,19 @@ __all__ = [
     "EXTERNAL_LOAD_RELATIVE_DISTANCE_METRIC",
     "EXTERNAL_LOAD_RELATIVE_DISTANCE_OPERATION",
     "EXTERNAL_LOAD_REPEATED_HIGH_INTENSITY_EFFORT_METRIC",
+    "EXTERNAL_LOAD_RHIE_BOUT_COUNT_METRIC",
+    "EXTERNAL_LOAD_RHIE_EFFORTS_PER_BOUT_METRIC",
+    "EXTERNAL_LOAD_RHIE_MEASURAND",
+    "EXTERNAL_LOAD_RHIE_RECOVERY_TIME_METRIC",
     "EXTERNAL_LOAD_SECOND",
     "EXTERNAL_LOAD_SESSION_DURATION_METRIC",
     "EXTERNAL_LOAD_SOURCE_A_ACCELERATION_EVENT_DEFINITION",
+    "EXTERNAL_LOAD_SOURCE_A_CHANGE_OF_DIRECTION_EVENT_DEFINITION",
     "EXTERNAL_LOAD_SOURCE_A_DECELERATION_EVENT_DEFINITION",
+    "EXTERNAL_LOAD_SOURCE_A_EXPLOSIVE_EFFORT_EVENT_DEFINITION",
     "EXTERNAL_LOAD_SOURCE_A_GNSS_ALGORITHM",
     "EXTERNAL_LOAD_SOURCE_A_IMA_ALGORITHM",
+    "EXTERNAL_LOAD_SOURCE_A_JUMP_EVENT_DEFINITION",
     "EXTERNAL_LOAD_SOURCE_A_MAPPING_DECISION",
     "EXTERNAL_LOAD_SOURCE_A_PLAYERLOAD_ALGORITHM",
     "EXTERNAL_LOAD_SOURCE_A_PLAYER_MATCH_AGGREGATION",
@@ -286,6 +343,7 @@ __all__ = [
     "MINUTE",
     "SECOND",
     "SOURCE_A_MAPPING_VERSION",
+    "SOURCE_A_MEASUREMENT_PROVIDER",
     "SOURCE_A_VARIABLE_REGISTRY_SHA256",
     "WATTS_PER_KILOGRAM",
 ]

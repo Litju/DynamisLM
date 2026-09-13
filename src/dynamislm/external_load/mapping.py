@@ -28,12 +28,20 @@ from dynamislm.external_load.identity import (
 from dynamislm.external_load.registry import (
     EXTERNAL_LOAD_ACCELERATION_EVENT_COUNT_METRIC,
     EXTERNAL_LOAD_ACCELERATION_MEASURAND,
+    EXTERNAL_LOAD_CHANGE_OF_DIRECTION_LEFT_EVENT_COUNT_METRIC,
+    EXTERNAL_LOAD_CHANGE_OF_DIRECTION_MEASURAND,
+    EXTERNAL_LOAD_CHANGE_OF_DIRECTION_RIGHT_EVENT_COUNT_METRIC,
     EXTERNAL_LOAD_CONSTRUCT,
+    EXTERNAL_LOAD_COUNT,
     EXTERNAL_LOAD_DECELERATION_EVENT_COUNT_METRIC,
     EXTERNAL_LOAD_DECELERATION_MEASURAND,
     EXTERNAL_LOAD_DISTANCE_MEASURAND,
     EXTERNAL_LOAD_DURATION_MEASURAND,
+    EXTERNAL_LOAD_EXPLOSIVE_EFFORT_EVENT_COUNT_METRIC,
+    EXTERNAL_LOAD_EXPLOSIVE_EFFORT_MEASURAND,
     EXTERNAL_LOAD_INPUT_PROCESSING_METHOD,
+    EXTERNAL_LOAD_JUMP_EVENT_COUNT_METRIC,
+    EXTERNAL_LOAD_JUMP_MEASURAND,
     EXTERNAL_LOAD_KILOMETERS_PER_HOUR,
     EXTERNAL_LOAD_MAXIMUM_SPEED_METRIC,
     EXTERNAL_LOAD_METABOLIC_POWER_MEASURAND,
@@ -44,11 +52,18 @@ from dynamislm.external_load.registry import (
     EXTERNAL_LOAD_PROVIDER_LOAD_MEASURAND,
     EXTERNAL_LOAD_PROVIDER_LOAD_METRIC,
     EXTERNAL_LOAD_RELATIVE_DISTANCE_METRIC,
+    EXTERNAL_LOAD_RHIE_BOUT_COUNT_METRIC,
+    EXTERNAL_LOAD_RHIE_EFFORTS_PER_BOUT_METRIC,
+    EXTERNAL_LOAD_RHIE_MEASURAND,
+    EXTERNAL_LOAD_RHIE_RECOVERY_TIME_METRIC,
     EXTERNAL_LOAD_SECOND,
     EXTERNAL_LOAD_SOURCE_A_ACCELERATION_EVENT_DEFINITION,
+    EXTERNAL_LOAD_SOURCE_A_CHANGE_OF_DIRECTION_EVENT_DEFINITION,
     EXTERNAL_LOAD_SOURCE_A_DECELERATION_EVENT_DEFINITION,
+    EXTERNAL_LOAD_SOURCE_A_EXPLOSIVE_EFFORT_EVENT_DEFINITION,
     EXTERNAL_LOAD_SOURCE_A_GNSS_ALGORITHM,
     EXTERNAL_LOAD_SOURCE_A_IMA_ALGORITHM,
+    EXTERNAL_LOAD_SOURCE_A_JUMP_EVENT_DEFINITION,
     EXTERNAL_LOAD_SOURCE_A_MAPPING_DECISION,
     EXTERNAL_LOAD_SOURCE_A_PLAYER_MATCH_AGGREGATION,
     EXTERNAL_LOAD_SOURCE_A_PLAYERLOAD_ALGORITHM,
@@ -64,6 +79,7 @@ from dynamislm.external_load.registry import (
     EXTERNAL_LOAD_TOTAL_DISTANCE_METRIC,
     EXTERNAL_LOAD_WATTS_PER_KILOGRAM,
     SOURCE_A_MAPPING_VERSION,
+    SOURCE_A_MEASUREMENT_PROVIDER,
     SOURCE_A_VARIABLE_REGISTRY_SHA256,
 )
 from dynamislm.ingestion.contracts import (
@@ -80,6 +96,7 @@ from dynamislm.measurement.identity import (
     MetadataEntry,
     NormalizationSpec,
     RegistryReference,
+    SamplingCharacteristics,
     ScientificIdentifier,
     SemanticIdentity,
     UnitReference,
@@ -140,6 +157,32 @@ def _provider_event(definition: RegistryReference) -> ExternalLoadEventDefinitio
         start_rule=None,
         end_rule=None,
     )
+
+
+_SOURCE_A_ACQUISITION_CHARACTERISTICS = (
+    MetadataEntry("gnss_acquisition_frequency_hz", 18.0),
+    MetadataEntry("lps_acquisition_frequency_hz", 10.0),
+    MetadataEntry("accelerometer_sensor_sampling_frequency_hz", 1000.0),
+    MetadataEntry("accelerometer_provider_output_frequency_hz", 100.0),
+    MetadataEntry("gyroscope_sampling_frequency_hz", 100.0),
+    MetadataEntry("magnetometer_sampling_frequency_hz", 100.0),
+)
+
+
+def _source_a_sampling(modality: ExternalLoadModality) -> SamplingCharacteristics | None:
+    if modality is ExternalLoadModality.GNSS:
+        return SamplingCharacteristics(
+            frequency_hz=18.0,
+            channels=("GNSS",),
+            sample_format="provider-documented acquisition frequency",
+        )
+    if modality is ExternalLoadModality.INERTIAL:
+        return SamplingCharacteristics(
+            frequency_hz=100.0,
+            channels=("accelerometer", "gyroscope", "magnetometer"),
+            sample_format="provider-delivered inertial channel frequency",
+        )
+    return None
 
 
 def _source_a_specs() -> dict[str, _SourceASpec]:
@@ -234,15 +277,17 @@ def _source_a_specs() -> dict[str, _SourceASpec]:
             **provider_kwargs,
         ),
         "Explosiveefforts(N)": _SourceASpec(
-            metric_family=ExternalLoadMetricFamily.PROVIDER_LOAD,
+            metric_family=ExternalLoadMetricFamily.EXPLOSIVE_EFFORT_EVENT_COUNT,
             modality=ExternalLoadModality.INERTIAL,
-            measurand=EXTERNAL_LOAD_ACCELERATION_MEASURAND,
-            metric_reference=EXTERNAL_LOAD_PROVIDER_LOAD_METRIC,
-            unit=None,
+            measurand=EXTERNAL_LOAD_EXPLOSIVE_EFFORT_MEASURAND,
+            metric_reference=EXTERNAL_LOAD_EXPLOSIVE_EFFORT_EVENT_COUNT_METRIC,
+            unit=EXTERNAL_LOAD_COUNT,
             threshold=ExternalLoadThresholdIdentity.unknown(),
             normalization=no_normalization,
             provider_algorithm=EXTERNAL_LOAD_SOURCE_A_IMA_ALGORITHM,
-            event_definition=_provider_event(EXTERNAL_LOAD_SOURCE_A_ACCELERATION_EVENT_DEFINITION),
+            event_definition=_provider_event(
+                EXTERNAL_LOAD_SOURCE_A_EXPLOSIVE_EFFORT_EVENT_DEFINITION
+            ),
             definition_status=ExternalLoadDefinitionStatus.PARTIAL,
             value_origin=ValueOrigin.PROVIDER_DERIVED,
         ),
@@ -302,7 +347,7 @@ def _source_a_specs() -> dict[str, _SourceASpec]:
             modality=ExternalLoadModality.GNSS,
             measurand=EXTERNAL_LOAD_SPEED_MEASURAND,
             metric_reference=EXTERNAL_LOAD_SPRINT_EVENT_COUNT_METRIC,
-            unit=None,
+            unit=EXTERNAL_LOAD_COUNT,
             threshold=_threshold(
                 quantity=EXTERNAL_LOAD_SPEED_MEASURAND,
                 value=25.0,
@@ -322,7 +367,7 @@ def _source_a_specs() -> dict[str, _SourceASpec]:
             modality=ExternalLoadModality.INERTIAL,
             measurand=EXTERNAL_LOAD_ACCELERATION_MEASURAND,
             metric_reference=EXTERNAL_LOAD_ACCELERATION_EVENT_COUNT_METRIC,
-            unit=None,
+            unit=EXTERNAL_LOAD_COUNT,
             threshold=ExternalLoadThresholdIdentity.unknown(),
             normalization=no_normalization,
             provider_algorithm=EXTERNAL_LOAD_SOURCE_A_IMA_ALGORITHM,
@@ -335,7 +380,7 @@ def _source_a_specs() -> dict[str, _SourceASpec]:
             modality=ExternalLoadModality.INERTIAL,
             measurand=EXTERNAL_LOAD_DECELERATION_MEASURAND,
             metric_reference=EXTERNAL_LOAD_DECELERATION_EVENT_COUNT_METRIC,
-            unit=None,
+            unit=EXTERNAL_LOAD_COUNT,
             threshold=ExternalLoadThresholdIdentity.unknown(),
             normalization=no_normalization,
             provider_algorithm=EXTERNAL_LOAD_SOURCE_A_IMA_ALGORITHM,
@@ -344,49 +389,53 @@ def _source_a_specs() -> dict[str, _SourceASpec]:
             value_origin=ValueOrigin.PROVIDER_DERIVED,
         ),
         "Changeofdirectiontoleft(N)": _SourceASpec(
-            metric_family=ExternalLoadMetricFamily.PROVIDER_LOAD,
+            metric_family=ExternalLoadMetricFamily.CHANGE_OF_DIRECTION_EVENT_COUNT,
             modality=ExternalLoadModality.INERTIAL,
-            measurand=EXTERNAL_LOAD_PROVIDER_LOAD_MEASURAND,
-            metric_reference=EXTERNAL_LOAD_PROVIDER_LOAD_METRIC,
-            unit=None,
+            measurand=EXTERNAL_LOAD_CHANGE_OF_DIRECTION_MEASURAND,
+            metric_reference=EXTERNAL_LOAD_CHANGE_OF_DIRECTION_LEFT_EVENT_COUNT_METRIC,
+            unit=EXTERNAL_LOAD_COUNT,
             threshold=ExternalLoadThresholdIdentity.unknown(),
             normalization=no_normalization,
             provider_algorithm=EXTERNAL_LOAD_SOURCE_A_IMA_ALGORITHM,
-            event_definition=None,
+            event_definition=_provider_event(
+                EXTERNAL_LOAD_SOURCE_A_CHANGE_OF_DIRECTION_EVENT_DEFINITION
+            ),
             definition_status=ExternalLoadDefinitionStatus.PARTIAL,
             value_origin=ValueOrigin.PROVIDER_DERIVED,
         ),
         "Changeofdirectiontoright(N)": _SourceASpec(
-            metric_family=ExternalLoadMetricFamily.PROVIDER_LOAD,
+            metric_family=ExternalLoadMetricFamily.CHANGE_OF_DIRECTION_EVENT_COUNT,
             modality=ExternalLoadModality.INERTIAL,
-            measurand=EXTERNAL_LOAD_PROVIDER_LOAD_MEASURAND,
-            metric_reference=EXTERNAL_LOAD_PROVIDER_LOAD_METRIC,
-            unit=None,
+            measurand=EXTERNAL_LOAD_CHANGE_OF_DIRECTION_MEASURAND,
+            metric_reference=EXTERNAL_LOAD_CHANGE_OF_DIRECTION_RIGHT_EVENT_COUNT_METRIC,
+            unit=EXTERNAL_LOAD_COUNT,
             threshold=ExternalLoadThresholdIdentity.unknown(),
             normalization=no_normalization,
             provider_algorithm=EXTERNAL_LOAD_SOURCE_A_IMA_ALGORITHM,
-            event_definition=None,
+            event_definition=_provider_event(
+                EXTERNAL_LOAD_SOURCE_A_CHANGE_OF_DIRECTION_EVENT_DEFINITION
+            ),
             definition_status=ExternalLoadDefinitionStatus.PARTIAL,
             value_origin=ValueOrigin.PROVIDER_DERIVED,
         ),
         "Jumps>40cm(IMA)": _SourceASpec(
-            metric_family=ExternalLoadMetricFamily.PROVIDER_LOAD,
+            metric_family=ExternalLoadMetricFamily.JUMP_EVENT_COUNT,
             modality=ExternalLoadModality.INERTIAL,
-            measurand=EXTERNAL_LOAD_PROVIDER_LOAD_MEASURAND,
-            metric_reference=EXTERNAL_LOAD_PROVIDER_LOAD_METRIC,
-            unit=None,
+            measurand=EXTERNAL_LOAD_JUMP_MEASURAND,
+            metric_reference=EXTERNAL_LOAD_JUMP_EVENT_COUNT_METRIC,
+            unit=EXTERNAL_LOAD_COUNT,
             threshold=ExternalLoadThresholdIdentity.unknown(),
             normalization=no_normalization,
             provider_algorithm=EXTERNAL_LOAD_SOURCE_A_IMA_ALGORITHM,
-            event_definition=None,
+            event_definition=_provider_event(EXTERNAL_LOAD_SOURCE_A_JUMP_EVENT_DEFINITION),
             definition_status=ExternalLoadDefinitionStatus.PARTIAL,
             value_origin=ValueOrigin.PROVIDER_DERIVED,
         ),
         "RHIEBoutRecoveryMean(s)": _SourceASpec(
             metric_family=ExternalLoadMetricFamily.REPEATED_HIGH_INTENSITY_EFFORT,
             modality=ExternalLoadModality.INERTIAL,
-            measurand=EXTERNAL_LOAD_PROVIDER_LOAD_MEASURAND,
-            metric_reference=EXTERNAL_LOAD_PROVIDER_LOAD_METRIC,
+            measurand=EXTERNAL_LOAD_RHIE_MEASURAND,
+            metric_reference=EXTERNAL_LOAD_RHIE_RECOVERY_TIME_METRIC,
             unit=EXTERNAL_LOAD_SECOND,
             threshold=ExternalLoadThresholdIdentity.unknown(),
             normalization=no_normalization,
@@ -398,9 +447,9 @@ def _source_a_specs() -> dict[str, _SourceASpec]:
         "RHIETotalBouts(N)": _SourceASpec(
             metric_family=ExternalLoadMetricFamily.REPEATED_HIGH_INTENSITY_EFFORT,
             modality=ExternalLoadModality.INERTIAL,
-            measurand=EXTERNAL_LOAD_PROVIDER_LOAD_MEASURAND,
-            metric_reference=EXTERNAL_LOAD_PROVIDER_LOAD_METRIC,
-            unit=None,
+            measurand=EXTERNAL_LOAD_RHIE_MEASURAND,
+            metric_reference=EXTERNAL_LOAD_RHIE_BOUT_COUNT_METRIC,
+            unit=EXTERNAL_LOAD_COUNT,
             threshold=ExternalLoadThresholdIdentity.unknown(),
             normalization=no_normalization,
             provider_algorithm=EXTERNAL_LOAD_SOURCE_A_RHIE_ALGORITHM,
@@ -411,9 +460,9 @@ def _source_a_specs() -> dict[str, _SourceASpec]:
         "RHIEEffortsPerBout-Mean": _SourceASpec(
             metric_family=ExternalLoadMetricFamily.REPEATED_HIGH_INTENSITY_EFFORT,
             modality=ExternalLoadModality.INERTIAL,
-            measurand=EXTERNAL_LOAD_PROVIDER_LOAD_MEASURAND,
-            metric_reference=EXTERNAL_LOAD_PROVIDER_LOAD_METRIC,
-            unit=None,
+            measurand=EXTERNAL_LOAD_RHIE_MEASURAND,
+            metric_reference=EXTERNAL_LOAD_RHIE_EFFORTS_PER_BOUT_METRIC,
+            unit=EXTERNAL_LOAD_COUNT,
             threshold=ExternalLoadThresholdIdentity.unknown(),
             normalization=no_normalization,
             provider_algorithm=EXTERNAL_LOAD_SOURCE_A_RHIE_ALGORITHM,
@@ -462,6 +511,18 @@ class ExternalLoadSourceMapping:
             raise ValueError("source_lineage must not contain empty strings")
         if self.external_identity.value_origin.value != self._expected_origin():
             raise ValueError("external identity origin does not match Source A variable role")
+        expected_spec = _SOURCE_A_SPECS.get(self.source_variable_identity.original_column_name)
+        if expected_spec is None:
+            raise ValueError("Source A variable is not registered for external-load mapping")
+        expected_identity = _external_identity_for_variable(
+            self.source_variable_identity,
+            expected_spec,
+            self.source_variable_identity.source_provider,
+        )
+        if self.external_identity != expected_identity:
+            raise ValueError(
+                "external identity does not match the exact Source A variable interpretation"
+            )
 
     def _expected_origin(self) -> str:
         if self.source_variable_identity.source_role is SourceVariableRole.DIRECT_REPORTED:
@@ -476,7 +537,21 @@ class ExternalLoadSourceMapping:
 
     @property
     def provider(self) -> str:
+        """Return the measurement-system provider, not the dataset authority."""
+
         return self.external_identity.system.provider
+
+    @property
+    def measurement_provider(self) -> str:
+        """Explicit alias for the provider/manufacturer of the measuring system."""
+
+        return self.external_identity.system.provider
+
+    @property
+    def dataset_provider(self) -> str:
+        """Return the preserved Source A dataset/repository provider."""
+
+        return self.source_variable_identity.source_provider
 
     @property
     def method_label(self) -> str:
@@ -520,8 +595,12 @@ def _external_identity_for_variable(
     origin = spec.value_origin
     provider_derived = origin is ValueOrigin.PROVIDER_DERIVED
     system = ExternalLoadSystemIdentity(
-        provider=provider,
+        provider=SOURCE_A_MEASUREMENT_PROVIDER if provider_derived else provider,
         device_or_system=EXTERNAL_LOAD_SOURCE_A_VECTOR7 if provider_derived else None,
+        sampling=_source_a_sampling(modality) if provider_derived else None,
+        acquisition_characteristics=(
+            _SOURCE_A_ACQUISITION_CHARACTERISTICS if provider_derived else ()
+        ),
         provider_algorithm=spec.provider_algorithm,
         provider_algorithm_status=(
             ProcessingComponentStatus.UNKNOWN
@@ -587,7 +666,7 @@ def _external_identity_for_variable(
         acquisition=AcquisitionIdentity(
             device=system.device_or_system,
             raw_artifact=None,
-            sampling=None,
+            sampling=system.sampling,
         ),
         processing=processing,
         version=VersionIdentity(
