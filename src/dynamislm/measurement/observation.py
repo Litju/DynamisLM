@@ -88,6 +88,15 @@ class ScientificMeasurementObservation:
         _require_instance(self.identity, MeasurementIdentity, "identity")
         _require_instance(self.result, MeasurementResult, "result")
         _require_instance(self.provenance, Provenance, "provenance")
+        # External-load identities carry a domain-specific origin axis in
+        # addition to the generic MeasurementIdentity fields.  When that
+        # extension is present, the result cannot relabel a provider/source
+        # value as direct or DynamisLM-derived at the observation boundary.
+        from dynamislm.external_load.identity import ExternalLoadMeasurementIdentity
+
+        if isinstance(self.identity, ExternalLoadMeasurementIdentity):
+            if self.result.classification.value_origin is not self.identity.value_origin:
+                raise ValueError("external-load identity and result value origins must agree")
 
 
 def create_derived_observation(

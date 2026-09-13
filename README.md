@@ -50,6 +50,24 @@ Women, academy/youth/U23, university, amateur/semi-professional, lower-division,
 
 This domain covers GNSS/GPS, optical tracking, inertial and vendor-derived measures, match/training exposure, total/relative distance, speed-zone metrics, HSR, sprint, acceleration/deceleration and provider/method/threshold identity.
 
+RES-64 implements the external-load scientific identity extension and the
+registered deterministic boundary for unit conversion, duration-normalized
+distance, and threshold summaries from explicit timestamped velocity samples.
+Modality, provider/system, threshold basis and boundary, event definition,
+session aggregation, processing, and normalization are identity-bearing:
+
+```text
+SAME_LABEL != SAME_MEASUREMENT
+SOURCE_REPORTED_VALUE != DYNAMISLM_DERIVATION
+```
+
+Source/provider outputs such as PlayerLoad remain first-class
+`PROVIDER_DERIVED` observations with exact Source A variable and provenance
+identity. Their proprietary derivations are not reconstructed or silently
+treated as DynamisLM computations. External-load comparisons fail closed when
+thresholds, modalities, providers, segmentation, dwell rules, filtering, or
+other material identity dimensions differ or are unknown.
+
 ### Longitudinal football context
 
 This domain covers athlete, first-team squad, club/team, competition, season, training, match, testing session, match exposure, training exposure, microcycle, match-day-relative context and multi-device/multi-source longitudinal history.
@@ -86,6 +104,13 @@ CMJ is no longer merely the next authorized unit. The repository contains substa
 - serialization and ranking authority.
 
 Additional CMJ force, power, RFD, RSI-mod and asymmetry completion work belongs downstream under RES-65. No metric is implied here beyond what the existing registered implementation and tests establish.
+
+RES-64 adds external-load identity, Source A interpretation mapping, unit and
+relative-distance operations, and a raw velocity threshold-summary operation.
+Acceleration/deceleration event algorithms, repeated-high-intensity effort
+algorithms, and proprietary PlayerLoad/IMA/RHIE derivations remain outside
+DynamisLM computational authority unless a later registered unit supplies
+their exact definitions and inputs.
 
 RES-75 hosted CI and repository governance is sealed. RES-63 implements the
 canonical empirical ingestion boundary; real source bytes and full canonical
@@ -143,7 +168,7 @@ No operational model, inference, baseline-inference benchmark, paid GPU qualific
 ## Current limitations
 
 - No trained checkpoint, model weights, corpus, database, API, frontend, GPU runtime, or deployment is included.
-- The other performance-test families, external-load/exposure engine and scientific-engine qualification remain downstream work in the RES-64→RES-71 sequence; RES-63 dataset qualification is limited to its current ingestion boundary.
+- The other performance-test families and scientific-engine qualification remain downstream work in the RES-64→RES-71 sequence; RES-63 dataset qualification remains limited to its current ingestion boundary, while RES-64's external-load operations remain limited to their registered identities and methods.
 - The current CMJ implementation is not a complete CMJ science program; additional force, power, RFD, RSI-mod and asymmetry methods remain downstream under RES-65.
 - The generic kernel and CMJ vertical slice represent registered contracts and provenance; they are not a complete persistence layer or clinical/return-to-play authority.
 - Comparability without a registered deterministic rule remains explicitly unresolved/insufficient.
