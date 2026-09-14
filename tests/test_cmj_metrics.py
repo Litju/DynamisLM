@@ -26,6 +26,7 @@ from dynamislm.measurement.cmj import (
     CMJIntegrationInterval,
     CMJMechanicalSystemContract,
     CMJMetricSupportKind,
+    CMJPhaseBoundary,
     CMJPhaseOccurrence,
     CMJPowerMetric,
     CMJPowerResult,
@@ -66,8 +67,14 @@ from dynamislm.measurement.cmj import (
     select_trials,
     source_artifact_for_signal,
 )
-from dynamislm.measurement.cmj.signal import RawVerticalForceSignal, SignalTimebase
+from dynamislm.measurement.cmj.signal import (
+    RawVerticalForceSignal,
+    RegularTimebase,
+    SignalTimebase,
+)
 from dynamislm.measurement.cmj.weighing import SystemWeightResult
+from dynamislm.measurement.identity import ScientificIdentifier
+from dynamislm.measurement.observation import ObservationContext
 from dynamislm.refusal import RefusalReasonCode, RefusalResult
 from test_cmj import (
     _absolute_parameters,
@@ -83,9 +90,22 @@ def _rebind_samples(
     samples: tuple[float, ...],
     *,
     timebase: SignalTimebase | None = None,
+    context: ObservationContext | None = None,
+    suffix: str | None = None,
 ) -> CMJForceInput:
     assert isinstance(source.signal, RawVerticalForceSignal)
     signal = replace(source.signal, samples=samples, timebase=timebase or source.signal.timebase)
+    if suffix is not None:
+        signal = replace(
+            signal,
+            signal_id=InstanceIdentifier("signal", f"{source.signal.signal_id.value}-{suffix}"),
+            source_artifact_id=InstanceIdentifier(
+                "artifact", f"{source.source_artifact.artifact_id.value}-{suffix}"
+            ),
+            acquisition_id=InstanceIdentifier(
+                "acquisition", f"{source.acquisition.acquisition_id.value}-{suffix}"
+            ),
+        )
     artifact = source_artifact_for_signal(signal)
     acquisition_identity = source.identity.acquisition
     if isinstance(signal.timebase, ExplicitTimebase):
@@ -99,8 +119,22 @@ def _rebind_samples(
             ),
             timebase=TimebaseIdentity(TimebaseKind.EXPLICIT, None),
         )
+    if suffix is not None:
+        acquisition_identity = replace(
+            acquisition_identity,
+            acquisition_instance_id=signal.acquisition_id,
+        )
+    identity_id = source.identity.identity_id
+    if suffix is not None:
+        identity_id = ScientificIdentifier(
+            identity_id.namespace,
+            identity_id.object_type,
+            f"{identity_id.key}-{suffix}",
+            identity_id.version,
+        )
     identity = replace(
         source.identity,
+        identity_id=identity_id,
         acquisition=replace(acquisition_identity, raw_artifact=artifact.artifact_id),
     )
     signal = replace(
@@ -120,9 +154,21 @@ def _rebind_samples(
         hardware_firmware=identity.acquisition.hardware_firmware,
     )
     observation = create_cmj_raw_observation(
-        observation_id=source.observation.observation_id,
-        result_id=source.observation.result.result_id,
-        context=source.observation.context,
+        observation_id=(
+            source.observation.observation_id
+            if suffix is None
+            else InstanceIdentifier(
+                "observation", f"{source.observation.observation_id.value}-{suffix}"
+            )
+        ),
+        result_id=(
+            source.observation.result.result_id
+            if suffix is None
+            else InstanceIdentifier(
+                "result", f"{source.observation.result.result_id.value}-{suffix}"
+            )
+        ),
+        context=context or source.observation.context,
         identity=identity,
         signal=signal,
         source_artifact=artifact,
@@ -148,8 +194,27 @@ def _adjudicate(weight: SystemWeightResult) -> SystemWeightResult:
     )
 
 
+def _replace_context_field(
+    context: ObservationContext,
+    field_name: str,
+    replacement: InstanceIdentifier,
+) -> ObservationContext:
+    if field_name == "athlete_id":
+        return replace(context, athlete_id=replacement)
+    if field_name == "session_id":
+        return replace(context, session_id=replacement)
+    if field_name == "test_instance_id":
+        return replace(context, test_instance_id=replacement)
+    if field_name == "trial_id":
+        return replace(context, trial_id=replacement)
+    raise AssertionError(f"unsupported context field: {field_name}")
+
+
 def _bilateral_fixture(
-    *, timebase: SignalTimebase | None = None
+    *,
+    timebase: SignalTimebase | None = None,
+    context: ObservationContext | None = None,
+    source_suffix: str | None = None,
 ) -> tuple[
     CMJForceInput,
     CMJForceInput,
@@ -165,11 +230,15 @@ def _bilateral_fixture(
         left,
         (300.0, 300.0, 300.0, 300.0, 250.0, 100.0, 150.0, 1600.0, 3200.0, 0.0),
         timebase=timebase,
+        context=context,
+        suffix=f"{source_suffix}-left" if source_suffix is not None else None,
     )
     right = _rebind_samples(
         right,
         (400.0, 400.0, 400.0, 400.0, 350.0, 200.0, 250.0, 1700.0, 3300.0, 0.0),
         timebase=timebase,
+        context=context,
+        suffix=f"{source_suffix}-right" if source_suffix is not None else None,
     )
     total = construct_total_supported_vertical_force(left, right)
     assert isinstance(total, TotalSupportedForceResult)
@@ -258,6 +327,32 @@ def test_force_metrics_use_total_force_and_exact_phase_support() -> None:
     assert whole_peak.observation.identity.semantic.metric_definition != (
         whole_mean.observation.identity.semantic.metric_definition
     )
+
+
+@pytest.mark.parametrize(
+    ("field_name", "replacement"),
+    (
+        ("athlete_id", InstanceIdentifier("athlete", "res65-rebound-athlete")),
+        ("session_id", InstanceIdentifier("session", "res65-rebound-session")),
+        ("test_instance_id", InstanceIdentifier("test-instance", "res65-rebound-test")),
+        ("trial_id", InstanceIdentifier("trial", "res65-rebound-trial")),
+    ),
+)
+def test_res65_force_result_rejects_output_context_rebinding(
+    field_name: str,
+    replacement: InstanceIdentifier,
+) -> None:
+    _, _, total, _, _, onset, takeoff, _ = _bilateral_fixture()
+    result = calculate_cmj_whole_movement_peak_total_supported_vertical_force(total, onset, takeoff)
+    assert isinstance(result, CMJForceMetricResult)
+    forged_context = _replace_context_field(result.observation.context, field_name, replacement)
+    with pytest.raises(ValueError, match="exact source context"):
+        CMJForceMetricResult(
+            replace(result.observation, context=forged_context),
+            result.metric,
+            result.source_force,
+            result.support,
+        )
 
 
 def test_force_metrics_refuse_wrong_phase_force_quantity_and_vendor_label() -> None:
@@ -373,6 +468,52 @@ def test_power_refuses_net_force_and_unrelated_velocity() -> None:
     assert RefusalReasonCode.SAMPLE_OR_TIMEBASE_MISMATCH in refused_velocity.reason_codes
 
 
+def test_res65_power_rejects_source_and_output_context_rebinding() -> None:
+    _, _, total, velocity, phases, _, _, _ = _bilateral_fixture()
+    altered_velocity = replace(
+        velocity,
+        observation=replace(
+            velocity.observation,
+            context=replace(
+                velocity.observation.context,
+                session_id=InstanceIdentifier("session", "res65-power-other-session"),
+            ),
+        ),
+    )
+    refused_source = calculate_cmj_power_metric(
+        total,
+        altered_velocity,
+        phases[1],
+        CMJPowerMetric.BRAKING_MEAN_SIGNED_POWER,
+    )
+    assert isinstance(refused_source, RefusalResult)
+    assert RefusalReasonCode.PHASE_SOURCE_MISMATCH in refused_source.reason_codes
+
+    result = calculate_cmj_power_metric(
+        total,
+        velocity,
+        phases[1],
+        CMJPowerMetric.BRAKING_MEAN_SIGNED_POWER,
+    )
+    assert isinstance(result, CMJPowerResult)
+    forged_observation = replace(
+        result.observation,
+        context=replace(
+            result.observation.context,
+            trial_id=InstanceIdentifier("trial", "res65-power-output-trial"),
+        ),
+    )
+    with pytest.raises(ValueError, match="exact source context"):
+        CMJPowerResult(
+            forged_observation,
+            result.metric,
+            result.source_force,
+            result.source_velocity,
+            result.phase_occurrence,
+            result.series,
+        )
+
+
 def test_power_peak_and_mean_are_distinct_registered_methods() -> None:
     _, _, total, velocity, phases, _, _, _ = _bilateral_fixture()
     peak = calculate_cmj_power_metric(
@@ -412,6 +553,21 @@ def test_takeoff_velocity_refuses_an_event_from_another_source() -> None:
     refused = project_cmj_takeoff_velocity(velocity, wrong_takeoff)
     assert isinstance(refused, RefusalResult)
     assert RefusalReasonCode.EVENT_SOURCE_MISMATCH in refused.reason_codes
+
+
+def test_res65_takeoff_velocity_rejects_output_context_rebinding() -> None:
+    _, _, _, velocity, _, _, takeoff, _ = _bilateral_fixture()
+    result = project_cmj_takeoff_velocity(velocity, takeoff)
+    assert isinstance(result, CMJTakeoffVelocityResult)
+    forged_observation = replace(
+        result.observation,
+        context=replace(
+            result.observation.context,
+            test_instance_id=InstanceIdentifier("test-instance", "res65-takeoff-output-test"),
+        ),
+    )
+    with pytest.raises(ValueError, match="exact source context"):
+        CMJTakeoffVelocityResult(forged_observation, result.source_velocity, result.takeoff_event)
 
 
 def test_rsi_mod_preserves_numerator_estimator_identity() -> None:
@@ -477,6 +633,47 @@ def test_rsi_mod_refuses_wrong_events_and_free_duration() -> None:
     assert RefusalReasonCode.EVENT_SOURCE_MISMATCH in refused.reason_codes
     with pytest.raises(TypeError):
         calculate_cmj_rsi_mod(jump_height, onset, takeoff, duration_s=1.0)  # type: ignore[call-arg]
+
+
+def test_res65_rsi_mod_rejects_output_context_rebinding_and_event_cross_binding() -> None:
+    from test_cmj_jump_height import _flight_fixture
+
+    jump_height, takeoff, _, force = _flight_fixture("res65-rsi-context")
+    baseline = estimate_system_weight(
+        force,
+        WeighingSegment(
+            force.signal.signal_id,
+            force.source_artifact.artifact_id,
+            force.identity.identity_id,
+            0,
+            5,
+        ),
+    )
+    assert isinstance(baseline, SystemWeightResult)
+    onset = detect_movement_onset(force, baseline, _onset_parameters(baseline))
+    assert isinstance(onset, CMJEventOccurrence)
+    result = calculate_cmj_rsi_mod(jump_height, onset, takeoff)
+    assert isinstance(result, CMJRSIModResult)
+    forged_observation = replace(
+        result.observation,
+        context=replace(
+            result.observation.context,
+            athlete_id=InstanceIdentifier("athlete", "res65-rsi-output-athlete"),
+        ),
+    )
+    with pytest.raises(ValueError, match="exact source context"):
+        CMJRSIModResult(
+            forged_observation,
+            result.jump_height,
+            result.movement_onset,
+            result.takeoff_event,
+            result.numerator,
+        )
+
+    wrong_onset = _bilateral_fixture()[5]
+    refused = calculate_cmj_rsi_mod(jump_height, wrong_onset, takeoff)
+    assert isinstance(refused, RefusalResult)
+    assert RefusalReasonCode.EVENT_SOURCE_MISMATCH in refused.reason_codes
 
 
 def test_rfd_is_explicitly_deferred() -> None:
@@ -587,6 +784,67 @@ def test_asymmetry_refuses_precombined_missing_channels_cross_trial_and_equation
     assert RefusalReasonCode.PHASE_METRIC_NOT_REGISTERED in refused_phase.reason_codes
 
 
+@pytest.mark.parametrize(
+    ("field_name", "replacement"),
+    (
+        ("athlete_id", InstanceIdentifier("athlete", "res65-asym-other-athlete")),
+        ("session_id", InstanceIdentifier("session", "res65-asym-other-session")),
+        ("trial_id", InstanceIdentifier("trial", "res65-asym-other-trial")),
+    ),
+)
+def test_res65_asymmetry_rejects_cross_context_sources(
+    field_name: str,
+    replacement: InstanceIdentifier,
+) -> None:
+    left, right, _, _, phases, _, _, _ = _bilateral_fixture()
+    forged_right = replace(
+        right,
+        observation=replace(
+            right.observation,
+            context=_replace_context_field(right.observation.context, field_name, replacement),
+        ),
+    )
+    refused = calculate_cmj_force_asymmetry(
+        left,
+        forged_right,
+        phases[1],
+        CMJAsymmetryMetric.BRAKING_PEAK_FORCE,
+    )
+    assert isinstance(refused, RefusalResult)
+    assert RefusalReasonCode.BILATERAL_INPUTS_INCOMPATIBLE in refused.reason_codes
+
+
+def test_res65_asymmetry_rejects_output_context_rebinding() -> None:
+    left, right, total, _, phases, _, _, _ = _bilateral_fixture()
+    result = calculate_cmj_force_asymmetry(
+        left,
+        right,
+        phases[1],
+        CMJAsymmetryMetric.BRAKING_PEAK_FORCE,
+        total_force=total,
+    )
+    assert isinstance(result, CMJForceAsymmetryResult)
+    forged_observation = replace(
+        result.observation,
+        context=replace(
+            result.observation.context,
+            session_id=InstanceIdentifier("session", "res65-asym-output-session"),
+        ),
+    )
+    with pytest.raises(ValueError, match="exact source context"):
+        CMJForceAsymmetryResult(
+            forged_observation,
+            result.metric,
+            result.equation,
+            result.left_source,
+            result.right_source,
+            result.total_force,
+            result.phase_occurrence,
+            result.left_value_n,
+            result.right_value_n,
+        )
+
+
 def test_metric_comparability_keeps_peak_mean_power_and_rsi_methods_distinct() -> None:
     left, right, total, velocity, phases, onset, takeoff, _ = _bilateral_fixture()
     peak = calculate_cmj_phase_force_metric(
@@ -610,11 +868,8 @@ def test_metric_comparability_keeps_peak_mean_power_and_rsi_methods_distinct() -
         CMJForceMetric.BRAKING_PEAK_TOTAL_SUPPORTED_VERTICAL_FORCE,
         output_observation_id=InstanceIdentifier("observation", "res65-altered-phase"),
     )
-    assert isinstance(altered_peak, CMJForceMetricResult)
-    altered_comparison = compare_cmj_metric_results(
-        peak, altered_peak, claim="phase boundary method mismatch"
-    )
-    assert altered_comparison.state is ComparabilityState.BRIDGE_VALIDATION_REQUIRED
+    assert isinstance(altered_peak, RefusalResult)
+    assert RefusalReasonCode.PROCESSING_LINEAGE_UNRESOLVED in altered_peak.reason_codes
 
     power = calculate_cmj_power_metric(
         total, velocity, phases[1], CMJPowerMetric.BRAKING_MEAN_SIGNED_POWER
@@ -645,7 +900,169 @@ def test_metric_comparability_keeps_peak_mean_power_and_rsi_methods_distinct() -
     assert onset.sample_index < takeoff.sample_index
 
 
-def test_res40_session_aggregation_accepts_res65_scalar_metric_results() -> None:
+def _time_at_fixture_sample(timebase: SignalTimebase, index: int) -> float:
+    if isinstance(timebase, RegularTimebase):
+        return timebase.start_time_s + index / timebase.sample_rate_hz
+    return timebase.times_s[index]
+
+
+def _phase_with_tampered_start_sample(
+    phase: CMJPhaseOccurrence,
+    velocity: SupportedSystemComVelocityResult,
+) -> CMJPhaseOccurrence:
+    selected_index = phase.start_boundary.sample_index - 1
+    boundary = replace(
+        phase.start_boundary,
+        sample_index=selected_index,
+        boundary_time_s=_time_at_fixture_sample(
+            phase.start_boundary.source_timebase, selected_index
+        ),
+        velocity_m_per_s=velocity.samples[selected_index - velocity.series.sample_start_index],
+    )
+    return replace(
+        phase,
+        start_boundary=boundary,
+        start_time_s=boundary.boundary_time_s,
+        sample_support=replace(phase.sample_support, start_index=selected_index),
+    )
+
+
+def _tamper_phase_boundary_field(
+    boundary: CMJPhaseBoundary,
+    field_name: str,
+    replacement: str | int,
+) -> CMJPhaseBoundary:
+    if field_name == "tie_policy":
+        return replace(boundary, tie_policy=str(replacement))
+    if field_name == "search_start_index":
+        return replace(boundary, search_start_index=int(replacement))
+    if field_name == "search_end_index":
+        return replace(boundary, search_end_index=int(replacement))
+    if field_name == "velocity_threshold_policy":
+        return replace(boundary, velocity_threshold_policy=str(replacement))
+    if field_name == "interpolation_policy":
+        return replace(boundary, interpolation_policy=str(replacement))
+    raise AssertionError(f"unsupported phase-boundary field: {field_name}")
+
+
+@pytest.mark.parametrize(
+    ("field_name", "replacement"),
+    (
+        ("tie_policy", "tampered tie policy"),
+        ("search_start_index", 5),
+        ("search_end_index", 8),
+        ("velocity_threshold_policy", "tampered threshold policy"),
+        ("interpolation_policy", "tampered interpolation policy"),
+    ),
+)
+def test_res65_phase_boundary_execution_authority_refuses_tampering(
+    field_name: str,
+    replacement: str | int,
+) -> None:
+    _, _, total, _, phases, _, _, _ = _bilateral_fixture()
+    altered_boundary = _tamper_phase_boundary_field(
+        phases[1].start_boundary, field_name, replacement
+    )
+    altered_phase = replace(phases[1], start_boundary=altered_boundary)
+    refused = calculate_cmj_phase_force_metric(
+        total,
+        altered_phase,
+        CMJForceMetric.BRAKING_PEAK_TOTAL_SUPPORTED_VERTICAL_FORCE,
+    )
+    assert isinstance(refused, RefusalResult)
+    assert RefusalReasonCode.PROCESSING_LINEAGE_UNRESOLVED in refused.reason_codes
+
+
+def test_res65_phase_boundary_selected_sample_tampering_is_blocked() -> None:
+    _, _, total, velocity, phases, _, _, _ = _bilateral_fixture()
+    altered_phase = _phase_with_tampered_start_sample(phases[1], velocity)
+    refused = calculate_cmj_phase_force_metric(
+        total,
+        altered_phase,
+        CMJForceMetric.BRAKING_PEAK_TOTAL_SUPPORTED_VERTICAL_FORCE,
+    )
+    assert isinstance(refused, RefusalResult)
+    assert RefusalReasonCode.PROCESSING_LINEAGE_UNRESOLVED in refused.reason_codes
+
+
+def test_res65_phase_source_velocity_id_tampering_is_blocked() -> None:
+    _, _, total, _, phases, _, _, _ = _bilateral_fixture()
+    tampered_series_id = InstanceIdentifier("signal", "res65-tampered-velocity-series")
+    altered_phase = replace(
+        phases[1],
+        start_boundary=replace(
+            phases[1].start_boundary,
+            source_velocity_series_id=tampered_series_id,
+        ),
+        end_boundary=replace(
+            phases[1].end_boundary,
+            source_velocity_series_id=tampered_series_id,
+        ),
+        source_velocity_series_id=tampered_series_id,
+    )
+    refused = calculate_cmj_phase_force_metric(
+        total,
+        altered_phase,
+        CMJForceMetric.BRAKING_PEAK_TOTAL_SUPPORTED_VERTICAL_FORCE,
+    )
+    assert isinstance(refused, RefusalResult)
+    assert RefusalReasonCode.PROCESSING_LINEAGE_UNRESOLVED in refused.reason_codes
+
+
+def test_res65_event_boundary_authority_tampering_is_blocked() -> None:
+    _, _, total, _, phases, onset, _, _ = _bilateral_fixture()
+    takeoff_boundary = phases[2].end_boundary
+    altered_event_id = replace(takeoff_boundary, source_event_id=onset.occurrence_id)
+    with pytest.raises(ValueError, match="processing method"):
+        replace(
+            takeoff_boundary,
+            method=replace(takeoff_boundary.method, display_label="tampered boundary method"),
+        )
+    altered_parameters = replace(
+        takeoff_boundary,
+        source_event_parameters=canonical_json(replace(onset.detector_parameters, dwell_samples=2)),
+    )
+    for altered_boundary in (altered_event_id, altered_parameters):
+        altered_phase = replace(phases[2], end_boundary=altered_boundary)
+        refused = calculate_cmj_phase_force_metric(
+            total,
+            altered_phase,
+            CMJForceMetric.PROPULSION_PEAK_TOTAL_SUPPORTED_VERTICAL_FORCE,
+        )
+        assert isinstance(refused, RefusalResult)
+        assert RefusalReasonCode.PROCESSING_LINEAGE_UNRESOLVED in refused.reason_codes
+
+
+def test_res65_phase_occurrence_support_and_definition_stale_provenance_are_blocked() -> None:
+    _, _, total, velocity, phases, _, _, _ = _bilateral_fixture()
+    altered_support = _phase_with_tampered_start_sample(phases[1], velocity)
+    refused_support = calculate_cmj_phase_force_metric(
+        total,
+        altered_support,
+        CMJForceMetric.BRAKING_PEAK_TOTAL_SUPPORTED_VERTICAL_FORCE,
+    )
+    assert isinstance(refused_support, RefusalResult)
+
+    altered_definition = replace(
+        phases[1],
+        phase_definition=phases[2].phase_definition,
+        start_boundary=phases[2].start_boundary,
+        end_boundary=phases[2].end_boundary,
+        start_time_s=phases[2].start_time_s,
+        end_time_s=phases[2].end_time_s,
+        sample_support=phases[2].sample_support,
+        source_event_ids=phases[2].source_event_ids,
+    )
+    refused_definition = calculate_cmj_phase_force_metric(
+        total,
+        altered_definition,
+        CMJForceMetric.PROPULSION_PEAK_TOTAL_SUPPORTED_VERTICAL_FORCE,
+    )
+    assert isinstance(refused_definition, RefusalResult)
+    assert RefusalReasonCode.PROCESSING_LINEAGE_UNRESOLVED in refused_definition.reason_codes
+
+
+def test_res40_session_aggregation_rejects_context_rewritten_res65_results() -> None:
     _, _, total, _, phases, _, _, _ = _bilateral_fixture()
     first = calculate_cmj_phase_force_metric(
         total,
@@ -668,16 +1085,54 @@ def test_res40_session_aggregation_accepts_res65_scalar_metric_results() -> None
         test_instance_id=InstanceIdentifier("test-instance", "res65-test"),
         trial_id=InstanceIdentifier("trial", "a"),
     )
-    first = CMJForceMetricResult(
-        replace(first.observation, context=context), first.metric, first.source_force, first.support
+    with pytest.raises(ValueError, match="exact source context"):
+        CMJForceMetricResult(
+            replace(first.observation, context=context),
+            first.metric,
+            first.source_force,
+            first.support,
+        )
+
+
+def test_res40_session_aggregation_accepts_independent_res65_trials() -> None:
+    template = _bilateral_inputs()[0].observation.context
+    context_a = replace(
+        template,
+        context_id=InstanceIdentifier("context", "res65-session-a"),
+        athlete_id=InstanceIdentifier("athlete", "res65-session-athlete"),
+        session_id=InstanceIdentifier("session", "res65-session"),
+        test_instance_id=InstanceIdentifier("test-instance", "res65-test"),
+        trial_id=InstanceIdentifier("trial", "a"),
     )
-    second_context = replace(context, trial_id=InstanceIdentifier("trial", "b"))
-    second = CMJForceMetricResult(
-        replace(second.observation, context=second_context),
-        second.metric,
-        second.source_force,
-        second.support,
+    context_b = replace(
+        context_a,
+        context_id=InstanceIdentifier("context", "res65-session-b"),
+        trial_id=InstanceIdentifier("trial", "b"),
     )
+    _, _, total_a, _, phases_a, _, _, _ = _bilateral_fixture(
+        context=context_a,
+        source_suffix="res65-session-a",
+    )
+    _, _, total_b, _, phases_b, _, _, _ = _bilateral_fixture(
+        context=context_b,
+        source_suffix="res65-session-b",
+    )
+    first = calculate_cmj_phase_force_metric(
+        total_a,
+        phases_a[1],
+        CMJForceMetric.BRAKING_TIME_MEAN_TOTAL_SUPPORTED_VERTICAL_FORCE,
+        output_observation_id=InstanceIdentifier("observation", "res65-session-a"),
+    )
+    second = calculate_cmj_phase_force_metric(
+        total_b,
+        phases_b[1],
+        CMJForceMetric.BRAKING_TIME_MEAN_TOTAL_SUPPORTED_VERTICAL_FORCE,
+        output_observation_id=InstanceIdentifier("observation", "res65-session-b"),
+    )
+    assert isinstance(first, CMJForceMetricResult)
+    assert isinstance(second, CMJForceMetricResult)
+    assert first.observation.context == context_a
+    assert second.observation.context == context_b
     candidate_set = DeclaredCandidateTrialSet(
         InstanceIdentifier("athlete", "res65-session-athlete"),
         InstanceIdentifier("session", "res65-session"),

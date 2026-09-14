@@ -332,6 +332,11 @@ class CMJForceMetricResult:
         total = _validated_total_force(self.source_force, None, "validate RES-65 force metric")
         if isinstance(total, RefusalResult):
             raise ValueError("force metric source is not a valid total supported force")
+        _require_exact_context(
+            self.observation.context,
+            total.observation.context,
+            "force metric output",
+        )
         _require_output_source_identity(self.observation, total.observation.identity)
         _validate_support_against_total(self.support, total)
         if self.support.phase_occurrence is not None:
@@ -519,6 +524,21 @@ class CMJPowerResult:
             raise ValueError("power source is not a valid total supported force")
         if not isinstance(self.source_velocity, SupportedSystemComVelocityResult):
             raise ValueError("power result requires a supported-system COM velocity result")
+        _require_exact_context(
+            self.observation.context,
+            total.observation.context,
+            "power output and force source",
+        )
+        _require_exact_context(
+            self.observation.context,
+            self.source_velocity.observation.context,
+            "power output and velocity source",
+        )
+        _require_exact_context(
+            self.observation.context,
+            self.phase_occurrence.source_context,
+            "power output and phase source",
+        )
         _require_output_source_identity(self.observation, self.source_velocity.observation.identity)
         binding = _validate_power_binding(total, self.source_velocity, self.phase_occurrence)
         if isinstance(binding, RefusalResult):
@@ -621,6 +641,11 @@ class CMJTakeoffVelocityResult:
             raise ValueError("takeoff velocity result requires a supported-system velocity result")
         if not isinstance(self.takeoff_event, CMJEventOccurrence):
             raise ValueError("takeoff velocity result requires a CMJ takeoff event")
+        _require_exact_context(
+            self.observation.context,
+            self.source_velocity.observation.context,
+            "takeoff velocity output",
+        )
         _require_output_source_identity(self.observation, self.source_velocity.observation.identity)
         binding = _validate_takeoff_velocity_binding(self.source_velocity, self.takeoff_event)
         if isinstance(binding, RefusalResult):
@@ -704,6 +729,11 @@ class CMJRSIModResult:
             self.takeoff_event, CMJEventOccurrence
         ):
             raise ValueError("RSI-mod result requires CMJ onset and takeoff events")
+        _require_exact_context(
+            self.observation.context,
+            self.jump_height.observation.context,
+            "RSI-mod output",
+        )
         _require_output_source_identity(self.observation, self.jump_height.observation.identity)
         binding = _validate_rsi_binding(
             self.jump_height, self.movement_onset, self.takeoff_event, self.numerator
@@ -816,6 +846,26 @@ class CMJForceAsymmetryResult:
         if isinstance(resolved, RefusalResult):
             raise ValueError("asymmetry bilateral source binding is invalid")
         total = resolved
+        _require_exact_context(
+            self.observation.context,
+            self.left_source.observation.context,
+            "asymmetry output and left source",
+        )
+        _require_exact_context(
+            self.observation.context,
+            self.right_source.observation.context,
+            "asymmetry output and right source",
+        )
+        _require_exact_context(
+            self.observation.context,
+            total.observation.context,
+            "asymmetry output and total-force source",
+        )
+        _require_exact_context(
+            self.observation.context,
+            self.phase_occurrence.source_context,
+            "asymmetry output and phase source",
+        )
         _require_output_source_identity(self.observation, total.observation.identity)
         source_refusal = _validate_phase_source(total, self.phase_occurrence)
         if source_refusal is not None:
@@ -1197,6 +1247,7 @@ def _processing_method_parameters_key(
         "_artifact_id",
         "_acquisition_id",
         "_identity_id",
+        "_series_id",
         "_event_id",
         "_event_ids",
         "_occurrence_id",
@@ -1433,6 +1484,221 @@ def _validate_support_against_total(
         raise ValueError("metric support is not attached to the exact total-force source")
 
 
+_MISSING_PHASE_PARAMETER = object()
+
+
+def _processing_run_parameter(run: ProcessingRun, key: str) -> object:
+    values = tuple(entry.value for entry in run.parameters if entry.key == key)
+    return values[0] if len(values) == 1 else _MISSING_PHASE_PARAMETER
+
+
+def _phase_authority_refusal(
+    phase: CMJPhaseOccurrence,
+    missing_information: tuple[str, ...],
+) -> RefusalResult:
+    return _metric_refusal(
+        "validate RES-39 phase execution authority for RES-65",
+        (RefusalReasonCode.PROCESSING_LINEAGE_UNRESOLVED,),
+        missing_information,
+        (phase.source_observation_id, phase.source_velocity_observation_id),
+        refusal_class=RefusalClass.IDENTITY_UNRESOLVED,
+    )
+
+
+def _validate_res39_phase_authority(phase: CMJPhaseOccurrence) -> RefusalResult | None:
+    """Validate RES-39 fields against the runs that actually produced them.
+
+    RES-39 phase and boundary dataclasses intentionally remain historical
+    wire objects.  RES-65 validates the authority it consumes instead of
+    changing those objects or their serialized meaning.
+    """
+
+    if not isinstance(phase, CMJPhaseOccurrence):
+        return _metric_refusal(
+            "validate RES-39 phase execution authority for RES-65",
+            (RefusalReasonCode.PHASE_SOURCE_MISMATCH,),
+            ("CMJPhaseOccurrence",),
+            refusal_class=RefusalClass.IDENTITY_UNRESOLVED,
+        )
+
+    for boundary in (phase.start_boundary, phase.end_boundary):
+        matching_runs = tuple(
+            run
+            for run in boundary.provenance.processing_runs
+            if run.output_entity_id == boundary.boundary_id
+        )
+        if len(matching_runs) != 1:
+            return _phase_authority_refusal(
+                phase,
+                (f"exactly one RES-39 processing run producing {boundary.boundary_id.qualified}",),
+            )
+        run = matching_runs[0]
+        if run.method != boundary.method:
+            return _phase_authority_refusal(
+                phase,
+                (
+                    f"RES-39 boundary run method equal to {boundary.boundary_id.qualified}"
+                    " boundary.method",
+                ),
+            )
+        if boundary.source_artifact_id not in run.source_artifact_ids:
+            return _phase_authority_refusal(
+                phase,
+                (f"RES-39 boundary run source artifact for {boundary.boundary_id.qualified}",),
+            )
+        expected_parameters = {
+            "phase_system": boundary.phase_system.stable_id,
+            "boundary_kind": boundary.kind.value,
+            "boundary_method": boundary.method.stable_id,
+            "search_start_index": boundary.search_start_index,
+            "search_end_index": boundary.search_end_index,
+            "selected_sample_index": boundary.sample_index,
+            "tie_policy": boundary.tie_policy,
+            "velocity_threshold_policy": boundary.velocity_threshold_policy,
+            "interpolation_policy": boundary.interpolation_policy,
+            "source_velocity_observation_id": boundary.source_velocity_observation_id.qualified,
+            "source_velocity_series_id": boundary.source_velocity_series_id.qualified,
+            "source_timebase": canonical_json(boundary.source_timebase),
+            "source_system_contract": canonical_json(phase.source_system_contract),
+            "source_event_id": (
+                boundary.source_event_id.qualified if boundary.source_event_id is not None else None
+            ),
+            "source_event_definition": (
+                boundary.source_event_definition.stable_id
+                if boundary.source_event_definition is not None
+                else None
+            ),
+            "source_event_method": (
+                boundary.source_event_method.stable_id
+                if boundary.source_event_method is not None
+                else None
+            ),
+            "source_event_parameters": boundary.source_event_parameters,
+            "source_event_effective_threshold_n": boundary.source_event_effective_threshold_n,
+        }
+        for key, expected in expected_parameters.items():
+            if _processing_run_parameter(run, key) != expected:
+                return _phase_authority_refusal(
+                    phase,
+                    (
+                        f"RES-39 boundary {boundary.boundary_id.qualified} field "
+                        f"{key} equal to its producing run",
+                    ),
+                )
+
+        if (
+            boundary.phase_system != phase.phase_system
+            or boundary.source_observation_id != phase.source_observation_id
+            or boundary.source_signal_id != phase.source_signal_id
+            or boundary.source_artifact_id != phase.source_artifact_id
+            or boundary.source_acquisition_id != phase.source_acquisition_id
+            or boundary.source_measurement_identity_id
+            != phase.source_measurement_identity.identity_id
+            or boundary.source_velocity_observation_id != phase.source_velocity_observation_id
+            or boundary.source_velocity_series_id != phase.source_velocity_series_id
+        ):
+            return _phase_authority_refusal(
+                phase,
+                ("phase occurrence and both RES-39 boundary source identities",),
+            )
+
+    matching_phase_runs = tuple(
+        run
+        for run in phase.provenance.processing_runs
+        if run.output_entity_id == phase.occurrence_id
+    )
+    if len(matching_phase_runs) != 1:
+        return _phase_authority_refusal(
+            phase,
+            ("exactly one RES-39 processing run producing the phase occurrence",),
+        )
+    phase_run = matching_phase_runs[0]
+    if phase_run.method != phase.phase_system:
+        return _phase_authority_refusal(
+            phase,
+            ("RES-39 phase-occurrence run method equal to phase.phase_system",),
+        )
+
+    expected_phase_parameters = {
+        "phase_system": phase.phase_system.stable_id,
+        "phase_definition": phase.phase_definition.stable_id,
+        "source_observation_id": phase.source_observation_id.qualified,
+        "source_signal_id": phase.source_signal_id.qualified,
+        "source_velocity_observation_id": phase.source_velocity_observation_id.qualified,
+        "source_velocity_series_id": phase.source_velocity_series_id.qualified,
+        "start_boundary_id": phase.start_boundary.boundary_id.qualified,
+        "end_boundary_id": phase.end_boundary.boundary_id.qualified,
+        "boundary_convention": phase.boundary_convention.stable_id,
+        "sample_support": canonical_json(phase.sample_support),
+        "interpolation_policy": phase.interpolation_policy,
+        "velocity_threshold_policy": phase.velocity_threshold_policy,
+        "source_velocity_initial_condition": canonical_json(
+            phase.source_velocity_initial_condition
+        ),
+        "source_velocity_integration_interval": canonical_json(
+            phase.source_velocity_integration_interval
+        ),
+        "source_velocity_source_signal_ids": canonical_json(
+            phase.source_velocity_source_signal_ids
+        ),
+        "source_velocity_source_observation_ids": canonical_json(
+            phase.source_velocity_source_observation_ids
+        ),
+        "source_velocity_source_measurement_identity_ids": canonical_json(
+            phase.source_velocity_source_measurement_identity_ids
+        ),
+        "source_velocity_version": canonical_json(phase.source_velocity_version),
+        "source_system_contract": canonical_json(phase.source_system_contract),
+    }
+    for key, expected in expected_phase_parameters.items():
+        if _processing_run_parameter(phase_run, key) != expected:
+            return _phase_authority_refusal(
+                phase,
+                (f"RES-39 phase-occurrence field {key} equal to its producing run",),
+            )
+
+    expected_source_event_ids = tuple(
+        boundary.source_event_id
+        for boundary in (phase.start_boundary, phase.end_boundary)
+        if boundary.source_event_id is not None
+    )
+    if phase.source_event_ids != expected_source_event_ids:
+        return _phase_authority_refusal(
+            phase,
+            ("phase source_event_ids equal to its boundary event authority",),
+        )
+    if phase.source_artifact_id not in tuple(
+        artifact.artifact_id for artifact in phase.provenance.source_artifacts
+    ) or phase.source_acquisition_id not in tuple(
+        acquisition.acquisition_id for acquisition in phase.provenance.acquisitions
+    ):
+        return _phase_authority_refusal(
+            phase,
+            ("phase source artifact and acquisition preserved in provenance",),
+        )
+    if (
+        phase.start_time_s != phase.start_boundary.boundary_time_s
+        or phase.end_time_s != phase.end_boundary.boundary_time_s
+        or phase.start_boundary.sample_index != phase.sample_support.start_index
+        or phase.end_boundary.sample_index != phase.sample_support.end_index
+    ):
+        return _phase_authority_refusal(
+            phase,
+            ("phase times and sample support equal to current boundary authority",),
+        )
+    if (
+        phase.source_velocity_operation
+        != phase.source_velocity_measurement_identity.processing.registered_operation
+        or phase.source_velocity_integration_method
+        != phase.source_velocity_integration_interval.integration_method
+    ):
+        return _phase_authority_refusal(
+            phase,
+            ("phase velocity operation and integration method preserve source authority",),
+        )
+    return None
+
+
 def _validate_phase_source(
     total: TotalSupportedForceResult,
     phase: CMJPhaseOccurrence,
@@ -1444,6 +1710,9 @@ def _validate_phase_source(
             ("CMJPhaseOccurrence",),
             (total.observation.observation_id,),
         )
+    authority_refusal = _validate_res39_phase_authority(phase)
+    if authority_refusal is not None:
+        return authority_refusal
     identity = total.observation.identity
     if not isinstance(identity, CMJMeasurementIdentity):
         return _metric_refusal(
@@ -1452,7 +1721,8 @@ def _validate_phase_source(
             ("CMJ total-force measurement identity",),
         )
     if (
-        phase.source_observation_id != total.observation.observation_id
+        phase.source_context != total.observation.context
+        or phase.source_observation_id != total.observation.observation_id
         or phase.source_signal_id != total.signal.signal_id
         or phase.source_artifact_id != total.source_artifact.artifact_id
         or phase.source_acquisition_id != total.acquisition.acquisition_id
@@ -1463,7 +1733,10 @@ def _validate_phase_source(
         return _metric_refusal(
             "validate RES-65 phase source",
             (RefusalReasonCode.PHASE_SOURCE_MISMATCH,),
-            ("phase occurrence from the exact total supported-force source",),
+            (
+                "phase occurrence from the exact total supported-force source, "
+                "including its complete observation context",
+            ),
             (total.observation.observation_id, phase.source_velocity_observation_id),
             refusal_class=RefusalClass.IDENTITY_UNRESOLVED,
         )
@@ -2037,6 +2310,7 @@ def _validate_power_binding(
         or identity.acquisition != velocity_identity.acquisition
         or identity.acquisition.processing_state != velocity_identity.acquisition.processing_state
         or total.observation.context != velocity.observation.context
+        or phase.source_context != total.observation.context
         or identity.semantic.protocol_identity != velocity_identity.semantic.protocol_identity
         or identity.processing.filtering != velocity_identity.processing.filtering
         or total.signal.timebase != velocity.series.timebase
@@ -2588,6 +2862,30 @@ def _validate_rsi_binding(
             observation_ids,
             refusal_class=RefusalClass.IDENTITY_UNRESOLVED,
         )
+    jump_parameters = jump_height.parameters
+    if (
+        jump_parameters.source_observation_id != takeoff.source_observation_id
+        or jump_parameters.source_signal_id != takeoff.source_signal_id
+        or jump_parameters.source_artifact_id != takeoff.source_artifact_id
+        or jump_parameters.source_acquisition_id != takeoff.source_acquisition_id
+        or jump_parameters.source_measurement_identity_id
+        != takeoff.source_measurement_identity.identity_id
+        or jump_parameters.source_timebase != takeoff.source_timebase
+        or not _provenance_has_source_entity(
+            jump_height.observation.provenance,
+            takeoff.occurrence_id,
+        )
+    ):
+        return _metric_refusal(
+            "calculate CMJ RSI-modified ratio",
+            (RefusalReasonCode.EVENT_SOURCE_MISMATCH,),
+            (
+                "movement-onset and takeoff events from the exact source authority "
+                "used by the jump-height result",
+            ),
+            observation_ids,
+            refusal_class=RefusalClass.IDENTITY_UNRESOLVED,
+        )
     duration = takeoff.event_time_s - movement_onset.event_time_s
     if duration <= 0 or not math.isfinite(duration):
         return _metric_refusal(
@@ -2762,6 +3060,14 @@ def _validate_asymmetry_sources(
     right: CMJForceInput,
     claim: str,
 ) -> RefusalResult | None:
+    if left.observation.context != right.observation.context:
+        return _metric_refusal(
+            claim,
+            (RefusalReasonCode.BILATERAL_INPUTS_INCOMPATIBLE,),
+            ("exactly equal left/right athlete, session, test-instance, trial, and context",),
+            (left.observation.observation_id, right.observation.observation_id),
+            refusal_class=RefusalClass.IDENTITY_UNRESOLVED,
+        )
     left_acquisition = left.identity.acquisition
     right_acquisition = right.identity.acquisition
     material_equal = (
@@ -3120,6 +3426,15 @@ def _require_output_source_identity(
         or identity.acquisition != source_identity.acquisition
     ):
         raise ValueError("RES-65 output identity does not preserve its source acquisition")
+
+
+def _require_exact_context(
+    output_context: ObservationContext,
+    source_context: ObservationContext,
+    label: str,
+) -> None:
+    if output_context != source_context:
+        raise ValueError(f"{label} observation context is not the exact source context")
 
 
 def _require_result_value(observation: ScientificMeasurementObservation, expected: float) -> None:
