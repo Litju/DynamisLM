@@ -45,6 +45,16 @@ from dynamislm.measurement.cmj.mechanics import (
     SupportedSystemComVelocityResult,
     compare_cmj_mechanics,
 )
+from dynamislm.measurement.cmj.metrics import (
+    CMJCompletedMetricResult,
+    CMJForceAsymmetryResult,
+    CMJForceMetricResult,
+    CMJPowerResult,
+    CMJRSIModResult,
+    CMJTakeoffVelocityResult,
+    cmj_metric_ranking_key,
+    compare_cmj_metric_results,
+)
 from dynamislm.measurement.cmj.phases import (
     CMJPhaseMetricResult,
     _phase_metric_method_key,
@@ -170,6 +180,7 @@ _RANKING_METHOD_KEY_FIELDS = {
         }
     ),
     "OBSERVATION": frozenset({"kind", "identity"}),
+    "CMJ_METRIC": frozenset({"kind", "metric", "method", "identity"}),
 }
 _REGISTERED_JUMP_HEIGHT_METHODS = (
     CMJ_FLIGHT_TIME_JUMP_HEIGHT_METHOD_V1,
@@ -707,6 +718,7 @@ type CMJTrialMetricValue = (
     | SupportedSystemComAccelerationResult
     | SupportedSystemComVelocityResult
     | SupportedSystemComRelativeDisplacementResult
+    | CMJCompletedMetricResult
 )
 type TrialMetricInputs = (
     Sequence[CMJTrialMetricValue] | Mapping[InstanceIdentifier, CMJTrialMetricValue]
@@ -2452,6 +2464,8 @@ def _compare_trial_values(
         return compare_cmj_jump_height_estimates(left, right, claim=claim, request_id=request_id)
     if isinstance(left, CMJPhaseMetricResult) and isinstance(right, CMJPhaseMetricResult):
         return compare_cmj_phase_metrics(left, right, claim=claim, request_id=request_id)
+    if isinstance(left, _RES65_TYPES) and isinstance(right, _RES65_TYPES):
+        return compare_cmj_metric_results(left, right, claim=claim, request_id=request_id)
     if isinstance(left, _MECHANICS_TYPES) and isinstance(right, _MECHANICS_TYPES):
         return compare_cmj_mechanics(left, right, claim=claim, request_id=request_id)
     if isinstance(left, _DERIVED_TYPES) and isinstance(right, _DERIVED_TYPES):
@@ -2485,6 +2499,13 @@ _DERIVED_TYPES = (
     SystemWeightResult,
     PhysicalSystemMassResult,
     StandardGravityMassEquivalentResult,
+)
+_RES65_TYPES = (
+    CMJForceMetricResult,
+    CMJPowerResult,
+    CMJTakeoffVelocityResult,
+    CMJRSIModResult,
+    CMJForceAsymmetryResult,
 )
 
 
@@ -2778,6 +2799,8 @@ def _metric_kind(value: CMJTrialMetricValue) -> str:
         return "JUMP_HEIGHT"
     if isinstance(value, CMJPhaseMetricResult):
         return "PHASE_METRIC"
+    if isinstance(value, _RES65_TYPES):
+        return "CMJ_METRIC"
     if isinstance(value, _MECHANICS_TYPES):
         return "MECHANICS"
     if isinstance(value, _DERIVED_TYPES):
@@ -2839,6 +2862,8 @@ def _source_method_key(value: CMJTrialMetricValue) -> str:
                 "landing_event": _event_method_key(value.landing_event),
             }
         )
+    if isinstance(value, _RES65_TYPES):
+        return canonical_json(cmj_metric_ranking_key(value))
     observation = _observation(value)
     return canonical_json(
         {
@@ -2855,6 +2880,8 @@ def _ranking_method_key(value: CMJTrialMetricValue) -> str:
         return canonical_json(_jump_height_method_key(value))
     if isinstance(value, CMJPhaseMetricResult):
         return _source_method_key(value)
+    if isinstance(value, _RES65_TYPES):
+        return canonical_json(cmj_metric_ranking_key(value))
     if isinstance(value, _MECHANICS_TYPES):
         return canonical_json(_mechanics_method_key(value))
     observation = _observation(value)
