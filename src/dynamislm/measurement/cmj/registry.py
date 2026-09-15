@@ -511,6 +511,165 @@ CMJ_TOTAL_SUPPORTED_VERTICAL_FORCE_MEASURAND = _reference(
 CMJ_TOTAL_SUPPORTED_VERTICAL_FORCE_METRIC = _reference(
     "metric", "cmj-total-supported-vertical-force", "Total supported vertical force"
 )
+
+# RES-65 additive metric-completion identities. Historical RES-34--RES-50
+# references above are intentionally not reused as aliases for these methods.
+CMJ_RES65_METRIC_COMPARABILITY_RULE = _reference(
+    "comparability-rule",
+    "cmj-res65-metric-completion-v1",
+    "CMJ RES-65 metric-completion comparability",
+)
+CMJ_RES65_SAMPLE_SUPPORT_CONVENTION = _reference(
+    "sample-convention",
+    "cmj-res65-inclusive-sample-support-v1",
+    "CMJ RES-65 inclusive sample support without interpolation",
+)
+CMJ_SAMPLE_PEAK_TOTAL_SUPPORTED_VERTICAL_FORCE_OPERATION = _reference(
+    "registered-operation",
+    "cmj-sample-peak-total-supported-vertical-force-v1",
+    "CMJ sampled peak total supported vertical force",
+)
+CMJ_TIME_WEIGHTED_MEAN_TOTAL_SUPPORTED_VERTICAL_FORCE_OPERATION = _reference(
+    "registered-operation",
+    "cmj-time-weighted-mean-total-supported-vertical-force-v1",
+    "CMJ time-weighted mean total supported vertical force",
+)
+CMJ_WHOLE_MOVEMENT_PEAK_TOTAL_SUPPORTED_VERTICAL_FORCE_METRIC = _reference(
+    "metric",
+    "cmj-whole-movement-peak-total-supported-vertical-force",
+    "Whole-movement sampled peak total supported vertical force",
+)
+CMJ_WHOLE_MOVEMENT_TIME_MEAN_TOTAL_SUPPORTED_VERTICAL_FORCE_METRIC = _reference(
+    "metric",
+    "cmj-whole-movement-time-mean-total-supported-vertical-force",
+    "Whole-movement time-weighted mean total supported vertical force",
+)
+CMJ_BRAKING_PEAK_TOTAL_SUPPORTED_VERTICAL_FORCE_METRIC = _reference(
+    "metric",
+    "cmj-braking-peak-total-supported-vertical-force",
+    "Braking sampled peak total supported vertical force",
+)
+CMJ_BRAKING_TIME_MEAN_TOTAL_SUPPORTED_VERTICAL_FORCE_METRIC = _reference(
+    "metric",
+    "cmj-braking-time-mean-total-supported-vertical-force",
+    "Braking time-weighted mean total supported vertical force",
+)
+CMJ_PROPULSION_PEAK_TOTAL_SUPPORTED_VERTICAL_FORCE_METRIC = _reference(
+    "metric",
+    "cmj-propulsion-peak-total-supported-vertical-force",
+    "Propulsion sampled peak total supported vertical force",
+)
+CMJ_PROPULSION_TIME_MEAN_TOTAL_SUPPORTED_VERTICAL_FORCE_METRIC = _reference(
+    "metric",
+    "cmj-propulsion-time-mean-total-supported-vertical-force",
+    "Propulsion time-weighted mean total supported vertical force",
+)
+CMJ_SUPPORTED_SYSTEM_EXTERNAL_MECHANICAL_POWER_MEASURAND = _reference(
+    "measurand",
+    "cmj-supported-system-external-mechanical-power",
+    "CMJ supported-system external mechanical power",
+)
+CMJ_POWER_SERIES_SCHEMA = _reference(
+    "schema",
+    "cmj-supported-system-external-mechanical-power-series-v1",
+    "CMJ supported-system external mechanical power series",
+)
+CMJ_POWER_SERIES_OPERATION = _reference(
+    "registered-operation",
+    "cmj-total-supported-force-times-supported-system-com-velocity-v1",
+    "CMJ total supported force times supported-system COM velocity",
+)
+CMJ_POWER_SAMPLED_SIGNED_EXTREMUM_OPERATION = _reference(
+    "registered-operation",
+    "cmj-sampled-signed-power-extremum-v1",
+    "CMJ sampled signed power extremum",
+)
+CMJ_POWER_TIME_WEIGHTED_MEAN_OPERATION = _reference(
+    "registered-operation",
+    "cmj-time-weighted-signed-power-mean-v1",
+    "CMJ time-weighted signed power mean",
+)
+CMJ_BRAKING_PEAK_NEGATIVE_POWER_METRIC = _reference(
+    "metric",
+    "cmj-braking-peak-negative-supported-system-external-mechanical-power",
+    "Braking peak negative supported-system external mechanical power",
+)
+CMJ_BRAKING_MEAN_SIGNED_POWER_METRIC = _reference(
+    "metric",
+    "cmj-braking-mean-signed-supported-system-external-mechanical-power",
+    "Braking mean signed supported-system external mechanical power",
+)
+CMJ_PROPULSION_PEAK_POSITIVE_POWER_METRIC = _reference(
+    "metric",
+    "cmj-propulsion-peak-positive-supported-system-external-mechanical-power",
+    "Propulsion peak positive supported-system external mechanical power",
+)
+CMJ_PROPULSION_MEAN_SIGNED_POWER_METRIC = _reference(
+    "metric",
+    "cmj-propulsion-mean-signed-supported-system-external-mechanical-power",
+    "Propulsion mean signed supported-system external mechanical power",
+)
+CMJ_TAKEOFF_VELOCITY_SCALAR_SCHEMA = _reference(
+    "schema", "cmj-takeoff-velocity-scalar-v1", "CMJ takeoff velocity scalar"
+)
+CMJ_TAKEOFF_VELOCITY_SCALAR_MEASURAND = _reference(
+    "measurand", "cmj-takeoff-velocity-scalar", "CMJ supported-system takeoff velocity"
+)
+CMJ_TAKEOFF_VELOCITY_SCALAR_METRIC = _reference(
+    "metric", "cmj-takeoff-velocity-scalar", "Takeoff velocity scalar"
+)
+CMJ_TAKEOFF_VELOCITY_SCALAR_PROJECTION_OPERATION = _reference(
+    "registered-operation",
+    "cmj-takeoff-velocity-scalar-projection-v1",
+    "CMJ exact takeoff velocity scalar projection",
+)
+CMJ_RSI_MOD_SCHEMA = _reference("schema", "cmj-rsi-mod-v1", "CMJ RSI-modified ratio")
+CMJ_RSI_MOD_MEASURAND = _reference(
+    "measurand", "cmj-rsi-modified", "CMJ reactive strength index-modified ratio"
+)
+CMJ_RSI_MOD_FLIGHT_TIME_METRIC = _reference(
+    "metric",
+    "cmj-rsi-modified-flight-time-jump-height",
+    "RSI-modified from flight-time jump height",
+)
+CMJ_RSI_MOD_TAKEOFF_VELOCITY_METRIC = _reference(
+    "metric",
+    "cmj-rsi-modified-takeoff-velocity-jump-height",
+    "RSI-modified from takeoff-velocity jump height",
+)
+CMJ_RSI_MOD_FLIGHT_TIME_OPERATION = _reference(
+    "registered-operation",
+    "cmj-rsi-modified-flight-time-jump-height-over-time-to-takeoff-v1",
+    "CMJ RSI-modified from flight-time jump height",
+)
+CMJ_RSI_MOD_TAKEOFF_VELOCITY_OPERATION = _reference(
+    "registered-operation",
+    "cmj-rsi-modified-takeoff-velocity-jump-height-over-time-to-takeoff-v1",
+    "CMJ RSI-modified from takeoff-velocity jump height",
+)
+CMJ_FORCE_ASYMMETRY_SCHEMA = _reference(
+    "schema", "cmj-left-right-force-asymmetry-v1", "CMJ left/right force asymmetry"
+)
+CMJ_FORCE_ASYMMETRY_MEASURAND = _reference(
+    "measurand", "cmj-left-right-force-asymmetry", "CMJ left/right force asymmetry"
+)
+CMJ_LEFT_RIGHT_FORCE_ASYMMETRY_OPERATION = _reference(
+    "registered-operation",
+    "cmj-left-right-force-asymmetry-right-minus-left-over-left-v1",
+    "CMJ right-minus-left-over-left force asymmetry",
+)
+CMJ_BRAKING_PEAK_FORCE_ASYMMETRY_METRIC = _reference(
+    "metric", "cmj-braking-peak-force-asymmetry", "Braking peak-force asymmetry"
+)
+CMJ_BRAKING_MEAN_FORCE_ASYMMETRY_METRIC = _reference(
+    "metric", "cmj-braking-time-mean-force-asymmetry", "Braking mean-force asymmetry"
+)
+CMJ_PROPULSION_PEAK_FORCE_ASYMMETRY_METRIC = _reference(
+    "metric", "cmj-propulsion-peak-force-asymmetry", "Propulsion peak-force asymmetry"
+)
+CMJ_PROPULSION_MEAN_FORCE_ASYMMETRY_METRIC = _reference(
+    "metric", "cmj-propulsion-time-mean-force-asymmetry", "Propulsion mean-force asymmetry"
+)
 CMJ_DYNAMISLM_PROCESSING_SYSTEM = _reference(
     "processing-system", "dynamislm-res35", "DynamisLM RES-35 processing system"
 )
@@ -757,6 +916,25 @@ RES40_DECISION_SESSION_COMPARABILITY = RegistryReference(
     display_label="RES-40 session comparability and capability matrix decision",
     reference_ids=("docs/decisions/RES40-DR-003-session-comparability-capability-matrix.md",),
 )
+RES65_DECISION_CMJ_METRIC_COMPLETION = RegistryReference(
+    identifier=ScientificIdentifier(
+        "dynamislm",
+        "decision-record",
+        "res65-cmj-football-metric-completion",
+        CMJ_REGISTRY_VERSION,
+    ),
+    display_label="RES-65 CMJ football metric-completion decision",
+    reference_ids=(
+        "docs/decisions/RES65-DR-001-cmj-football-metric-completion.md",
+        "https://doi.org/10.1007/s00421-016-3346-6",
+        "https://doi.org/10.1519/JSC.0000000000000311",
+        "https://doi.org/10.1080/14763141.2015.1123761",
+        "https://doi.org/10.5114/biolsport.2021.100363",
+        "https://doi.org/10.1016/j.gaitpost.2022.05.012",
+        "https://doi.org/10.1080/14763141.2018.1465116",
+        "https://doi.org/10.1519/JSC.0000000000004785",
+    ),
+)
 
 NEWTON = UnitReference(
     ScientificIdentifier("dynamislm", "unit", "newton", CMJ_REGISTRY_VERSION), "N"
@@ -792,6 +970,14 @@ NEWTON_SECOND = UnitReference(
 SECOND = UnitReference(
     ScientificIdentifier("dynamislm", "unit", "second", CMJ_REGISTRY_VERSION),
     "s",
+)
+WATT = UnitReference(
+    ScientificIdentifier("dynamislm", "unit", "watt", CMJ_REGISTRY_VERSION),
+    "W",
+)
+PERCENT = UnitReference(
+    ScientificIdentifier("dynamislm", "unit", "percent", CMJ_REGISTRY_VERSION),
+    "%",
 )
 # Short aliases retain readable operation names without creating additional
 # registry identities.
