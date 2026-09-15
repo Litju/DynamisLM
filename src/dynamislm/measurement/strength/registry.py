@@ -78,6 +78,16 @@ IMTP_BASELINE_OPERATION = _reference(
 IMTP_TRIAL_SUPPORT_METHOD = _reference(
     "selection-method", "imtp-explicit-trial-support-v1", "IMTP explicit trial support"
 )
+IMTP_ONSET_TO_SOURCE_END_SUPPORT_METHOD = _reference(
+    "selection-method",
+    "imtp-onset-to-qualified-source-end-v1",
+    "IMTP onset to qualified source-series end",
+)
+IMTP_TRIAL_QC_OPERATION = _reference(
+    "registered-operation",
+    "imtp-trial-qualification-v1",
+    "IMTP qualified-trial QC declaration",
+)
 IMTP_ONSET_EVENT_DEFINITION = _reference(
     "event-definition", "imtp-force-onset-v1", "IMTP force onset"
 )
@@ -230,6 +240,36 @@ VBT_PHASE_BOUNDARY_CONVENTION = _reference(
     "vbt-inclusive-sample-boundaries-v1",
     "VBT inclusive sample phase boundaries",
 )
+VBT_PHASE_SOURCE_PROCESSING_METHOD = _reference(
+    "phase-source-method",
+    "vbt-upstream-explicit-phase-source-v1",
+    "VBT upstream explicit phase source declaration",
+)
+VBT_PHASE_SOURCE_QUALIFICATION_RULE = _reference(
+    "phase-source-rule",
+    "vbt-qualified-upstream-phase-source-v1",
+    "VBT qualified upstream phase-source authority",
+)
+
+VBT_BENCH_PRESS_EXERCISE = _reference("exercise", "bench-press", "Bench press")
+VBT_SMITH_MACHINE_EQUIPMENT = _reference("equipment", "smith-machine", "Smith machine")
+VBT_BENCH_PRESS_PAUSED_VARIANT = _reference(
+    "exercise-variant", "bench-press-paused", "Paused bench press"
+)
+VBT_BENCH_PRESS_TOUCH_AND_GO_VARIANT = _reference(
+    "exercise-variant", "bench-press-touch-and-go", "Touch-and-go bench press"
+)
+VBT_BENCH_PRESS_FULL_ROM = _reference(
+    "range-of-motion",
+    "bench-press-chest-to-full-extension",
+    "Chest contact to full elbow extension",
+)
+VBT_BENCH_PRESS_TWO_SECOND_PAUSE = _reference(
+    "pause-semantics", "bench-press-two-second-chest-pause", "Two-second pause on the chest"
+)
+VBT_BENCH_PRESS_TOUCH_AND_GO_PAUSE = _reference(
+    "pause-semantics", "bench-press-touch-and-go", "Continuous touch-and-go chest contact"
+)
 
 VBT_VELOCITY_MEASURAND = _reference("measurand", "barbell-velocity", "Barbell velocity")
 VBT_VELOCITY_SERIES_METRIC = _reference(
@@ -287,6 +327,16 @@ VBT_MEASURED_1RM_SELECTION_RULE = _reference(
     "measured-1rm-explicit-successful-repetition-v1",
     "Measured 1RM explicit successful-repetition selection",
 )
+VBT_DIRECT_1RM_ASSESSMENT_OPERATION = _reference(
+    "registered-operation",
+    "direct-one-repetition-maximum-assessment-v1",
+    "Qualified direct one-repetition-maximum assessment source",
+)
+VBT_DIRECT_1RM_MAXIMALITY_DECLARATION = _reference(
+    "maximality-declaration",
+    "direct-one-repetition-maximum-source-declaration-v1",
+    "Qualified source declaration of maximal one-repetition load",
+)
 
 VBT_LOAD_VELOCITY_MODEL = _reference(
     "model", "individual-linear-load-velocity-v1", "Individual linear load-velocity model"
@@ -313,9 +363,15 @@ VBT_ESTIMATED_1RM_OPERATION = _reference(
 )
 VBT_SMITH_BENCH_GENERAL_TERMINAL_VELOCITY = _reference(
     "terminal-velocity-assumption",
-    "smith-bench-general-terminal-velocity-0-17-mps-v1",
-    "Smith-machine bench press general 1RM velocity 0.17 m/s",
+    "janicijevic-smith-bench-touch-and-go-terminal-velocity-0-17-mps-v1",
+    "Janicijevic Smith-machine touch-and-go bench terminal velocity 0.17 m/s",
 )
+VBT_SMITH_BENCH_PAUSED_TERMINAL_VELOCITY = _reference(
+    "terminal-velocity-assumption",
+    "janicijevic-smith-bench-paused-terminal-velocity-0-17-mps-v1",
+    "Janicijevic Smith-machine paused bench terminal velocity 0.17 m/s",
+)
+VBT_SMITH_BENCH_TOUCH_AND_GO_TERMINAL_VELOCITY = VBT_SMITH_BENCH_GENERAL_TERMINAL_VELOCITY
 
 VBT_VELOCITY_LOSS_MEASURAND = _reference(
     "measurand", "within-set-velocity-loss", "Within-set velocity loss"

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import datetime as datetime_module
 from dataclasses import replace
+from typing import Any
 
 import pytest
 
@@ -40,6 +41,7 @@ from dynamislm.measurement.strength.identity import (
     StrengthProcessingIdentity,
     StrengthProcessingState,
     StrengthProcessingStep,
+    StrengthProtocolAttribute,
     StrengthProtocolIdentity,
     StrengthSemanticIdentity,
     StrengthSensorModality,
@@ -60,6 +62,7 @@ from dynamislm.measurement.strength.imtp import (
     IMTPOnsetParameters,
     IMTPThresholdDirection,
     IMTPTrialMetricInput,
+    IMTPTrialQualificationStatus,
     IMTPTrialSelectionRule,
     aggregate_imtp_metric_results,
     build_imtp_baseline,
@@ -70,6 +73,7 @@ from dynamislm.measurement.strength.imtp import (
     create_imtp_force_input,
     detect_imtp_onset,
     normalize_imtp_force,
+    qualify_imtp_trial,
     source_artifact_for_imtp_series,
 )
 from dynamislm.measurement.strength.registry import (
@@ -90,12 +94,27 @@ from dynamislm.measurement.strength.registry import (
     NEWTON,
     NEWTON_PER_KILOGRAM,
     RES66_DECISION_STRENGTH_IMTP_VBT,
+    STRENGTH_MAXIMUM_STRENGTH_CONSTRUCT,
     STRENGTH_REGISTRY_VERSION,
     VBT_BAR_VELOCITY_CONSTRUCT,
+    VBT_BENCH_PRESS_EXERCISE,
+    VBT_BENCH_PRESS_FULL_ROM,
+    VBT_BENCH_PRESS_TOUCH_AND_GO_PAUSE,
+    VBT_BENCH_PRESS_TOUCH_AND_GO_VARIANT,
+    VBT_CONCENTRIC_PHASE_DEFINITION,
+    VBT_DIRECT_1RM_ASSESSMENT_OPERATION,
+    VBT_DIRECT_1RM_MAXIMALITY_DECLARATION,
+    VBT_EXPLICIT_CONCENTRIC_PHASE_METHOD,
     VBT_INPUT_OPERATION,
     VBT_MEAN_PROPULSIVE_VELOCITY_METRIC,
+    VBT_MEASURED_1RM_MEASURAND,
     VBT_MEASURED_1RM_METRIC,
+    VBT_MEASURED_1RM_SELECTION_RULE,
     VBT_PEAK_VELOCITY_METRIC,
+    VBT_PHASE_BOUNDARY_CONVENTION,
+    VBT_PHASE_SOURCE_PROCESSING_METHOD,
+    VBT_PHASE_SOURCE_QUALIFICATION_RULE,
+    VBT_SMITH_MACHINE_EQUIPMENT,
     VBT_VELOCITY_MEASURAND,
     VBT_VELOCITY_SERIES_METRIC,
 )
@@ -103,8 +122,13 @@ from dynamislm.measurement.strength.vbt import (
     VBT_SMITH_BENCH_GENERAL_TERMINAL_VELOCITY_017,
     EstimatedOneRepMax,
     MeasuredOneRepMax,
+    MeasuredOneRepMaxAssessmentEvidence,
+    TerminalVelocityAssumption,
     VBTConcentricPhase,
+    VBTConcentricPhaseSourceEvidence,
+    VBTMetric,
     VBTMetricResult,
+    VBTPhaseSourceAuthority,
     VBTSuccessfulRepetition,
     VBTVelocityLossReference,
     VBTVelocitySeries,
@@ -129,6 +153,7 @@ from dynamislm.provenance import (
     EvidenceReference,
     LineageEdge,
     LineageRelation,
+    ProcessingRun,
     Provenance,
     SourceArtifact,
 )
@@ -154,8 +179,104 @@ def _context(*, trial: str = "trial") -> ObservationContext:
     )
 
 
-def _phase(evidence: VBTVelocitySeriesEvidence) -> VBTConcentricPhase:
-    phase = qualify_vbt_concentric_phase(evidence, start_index=0, end_index=3)
+def _phase(
+    evidence: VBTVelocitySeriesEvidence,
+    *,
+    boundary_parameters: tuple[MetadataEntry, ...] = (),
+) -> VBTConcentricPhase:
+    source_phase_id = InstanceIdentifier("phase-occurrence", f"upstream-phase-{evidence.rep_index}")
+    start_index, end_index = 0, 3
+    source_parameters = (
+        MetadataEntry("phase_definition", VBT_CONCENTRIC_PHASE_DEFINITION.stable_id),
+        MetadataEntry("boundary_method", VBT_EXPLICIT_CONCENTRIC_PHASE_METHOD.stable_id),
+        MetadataEntry("boundary_convention", VBT_PHASE_BOUNDARY_CONVENTION.stable_id),
+        MetadataEntry("source_phase_id", source_phase_id.qualified),
+        MetadataEntry("source_observation_id", evidence.observation.observation_id.qualified),
+        MetadataEntry("source_series_id", evidence.series.series_id.qualified),
+        MetadataEntry("source_artifact_id", evidence.source_artifact.artifact_id.qualified),
+        MetadataEntry("source_acquisition_id", evidence.acquisition.acquisition_id.qualified),
+        MetadataEntry("source_measurement_identity_id", evidence.identity.identity_id.stable_id),
+        MetadataEntry("source_series_digest", evidence.source_series_digest),
+        MetadataEntry("source_timebase", canonical_json(evidence.series.timebase)),
+        MetadataEntry("source_sample_count", len(evidence.series.samples)),
+        MetadataEntry("set_id", evidence.set_id.qualified),
+        MetadataEntry("rep_id", evidence.rep_id.qualified),
+        MetadataEntry("rep_index", evidence.rep_index),
+        MetadataEntry("external_load", canonical_json(evidence.external_load)),
+        MetadataEntry("start_index", start_index),
+        MetadataEntry("end_index", end_index),
+        MetadataEntry("start_time_s", 0.0),
+        MetadataEntry("end_time_s", 0.06),
+        MetadataEntry("boundary_parameters", canonical_json(boundary_parameters)),
+        MetadataEntry("authority", VBTPhaseSourceAuthority.REGISTERED_UPSTREAM_PROCESSING.value),
+        MetadataEntry("upstream_processing_run_id", "processing-run:upstream-phase-run"),
+    )
+    source_run = ProcessingRun(
+        processing_run_id=InstanceIdentifier("processing-run", "upstream-phase-run"),
+        source_artifact_ids=(evidence.source_artifact.artifact_id,),
+        method=VBT_PHASE_SOURCE_PROCESSING_METHOD,
+        parameters=source_parameters,
+        software_version="synthetic-upstream-phase-1",
+        output_entity_id=source_phase_id,
+    )
+    source_edges = list(evidence.observation.provenance.lineage_edges)
+    for entity_id in (
+        evidence.observation.observation_id,
+        evidence.series.series_id,
+        evidence.set_id,
+        evidence.rep_id,
+    ):
+        source_edges.append(
+            LineageEdge(
+                entity_id.qualified,
+                source_run.processing_run_id.qualified,
+                LineageRelation.DERIVED_FROM,
+            )
+        )
+    source_edges.append(
+        LineageEdge(
+            VBT_PHASE_SOURCE_QUALIFICATION_RULE.stable_id,
+            source_run.processing_run_id.qualified,
+            LineageRelation.SUPPORTED_BY,
+        )
+    )
+    source_edges.append(
+        LineageEdge(
+            source_run.processing_run_id.qualified,
+            source_phase_id.qualified,
+            LineageRelation.PRODUCED,
+        )
+    )
+    source_provenance = replace(
+        evidence.observation.provenance,
+        processing_runs=(*evidence.observation.provenance.processing_runs, source_run),
+        lineage_edges=tuple(source_edges),
+    )
+    source = VBTConcentricPhaseSourceEvidence(
+        source_phase_id=source_phase_id,
+        source_context=evidence.observation.context,
+        source_observation_id=evidence.observation.observation_id,
+        source_series_id=evidence.series.series_id,
+        source_artifact_id=evidence.source_artifact.artifact_id,
+        source_acquisition_id=evidence.acquisition.acquisition_id,
+        source_measurement_identity_id=evidence.identity.identity_id,
+        source_series_digest=evidence.source_series_digest,
+        source_timebase=evidence.series.timebase,
+        source_sample_count=len(evidence.series.samples),
+        set_id=evidence.set_id,
+        rep_id=evidence.rep_id,
+        rep_index=evidence.rep_index,
+        external_load=evidence.external_load,
+        start_index=start_index,
+        end_index=end_index,
+        start_time_s=0.0,
+        end_time_s=0.06,
+        boundary_parameters=boundary_parameters,
+        authority=VBTPhaseSourceAuthority.REGISTERED_UPSTREAM_PROCESSING,
+        upstream_processing_run_id=source_run.processing_run_id,
+        provenance=source_provenance,
+    )
+    phase = qualify_vbt_concentric_phase(evidence, source)
     if not isinstance(phase, VBTConcentricPhase):
         raise AssertionError("synthetic phase fixture failed")
     return phase
@@ -306,14 +427,22 @@ def _vbt_evidence(
     protocol = StrengthProtocolIdentity(
         reference=BENCH_PRESS_VBT_PROTOCOL_V1,
         test_family=StrengthTestFamily.BENCH_PRESS_VBT,
-        exercise=_ref("exercise", "bench-press", "Bench press"),
-        equipment=_ref("equipment", "smith", "Smith machine"),
+        exercise=VBT_BENCH_PRESS_EXERCISE,
+        exercise_variant=VBT_BENCH_PRESS_TOUCH_AND_GO_VARIANT,
+        equipment=VBT_SMITH_MACHINE_EQUIPMENT,
         equipment_mode=StrengthEquipmentMode.SMITH_MACHINE,
+        range_of_motion=StrengthProtocolAttribute(
+            "range_of_motion", VBT_BENCH_PRESS_FULL_ROM.stable_id
+        ),
+        pause_semantics=StrengthProtocolAttribute(
+            "pause_semantics", VBT_BENCH_PRESS_TOUCH_AND_GO_PAUSE.stable_id
+        ),
         external_load_status=StrengthExternalLoadStatus.DEFINED,
         external_load=load,
         provider="synthetic fixture",
         sensor_modality=StrengthSensorModality.LINEAR_POSITION_TRANSDUCER,
         attachment_location="right distal bar",
+        sampling=SamplingCharacteristics(1000.0, ("bar",)),
     )
     timebase = StrengthTimebase(
         StrengthTimebaseKind.EXPLICIT,
@@ -337,7 +466,7 @@ def _vbt_evidence(
         raw_artifact=artifact_id,
         acquisition_instance_id=acquisition_id,
         sensor_channel="bar",
-        sampling=SamplingCharacteristics(100.0, ("bar",)),
+        sampling=SamplingCharacteristics(1000.0, ("bar",)),
         provider="synthetic fixture",
         sensor_modality=StrengthSensorModality.LINEAR_POSITION_TRANSDUCER,
         attachment_location="right distal bar",
@@ -403,6 +532,83 @@ def _vbt_metric(index: int, *, load: float = 50.0, velocity: float = 0.5) -> VBT
     result = calculate_mean_concentric_velocity(evidence)
     assert isinstance(result, VBTMetricResult)
     return result
+
+
+def _measured_assessment(
+    evidence: VBTVelocitySeriesEvidence,
+) -> MeasuredOneRepMaxAssessmentEvidence:
+    artifact_id = InstanceIdentifier("artifact", f"measured-1rm-artifact-{evidence.rep_index}")
+    artifact = SourceArtifact(
+        artifact_id=artifact_id,
+        content_digest=f"sha256:measured-1rm-{evidence.rep_index}",
+        media_type="application/vnd.synthetic.measured-1rm",
+        immutable=True,
+    )
+    acquisition = replace(evidence.acquisition, source_artifact_id=artifact_id)
+    identity = replace(
+        evidence.identity,
+        semantic=replace(
+            evidence.identity.semantic,
+            construct=STRENGTH_MAXIMUM_STRENGTH_CONSTRUCT,
+            measurand=VBT_MEASURED_1RM_MEASURAND,
+            metric_definition=VBT_MEASURED_1RM_METRIC,
+        ),
+        acquisition=replace(evidence.identity.acquisition, raw_artifact=artifact_id),
+        processing=replace(
+            evidence.identity.processing,
+            registered_operation=VBT_DIRECT_1RM_ASSESSMENT_OPERATION,
+            method_parameters=(),
+        ),
+        version=replace(
+            evidence.identity.version,
+            processing_method=VBT_DIRECT_1RM_ASSESSMENT_OPERATION,
+        ),
+    )
+    observation = replace(
+        evidence.observation,
+        identity=identity,
+        result=MeasurementResult(
+            result_id=InstanceIdentifier("result", f"measured-1rm-{evidence.rep_index}"),
+            value=ScalarValue(evidence.external_load.value),
+            unit=KILOGRAM,
+            classification=ScientificClassification(ValueOrigin.SOURCE_REPORTED, ()),
+            quality=MeasurementQuality(),
+            uncertainty=UncertaintyMetadata(),
+            status=ResultStatus.VALID,
+        ),
+        provenance=replace(
+            evidence.observation.provenance,
+            source_artifacts=(artifact,),
+            acquisitions=(acquisition,),
+            processing_runs=(),
+            lineage_edges=(
+                LineageEdge(
+                    artifact_id.qualified,
+                    acquisition.acquisition_id.qualified,
+                    LineageRelation.ACQUIRED_AS,
+                ),
+                LineageEdge(
+                    acquisition.acquisition_id.qualified,
+                    evidence.observation.observation_id.qualified,
+                    LineageRelation.PRODUCED,
+                ),
+            ),
+        ),
+    )
+    protocol_identity = evidence.identity.semantic.protocol_identity
+    assert protocol_identity is not None
+    return MeasuredOneRepMaxAssessmentEvidence(
+        source_observation=observation,
+        source_artifact=artifact,
+        source_acquisition=acquisition,
+        protocol_identity=protocol_identity,
+        assessment_method=VBT_DIRECT_1RM_ASSESSMENT_OPERATION,
+        maximality_declaration=VBT_DIRECT_1RM_MAXIMALITY_DECLARATION,
+        selection_rule=VBT_MEASURED_1RM_SELECTION_RULE,
+        attempt_id=InstanceIdentifier("attempt", f"direct-1rm-{evidence.rep_index}"),
+        measured_load=evidence.external_load,
+        source_value_origin=ValueOrigin.SOURCE_REPORTED,
+    )
 
 
 def test_imtp_analytic_metrics_and_roundtrip() -> None:
@@ -536,7 +742,9 @@ def test_imtp_trial_aggregation_requires_explicit_rule() -> None:
     force, _, onset, _ = _imtp_fixture()
     peak = calculate_imtp_peak_force(force, onset)
     assert isinstance(peak, IMTPMetricResult)
-    ineligible = IMTPTrialMetricInput(peak, False)
+    qualification = qualify_imtp_trial(peak, status=IMTPTrialQualificationStatus.EXCLUDED)
+    assert not isinstance(qualification, RefusalResult)
+    ineligible = IMTPTrialMetricInput(peak, qualification)
     selected = aggregate_imtp_metric_results((ineligible,), IMTPTrialSelectionRule.BEST_PEAK_FORCE)
     assert isinstance(selected, RefusalResult)
     assert "TRIAL_NOT_ELIGIBLE" in selected.reason_codes
@@ -549,8 +757,15 @@ def test_imtp_trial_aggregation_replays_explicit_eligible_trials() -> None:
     peak_b = calculate_imtp_peak_force(force_b, onset_b)
     assert isinstance(peak_a, IMTPMetricResult)
     assert isinstance(peak_b, IMTPMetricResult)
+    qualification_a = qualify_imtp_trial(peak_a)
+    qualification_b = qualify_imtp_trial(peak_b)
+    assert not isinstance(qualification_a, RefusalResult)
+    assert not isinstance(qualification_b, RefusalResult)
     aggregated = aggregate_imtp_metric_results(
-        (IMTPTrialMetricInput(peak_a, True), IMTPTrialMetricInput(peak_b, True)),
+        (
+            IMTPTrialMetricInput(peak_a, qualification_a),
+            IMTPTrialMetricInput(peak_b, qualification_b),
+        ),
         IMTPTrialSelectionRule.MEAN_ALL_ELIGIBLE,
     )
     assert not isinstance(aggregated, RefusalResult)
@@ -631,7 +846,9 @@ def test_vbt_phase_provenance_and_context_rebinding_are_blocked() -> None:
 def test_vbt_measured_and_estimated_1rm_origins_are_invariant() -> None:
     evidence = _vbt_evidence(1, load_kg=50.0, velocity=1.2)
     evidence = evidence.with_phase(_phase(evidence))
-    measured = build_measured_1rm(VBTSuccessfulRepetition(evidence, True))
+    refused_success = build_measured_1rm(VBTSuccessfulRepetition(evidence, True))
+    assert isinstance(refused_success, RefusalResult)
+    measured = build_measured_1rm(_measured_assessment(evidence))
     assert isinstance(measured, MeasuredOneRepMax)
     assert measured.value_kg == 50.0
     assert measured.observation.identity.semantic.metric_definition == VBT_MEASURED_1RM_METRIC
@@ -830,13 +1047,12 @@ def test_vbt_source_sampling_and_phase_support_tampering_are_blocked() -> None:
             evidence.source_series_digest,
         )
     phase = _phase(evidence)
-    bad_phase = replace(
-        phase,
-        start_index=1,
-        start_time_s=0.01,
-    )
-    with pytest.raises(ValueError, match="processing run"):
-        evidence.with_phase(bad_phase)
+    with pytest.raises(ValueError, match="processing run|upstream source evidence"):
+        replace(
+            phase,
+            start_index=1,
+            start_time_s=0.01,
+        )
 
 
 def test_vbt_metric_relabel_and_processing_provenance_mutation_are_blocked() -> None:
@@ -880,12 +1096,7 @@ def test_vbt_metric_relabel_and_processing_provenance_mutation_are_blocked() -> 
 def test_vbt_fixed_load_phase_support_and_cross_metric_mismatches_fail_closed() -> None:
     left = _vbt_metric(1, load=50.0)
     evidence = _vbt_evidence(2, load_kg=50.0)
-    phase = qualify_vbt_concentric_phase(
-        evidence,
-        start_index=0,
-        end_index=3,
-        boundary_parameters=(MetadataEntry("boundary_variant", "different"),),
-    )
+    phase = _phase(evidence, boundary_parameters=(MetadataEntry("boundary_variant", "different"),))
     assert isinstance(phase, VBTConcentricPhase)
     right = calculate_mean_concentric_velocity(evidence.with_phase(phase))
     assert isinstance(right, VBTMetricResult)
@@ -923,4 +1134,237 @@ def test_load_velocity_model_coefficients_and_estimated_origin_cannot_be_forged(
             replace(estimate.observation, result=forged_result),
             model,
             estimate.terminal_velocity_assumption,
+        )
+
+
+def test_vbt_raw_indices_cannot_create_phase_authority() -> None:
+    refused = qualify_vbt_concentric_phase(_vbt_evidence(1), start_index=0, end_index=3)
+    assert isinstance(refused, RefusalResult)
+    assert "PHASE_SOURCE_MISMATCH" in refused.reason_codes
+
+
+def test_vbt_qualified_phase_has_source_digest_and_trial_free_metrics_are_not_used() -> None:
+    evidence = _vbt_evidence(1)
+    phase = _phase(evidence)
+    assert phase.source_evidence is not None
+    assert phase.source_series_digest == evidence.source_series_digest
+    result = calculate_mean_concentric_velocity(evidence.with_phase(phase))
+    assert isinstance(result, VBTMetricResult)
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    ("start_index", "end_index", "boundary_method", "set_id", "rep_id", "load", "digest"),
+)
+def test_vbt_phase_source_identity_mutations_are_blocked(mutation: str) -> None:
+    evidence = _vbt_evidence(1)
+    phase = _phase(evidence)
+    if mutation == "start_index":
+        with pytest.raises(ValueError, match="upstream source evidence"):
+            replace(phase, start_index=1, start_time_s=0.01)
+        return
+    source = phase.source_evidence
+    assert source is not None
+    changes: dict[str, dict[str, Any]] = {
+        "end_index": {"end_index": 2, "end_time_s": 0.03},
+        "boundary_method": {"boundary_method": VBT_PHASE_SOURCE_PROCESSING_METHOD},
+        "set_id": {"set_id": InstanceIdentifier("set", "other-set")},
+        "rep_id": {"rep_id": InstanceIdentifier("rep", "other-rep")},
+        "load": {"external_load": replace(evidence.external_load, value=60.0)},
+        "digest": {"source_series_digest": "sha256:tampered"},
+    }
+    with pytest.raises(ValueError, match="parameters|source|provenance"):
+        replace(source, **changes[mutation])
+
+
+def test_measured_1rm_direct_assessment_binds_source_origin_and_maximality() -> None:
+    evidence = _vbt_evidence(1, load_kg=50.0, velocity=1.2)
+    assessment = _measured_assessment(evidence)
+    measured = build_measured_1rm(assessment)
+    assert isinstance(measured, MeasuredOneRepMax)
+    assert measured.observation.result.classification.value_origin is ValueOrigin.SOURCE_REPORTED
+    assert measured.assessment.attempt_id.instance_type == "attempt"
+
+
+def test_measured_1rm_qualification_tampering_is_blocked() -> None:
+    force, _, onset, _ = _imtp_fixture()
+    peak = calculate_imtp_peak_force(force, onset)
+    assert isinstance(peak, IMTPMetricResult)
+    qualification = qualify_imtp_trial(peak)
+    assert not isinstance(qualification, RefusalResult)
+    with pytest.raises(ValueError, match="decision fields"):
+        replace(qualification, reason_codes=("TAMPERED",))
+
+
+def test_imtp_peak_support_is_source_end_and_free_end_index_is_blocked() -> None:
+    force, _, onset, _ = _imtp_fixture()
+    peak = calculate_imtp_peak_force(force, onset)
+    assert isinstance(peak, IMTPMetricResult)
+    assert peak.support.end_index == len(force.series.samples) - 1
+    refused = calculate_imtp_peak_force(force, onset, trial_end_index=onset.sample_index)
+    assert isinstance(refused, RefusalResult)
+
+
+@pytest.mark.parametrize("dwell", (2, 5))
+def test_imtp_v1_rejects_alternate_dwell_rules(dwell: int) -> None:
+    with pytest.raises(ValueError, match="exactly one dwell"):
+        IMTPOnsetParameters(5.0, IMTPThresholdDirection.ABOVE_THRESHOLD, dwell, 4)
+
+
+def test_imtp_multisource_context_is_deterministic_and_trial_free() -> None:
+    force_a, _, onset_a, _ = _imtp_fixture("-ctx-a")
+    force_b, _, onset_b, _ = _imtp_fixture("-ctx-b")
+    peak_a = calculate_imtp_peak_force(force_a, onset_a)
+    peak_b = calculate_imtp_peak_force(force_b, onset_b)
+    assert isinstance(peak_a, IMTPMetricResult)
+    assert isinstance(peak_b, IMTPMetricResult)
+    qualification_a = qualify_imtp_trial(peak_a)
+    qualification_b = qualify_imtp_trial(peak_b)
+    assert not isinstance(qualification_a, RefusalResult)
+    assert not isinstance(qualification_b, RefusalResult)
+    aggregated = aggregate_imtp_metric_results(
+        (
+            IMTPTrialMetricInput(peak_a, qualification_a),
+            IMTPTrialMetricInput(peak_b, qualification_b),
+        ),
+        IMTPTrialSelectionRule.MEAN_ALL_ELIGIBLE,
+    )
+    assert not isinstance(aggregated, RefusalResult)
+    assert aggregated.observation.context.trial_id is None
+    assert aggregated.observation.context != peak_a.observation.context
+    assert aggregated.observation.context.context_id.value.startswith("res66-multisource:")
+
+
+def test_load_velocity_model_and_estimate_use_full_calibration_context() -> None:
+    points = tuple(
+        _vbt_metric(index, load=load, velocity=velocity)
+        for index, (load, velocity) in enumerate(((50.0, 1.2), (100.0, 0.7)), 1)
+    )
+    model = fit_load_velocity_model(points)
+    assert not isinstance(model, RefusalResult)
+    assert model.analysis_context.trial_id is None
+    assert model.analysis_context != points[0].observation.context
+    estimate = estimate_1rm_from_load_velocity_model(
+        model, VBT_SMITH_BENCH_GENERAL_TERMINAL_VELOCITY_017
+    )
+    assert isinstance(estimate, EstimatedOneRepMax)
+    assert estimate.observation.context == model.analysis_context
+
+
+@pytest.mark.parametrize(
+    "field",
+    ("filtering", "smoothing", "resampling", "software", "processing_state", "method_version"),
+)
+def test_load_velocity_processing_identity_mismatch_is_blocked(field: str) -> None:
+    first = _vbt_metric(1, load=50.0, velocity=1.2)
+    second_evidence = _vbt_evidence(
+        2,
+        load_kg=100.0,
+        velocity=0.7,
+        processing_state=(
+            StrengthProcessingState.DEVICE_PROCESSED
+            if field == "processing_state"
+            else StrengthProcessingState.PROVIDER_PROCESSED
+        ),
+    )
+    if field == "filtering":
+        filter_ref = _ref("filter", "low-pass", "Synthetic low-pass")
+        processing = replace(
+            second_evidence.identity.processing,
+            filtering=(filter_ref,),
+            filtering_status=StrengthProcessingComponentStatus.REGISTERED,
+        )
+        second_evidence = replace(
+            second_evidence,
+            identity=replace(second_evidence.identity, processing=processing),
+            observation=replace(
+                second_evidence.observation,
+                identity=replace(second_evidence.identity, processing=processing),
+            ),
+        )
+    elif field == "smoothing":
+        processing = replace(
+            second_evidence.identity.processing,
+            smoothing=StrengthProcessingStep(
+                StrengthProcessingComponentStatus.REGISTERED,
+                method=_ref("smoothing", "moving-average", "Synthetic smoothing"),
+            ),
+        )
+        second_evidence = replace(
+            second_evidence,
+            identity=replace(second_evidence.identity, processing=processing),
+            observation=replace(
+                second_evidence.observation,
+                identity=replace(second_evidence.identity, processing=processing),
+            ),
+        )
+    elif field == "resampling":
+        processing = replace(
+            second_evidence.identity.processing,
+            resampling=StrengthProcessingStep(
+                StrengthProcessingComponentStatus.REGISTERED,
+                method=_ref("resampling", "linear", "Synthetic resampling"),
+            ),
+        )
+        second_evidence = replace(
+            second_evidence,
+            identity=replace(second_evidence.identity, processing=processing),
+            observation=replace(
+                second_evidence.observation,
+                identity=replace(second_evidence.identity, processing=processing),
+            ),
+        )
+    elif field == "software":
+        version = replace(second_evidence.identity.version, software_version="other-software")
+        second_evidence = replace(
+            second_evidence,
+            identity=replace(second_evidence.identity, version=version),
+            observation=replace(
+                second_evidence.observation,
+                identity=replace(second_evidence.identity, version=version),
+            ),
+        )
+    elif field == "method_version":
+        version = replace(second_evidence.identity.version, method_registry_version="2.0.0")
+        second_evidence = replace(
+            second_evidence,
+            identity=replace(second_evidence.identity, version=version),
+            observation=replace(
+                second_evidence.observation,
+                identity=replace(second_evidence.identity, version=version),
+            ),
+        )
+    second = calculate_mean_concentric_velocity(second_evidence.with_phase(_phase(second_evidence)))
+    assert isinstance(second, VBTMetricResult)
+    refused = fit_load_velocity_model((first, second))
+    assert isinstance(refused, RefusalResult)
+
+
+def test_load_velocity_phase_boundary_method_mismatch_is_blocked() -> None:
+    evidence = _vbt_evidence(2, load_kg=100.0, velocity=0.7)
+    source = _phase(evidence).source_evidence
+    assert source is not None
+    with pytest.raises(ValueError, match="parameters|source|provenance"):
+        replace(source, boundary_method=VBT_PHASE_SOURCE_PROCESSING_METHOD)
+
+
+def test_terminal_velocity_generic_assumption_is_not_constructible() -> None:
+    with pytest.raises(ValueError, match="applicability"):
+        TerminalVelocityAssumption(
+            VBT_SMITH_BENCH_GENERAL_TERMINAL_VELOCITY_017.reference,
+            0.17,
+            "generic Smith-machine bench press",
+        )
+
+
+def test_terminal_velocity_wrong_metric_and_pause_contracts_are_blocked() -> None:
+    with pytest.raises(ValueError, match="velocity metric"):
+        replace(
+            VBT_SMITH_BENCH_GENERAL_TERMINAL_VELOCITY_017,
+            velocity_metric=VBTMetric.PEAK_VELOCITY,
+        )
+    with pytest.raises(ValueError, match="pause"):
+        replace(
+            VBT_SMITH_BENCH_GENERAL_TERMINAL_VELOCITY_017,
+            pause_semantics=StrengthProtocolAttribute("pause_semantics", "unresolved"),
         )

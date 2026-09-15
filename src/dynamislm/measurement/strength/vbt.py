@@ -20,6 +20,7 @@ from dynamislm.measurement.identity import (
     InstanceIdentifier,
     MetadataEntry,
     RegistryReference,
+    SamplingCharacteristics,
     ScientificIdentifier,
     SignConvention,
     UnitReference,
@@ -40,6 +41,7 @@ from dynamislm.measurement.result import (
     UncertaintyMetadata,
     UncertaintyStatus,
 )
+from dynamislm.measurement.strength.context import build_multisource_analysis_context
 from dynamislm.measurement.strength.identity import (
     StrengthAcquisitionIdentity,
     StrengthArtifactHashScope,
@@ -52,6 +54,7 @@ from dynamislm.measurement.strength.identity import (
     StrengthProcessingComponentStatus,
     StrengthProcessingIdentity,
     StrengthProcessingState,
+    StrengthProtocolAttribute,
     StrengthProtocolIdentity,
     StrengthSensorModality,
     StrengthSourceArtifact,
@@ -73,8 +76,16 @@ from dynamislm.measurement.strength.registry import (
     STRENGTH_MAXIMUM_STRENGTH_CONSTRUCT,
     STRENGTH_REGISTRY_VERSION,
     VBT_BAR_VELOCITY_CONSTRUCT,
+    VBT_BENCH_PRESS_EXERCISE,
+    VBT_BENCH_PRESS_FULL_ROM,
+    VBT_BENCH_PRESS_PAUSED_VARIANT,
+    VBT_BENCH_PRESS_TOUCH_AND_GO_PAUSE,
+    VBT_BENCH_PRESS_TOUCH_AND_GO_VARIANT,
+    VBT_BENCH_PRESS_TWO_SECOND_PAUSE,
     VBT_BEST_PREVIOUS_REPETITION_REFERENCE,
     VBT_CONCENTRIC_PHASE_DEFINITION,
+    VBT_DIRECT_1RM_ASSESSMENT_OPERATION,
+    VBT_DIRECT_1RM_MAXIMALITY_DECLARATION,
     VBT_ESTIMATED_1RM_MEASURAND,
     VBT_ESTIMATED_1RM_METRIC,
     VBT_ESTIMATED_1RM_OPERATION,
@@ -94,7 +105,12 @@ from dynamislm.measurement.strength.registry import (
     VBT_PEAK_VELOCITY_METRIC,
     VBT_PEAK_VELOCITY_OPERATION,
     VBT_PHASE_BOUNDARY_CONVENTION,
+    VBT_PHASE_SOURCE_PROCESSING_METHOD,
+    VBT_PHASE_SOURCE_QUALIFICATION_RULE,
     VBT_SMITH_BENCH_GENERAL_TERMINAL_VELOCITY,
+    VBT_SMITH_BENCH_PAUSED_TERMINAL_VELOCITY,
+    VBT_SMITH_BENCH_TOUCH_AND_GO_TERMINAL_VELOCITY,
+    VBT_SMITH_MACHINE_EQUIPMENT,
     VBT_SUCCESSFUL_REPETITION_CRITERION,
     VBT_VELOCITY_LOSS_MEASURAND,
     VBT_VELOCITY_LOSS_METRIC,
@@ -127,6 +143,10 @@ class VBTMetric(StrEnum):
 
 class VBTPhaseAuthorityStatus(StrEnum):
     QUALIFIED_UPSTREAM_EXPLICIT_PHASE_REQUIRED = "QUALIFIED_UPSTREAM_EXPLICIT_PHASE_REQUIRED"
+
+
+class VBTPhaseSourceAuthority(StrEnum):
+    REGISTERED_UPSTREAM_PROCESSING = "REGISTERED_UPSTREAM_PROCESSING"
 
 
 class VBTVelocityLossReference(StrEnum):
@@ -238,16 +258,17 @@ class VBTVelocitySeries:
 
 @register_serializable_type
 @dataclass(frozen=True, slots=True)
-class VBTConcentricPhase:
-    """Qualified upstream phase support; no phase is inferred from a scalar."""
+class VBTConcentricPhaseSourceEvidence:
+    """Upstream declaration that gives phase boundaries scientific authority."""
 
-    phase_id: InstanceIdentifier
+    source_phase_id: InstanceIdentifier
     source_context: ObservationContext
     source_observation_id: InstanceIdentifier
     source_series_id: InstanceIdentifier
     source_artifact_id: InstanceIdentifier
     source_acquisition_id: InstanceIdentifier
     source_measurement_identity_id: ScientificIdentifier
+    source_series_digest: str
     source_timebase: StrengthTimebase
     source_sample_count: int
     set_id: InstanceIdentifier
@@ -262,10 +283,115 @@ class VBTConcentricPhase:
     boundary_method: RegistryReference = VBT_EXPLICIT_CONCENTRIC_PHASE_METHOD
     boundary_convention: RegistryReference = VBT_PHASE_BOUNDARY_CONVENTION
     boundary_parameters: tuple[MetadataEntry, ...] = ()
+    authority: VBTPhaseSourceAuthority = VBTPhaseSourceAuthority.REGISTERED_UPSTREAM_PROCESSING
+    upstream_processing_run_id: InstanceIdentifier | None = None
+    provenance: Provenance | None = None
+
+    def __post_init__(self) -> None:
+        _require_instance(self.source_context, ObservationContext, "source_context")
+        if self.source_phase_id.instance_type != "phase-occurrence":
+            raise ValueError("source_phase_id must identify an upstream phase occurrence")
+        for field_name, value, expected in (
+            ("source_observation_id", self.source_observation_id, "observation"),
+            ("source_series_id", self.source_series_id, "signal"),
+            ("source_artifact_id", self.source_artifact_id, "artifact"),
+            ("source_acquisition_id", self.source_acquisition_id, "acquisition"),
+            ("set_id", self.set_id, "set"),
+            ("rep_id", self.rep_id, "rep"),
+        ):
+            if value.instance_type != expected:
+                raise ValueError(f"{field_name} has the wrong identifier type")
+        if self.source_measurement_identity_id.object_type != "measurement-identity":
+            raise ValueError("source_measurement_identity_id must identify a measurement")
+        if not self.source_series_digest.strip():
+            raise ValueError("source_series_digest must not be empty")
+        _require_instance(self.source_timebase, StrengthTimebase, "source_timebase")
+        if type(self.source_sample_count) is not int or self.source_sample_count < 1:
+            raise ValueError("source_sample_count must be positive")
+        if type(self.rep_index) is not int or self.rep_index < 1:
+            raise ValueError("rep_index must be a positive integer")
+        if (
+            type(self.start_index) is not int
+            or type(self.end_index) is not int
+            or self.start_index < 0
+            or self.end_index <= self.start_index
+        ):
+            raise ValueError("upstream phase must contain an inclusive interval")
+        _require_instance(self.external_load, StrengthLoadIdentity, "external_load")
+        _require_instance(self.phase_definition, RegistryReference, "phase_definition")
+        _require_instance(self.boundary_method, RegistryReference, "boundary_method")
+        _require_instance(self.boundary_convention, RegistryReference, "boundary_convention")
+        _require_tuple_items(self.boundary_parameters, MetadataEntry, "boundary_parameters")
+        _require_enum(self.authority, VBTPhaseSourceAuthority, "authority")
+        _finite(self.start_time_s, "phase start time")
+        _finite(self.end_time_s, "phase end time")
+        if self.end_time_s <= self.start_time_s:
+            raise ValueError("upstream phase duration must be positive")
+        if self.authority is VBTPhaseSourceAuthority.REGISTERED_UPSTREAM_PROCESSING:
+            if self.upstream_processing_run_id is None or self.provenance is None:
+                raise ValueError("registered upstream phase requires processing provenance")
+            if self.upstream_processing_run_id.instance_type != "processing-run":
+                raise ValueError("upstream_processing_run_id must identify a processing run")
+            matching = tuple(
+                run
+                for run in self.provenance.processing_runs
+                if run.output_entity_id == self.source_phase_id
+            )
+            if (
+                len(matching) != 1
+                or matching[0].processing_run_id != self.upstream_processing_run_id
+            ):
+                raise ValueError("upstream phase provenance must preserve its source run")
+            if matching[0].method != VBT_PHASE_SOURCE_PROCESSING_METHOD:
+                raise ValueError("upstream phase source run uses an unregistered method")
+            if matching[0].parameters != _phase_source_parameters(self):
+                raise ValueError("upstream phase source run parameters do not reproduce")
+            if self.source_artifact_id not in matching[0].source_artifact_ids:
+                raise ValueError("upstream phase source run omits the source artifact")
+            if not any(
+                edge.from_id == VBT_PHASE_SOURCE_QUALIFICATION_RULE.stable_id
+                and edge.to_id == matching[0].processing_run_id.qualified
+                and edge.relation is LineageRelation.SUPPORTED_BY
+                for edge in self.provenance.lineage_edges
+            ):
+                raise ValueError("upstream phase source is missing its qualification authority")
+        elif self.provenance is None:
+            raise ValueError("phase source evidence requires provenance")
+
+
+@register_serializable_type
+@dataclass(frozen=True, slots=True)
+class VBTConcentricPhase:
+    """Qualified upstream phase support; no phase is inferred from a scalar."""
+
+    phase_id: InstanceIdentifier
+    source_context: ObservationContext
+    source_observation_id: InstanceIdentifier
+    source_series_id: InstanceIdentifier
+    source_artifact_id: InstanceIdentifier
+    source_acquisition_id: InstanceIdentifier
+    source_measurement_identity_id: ScientificIdentifier
+    source_series_digest: str
+    source_timebase: StrengthTimebase
+    source_sample_count: int
+    set_id: InstanceIdentifier
+    rep_id: InstanceIdentifier
+    rep_index: int
+    external_load: StrengthLoadIdentity
+    start_index: int
+    end_index: int
+    start_time_s: float
+    end_time_s: float
+    phase_definition: RegistryReference = VBT_CONCENTRIC_PHASE_DEFINITION
+    boundary_method: RegistryReference = VBT_EXPLICIT_CONCENTRIC_PHASE_METHOD
+    boundary_convention: RegistryReference = VBT_PHASE_BOUNDARY_CONVENTION
+    boundary_parameters: tuple[MetadataEntry, ...] = ()
+    source_evidence: VBTConcentricPhaseSourceEvidence | None = None
     processing_run_id: InstanceIdentifier | None = None
     provenance: Provenance | None = None
 
     def __post_init__(self) -> None:
+        _require_instance(self.source_context, ObservationContext, "source_context")
         if self.phase_id.instance_type != "phase-occurrence":
             raise ValueError("phase_id must identify a phase occurrence")
         for field_name, value, expected in (
@@ -280,6 +406,8 @@ class VBTConcentricPhase:
                 raise ValueError(f"{field_name} has the wrong identifier type")
         if self.source_measurement_identity_id.object_type != "measurement-identity":
             raise ValueError("phase source identity must identify a measurement")
+        if not self.source_series_digest.strip():
+            raise ValueError("phase source digest must not be empty")
         _require_instance(self.source_timebase, StrengthTimebase, "source_timebase")
         if type(self.source_sample_count) is not int or self.source_sample_count < 1:
             raise ValueError("phase source_sample_count must be positive")
@@ -299,6 +427,24 @@ class VBTConcentricPhase:
         _require_instance(self.boundary_method, RegistryReference, "boundary_method")
         _require_instance(self.boundary_convention, RegistryReference, "boundary_convention")
         _require_tuple_items(self.boundary_parameters, MetadataEntry, "boundary_parameters")
+        _require_optional_instance(
+            self.source_evidence, VBTConcentricPhaseSourceEvidence, "source_evidence"
+        )
+        if self.source_evidence is None:
+            raise ValueError("phase must preserve typed upstream source evidence")
+        if (
+            self.source_evidence.source_phase_id == self.phase_id
+            or self.source_evidence.source_series_digest != self.source_series_digest
+            or self.source_evidence.start_index != self.start_index
+            or self.source_evidence.end_index != self.end_index
+            or self.phase_definition != self.source_evidence.phase_definition
+            or self.boundary_method != self.source_evidence.boundary_method
+            or self.boundary_convention != self.source_evidence.boundary_convention
+            or self.boundary_parameters != self.source_evidence.boundary_parameters
+        ):
+            raise ValueError(
+                "phase processing run does not preserve exact upstream source evidence"
+            )
         _finite(self.start_time_s, "phase start time")
         _finite(self.end_time_s, "phase end time")
         if self.end_time_s <= self.start_time_s:
@@ -671,34 +817,116 @@ def _validate_vbt_evidence(evidence: VBTVelocitySeriesEvidence) -> None:
         _validate_phase_for_evidence(evidence, evidence.phase)
 
 
-def _phase_parameters(
-    evidence: VBTVelocitySeriesEvidence,
-    start_index: int,
-    end_index: int,
-    boundary_parameters: tuple[MetadataEntry, ...],
+def _phase_source_parameters(
+    source: VBTConcentricPhaseSourceEvidence,
 ) -> tuple[MetadataEntry, ...]:
-    phase = VBT_CONCENTRIC_PHASE_DEFINITION
     return (
-        MetadataEntry("phase_definition", phase.stable_id),
-        MetadataEntry("boundary_method", VBT_EXPLICIT_CONCENTRIC_PHASE_METHOD.stable_id),
-        MetadataEntry("boundary_convention", VBT_PHASE_BOUNDARY_CONVENTION.stable_id),
-        MetadataEntry("source_observation_id", evidence.observation.observation_id.qualified),
-        MetadataEntry("source_series_id", evidence.series.series_id.qualified),
-        MetadataEntry("source_artifact_id", evidence.source_artifact.artifact_id.qualified),
-        MetadataEntry("source_acquisition_id", evidence.acquisition.acquisition_id.qualified),
-        MetadataEntry("source_measurement_identity_id", evidence.identity.identity_id.stable_id),
-        MetadataEntry("source_timebase", canonical_json(evidence.series.timebase)),
-        MetadataEntry("source_sample_count", len(evidence.series.samples)),
-        MetadataEntry("set_id", evidence.set_id.qualified),
-        MetadataEntry("rep_id", evidence.rep_id.qualified),
-        MetadataEntry("rep_index", evidence.rep_index),
-        MetadataEntry("external_load", canonical_json(evidence.external_load)),
-        MetadataEntry("start_index", start_index),
-        MetadataEntry("end_index", end_index),
-        MetadataEntry("start_time_s", time_at(evidence.series.timebase, start_index)),
-        MetadataEntry("end_time_s", time_at(evidence.series.timebase, end_index)),
-        MetadataEntry("boundary_parameters", canonical_json(boundary_parameters)),
+        MetadataEntry("phase_definition", source.phase_definition.stable_id),
+        MetadataEntry("boundary_method", source.boundary_method.stable_id),
+        MetadataEntry("boundary_convention", source.boundary_convention.stable_id),
+        MetadataEntry("source_phase_id", source.source_phase_id.qualified),
+        MetadataEntry("source_observation_id", source.source_observation_id.qualified),
+        MetadataEntry("source_series_id", source.source_series_id.qualified),
+        MetadataEntry("source_artifact_id", source.source_artifact_id.qualified),
+        MetadataEntry("source_acquisition_id", source.source_acquisition_id.qualified),
+        MetadataEntry(
+            "source_measurement_identity_id", source.source_measurement_identity_id.stable_id
+        ),
+        MetadataEntry("source_series_digest", source.source_series_digest),
+        MetadataEntry("source_timebase", canonical_json(source.source_timebase)),
+        MetadataEntry("source_sample_count", source.source_sample_count),
+        MetadataEntry("set_id", source.set_id.qualified),
+        MetadataEntry("rep_id", source.rep_id.qualified),
+        MetadataEntry("rep_index", source.rep_index),
+        MetadataEntry("external_load", canonical_json(source.external_load)),
+        MetadataEntry("start_index", source.start_index),
+        MetadataEntry("end_index", source.end_index),
+        MetadataEntry("start_time_s", source.start_time_s),
+        MetadataEntry("end_time_s", source.end_time_s),
+        MetadataEntry("boundary_parameters", canonical_json(source.boundary_parameters)),
+        MetadataEntry("authority", source.authority.value),
+        MetadataEntry(
+            "upstream_processing_run_id",
+            source.upstream_processing_run_id.qualified
+            if source.upstream_processing_run_id is not None
+            else None,
+        ),
     )
+
+
+def _validate_phase_source_for_evidence(
+    evidence: VBTVelocitySeriesEvidence,
+    source: VBTConcentricPhaseSourceEvidence,
+) -> None:
+    if not isinstance(source, VBTConcentricPhaseSourceEvidence):
+        raise ValueError("typed VBTConcentricPhaseSourceEvidence is required")
+    if (
+        source.source_context != evidence.observation.context
+        or source.source_observation_id != evidence.observation.observation_id
+        or source.source_series_id != evidence.series.series_id
+        or source.source_artifact_id != evidence.source_artifact.artifact_id
+        or source.source_acquisition_id != evidence.acquisition.acquisition_id
+        or source.source_measurement_identity_id != evidence.identity.identity_id
+        or source.source_series_digest != evidence.source_series_digest
+        or source.source_timebase != evidence.series.timebase
+        or source.source_sample_count != len(evidence.series.samples)
+        or source.set_id != evidence.set_id
+        or source.rep_id != evidence.rep_id
+        or source.rep_index != evidence.rep_index
+        or source.external_load != evidence.external_load
+    ):
+        raise ValueError("phase source evidence is not from the exact set/rep/load source")
+    if source.start_index < 0 or source.end_index >= len(evidence.series.samples):
+        raise ValueError("phase source exceeds source series")
+    if source.start_index >= source.end_index:
+        raise ValueError("phase source requires at least one interval")
+    if source.start_time_s != time_at(
+        evidence.series.timebase, source.start_index
+    ) or source.end_time_s != time_at(evidence.series.timebase, source.end_index):
+        raise ValueError("phase source times do not match source timebase")
+    if source.phase_definition != VBT_CONCENTRIC_PHASE_DEFINITION:
+        raise ValueError("phase source definition is not registered")
+    if source.boundary_convention != VBT_PHASE_BOUNDARY_CONVENTION:
+        raise ValueError("phase source boundary convention is not registered")
+    if source.provenance is None:
+        raise ValueError("phase source provenance is required")
+    if source.source_artifact_id not in tuple(
+        artifact.artifact_id for artifact in source.provenance.source_artifacts
+    ):
+        raise ValueError("phase source provenance omits source artifact")
+    if source.source_acquisition_id not in tuple(
+        acquisition.acquisition_id for acquisition in source.provenance.acquisitions
+    ):
+        raise ValueError("phase source provenance omits source acquisition")
+    if source.upstream_processing_run_id is None:
+        raise ValueError("phase source processing run is unresolved")
+    matching = tuple(
+        run
+        for run in source.provenance.processing_runs
+        if run.output_entity_id == source.source_phase_id
+    )
+    if len(matching) != 1 or matching[0].processing_run_id != source.upstream_processing_run_id:
+        raise ValueError("phase source processing provenance is stale")
+    run = matching[0]
+    if run.method != VBT_PHASE_SOURCE_PROCESSING_METHOD:
+        raise ValueError("phase source processing method is not registered")
+    if run.parameters != _phase_source_parameters(source):
+        raise ValueError("phase source processing parameters do not reproduce")
+    if source.source_artifact_id not in run.source_artifact_ids:
+        raise ValueError("phase source run omits source artifact")
+    for entity_id in (
+        source.source_observation_id,
+        source.source_series_id,
+        source.set_id,
+        source.rep_id,
+    ):
+        if not any(
+            edge.from_id == entity_id.qualified
+            and edge.to_id == run.processing_run_id.qualified
+            and edge.relation is LineageRelation.DERIVED_FROM
+            for edge in source.provenance.lineage_edges
+        ):
+            raise ValueError("phase source provenance omits upstream source lineage")
 
 
 def _validate_phase_for_evidence(
@@ -714,6 +942,7 @@ def _validate_phase_for_evidence(
         or phase.source_artifact_id != evidence.source_artifact.artifact_id
         or phase.source_acquisition_id != evidence.acquisition.acquisition_id
         or phase.source_measurement_identity_id != evidence.identity.identity_id
+        or phase.source_series_digest != evidence.source_series_digest
         or phase.source_timebase != evidence.series.timebase
         or phase.source_sample_count != len(evidence.series.samples)
         or phase.set_id != evidence.set_id
@@ -732,9 +961,15 @@ def _validate_phase_for_evidence(
         raise ValueError("VBT phase times do not match source timebase")
     if phase.processing_run_id is None or phase.provenance is None:
         raise ValueError("VBT phase must preserve its producing processing run")
-    parameters = _phase_parameters(
-        evidence, phase.start_index, phase.end_index, phase.boundary_parameters
-    )
+    if phase.source_evidence is None:
+        raise ValueError("VBT phase must preserve typed upstream source evidence")
+    _validate_phase_source_for_evidence(evidence, phase.source_evidence)
+    if (
+        phase.source_evidence.start_index != phase.start_index
+        or phase.source_evidence.end_index != phase.end_index
+    ):
+        raise ValueError("VBT phase boundaries do not match upstream source evidence")
+    parameters = _phase_source_parameters(phase.source_evidence)
     runs = tuple(
         run for run in phase.provenance.processing_runs if run.output_entity_id == phase.phase_id
     )
@@ -767,6 +1002,7 @@ def _validate_phase_for_evidence(
         phase.source_series_id,
         phase.set_id,
         phase.rep_id,
+        phase.source_evidence.source_phase_id,
     )
     for entity_id in phase_source_entities:
         if not any(
@@ -901,25 +1137,26 @@ def _provenance_with_run(
 
 def qualify_vbt_concentric_phase(
     evidence: VBTVelocitySeriesEvidence,
+    phase_source: VBTConcentricPhaseSourceEvidence | None = None,
     *,
-    start_index: int,
-    end_index: int,
-    boundary_parameters: tuple[MetadataEntry, ...] = (),
+    start_index: int | None = None,
+    end_index: int | None = None,
+    boundary_parameters: tuple[MetadataEntry, ...] | None = None,
     output_phase_id: InstanceIdentifier | None = None,
 ) -> VBTConcentricPhase | RefusalResult:
-    """Bind explicit upstream phase boundaries without inferring them."""
+    """Bind a phase only from a qualified upstream phase-source declaration."""
 
     claim = "qualify VBT concentric phase support"
     try:
         _validate_vbt_evidence(evidence)
-        if type(start_index) is not int or type(end_index) is not int:
-            raise ValueError("phase indices must be integers")
-        if start_index < 0 or end_index <= start_index or end_index >= len(evidence.series.samples):
-            raise ValueError("phase must be an inclusive source interval with at least two samples")
-        _require_tuple_items(boundary_parameters, MetadataEntry, "boundary_parameters")
-        start_time = time_at(evidence.series.timebase, start_index)
-        end_time = time_at(evidence.series.timebase, end_index)
-        parameters = _phase_parameters(evidence, start_index, end_index, boundary_parameters)
+        if phase_source is None:
+            raise ValueError(
+                "bare phase indices are blocked; typed upstream phase-source evidence is required"
+            )
+        if start_index is not None or end_index is not None or boundary_parameters is not None:
+            raise ValueError("phase boundaries must come from the typed upstream source evidence")
+        _validate_phase_source_for_evidence(evidence, phase_source)
+        parameters = _phase_source_parameters(phase_source)
     except (IndexError, TypeError, ValueError) as exc:
         return _refusal(
             claim,
@@ -940,24 +1177,43 @@ def qualify_vbt_concentric_phase(
             (evidence.observation.observation_id,),
             refusal_class=RefusalClass.IDENTITY_UNRESOLVED,
         )
+    if phase_source.provenance is None:
+        return _refusal(
+            claim,
+            (RefusalReasonCode.PROCESSING_LINEAGE_UNRESOLVED,),
+            ("upstream phase source provenance",),
+            (evidence.observation.observation_id,),
+            refusal_class=RefusalClass.IDENTITY_UNRESOLVED,
+        )
+    base = _merge_provenance(evidence.observation.provenance, phase_source.provenance)
     run = ProcessingRun(
         processing_run_id=InstanceIdentifier("processing-run", f"vbt-concentric:{digest}"),
-        source_artifact_ids=(evidence.source_artifact.artifact_id,),
+        source_artifact_ids=tuple(
+            sorted(
+                (artifact.artifact_id for artifact in base.source_artifacts),
+                key=lambda item: item.qualified,
+            )
+        ),
         method=VBT_EXPLICIT_CONCENTRIC_PHASE_METHOD,
         parameters=parameters,
         software_version=RES66_SOFTWARE_VERSION,
         output_entity_id=phase_id,
     )
     provenance = _provenance_with_run(
-        evidence.observation.provenance,
+        base,
         processing_run=run,
         output_entity_id=phase_id,
-        source_observation_ids=(evidence.observation.observation_id,),
-        source_acquisition_ids=(evidence.acquisition.acquisition_id,),
+        source_observation_ids=(evidence.observation.observation_id, phase_source.source_phase_id),
+        source_acquisition_ids=(phase_source.source_acquisition_id,),
         supported_by=(RES66_DECISION_STRENGTH_IMTP_VBT,),
     )
     phase_edges = list(provenance.lineage_edges)
-    for entity_id in (evidence.series.series_id, evidence.set_id, evidence.rep_id):
+    for entity_id in (
+        evidence.series.series_id,
+        evidence.set_id,
+        evidence.rep_id,
+        phase_source.source_phase_id,
+    ):
         edge = LineageEdge(
             entity_id.qualified, run.processing_run_id.qualified, LineageRelation.DERIVED_FROM
         )
@@ -973,17 +1229,19 @@ def qualify_vbt_concentric_phase(
             source_artifact_id=evidence.source_artifact.artifact_id,
             source_acquisition_id=evidence.acquisition.acquisition_id,
             source_measurement_identity_id=evidence.identity.identity_id,
+            source_series_digest=evidence.source_series_digest,
             source_timebase=evidence.series.timebase,
             source_sample_count=len(evidence.series.samples),
             set_id=evidence.set_id,
             rep_id=evidence.rep_id,
             rep_index=evidence.rep_index,
             external_load=evidence.external_load,
-            start_index=start_index,
-            end_index=end_index,
-            start_time_s=start_time,
-            end_time_s=end_time,
-            boundary_parameters=boundary_parameters,
+            start_index=phase_source.start_index,
+            end_index=phase_source.end_index,
+            start_time_s=phase_source.start_time_s,
+            end_time_s=phase_source.end_time_s,
+            boundary_parameters=phase_source.boundary_parameters,
+            source_evidence=phase_source,
             processing_run_id=run.processing_run_id,
             provenance=provenance,
         )
@@ -1482,7 +1740,7 @@ def refuse_mean_propulsive_velocity(
 @register_serializable_type
 @dataclass(frozen=True, slots=True)
 class VBTSuccessfulRepetition:
-    """Explicit success criterion for a measured 1RM repetition."""
+    """A repetition outcome that is not, by itself, 1RM maximality authority."""
 
     evidence: VBTVelocitySeriesEvidence
     successful: bool
@@ -1498,11 +1756,108 @@ class VBTSuccessfulRepetition:
 
 @register_serializable_type
 @dataclass(frozen=True, slots=True)
+class MeasuredOneRepMaxAssessmentEvidence:
+    """Qualified direct/source-reported maximal assessment evidence."""
+
+    source_observation: ScientificMeasurementObservation
+    source_artifact: SourceArtifact
+    source_acquisition: AcquisitionRecord
+    protocol_identity: StrengthProtocolIdentity
+    assessment_method: RegistryReference
+    maximality_declaration: RegistryReference
+    selection_rule: RegistryReference
+    attempt_id: InstanceIdentifier
+    measured_load: StrengthLoadIdentity
+    source_value_origin: ValueOrigin
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.source_observation.identity, VBTMeasurementIdentity):
+            raise ValueError("direct 1RM assessment requires a VBT strength identity")
+        if self.source_observation.identity.semantic.protocol_identity != self.protocol_identity:
+            raise ValueError("direct 1RM source protocol identity is not preserved")
+        if self.assessment_method != VBT_DIRECT_1RM_ASSESSMENT_OPERATION:
+            raise ValueError("direct 1RM assessment method is not registered")
+        if self.maximality_declaration != VBT_DIRECT_1RM_MAXIMALITY_DECLARATION:
+            raise ValueError("direct 1RM maximality declaration is not registered")
+        if self.selection_rule != VBT_MEASURED_1RM_SELECTION_RULE:
+            raise ValueError("direct 1RM selection rule is not registered")
+        if self.attempt_id.instance_type != "attempt":
+            raise ValueError("attempt_id must identify a maximal-assessment attempt")
+        if self.protocol_identity.equipment is None:
+            raise ValueError("direct 1RM assessment requires equipment identity")
+        if self.protocol_identity.equipment_mode is StrengthEquipmentMode.UNKNOWN:
+            raise ValueError("direct 1RM assessment requires equipment mode")
+        if (
+            self.protocol_identity.exercise_variant is None
+            or self.protocol_identity.range_of_motion is None
+            or self.protocol_identity.pause_semantics is None
+        ):
+            raise ValueError(
+                "direct 1RM assessment requires execution variant, ROM, and pause semantics"
+            )
+        if self.measured_load.unit != KILOGRAM or not self.measured_load.is_physical_load:
+            raise ValueError("direct 1RM assessment requires a physical kilogram load")
+        if self.source_value_origin not in {
+            ValueOrigin.DIRECT_MEASUREMENT,
+            ValueOrigin.SOURCE_REPORTED,
+        }:
+            raise ValueError(
+                "direct 1RM assessment source origin must be direct or source-reported"
+            )
+        observation = self.source_observation
+        if observation.result.status is not ResultStatus.VALID:
+            raise ValueError("direct 1RM assessment source observation is not valid")
+        if observation.result.unit != KILOGRAM:
+            raise ValueError("direct 1RM source observation must use kilograms")
+        if not isinstance(observation.result.value, ScalarValue):
+            raise ValueError("direct 1RM source observation must contain a scalar load")
+        if observation.result.classification.value_origin is not self.source_value_origin:
+            raise ValueError("direct 1RM source origin is not preserved")
+        if _finite(observation.result.value.value, "direct 1RM source load") != _load_value_kg(
+            self.measured_load
+        ):
+            raise ValueError("direct 1RM source scalar does not equal the measured load")
+        identity = observation.identity
+        if not isinstance(identity.acquisition, StrengthAcquisitionIdentity):
+            raise ValueError("direct 1RM source requires strength acquisition identity")
+        if not isinstance(identity.processing, StrengthProcessingIdentity):
+            raise ValueError("direct 1RM source requires strength processing identity")
+        if identity.processing.registered_operation != self.assessment_method:
+            raise ValueError("direct 1RM source processing operation is not registered")
+        if identity.acquisition.raw_artifact != self.source_artifact.artifact_id:
+            raise ValueError("direct 1RM source identity does not preserve its artifact")
+        if identity.acquisition.acquisition_instance_id != self.source_acquisition.acquisition_id:
+            raise ValueError("direct 1RM source identity does not preserve its acquisition")
+        if self.source_acquisition.source_artifact_id != self.source_artifact.artifact_id:
+            raise ValueError("direct 1RM acquisition does not preserve its artifact")
+        if not self.source_artifact.immutable:
+            raise ValueError("direct 1RM source artifact must be immutable")
+        provenance = observation.provenance
+        if self.source_artifact not in provenance.source_artifacts:
+            raise ValueError("direct 1RM provenance omits its source artifact")
+        if self.source_acquisition not in provenance.acquisitions:
+            raise ValueError("direct 1RM provenance omits its source acquisition")
+        if not any(
+            edge.from_id == self.source_artifact.artifact_id.qualified
+            and edge.to_id == self.source_acquisition.acquisition_id.qualified
+            and edge.relation is LineageRelation.ACQUIRED_AS
+            for edge in provenance.lineage_edges
+        ) or not any(
+            edge.from_id == self.source_acquisition.acquisition_id.qualified
+            and edge.to_id == observation.observation_id.qualified
+            and edge.relation is LineageRelation.PRODUCED
+            for edge in provenance.lineage_edges
+        ):
+            raise ValueError("direct 1RM provenance omits its source path")
+
+
+@register_serializable_type
+@dataclass(frozen=True, slots=True)
 class MeasuredOneRepMax:
     """Direct/source-reported strength result; never a model estimate."""
 
     observation: ScientificMeasurementObservation
-    repetition: VBTSuccessfulRepetition
+    assessment: MeasuredOneRepMaxAssessmentEvidence
     selection_rule: RegistryReference = VBT_MEASURED_1RM_SELECTION_RULE
 
     def __post_init__(self) -> None:
@@ -1535,26 +1890,31 @@ def _load_definition_key(load: StrengthLoadIdentity) -> object:
 
 
 def _build_measured_1rm_observation(
-    repetition: VBTSuccessfulRepetition,
+    assessment: MeasuredOneRepMaxAssessmentEvidence,
     *,
     output_observation_id: InstanceIdentifier | None,
 ) -> ScientificMeasurementObservation:
-    evidence = repetition.evidence
-    load_kg = _load_value_kg(evidence.external_load)
+    source_observation = assessment.source_observation
+    source_identity = source_observation.identity
+    if not isinstance(source_identity, VBTMeasurementIdentity):
+        raise ValueError("direct 1RM source requires VBT measurement identity")
+    load_kg = _load_value_kg(assessment.measured_load)
     parameters = (
         MetadataEntry("operation_id", VBT_MEASURED_1RM_OPERATION.stable_id),
         MetadataEntry("measurand", VBT_MEASURED_1RM_MEASURAND.stable_id),
         MetadataEntry("metric", VBT_MEASURED_1RM_METRIC.stable_id),
-        MetadataEntry("source_observation_id", evidence.observation.observation_id.qualified),
-        MetadataEntry("source_series_id", evidence.series.series_id.qualified),
-        MetadataEntry("source_artifact_id", evidence.source_artifact.artifact_id.qualified),
-        MetadataEntry("set_id", evidence.set_id.qualified),
-        MetadataEntry("rep_id", evidence.rep_id.qualified),
-        MetadataEntry("rep_index", evidence.rep_index),
-        MetadataEntry("external_load", canonical_json(evidence.external_load)),
-        MetadataEntry("successful", repetition.successful),
-        MetadataEntry("success_criteria", repetition.success_criteria.stable_id),
-        MetadataEntry("selection_rule", VBT_MEASURED_1RM_SELECTION_RULE.stable_id),
+        MetadataEntry("source_observation_id", source_observation.observation_id.qualified),
+        MetadataEntry("source_artifact_id", assessment.source_artifact.artifact_id.qualified),
+        MetadataEntry(
+            "source_acquisition_id", assessment.source_acquisition.acquisition_id.qualified
+        ),
+        MetadataEntry("protocol_identity", canonical_json(assessment.protocol_identity)),
+        MetadataEntry("attempt_id", assessment.attempt_id.qualified),
+        MetadataEntry("measured_load", canonical_json(assessment.measured_load)),
+        MetadataEntry("assessment_method", assessment.assessment_method.stable_id),
+        MetadataEntry("maximality_declaration", assessment.maximality_declaration.stable_id),
+        MetadataEntry("source_value_origin", assessment.source_value_origin.value),
+        MetadataEntry("selection_rule", assessment.selection_rule.stable_id),
     )
     digest = canonical_hash(
         {"operation": VBT_MEASURED_1RM_OPERATION, "parameters": parameters}
@@ -1562,7 +1922,6 @@ def _build_measured_1rm_observation(
     observation_id = output_observation_id or InstanceIdentifier(
         "observation", f"vbt-measured-1rm:{digest}"
     )
-    source_identity = evidence.identity
     processing = StrengthProcessingIdentity(
         registered_operation=VBT_MEASURED_1RM_OPERATION,
         method_parameters=parameters,
@@ -1604,9 +1963,7 @@ def _build_measured_1rm_observation(
         media_type="application/vnd.dynamislm.vbt.measured-1rm",
         immutable=True,
     )
-    base = evidence.observation.provenance
-    if evidence.phase is not None and evidence.phase.provenance is not None:
-        base = _merge_provenance(base, evidence.phase.provenance)
+    base = source_observation.provenance
     run = ProcessingRun(
         processing_run_id=InstanceIdentifier("processing-run", f"vbt-measured-1rm:{digest}"),
         source_artifact_ids=tuple(
@@ -1624,35 +1981,27 @@ def _build_measured_1rm_observation(
         base,
         processing_run=run,
         output_entity_id=observation_id,
-        source_observation_ids=(evidence.observation.observation_id,),
-        source_acquisition_ids=(evidence.acquisition.acquisition_id,),
+        source_observation_ids=(source_observation.observation_id,),
+        source_acquisition_ids=(assessment.source_acquisition.acquisition_id,),
         supported_by=(RES66_DECISION_STRENGTH_IMTP_VBT,),
         output_artifacts=(output_artifact,),
     )
     edges = list(provenance.lineage_edges)
-    for entity_id in (evidence.series.series_id, evidence.set_id, evidence.rep_id):
+    for entity_id in (assessment.source_artifact.artifact_id, assessment.attempt_id):
         edge = LineageEdge(
             entity_id.qualified, run.processing_run_id.qualified, LineageRelation.DERIVED_FROM
         )
         if edge not in edges:
             edges.append(edge)
-    if evidence.phase is not None:
-        edge = LineageEdge(
-            evidence.phase.phase_id.qualified,
-            run.processing_run_id.qualified,
-            LineageRelation.DERIVED_FROM,
-        )
-        if edge not in edges:
-            edges.append(edge)
     return ScientificMeasurementObservation(
         observation_id=observation_id,
-        context=evidence.observation.context,
+        context=source_observation.context,
         identity=identity,
         result=MeasurementResult(
             result_id=InstanceIdentifier("result", f"vbt-measured-1rm:{digest}"),
             value=ScalarValue(load_kg),
             unit=KILOGRAM,
-            classification=ScientificClassification(ValueOrigin.DIRECT_MEASUREMENT, ()),
+            classification=ScientificClassification(assessment.source_value_origin, ()),
             uncertainty=UncertaintyMetadata(status=UncertaintyStatus.NOT_ASSESSED),
             status=ResultStatus.VALID,
         ),
@@ -1661,13 +2010,14 @@ def _build_measured_1rm_observation(
 
 
 def _validate_measured_1rm_result(result: MeasuredOneRepMax) -> None:
-    repetition = result.repetition
-    if not repetition.successful:
-        raise ValueError("measured 1RM requires an explicitly successful repetition")
+    assessment = result.assessment
+    if not isinstance(assessment, MeasuredOneRepMaxAssessmentEvidence):
+        raise ValueError("measured 1RM requires qualified direct assessment evidence")
     if result.selection_rule != VBT_MEASURED_1RM_SELECTION_RULE:
         raise ValueError("measured 1RM selection rule is not registered")
-    evidence = repetition.evidence
-    _validate_vbt_evidence(evidence)
+    source_observation = assessment.source_observation
+    if source_observation.identity != assessment.source_observation.identity:
+        raise ValueError("direct assessment source identity was rebound")
     identity = result.observation.identity
     if not isinstance(identity, VBTMeasurementIdentity):
         raise ValueError("measured 1RM requires VBT identity")
@@ -1680,11 +2030,13 @@ def _validate_measured_1rm_result(result: MeasuredOneRepMax) -> None:
     if identity.processing.registered_operation != VBT_MEASURED_1RM_OPERATION:
         raise ValueError("measured 1RM has the wrong operation")
     if (
-        identity.semantic.protocol_identity != evidence.identity.semantic.protocol_identity
-        or identity.acquisition != evidence.identity.acquisition
+        identity.semantic.protocol_identity != assessment.protocol_identity
+        or identity.acquisition != source_observation.identity.acquisition
     ):
         raise ValueError("measured 1RM does not preserve protocol/acquisition identity")
-    source_processing = evidence.identity.processing
+    if not isinstance(source_observation.identity.processing, StrengthProcessingIdentity):
+        raise ValueError("measured 1RM source requires strength processing identity")
+    source_processing = source_observation.identity.processing
     if (
         identity.processing.filtering != source_processing.filtering
         or identity.processing.filtering_status != source_processing.filtering_status
@@ -1693,7 +2045,7 @@ def _validate_measured_1rm_result(result: MeasuredOneRepMax) -> None:
         or identity.processing.processing_state != StrengthProcessingState.DYNAMISLM_PROCESSED
     ):
         raise ValueError("measured 1RM does not preserve processing identity")
-    if result.observation.context != evidence.observation.context:
+    if result.observation.context != source_observation.context:
         raise ValueError("measured 1RM output context was rebound")
     if result.observation.result.unit != KILOGRAM:
         raise ValueError("measured 1RM must use kg")
@@ -1702,55 +2054,61 @@ def _validate_measured_1rm_result(result: MeasuredOneRepMax) -> None:
         ValueOrigin.SOURCE_REPORTED,
     }:
         raise ValueError("measured 1RM cannot carry a model-estimate origin")
-    if result.value_kg != _load_value_kg(evidence.external_load):
-        raise ValueError("measured 1RM scalar does not equal the successful physical load")
+    if result.observation.result.classification.value_origin is not assessment.source_value_origin:
+        raise ValueError("measured 1RM output does not preserve source value origin")
+    if result.value_kg != _load_value_kg(assessment.measured_load):
+        raise ValueError("measured 1RM scalar does not equal the qualified maximal load")
     parameters = {entry.key: entry.value for entry in identity.processing.method_parameters}
     if (
-        parameters.get("success_criteria") != VBT_SUCCESSFUL_REPETITION_CRITERION.stable_id
+        parameters.get("assessment_method") != assessment.assessment_method.stable_id
+        or parameters.get("maximality_declaration") != assessment.maximality_declaration.stable_id
+        or parameters.get("attempt_id") != assessment.attempt_id.qualified
         or parameters.get("selection_rule") != VBT_MEASURED_1RM_SELECTION_RULE.stable_id
-        or parameters.get("rep_id") != evidence.rep_id.qualified
     ):
-        raise ValueError("measured 1RM does not preserve success/rep identity")
+        raise ValueError("measured 1RM does not preserve assessment maximality identity")
     _require_vbt_output_lineage(
         result.observation,
         operation=VBT_MEASURED_1RM_OPERATION,
         parameters=identity.processing.method_parameters,
         source_entities=(
-            evidence.observation.observation_id,
-            evidence.series.series_id,
-            evidence.set_id,
-            evidence.rep_id,
-            *((evidence.phase.phase_id,) if evidence.phase is not None else ()),
+            source_observation.observation_id,
+            assessment.source_artifact.artifact_id,
+            assessment.attempt_id,
         ),
-        expected_origins=(ValueOrigin.DIRECT_MEASUREMENT, ValueOrigin.SOURCE_REPORTED),
+        expected_origins=(assessment.source_value_origin,),
     )
 
 
 def build_measured_1rm(
-    repetition: VBTSuccessfulRepetition,
+    assessment: MeasuredOneRepMaxAssessmentEvidence | VBTSuccessfulRepetition,
     *,
     output_observation_id: InstanceIdentifier | None = None,
 ) -> MeasuredOneRepMax | RefusalResult:
-    """Create a direct measured 1RM from a successful typed repetition."""
+    """Create measured 1RM only from qualified maximal-assessment evidence."""
 
     claim = "build measured 1RM from a successful repetition"
     try:
-        if not isinstance(repetition, VBTSuccessfulRepetition):
-            raise ValueError("VBTSuccessfulRepetition is required")
-        if not repetition.successful:
-            raise ValueError("repetition is not successful")
-        _load_value_kg(repetition.evidence.external_load)
+        if isinstance(assessment, VBTSuccessfulRepetition):
+            raise ValueError(
+                "a successful repetition is not maximality evidence; "
+                "qualified direct assessment required"
+            )
+        if not isinstance(assessment, MeasuredOneRepMaxAssessmentEvidence):
+            raise ValueError("MeasuredOneRepMaxAssessmentEvidence is required")
+        _load_value_kg(assessment.measured_load)
         observation = _build_measured_1rm_observation(
-            repetition, output_observation_id=output_observation_id
+            assessment, output_observation_id=output_observation_id
         )
-        return MeasuredOneRepMax(observation, repetition)
+        return MeasuredOneRepMax(observation, assessment)
     except (AttributeError, IndexError, TypeError, ValueError) as exc:
         return _refusal(
             claim,
             (RefusalReasonCode.MEASURAND_MISMATCH,),
-            (f"successful physical load and direct repetition identity: {exc}",),
-            (repetition.evidence.observation.observation_id,)
-            if isinstance(repetition, VBTSuccessfulRepetition)
+            (f"qualified maximal assessment evidence: {exc}",),
+            (assessment.source_observation.observation_id,)
+            if isinstance(assessment, MeasuredOneRepMaxAssessmentEvidence)
+            else (assessment.evidence.observation.observation_id,)
+            if isinstance(assessment, VBTSuccessfulRepetition)
             else (),
             refusal_class=RefusalClass.IDENTITY_UNRESOLVED,
         )
@@ -1759,29 +2117,98 @@ def build_measured_1rm(
 @register_serializable_type
 @dataclass(frozen=True, slots=True)
 class TerminalVelocityAssumption:
-    """Registered terminal velocity assumption for one model application."""
+    """Registered terminal velocity assumption for one exact protocol application."""
 
     reference: RegistryReference
     value_m_per_s: float
     description: str
+    exercise: RegistryReference | None = None
+    equipment: RegistryReference | None = None
+    equipment_mode: StrengthEquipmentMode | None = None
+    exercise_variant: RegistryReference | None = None
+    range_of_motion: StrengthProtocolAttribute | None = None
+    pause_semantics: StrengthProtocolAttribute | None = None
+    velocity_metric: VBTMetric | None = None
+    load_semantics: StrengthLoadSemantics | None = None
+    model_family: RegistryReference | None = None
+    sampling: SamplingCharacteristics | None = None
 
     def __post_init__(self) -> None:
-        if self.reference != VBT_SMITH_BENCH_GENERAL_TERMINAL_VELOCITY:
+        if self.reference not in {
+            VBT_SMITH_BENCH_GENERAL_TERMINAL_VELOCITY,
+            VBT_SMITH_BENCH_PAUSED_TERMINAL_VELOCITY,
+            VBT_SMITH_BENCH_TOUCH_AND_GO_TERMINAL_VELOCITY,
+        }:
             raise ValueError("terminal velocity assumption is not registered")
         if _finite(self.value_m_per_s, "terminal velocity") != 0.17:
             raise ValueError("the registered Smith-machine bench terminal velocity is 0.17 m/s")
         if not self.description.strip():
             raise ValueError("terminal velocity description must not be empty")
+        if self.exercise != VBT_BENCH_PRESS_EXERCISE:
+            raise ValueError("terminal velocity exercise applicability is not registered")
+        if self.equipment != VBT_SMITH_MACHINE_EQUIPMENT:
+            raise ValueError("terminal velocity equipment applicability is not registered")
+        if self.equipment_mode is not StrengthEquipmentMode.SMITH_MACHINE:
+            raise ValueError("terminal velocity equipment mode is not registered")
+        if self.exercise_variant not in {
+            VBT_BENCH_PRESS_PAUSED_VARIANT,
+            VBT_BENCH_PRESS_TOUCH_AND_GO_VARIANT,
+        }:
+            raise ValueError("terminal velocity exercise variant is unresolved")
+        if self.range_of_motion != StrengthProtocolAttribute(
+            "range_of_motion", VBT_BENCH_PRESS_FULL_ROM.stable_id
+        ):
+            raise ValueError("terminal velocity range-of-motion applicability is unresolved")
+        if self.pause_semantics is None or self.pause_semantics.name != "pause_semantics":
+            raise ValueError("terminal velocity pause semantics are unresolved")
+        if self.pause_semantics.value not in {
+            VBT_BENCH_PRESS_TWO_SECOND_PAUSE.stable_id,
+            VBT_BENCH_PRESS_TOUCH_AND_GO_PAUSE.stable_id,
+        }:
+            raise ValueError("terminal velocity pause semantics are not registered")
+        if self.velocity_metric is not VBTMetric.MEAN_CONCENTRIC_VELOCITY:
+            raise ValueError("terminal velocity velocity metric must be mean concentric velocity")
+        if self.load_semantics is not StrengthLoadSemantics.TOTAL_EXTERNAL_LOAD:
+            raise ValueError("terminal velocity load semantics are not registered")
+        if self.model_family != VBT_LOAD_VELOCITY_MODEL:
+            raise ValueError("terminal velocity model family is not registered")
+        if self.sampling != SamplingCharacteristics(1000.0, ("bar",)):
+            raise ValueError("terminal velocity sampling applicability is unresolved")
 
 
 SMITH_BENCH_GENERAL_TERMINAL_VELOCITY_017 = TerminalVelocityAssumption(
     reference=VBT_SMITH_BENCH_GENERAL_TERMINAL_VELOCITY,
     value_m_per_s=0.17,
     description=(
-        "General 1RM velocity reported for the paused and touch-and-go Smith-machine bench press."
+        "0.17 m/s general V1RM for the Janicijevic Smith-machine touch-and-go bench protocol."
     ),
+    exercise=VBT_BENCH_PRESS_EXERCISE,
+    equipment=VBT_SMITH_MACHINE_EQUIPMENT,
+    equipment_mode=StrengthEquipmentMode.SMITH_MACHINE,
+    exercise_variant=VBT_BENCH_PRESS_TOUCH_AND_GO_VARIANT,
+    range_of_motion=StrengthProtocolAttribute(
+        "range_of_motion", VBT_BENCH_PRESS_FULL_ROM.stable_id
+    ),
+    pause_semantics=StrengthProtocolAttribute(
+        "pause_semantics", VBT_BENCH_PRESS_TOUCH_AND_GO_PAUSE.stable_id
+    ),
+    velocity_metric=VBTMetric.MEAN_CONCENTRIC_VELOCITY,
+    load_semantics=StrengthLoadSemantics.TOTAL_EXTERNAL_LOAD,
+    model_family=VBT_LOAD_VELOCITY_MODEL,
+    sampling=SamplingCharacteristics(1000.0, ("bar",)),
 )
 VBT_SMITH_BENCH_GENERAL_TERMINAL_VELOCITY_017 = SMITH_BENCH_GENERAL_TERMINAL_VELOCITY_017
+
+SMITH_BENCH_PAUSED_TERMINAL_VELOCITY_017 = replace(
+    SMITH_BENCH_GENERAL_TERMINAL_VELOCITY_017,
+    reference=VBT_SMITH_BENCH_PAUSED_TERMINAL_VELOCITY,
+    description="0.17 m/s general V1RM for the Janicijevic Smith-machine paused bench protocol.",
+    exercise_variant=VBT_BENCH_PRESS_PAUSED_VARIANT,
+    pause_semantics=StrengthProtocolAttribute(
+        "pause_semantics", VBT_BENCH_PRESS_TWO_SECOND_PAUSE.stable_id
+    ),
+)
+VBT_SMITH_BENCH_PAUSED_TERMINAL_VELOCITY_017 = SMITH_BENCH_PAUSED_TERMINAL_VELOCITY_017
 
 
 @register_serializable_type
@@ -1796,6 +2223,7 @@ class LoadVelocityModel:
     session_id: InstanceIdentifier
     test_instance_id: InstanceIdentifier
     population_context: str
+    analysis_context: ObservationContext
     protocol_identity: StrengthProtocolIdentity
     device_identity: StrengthAcquisitionIdentity
     velocity_metric: VBTMetric
@@ -1885,6 +2313,7 @@ def _acquisition_method_key(acquisition: StrengthAcquisitionIdentity) -> object:
     return {
         "device": acquisition.device,
         "provider": acquisition.provider,
+        "hardware_firmware": acquisition.hardware_firmware,
         "sensor_modality": acquisition.sensor_modality,
         "attachment_location": acquisition.attachment_location,
         "sampling": acquisition.sampling,
@@ -1892,11 +2321,40 @@ def _acquisition_method_key(acquisition: StrengthAcquisitionIdentity) -> object:
         "physical_axis": acquisition.physical_axis,
         "reference_frame": acquisition.reference_frame,
         "sign_convention": acquisition.sign_convention,
-        "timebase": (
-            _comparison_timebase_key(acquisition.timebase)
-            if acquisition.timebase is not None
-            else None
-        ),
+        "timebase": (acquisition.timebase if acquisition.timebase is not None else None),
+        "processing_state": acquisition.processing_state,
+    }
+
+
+def _calibration_method_key(result: VBTMetricResult) -> object:
+    """Complete processing/acquisition/phase identity for one calibration point."""
+
+    identity = result.evidence.identity
+    protocol = identity.semantic.protocol_identity
+    if protocol is None:
+        raise ValueError("calibration point protocol identity is unresolved")
+    processing = identity.processing
+    return {
+        "velocity_metric": result.metric,
+        "protocol": _protocol_model_key(protocol),
+        "acquisition": _acquisition_method_key(identity.acquisition),
+        "source_processing": {
+            "registered_operation": processing.registered_operation,
+            "method_parameters": processing.method_parameters,
+            "filtering": processing.filtering,
+            "filtering_status": processing.filtering_status,
+            "smoothing": processing.smoothing,
+            "resampling": processing.resampling,
+            "processing_state": processing.processing_state,
+        },
+        "source_version": identity.version,
+        "phase": {
+            "definition": result.phase.phase_definition,
+            "boundary_method": result.phase.boundary_method,
+            "boundary_convention": result.phase.boundary_convention,
+            "boundary_parameters": result.phase.boundary_parameters,
+        },
+        "source_timebase": result.evidence.series.timebase,
     }
 
 
@@ -1924,6 +2382,8 @@ def _validate_load_velocity_model(model: LoadVelocityModel) -> None:
         raise ValueError("load-velocity model context identifiers are invalid")
     if not model.population_context.strip():
         raise ValueError("model population_context must not be empty")
+    if not isinstance(model.analysis_context, ObservationContext):
+        raise ValueError("load-velocity model requires a typed multi-source analysis context")
     if model.equation != "velocity_m_per_s = intercept_m_per_s + slope_m_per_s_per_kg * load_kg":
         raise ValueError("load-velocity model equation is not registered")
     if model.software_version != RES66_SOFTWARE_VERSION:
@@ -1948,6 +2408,19 @@ def _validate_load_velocity_model(model: LoadVelocityModel) -> None:
         raise ValueError("model context does not match calibration context")
     if first.observation.context.population_context != model.population_context:
         raise ValueError("model population applicability does not match calibration")
+    expected_analysis_context = build_multisource_analysis_context(
+        VBT_LOAD_VELOCITY_MODEL,
+        tuple(result.observation for result in model.calibration_results),
+    )
+    if model.analysis_context != expected_analysis_context:
+        raise ValueError("load-velocity model context does not bind the full calibration set")
+    if (
+        model.athlete_id != model.analysis_context.athlete_id
+        or model.session_id != model.analysis_context.session_id
+        or model.test_instance_id != model.analysis_context.test_instance_id
+        or model.population_context != model.analysis_context.population_context
+    ):
+        raise ValueError("load-velocity model context identifiers are not analysis-bound")
     if first.evidence.identity.semantic.protocol_identity is None or _protocol_model_key(
         first.evidence.identity.semantic.protocol_identity
     ) != _protocol_model_key(model.protocol_identity):
@@ -1957,6 +2430,7 @@ def _validate_load_velocity_model(model: LoadVelocityModel) -> None:
     ):
         raise ValueError("model device/acquisition identity does not match calibration")
     load_definition = _load_definition_key(model.calibration_loads[0])
+    calibration_method_key = _calibration_method_key(first)
     for index, result in enumerate(model.calibration_results):
         if not isinstance(result, VBTMetricResult) or result.metric is not model.velocity_metric:
             raise ValueError("model calibration metric mismatch")
@@ -1974,6 +2448,8 @@ def _validate_load_velocity_model(model: LoadVelocityModel) -> None:
             model.device_identity
         ):
             raise ValueError("model calibration device mismatch")
+        if _calibration_method_key(result) != calibration_method_key:
+            raise ValueError("model calibration processing/method identity mismatch")
         if _load_definition_key(model.calibration_loads[index]) != load_definition:
             raise ValueError("model calibration load definition mismatch")
         if result.evidence.external_load != model.calibration_loads[index]:
@@ -2031,6 +2507,11 @@ def fit_load_velocity_model(
         first = calibration_results[0]
         if first.metric not in {VBTMetric.MEAN_CONCENTRIC_VELOCITY, VBTMetric.PEAK_VELOCITY}:
             raise ValueError("load-velocity model requires a registered velocity metric")
+        analysis_context = build_multisource_analysis_context(
+            VBT_LOAD_VELOCITY_MODEL,
+            tuple(item.observation for item in calibration_results),
+        )
+        calibration_method_key = _calibration_method_key(first)
         load_definition = _load_definition_key(first.evidence.external_load)
         if _load_value_kg(first.evidence.external_load) < 0:
             raise ValueError("load must be non-negative")
@@ -2055,6 +2536,10 @@ def fit_load_velocity_model(
                 result.evidence.identity.acquisition
             ) != _acquisition_method_key(first.evidence.identity.acquisition):
                 raise ValueError("calibration points must share device/acquisition identity")
+            if _calibration_method_key(result) != calibration_method_key:
+                raise ValueError(
+                    "calibration points must share complete processing/phase method identity"
+                )
             if _load_definition_key(result.evidence.external_load) != load_definition:
                 raise ValueError("calibration points must share physical load definition")
         loads = tuple(item.evidence.external_load for item in calibration_results)
@@ -2098,6 +2583,7 @@ def fit_load_velocity_model(
             session_id=first.observation.context.session_id,
             test_instance_id=first.observation.context.test_instance_id,
             population_context=first.observation.context.population_context,
+            analysis_context=analysis_context,
             protocol_identity=protocol,
             device_identity=device_identity,
             velocity_metric=first.metric,
@@ -2150,6 +2636,45 @@ def _estimated_1rm_value(
     ):
         raise ValueError("terminal velocity requires unsupported non-extrapolating 1RM application")
     return value
+
+
+def _validate_terminal_velocity_applicability(
+    model: LoadVelocityModel,
+    assumption: TerminalVelocityAssumption,
+) -> None:
+    protocol = model.protocol_identity
+    if (
+        protocol.exercise != assumption.exercise
+        or protocol.equipment != assumption.equipment
+        or protocol.equipment_mode != assumption.equipment_mode
+        or protocol.exercise_variant != assumption.exercise_variant
+        or protocol.range_of_motion != assumption.range_of_motion
+        or protocol.pause_semantics != assumption.pause_semantics
+        or protocol.sampling != assumption.sampling
+    ):
+        raise ValueError("terminal velocity protocol applicability is not exact")
+    if model.model_reference != assumption.model_family:
+        raise ValueError("terminal velocity model family is not exact")
+    if model.velocity_metric is not assumption.velocity_metric:
+        raise ValueError("terminal velocity velocity metric is not exact")
+    if any(load.semantics is not assumption.load_semantics for load in model.calibration_loads):
+        raise ValueError("terminal velocity load semantics are not exact")
+    for result in model.calibration_results:
+        source_protocol = result.evidence.identity.semantic.protocol_identity
+        if source_protocol is None or (
+            source_protocol.exercise != assumption.exercise
+            or source_protocol.equipment != assumption.equipment
+            or source_protocol.equipment_mode != assumption.equipment_mode
+            or source_protocol.exercise_variant != assumption.exercise_variant
+            or source_protocol.range_of_motion != assumption.range_of_motion
+            or source_protocol.pause_semantics != assumption.pause_semantics
+            or source_protocol.sampling != assumption.sampling
+        ):
+            raise ValueError("calibration point does not satisfy terminal velocity applicability")
+        if result.evidence.identity.acquisition.sampling != assumption.sampling:
+            raise ValueError(
+                "calibration sampling does not satisfy terminal velocity applicability"
+            )
 
 
 def _model_output_lineage(
@@ -2327,7 +2852,7 @@ def _build_estimated_1rm_observation(
             edges.append(edge)
     return ScientificMeasurementObservation(
         observation_id=observation_id,
-        context=first.observation.context,
+        context=model.analysis_context,
         identity=identity,
         result=MeasurementResult(
             result_id=InstanceIdentifier("result", f"vbt-estimated-1rm:{digest}"),
@@ -2347,6 +2872,7 @@ def _build_estimated_1rm_observation(
 def _validate_estimated_1rm_result(result: EstimatedOneRepMax) -> None:
     model = result.model
     _validate_load_velocity_model(model)
+    _validate_terminal_velocity_applicability(model, result.terminal_velocity_assumption)
     expected = _estimated_1rm_value(model, result.terminal_velocity_assumption)
     identity = result.observation.identity
     if not isinstance(identity, VBTMeasurementIdentity):
@@ -2376,8 +2902,8 @@ def _validate_estimated_1rm_result(result: EstimatedOneRepMax) -> None:
         or identity.processing.processing_state != StrengthProcessingState.DYNAMISLM_PROCESSED
     ):
         raise ValueError("estimated 1RM does not preserve processing identity")
-    if result.observation.context != model.calibration_results[0].observation.context:
-        raise ValueError("estimated 1RM output context was rebound")
+    if result.observation.context != model.analysis_context:
+        raise ValueError("estimated 1RM output context is not the derived calibration context")
     if (
         result.observation.result.unit != KILOGRAM
         or result.observation.result.classification.value_origin is not ValueOrigin.MODEL_ESTIMATE
@@ -2416,12 +2942,7 @@ def estimate_1rm_from_load_velocity_model(
             raise ValueError("explicit registered terminal velocity assumption is required")
         if not isinstance(assumption, TerminalVelocityAssumption):
             raise ValueError("terminal velocity assumption must be typed")
-        if model.protocol_identity.test_family is not StrengthTestFamily.BENCH_PRESS_VBT:
-            raise ValueError("RES-66 V1 terminal velocity is not registered for squat VBT")
-        if model.protocol_identity.equipment_mode is not StrengthEquipmentMode.SMITH_MACHINE:
-            raise ValueError(
-                "RES-66 V1 terminal velocity is registered only for Smith-machine bench press"
-            )
+        _validate_terminal_velocity_applicability(model, assumption)
         value = _estimated_1rm_value(model, assumption)
         observation = _build_estimated_1rm_observation(
             model, assumption, value, output_observation_id
@@ -2584,6 +3105,10 @@ def _build_velocity_loss_observation(
     value: float,
     output_observation_id: InstanceIdentifier | None,
 ) -> ScientificMeasurementObservation:
+    analysis_context = build_multisource_analysis_context(
+        VBT_VELOCITY_LOSS_OPERATION,
+        tuple(item.observation for item in repetitions),
+    )
     parameters = _velocity_loss_parameters(repetitions, current, reference_rule, reference)
     digest = canonical_hash(
         {"operation": VBT_VELOCITY_LOSS_OPERATION, "parameters": parameters, "value": value}
@@ -2679,7 +3204,7 @@ def _build_velocity_loss_observation(
                 edges.append(edge)
     return ScientificMeasurementObservation(
         observation_id=observation_id,
-        context=current.observation.context,
+        context=analysis_context,
         identity=identity,
         result=MeasurementResult(
             result_id=InstanceIdentifier("result", f"vbt-velocity-loss:{digest}"),
@@ -2739,8 +3264,12 @@ def _validate_velocity_loss_result(result: VBTVelocityLossResult) -> None:
         or result.observation.result.unit != PERCENT
     ):
         raise ValueError("velocity-loss output has the wrong operation or unit")
-    if result.observation.context != result.current.observation.context:
-        raise ValueError("velocity-loss output context was rebound")
+    expected_context = build_multisource_analysis_context(
+        VBT_VELOCITY_LOSS_OPERATION,
+        tuple(item.observation for item in result.repetitions),
+    )
+    if result.observation.context != expected_context:
+        raise ValueError("velocity-loss output context was rebound or first-source inherited")
     parameters = {entry.key: entry.value for entry in identity.processing.method_parameters}
     if (
         parameters.get("reference_rule")
@@ -3187,7 +3716,9 @@ VBTVelocityLoss = VBTVelocityLossResult
 __all__ = [
     "RES66_SOFTWARE_VERSION",
     "SMITH_BENCH_GENERAL_TERMINAL_VELOCITY_017",
+    "SMITH_BENCH_PAUSED_TERMINAL_VELOCITY_017",
     "VBT_SMITH_BENCH_GENERAL_TERMINAL_VELOCITY_017",
+    "VBT_SMITH_BENCH_PAUSED_TERMINAL_VELOCITY_017",
     "Estimated1RM",
     "Estimated1RMResult",
     "EstimatedOneRepMax",
@@ -3198,14 +3729,17 @@ __all__ = [
     "Measured1RM",
     "Measured1RMResult",
     "MeasuredOneRepMax",
+    "MeasuredOneRepMaxAssessmentEvidence",
     "OneRepMaxEstimated",
     "OneRepMaxMeasured",
     "TerminalVelocityAssumption",
     "VBTConcentricPhase",
     "VBTConcentricPhaseEvidence",
+    "VBTConcentricPhaseSourceEvidence",
     "VBTMetric",
     "VBTMetricResult",
     "VBTPhaseAuthorityStatus",
+    "VBTPhaseSourceAuthority",
     "VBTRepetitionEvidence",
     "VBTSourceSeries",
     "VBTSuccessfulRepetition",
