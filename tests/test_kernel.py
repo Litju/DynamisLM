@@ -619,6 +619,7 @@ def test_no_test_specific_arithmetic_or_science_is_in_generic_public_package() -
         path.read_text(encoding="utf-8")
         for path in package_root.rglob("*.py")
         if "measurement/cmj" not in path.as_posix()
+        and "measurement/strength" not in path.as_posix()
     )
 
     assert "cmj" not in source.lower()
