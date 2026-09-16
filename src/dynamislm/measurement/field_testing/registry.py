@@ -191,6 +191,11 @@ COD_ASYMMETRY_OPERATION = _reference(
 RSA_SPRINT_SOURCE_OPERATION = _reference(
     "processing-method", "rsa-sprint-source-v1", "RSA repetition source observation V1"
 )
+RSA_CRITERION_SPRINT_SOURCE_OPERATION = _reference(
+    "processing-method",
+    "rsa-criterion-sprint-source-v1",
+    "RSA preliminary criterion sprint source observation V1",
+)
 RSA_AGGREGATION_OPERATION = _reference(
     "registered-operation", "rsa-complete-series-aggregation-v1", "RSA complete-series aggregation"
 )
@@ -215,6 +220,17 @@ RSA_S_DEC_OPERATION = RSA_PERCENT_DECREMENT_OPERATION
 
 IFT_STAGE_SOURCE_OPERATION = _reference(
     "processing-method", "30-15-ift-stage-source-v1", "30-15 IFT stage source observation V1"
+)
+IFT_STAGE_COMPLETION_SOURCE_OPERATION = _reference(
+    "processing-method",
+    "30-15-ift-stage-completion-source-v1",
+    "30-15 IFT source stage completion/adjudication V1",
+)
+IFT_STAGE_COMPLETION_MEASURAND = _reference(
+    "measurand", "30-15-ift-stage-completion", "30-15 IFT source stage completion state"
+)
+IFT_STAGE_COMPLETION_METRIC = _reference(
+    "metric", "30-15-ift-stage-completion", "30-15 IFT source stage completion state"
 )
 IFT_TEST_SOURCE_OPERATION = _reference(
     "processing-method", "30-15-ift-test-source-v1", "30-15 IFT test source observation V1"
@@ -277,11 +293,18 @@ COD_ASYMMETRY_METRIC = _reference(
 
 RSA_SPRINT_TIME_MEASURAND = _reference("measurand", "rsa-sprint-time", "RSA repetition sprint time")
 RSA_SPRINT_TIME_METRIC = _reference("metric", "rsa-sprint-time", "RSA repetition sprint time")
+RSA_PERCENT_DECREMENT_MEASURAND = _reference(
+    "measurand",
+    "rsa-percent-decrement",
+    "RSA mechanical repeated-sprint performance percentage decrement",
+)
 RSA_BEST_TIME_METRIC = _reference("metric", "rsa-best-time", "RSA best sprint time")
 RSA_MEAN_TIME_METRIC = _reference("metric", "rsa-mean-time", "RSA mean sprint time")
 RSA_TOTAL_TIME_METRIC = _reference("metric", "rsa-total-time", "RSA total sprint time")
 RSA_PERCENT_DECREMENT_METRIC = _reference(
-    "metric", "rsa-percent-decrement", "RSA mechanical percent decrement"
+    "metric",
+    "rsa-percent-decrement",
+    "RSA mechanical repeated-sprint performance percentage decrement",
 )
 RSA_S_DEC_METRIC = RSA_PERCENT_DECREMENT_METRIC
 

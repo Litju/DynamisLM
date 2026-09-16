@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import datetime as datetime_module
 from dataclasses import dataclass
 from enum import StrEnum
 
@@ -12,9 +13,12 @@ from dynamislm.measurement.field_testing._common import (
     _numeric_scalar,
     _protocol_processing_components,
     _refusal,
+    _require_field_testing_source_lineage,
     _require_qualified,
+    _require_verified_field_artifact,
+    _source_processing_state,
     build_field_testing_source_observation,
-    build_source_qualification_observation,
+    normalize_field_test_qualification,
 )
 from dynamislm.measurement.field_testing.identity import (
     FieldTestFamily,
@@ -42,6 +46,9 @@ from dynamislm.measurement.field_testing.registry import (
     IFT30_15_TERMINATION_RULE,
     IFT30_15_TEST_FAMILY,
     IFT_AUDIO_SIGNAL_TRIGGER,
+    IFT_STAGE_COMPLETION_MEASURAND,
+    IFT_STAGE_COMPLETION_METRIC,
+    IFT_STAGE_COMPLETION_SOURCE_OPERATION,
     IFT_STAGE_SOURCE_OPERATION,
     IFT_STAGE_VELOCITY_MEASURAND,
     IFT_STAGE_VELOCITY_METRIC,
@@ -197,14 +204,10 @@ def ift30_15_protocol_v1() -> IFT30_15ProtocolIdentity:
 def _ift_stage_parameters(
     protocol: IFT30_15ProtocolIdentity,
     stage_index: int,
-    completion: IFTStageCompletion,
-    miss_count: int,
 ) -> tuple[MetadataEntry, ...]:
     return (
         MetadataEntry("stage_index", stage_index),
         MetadataEntry("target_stage_velocity_kmh", protocol.stage_velocity_kmh(stage_index)),
-        MetadataEntry("completion", completion.value),
-        MetadataEntry("miss_count", miss_count),
         MetadataEntry("course_length_m", protocol.course_length_m),
         MetadataEntry("run_interval_s", protocol.run_interval_s),
         MetadataEntry("recovery_interval_s", protocol.recovery_interval_s),
@@ -232,25 +235,141 @@ def _acquisition_identity(
 
 @register_serializable_type
 @dataclass(frozen=True, slots=True)
-class IFTStageEvidence:
-    """One source-reported, source-qualified stage completion record."""
+class IFTStageCompletionEvidence:
+    """Typed source/provider adjudication for one exact IFT stage."""
 
     observation: ScientificMeasurementObservation
-    stage_index: int
-    target_stage_velocity_kmh: float
-    completion: IFTStageCompletion
-    miss_count: int = 0
+    target_stage_observation_id: InstanceIdentifier
+
+    def __post_init__(self) -> None:
+        _require_instance(self.observation, ScientificMeasurementObservation, "observation")
+        _require_field_testing_source_lineage(self.observation)
+        _require_instance(
+            self.target_stage_observation_id,
+            InstanceIdentifier,
+            "target_stage_observation_id",
+        )
+        if self.target_stage_observation_id.instance_type != "observation":
+            raise ValueError("target_stage_observation_id must identify an observation")
+        identity = self.observation.identity
+        if not isinstance(identity, IFT30_15MeasurementIdentity):
+            raise ValueError("IFT completion requires IFT30_15MeasurementIdentity")
+        protocol = identity.semantic.protocol_identity
+        if not isinstance(protocol, IFT30_15ProtocolIdentity):
+            raise ValueError("IFT completion requires IFT30_15ProtocolIdentity")
+        if identity.semantic.metric_definition != IFT_STAGE_COMPLETION_METRIC:
+            raise ValueError("IFT completion has the wrong metric")
+        if identity.semantic.measurand != IFT_STAGE_COMPLETION_MEASURAND:
+            raise ValueError("IFT completion has the wrong measurand")
+        if identity.processing.registered_operation != IFT_STAGE_COMPLETION_SOURCE_OPERATION:
+            raise ValueError("IFT completion uses an unregistered source operation")
+        value = self.observation.result.value
+        if not isinstance(value, CategoricalValue):
+            raise ValueError("IFT completion must carry a categorical source result")
+        try:
+            IFTStageCompletion(value.category)
+        except ValueError as exc:
+            raise ValueError("completion category is not registered") from exc
+        if self.observation.result.classification.value_origin not in {
+            ValueOrigin.SOURCE_REPORTED,
+            ValueOrigin.PROVIDER_DERIVED,
+        }:
+            raise ValueError("IFT completion must remain source-reported or provider-derived")
+        if self.observation.result.status is not ResultStatus.VALID:
+            raise ValueError("IFT completion must be valid")
+        for artifact in self.observation.provenance.source_artifacts:
+            if not isinstance(artifact, FieldTestingSourceArtifact):
+                raise ValueError("IFT completion must preserve field-test artifacts")
+            _require_verified_field_artifact(artifact)
+        if any(
+            not isinstance(acquisition, FieldTestingAcquisitionRecord)
+            for acquisition in self.observation.provenance.acquisitions
+        ):
+            raise ValueError("IFT completion must preserve typed acquisitions")
+        parameters = {entry.key: entry.value for entry in identity.processing.method_parameters}
+        if (
+            parameters.get("target_stage_observation_id")
+            != self.target_stage_observation_id.qualified
+        ):
+            raise ValueError("IFT completion target is not preserved in source identity")
+        if parameters.get("stage_index") != self.stage_index:
+            raise ValueError("IFT completion stage index is not preserved in source identity")
+        if parameters.get("target_stage_velocity_kmh") != self.target_stage_velocity_kmh:
+            raise ValueError("IFT completion target velocity is not preserved in source identity")
+        if parameters.get("completion") != self.completion.value:
+            raise ValueError("IFT completion category is not preserved in source identity")
+        if self.miss_count is not None and parameters.get("miss_count") != self.miss_count:
+            raise ValueError("IFT completion checkpoint count is not preserved in source identity")
+        expected_state = (
+            FieldTestProcessingState.PROVIDER_PROCESSED
+            if self.observation.result.classification.value_origin is ValueOrigin.PROVIDER_DERIVED
+            else FieldTestProcessingState.RAW_ACQUIRED
+        )
+        if identity.processing.processing_state is not expected_state:
+            raise ValueError("IFT completion processing state does not match source origin")
+
+    @property
+    def protocol(self) -> IFT30_15ProtocolIdentity:
+        identity = self.observation.identity
+        assert isinstance(identity, IFT30_15MeasurementIdentity)
+        protocol = identity.semantic.protocol_identity
+        assert isinstance(protocol, IFT30_15ProtocolIdentity)
+        return protocol
+
+    @property
+    def _parameters(self) -> dict[str, object]:
+        return {
+            entry.key: entry.value
+            for entry in self.observation.identity.processing.method_parameters
+        }
+
+    @property
+    def stage_index(self) -> int:
+        value = self._parameters.get("stage_index")
+        if type(value) is not int or value < 1:
+            raise ValueError("IFT completion stage index must be a positive integer")
+        return value
+
+    @property
+    def target_stage_velocity_kmh(self) -> float:
+        return _finite(
+            self._parameters.get("target_stage_velocity_kmh"),
+            "target_stage_velocity_kmh",
+        )
+
+    @property
+    def completion(self) -> IFTStageCompletion:
+        value = self.observation.result.value
+        assert isinstance(value, CategoricalValue)
+        return IFTStageCompletion(value.category)
+
+    @property
+    def miss_count(self) -> int | None:
+        value = self._parameters.get("miss_count")
+        if value is None:
+            return None
+        if type(value) is not int or value < 0:
+            raise ValueError("IFT completion miss_count must be a non-negative integer")
+        return value
+
+
+@register_serializable_type
+@dataclass(frozen=True, slots=True)
+class IFTStageEvidence:
+    """One stage source observation bound to source completion evidence."""
+
+    observation: ScientificMeasurementObservation
+    completion_evidence: IFTStageCompletionEvidence
     source_qualification: FieldTestingSourceQualificationEvidence | None = None
 
     def __post_init__(self) -> None:
         _require_instance(self.observation, ScientificMeasurementObservation, "observation")
-        if type(self.stage_index) is not int or self.stage_index < 1:
-            raise ValueError("stage_index must be a positive integer")
-        target = _finite(self.target_stage_velocity_kmh, "target_stage_velocity_kmh")
-        object.__setattr__(self, "target_stage_velocity_kmh", target)
-        _require_enum(self.completion, IFTStageCompletion, "completion")
-        if type(self.miss_count) is not int or self.miss_count < 0:
-            raise ValueError("miss_count must be a non-negative integer")
+        _require_field_testing_source_lineage(self.observation)
+        _require_instance(
+            self.completion_evidence,
+            IFTStageCompletionEvidence,
+            "completion_evidence",
+        )
         identity = self.observation.identity
         if not isinstance(identity, IFT30_15MeasurementIdentity):
             raise ValueError("IFT stage requires IFT30_15MeasurementIdentity")
@@ -269,29 +388,45 @@ class IFTStageEvidence:
             raise ValueError("IFT source stage cannot be a model estimate")
         if self.observation.result.unit != KILOMETER_PER_HOUR:
             raise ValueError("IFT stage velocity must use km/h")
-        if _numeric_scalar(self.observation) != target:
+        if self.completion_evidence.target_stage_observation_id != self.observation.observation_id:
+            raise ValueError("IFT completion targets a different stage observation")
+        if self.completion_evidence.observation.context != self.observation.context:
+            raise ValueError("IFT completion context does not match the stage observation")
+        if self.completion_evidence.protocol != protocol:
+            raise ValueError("IFT completion and stage use different protocols")
+        if _numeric_scalar(self.observation) != self.target_stage_velocity_kmh:
             raise ValueError("IFT stage target velocity does not match source result")
         if protocol.reference == IFT30_15_PROTOCOL_V1:
-            if target != protocol.stage_velocity_kmh(self.stage_index):
+            if self.target_stage_velocity_kmh != protocol.stage_velocity_kmh(self.stage_index):
                 raise ValueError("IFT stage velocity does not reproduce from canonical protocol")
         params = {entry.key: entry.value for entry in identity.processing.method_parameters}
         if (
             params.get("stage_index") != self.stage_index
-            or params.get("target_stage_velocity_kmh") != target
-            or params.get("completion") != self.completion.value
-            or params.get("miss_count") != self.miss_count
+            or params.get("target_stage_velocity_kmh") != self.target_stage_velocity_kmh
         ):
-            raise ValueError("IFT stage evidence is not preserved in processing identity")
+            raise ValueError("IFT stage index/velocity is not preserved in processing identity")
         if self.source_qualification is not None:
             _require_qualified(self.source_qualification, self.observation)
 
     @property
     def protocol(self) -> IFT30_15ProtocolIdentity:
-        identity = self.observation.identity
-        assert isinstance(identity, IFT30_15MeasurementIdentity)
-        protocol = identity.semantic.protocol_identity
-        assert isinstance(protocol, IFT30_15ProtocolIdentity)
-        return protocol
+        return self.completion_evidence.protocol
+
+    @property
+    def stage_index(self) -> int:
+        return self.completion_evidence.stage_index
+
+    @property
+    def target_stage_velocity_kmh(self) -> float:
+        return self.completion_evidence.target_stage_velocity_kmh
+
+    @property
+    def completion(self) -> IFTStageCompletion:
+        return self.completion_evidence.completion
+
+    @property
+    def miss_count(self) -> int | None:
+        return self.completion_evidence.miss_count
 
     @property
     def is_completed(self) -> bool:
@@ -330,37 +465,30 @@ def _ift_source_key(observation: ScientificMeasurementObservation) -> object:
     )
 
 
-def build_ift_stage_evidence(
+def build_ift_stage_source_observation(
     *,
     observation_id: InstanceIdentifier,
     context: ObservationContext,
     protocol: IFT30_15ProtocolIdentity,
     stage_index: int,
-    completion: IFTStageCompletion,
-    miss_count: int,
     source_artifact: FieldTestingSourceArtifact,
     acquisition: FieldTestingAcquisitionRecord,
-    target_stage_velocity_kmh: float | None = None,
+    value_origin: ValueOrigin = ValueOrigin.SOURCE_REPORTED,
     processing_run: ProcessingRun | None = None,
-    qualification_status: FieldTestQualificationStatus | None = None,
-) -> IFTStageEvidence:
-    """Create a typed source stage record; stage count alone cannot mint VIFT."""
+) -> ScientificMeasurementObservation:
+    """Ingest one canonical IFT stage target-velocity observation."""
 
     if not isinstance(protocol, IFT30_15ProtocolIdentity):
         raise ValueError("protocol must be an IFT30_15ProtocolIdentity")
-    _require_enum(completion, IFTStageCompletion, "completion")
-    if type(stage_index) is not int or stage_index < 1:
-        raise ValueError("stage_index must be a positive integer")
-    if type(miss_count) is not int or miss_count < 0:
-        raise ValueError("miss_count must be a non-negative integer")
-    target = (
-        protocol.stage_velocity_kmh(stage_index)
-        if target_stage_velocity_kmh is None
-        else _finite(target_stage_velocity_kmh, "target_stage_velocity_kmh")
-    )
     if protocol.reference is None:
         raise ValueError("IFT stage requires a registered protocol")
-    parameters = _ift_stage_parameters(protocol, stage_index, completion, miss_count)
+    if type(stage_index) is not int or stage_index < 1:
+        raise ValueError("stage_index must be a positive integer")
+    _require_enum(value_origin, ValueOrigin, "value_origin")
+    if value_origin in {ValueOrigin.DYNAMISLM_DERIVED, ValueOrigin.MODEL_ESTIMATE}:
+        raise ValueError("IFT stage source cannot be DynamisLM-derived or estimated")
+    target = protocol.stage_velocity_kmh(stage_index)
+    parameters = _ift_stage_parameters(protocol, stage_index)
     identity = IFT30_15MeasurementIdentity(
         identity_id=ScientificIdentifier(
             "dynamislm",
@@ -385,7 +513,7 @@ def build_ift_stage_evidence(
             filtering_status=_protocol_processing_components(protocol)[1],
             smoothing=_protocol_processing_components(protocol)[2],
             interpolation=_protocol_processing_components(protocol)[3],
-            processing_state=FieldTestProcessingState.RAW_ACQUIRED,
+            processing_state=_source_processing_state(value_origin),
         ),
         version=VersionIdentity(
             processing_method=IFT_STAGE_SOURCE_OPERATION,
@@ -399,13 +527,13 @@ def build_ift_stage_evidence(
         value=ScalarValue(target),
         unit=KILOMETER_PER_HOUR,
         classification=ScientificClassification(
-            ValueOrigin.SOURCE_REPORTED, (ScientificRole.PERFORMANCE_OUTCOME,)
+            value_origin, (ScientificRole.PERFORMANCE_OUTCOME,)
         ),
         quality=MeasurementQuality(),
         uncertainty=UncertaintyMetadata(status=UncertaintyStatus.NOT_ASSESSED),
         status=ResultStatus.VALID,
     )
-    observation = build_field_testing_source_observation(
+    return build_field_testing_source_observation(
         observation_id=observation_id,
         context=context,
         identity=identity,
@@ -414,39 +542,152 @@ def build_ift_stage_evidence(
         acquisition=acquisition,
         processing_run=processing_run,
     )
-    stage = IFTStageEvidence(observation, stage_index, target, completion, miss_count)
-    if qualification_status is None:
-        return stage
-    qualification = build_source_qualification_observation(
-        target_observation=observation,
-        status=qualification_status,
+
+
+def build_ift_stage_completion_source_observation(
+    *,
+    stage_observation: ScientificMeasurementObservation,
+    reported_completion: IFTStageCompletion,
+    reported_miss_count: int | None = None,
+    source_artifact: FieldTestingSourceArtifact,
+    acquisition: FieldTestingAcquisitionRecord,
+    value_origin: ValueOrigin = ValueOrigin.SOURCE_REPORTED,
+    output_observation_id: InstanceIdentifier | None = None,
+    recorded_at: datetime_module.datetime | None = None,
+) -> IFTStageCompletionEvidence:
+    """Ingest source/provider stage completion and optional checkpoint data."""
+
+    if not isinstance(stage_observation, ScientificMeasurementObservation):
+        raise ValueError("stage_observation must be a scientific observation")
+    stage_identity = stage_observation.identity
+    if not isinstance(stage_identity, IFT30_15MeasurementIdentity):
+        raise ValueError("stage_observation must use IFT30_15MeasurementIdentity")
+    protocol = stage_identity.semantic.protocol_identity
+    if not isinstance(protocol, IFT30_15ProtocolIdentity):
+        raise ValueError("stage_observation must use IFT30_15ProtocolIdentity")
+    if stage_identity.semantic.metric_definition != IFT_STAGE_VELOCITY_METRIC:
+        raise ValueError("stage_observation must be an IFT stage velocity observation")
+    _require_enum(reported_completion, IFTStageCompletion, "reported_completion")
+    _require_enum(value_origin, ValueOrigin, "value_origin")
+    if value_origin not in {ValueOrigin.SOURCE_REPORTED, ValueOrigin.PROVIDER_DERIVED}:
+        raise ValueError(
+            "IFT completion ingestion requires source-reported or provider-derived data"
+        )
+    if reported_miss_count is not None and (
+        type(reported_miss_count) is not int or reported_miss_count < 0
+    ):
+        raise ValueError("reported_miss_count must be a non-negative integer")
+    stage_parameters = _stage_parameters(stage_observation)
+    stage_index_value = stage_parameters.get("stage_index")
+    target_velocity_value = stage_parameters.get("target_stage_velocity_kmh")
+    if type(stage_index_value) is not int or stage_index_value < 1:
+        raise ValueError("stage source does not preserve a positive stage index")
+    if isinstance(target_velocity_value, bool) or not isinstance(
+        target_velocity_value, int | float
+    ):
+        raise ValueError("stage source does not preserve a numeric target velocity")
+    parameters = [
+        MetadataEntry("target_stage_observation_id", stage_observation.observation_id.qualified),
+        MetadataEntry("stage_index", stage_index_value),
+        MetadataEntry("target_stage_velocity_kmh", float(target_velocity_value)),
+        MetadataEntry("completion", reported_completion.value),
+    ]
+    if reported_miss_count is not None:
+        parameters.append(MetadataEntry("miss_count", reported_miss_count))
+    observation_id = output_observation_id or InstanceIdentifier(
+        "observation", f"ift30-15-stage-completion:{stage_observation.observation_id.value}"
+    )
+    identity = IFT30_15MeasurementIdentity(
+        identity_id=ScientificIdentifier(
+            "dynamislm",
+            "measurement-identity",
+            f"ift30-15-stage-completion:{observation_id.value}",
+            FIELD_TESTING_REGISTRY_VERSION,
+        ),
+        semantic=FieldTestingSemanticIdentity(
+            construct=IFT30_15_CONSTRUCT,
+            test_family=IFT30_15_TEST_FAMILY,
+            protocol=protocol.reference,
+            measurand=IFT_STAGE_COMPLETION_MEASURAND,
+            metric_definition=IFT_STAGE_COMPLETION_METRIC,
+            protocol_identity=protocol,
+        ),
+        acquisition=_acquisition_identity(source_artifact, acquisition),
+        processing=FieldTestingProcessingIdentity(
+            registered_operation=IFT_STAGE_COMPLETION_SOURCE_OPERATION,
+            method_parameters=tuple(parameters),
+            filtering=_protocol_processing_components(protocol)[0],
+            filtering_status=_protocol_processing_components(protocol)[1],
+            smoothing=_protocol_processing_components(protocol)[2],
+            interpolation=_protocol_processing_components(protocol)[3],
+            processing_state=_source_processing_state(value_origin),
+        ),
+        version=VersionIdentity(
+            processing_method=IFT_STAGE_COMPLETION_SOURCE_OPERATION,
+            method_registry_version=FIELD_TESTING_REGISTRY_VERSION,
+            software_version=FIELD_TESTING_SOFTWARE_VERSION,
+            hardware_firmware=acquisition.hardware_firmware,
+        ),
+    )
+    result = MeasurementResult(
+        result_id=InstanceIdentifier("result", f"{observation_id.value}:completion"),
+        value=CategoricalValue(reported_completion.value),
+        unit=None,
+        classification=ScientificClassification(value_origin, ()),
+        quality=MeasurementQuality(),
+        uncertainty=UncertaintyMetadata(status=UncertaintyStatus.NOT_ASSESSED),
+        status=ResultStatus.VALID,
+    )
+    observation = build_field_testing_source_observation(
+        observation_id=observation_id,
+        context=stage_observation.context,
+        identity=identity,
+        result=result,
         source_artifact=source_artifact,
         acquisition=acquisition,
+        recorded_at=recorded_at,
     )
-    return IFTStageEvidence(observation, stage_index, target, completion, miss_count, qualification)
+    return IFTStageCompletionEvidence(observation, stage_observation.observation_id)
+
+
+def _stage_parameters(observation: ScientificMeasurementObservation) -> dict[str, object]:
+    identity = observation.identity
+    if not isinstance(identity, IFT30_15MeasurementIdentity):
+        raise ValueError("IFT stage must use IFT30_15MeasurementIdentity")
+    return {entry.key: entry.value for entry in identity.processing.method_parameters}
+
+
+def build_ift_stage_evidence(
+    *,
+    stage_observation: ScientificMeasurementObservation,
+    completion_evidence: IFTStageCompletionEvidence,
+    source_qualification_observation: ScientificMeasurementObservation | None = None,
+) -> IFTStageEvidence:
+    """Normalize one stage observation against pre-existing source completion evidence."""
+
+    qualification = None
+    if source_qualification_observation is not None:
+        qualification = normalize_field_test_qualification(
+            source_qualification_observation,
+            stage_observation,
+        )
+    return IFTStageEvidence(stage_observation, completion_evidence, qualification)
 
 
 def qualify_ift_stage(
     stage: IFTStageEvidence,
     *,
-    status: FieldTestQualificationStatus,
-    source_artifact: FieldTestingSourceArtifact,
-    acquisition: FieldTestingAcquisitionRecord,
+    source_observation: ScientificMeasurementObservation,
 ) -> IFTStageEvidence:
     if not isinstance(stage, IFTStageEvidence):
         raise ValueError("stage must be an IFTStageEvidence")
-    qualification = build_source_qualification_observation(
-        target_observation=stage.observation,
-        status=status,
-        source_artifact=source_artifact,
-        acquisition=acquisition,
+    qualification = normalize_field_test_qualification(
+        source_observation,
+        stage.observation,
     )
     return IFTStageEvidence(
         stage.observation,
-        stage.stage_index,
-        stage.target_stage_velocity_kmh,
-        stage.completion,
-        stage.miss_count,
+        stage.completion_evidence,
         qualification,
     )
 
@@ -454,29 +695,69 @@ def qualify_ift_stage(
 @register_serializable_type
 @dataclass(frozen=True, slots=True)
 class IFTTerminationEvidence:
-    """Source-reported termination reason bound to a categorical observation."""
+    """Source/provider termination reason bound to a categorical observation."""
 
     observation: ScientificMeasurementObservation
-    reason: IFTTerminationReason
 
     def __post_init__(self) -> None:
         _require_instance(self.observation, ScientificMeasurementObservation, "observation")
-        _require_enum(self.reason, IFTTerminationReason, "reason")
+        _require_field_testing_source_lineage(self.observation)
         value = self.observation.result.value
-        if not isinstance(value, CategoricalValue) or value.category != self.reason.value:
-            raise ValueError("termination evidence category does not match its reason")
-        if self.observation.result.classification.value_origin is not ValueOrigin.SOURCE_REPORTED:
-            raise ValueError("termination evidence must remain source-reported")
+        if not isinstance(value, CategoricalValue):
+            raise ValueError("termination evidence must carry a categorical source result")
+        try:
+            IFTTerminationReason(value.category)
+        except ValueError as exc:
+            raise ValueError("termination category is not registered") from exc
+        if self.observation.result.classification.value_origin not in {
+            ValueOrigin.SOURCE_REPORTED,
+            ValueOrigin.PROVIDER_DERIVED,
+        }:
+            raise ValueError("termination evidence must remain source-reported or provider-derived")
         if self.observation.result.status is not ResultStatus.VALID:
             raise ValueError("termination evidence must be valid")
-        if self.observation.identity.semantic.metric_definition != IFT_TERMINATION_METRIC:
+        for artifact in self.observation.provenance.source_artifacts:
+            if not isinstance(artifact, FieldTestingSourceArtifact):
+                raise ValueError("termination evidence must preserve field-test artifacts")
+            _require_verified_field_artifact(artifact)
+        if any(
+            not isinstance(acquisition, FieldTestingAcquisitionRecord)
+            for acquisition in self.observation.provenance.acquisitions
+        ):
+            raise ValueError("termination evidence must preserve typed acquisitions")
+        identity = self.observation.identity
+        if not isinstance(identity, IFT30_15MeasurementIdentity):
+            raise ValueError("termination evidence requires IFT30_15MeasurementIdentity")
+        if identity.semantic.metric_definition != IFT_TERMINATION_METRIC:
             raise ValueError("termination evidence has the wrong metric")
-        parameters = {
-            entry.key: entry.value
-            for entry in self.observation.identity.processing.method_parameters
-        }
+        if identity.semantic.measurand != IFT_TERMINATION_MEASURAND:
+            raise ValueError("termination evidence has the wrong measurand")
+        parameters = {entry.key: entry.value for entry in identity.processing.method_parameters}
+        if identity.processing.registered_operation != IFT_TEST_SOURCE_OPERATION:
+            raise ValueError("termination evidence uses an unregistered source operation")
+        if self.reason is IFTTerminationReason.UNKNOWN:
+            raise ValueError("termination evidence must report an explicit reason")
         if parameters.get("termination_reason") != self.reason.value:
             raise ValueError("termination reason is not preserved in source identity")
+
+    @property
+    def reason(self) -> IFTTerminationReason:
+        value = self.observation.result.value
+        assert isinstance(value, CategoricalValue)
+        return IFTTerminationReason(value.category)
+
+    @property
+    def target_stage_observation_id(self) -> InstanceIdentifier:
+        identity = self.observation.identity
+        assert isinstance(identity, IFT30_15MeasurementIdentity)
+        parameters = {entry.key: entry.value for entry in identity.processing.method_parameters}
+        value = parameters.get("target_stage_observation_id")
+        if not isinstance(value, str):
+            raise ValueError("termination evidence target stage is unresolved")
+        instance_type, _, instance_value = value.partition(":")
+        if instance_type != "observation" or not instance_value:
+            raise ValueError("termination evidence target stage is invalid")
+        return InstanceIdentifier(instance_type, instance_value)
 
 
 @register_serializable_type
@@ -514,9 +795,11 @@ class IFTTestEvidence:
                 context.athlete_id != first_context.athlete_id
                 or context.session_id != first_context.session_id
                 or context.test_instance_id != first_context.test_instance_id
+                or context.trial_id != first_context.trial_id
                 or context.observed_at != first_context.observed_at
                 or context.population_context != first_context.population_context
                 or context.environment != first_context.environment
+                or context.context_metadata != first_context.context_metadata
             ):
                 raise ValueError("IFT stages must share one athlete/session/test scope")
             if _ift_source_key(stage.observation) != _ift_source_key(ordered[0].observation):
@@ -526,33 +809,18 @@ class IFTTestEvidence:
             termination_context.athlete_id != first_context.athlete_id
             or termination_context.session_id != first_context.session_id
             or termination_context.test_instance_id != first_context.test_instance_id
+            or termination_context.trial_id != first_context.trial_id
             or termination_context.observed_at != first_context.observed_at
             or termination_context.population_context != first_context.population_context
             or termination_context.environment != first_context.environment
+            or termination_context.context_metadata != first_context.context_metadata
         ):
             raise ValueError("termination evidence is bound to a different IFT test")
         if _ift_source_key(self.termination.observation) != _ift_source_key(ordered[0].observation):
             raise ValueError("termination evidence must use the same source-device identity")
         last = ordered[-1]
-        termination_parameters = {
-            entry.key: entry.value
-            for entry in self.termination.observation.identity.processing.method_parameters
-        }
-        if (
-            termination_parameters.get("target_stage_observation_id")
-            != last.observation.observation_id.qualified
-        ):
+        if self.termination.target_stage_observation_id != last.observation.observation_id:
             raise ValueError("termination evidence is bound to a different final stage")
-        if self.termination.reason is IFTTerminationReason.THREE_CONSECUTIVE_CONTROL_ZONE_FAILURES:
-            if last.is_completed or last.miss_count < 3:
-                raise ValueError(
-                    "three-failure termination requires an incomplete stage with three misses"
-                )
-        elif self.termination.reason is IFTTerminationReason.VOLUNTARY_EXHAUSTION:
-            if not last.is_completed and last.miss_count >= 3:
-                raise ValueError(
-                    "voluntary exhaustion cannot be relabelled from three control-zone failures"
-                )
 
     @property
     def final_completed_stage(self) -> IFTStageEvidence:
@@ -567,25 +835,35 @@ class IFTTestEvidence:
         for stage in self.stages:
             assert stage.source_qualification is not None
             observations.extend(
-                (stage.observation, stage.source_qualification.qualification_observation)
+                (
+                    stage.observation,
+                    stage.completion_evidence.observation,
+                    stage.source_qualification.qualification_observation,
+                )
             )
         observations.append(self.termination.observation)
         return tuple(observations)
 
 
-def build_ift_termination_evidence(
+def build_ift_termination_source_observation(
     *,
     target_stage: IFTStageEvidence,
-    reason: IFTTerminationReason,
+    reported_reason: IFTTerminationReason,
     source_artifact: FieldTestingSourceArtifact,
     acquisition: FieldTestingAcquisitionRecord,
+    value_origin: ValueOrigin = ValueOrigin.SOURCE_REPORTED,
     output_observation_id: InstanceIdentifier | None = None,
-) -> IFTTerminationEvidence:
-    """Create the source-reported termination evidence for an IFT test."""
+) -> ScientificMeasurementObservation:
+    """Ingest an explicit source/provider termination reason."""
 
     if not isinstance(target_stage, IFTStageEvidence):
         raise ValueError("target_stage must be an IFTStageEvidence")
-    _require_enum(reason, IFTTerminationReason, "reason")
+    _require_enum(reported_reason, IFTTerminationReason, "reported_reason")
+    _require_enum(value_origin, ValueOrigin, "value_origin")
+    if value_origin not in {ValueOrigin.SOURCE_REPORTED, ValueOrigin.PROVIDER_DERIVED}:
+        raise ValueError(
+            "IFT termination ingestion requires source-reported or provider-derived data"
+        )
     protocol = target_stage.protocol
     identity = IFT30_15MeasurementIdentity(
         identity_id=ScientificIdentifier(
@@ -606,12 +884,12 @@ def build_ift_termination_evidence(
         processing=FieldTestingProcessingIdentity(
             registered_operation=IFT_TEST_SOURCE_OPERATION,
             method_parameters=(
-                MetadataEntry("termination_reason", reason.value),
+                MetadataEntry("termination_reason", reported_reason.value),
                 MetadataEntry(
                     "target_stage_observation_id", target_stage.observation.observation_id.qualified
                 ),
             ),
-            processing_state=FieldTestProcessingState.RAW_ACQUIRED,
+            processing_state=_source_processing_state(value_origin),
             filtering=_protocol_processing_components(protocol)[0],
             filtering_status=_protocol_processing_components(protocol)[1],
             smoothing=_protocol_processing_components(protocol)[2],
@@ -629,9 +907,9 @@ def build_ift_termination_evidence(
     )
     result = MeasurementResult(
         result_id=InstanceIdentifier("result", f"{observation_id.value}:termination"),
-        value=CategoricalValue(reason.value),
+        value=CategoricalValue(reported_reason.value),
         unit=None,
-        classification=ScientificClassification(ValueOrigin.SOURCE_REPORTED, ()),
+        classification=ScientificClassification(value_origin, ()),
         quality=MeasurementQuality(),
         uncertainty=UncertaintyMetadata(status=UncertaintyStatus.NOT_ASSESSED),
         status=ResultStatus.VALID,
@@ -644,7 +922,31 @@ def build_ift_termination_evidence(
         source_artifact=source_artifact,
         acquisition=acquisition,
     )
-    return IFTTerminationEvidence(observation, reason)
+    return observation
+
+
+def build_ift_termination_evidence(
+    *,
+    termination_observation: ScientificMeasurementObservation,
+    target_stage: IFTStageEvidence,
+) -> IFTTerminationEvidence:
+    """Normalize pre-existing source/provider termination evidence."""
+
+    if not isinstance(target_stage, IFTStageEvidence):
+        raise ValueError("target_stage must be an IFTStageEvidence")
+    evidence = IFTTerminationEvidence(termination_observation)
+    if evidence.target_stage_observation_id != target_stage.observation.observation_id:
+        raise ValueError("termination evidence targets a different final stage")
+    if evidence.observation.context != target_stage.observation.context:
+        raise ValueError("termination evidence context does not match the target stage")
+    termination_identity = evidence.observation.identity
+    if not isinstance(termination_identity, IFT30_15MeasurementIdentity):
+        raise ValueError("termination evidence requires IFT30_15MeasurementIdentity")
+    if termination_identity.semantic.protocol_identity != target_stage.protocol:
+        raise ValueError("termination evidence uses a different protocol")
+    if _ift_source_key(evidence.observation) != _ift_source_key(target_stage.observation):
+        raise ValueError("termination evidence must use the same source identity")
+    return evidence
 
 
 def build_ift_test_evidence(
@@ -652,19 +954,10 @@ def build_ift_test_evidence(
     test_id: InstanceIdentifier,
     protocol: IFT30_15ProtocolIdentity,
     stages: tuple[IFTStageEvidence, ...],
-    termination_reason: IFTTerminationReason,
-    termination_source_artifact: FieldTestingSourceArtifact,
-    termination_acquisition: FieldTestingAcquisitionRecord,
+    termination: IFTTerminationEvidence,
 ) -> IFTTestEvidence:
     if not isinstance(stages, tuple) or not stages:
         raise ValueError("stages must be a non-empty tuple")
-    target_stage = max(stages, key=lambda item: item.stage_index)
-    termination = build_ift_termination_evidence(
-        target_stage=target_stage,
-        reason=termination_reason,
-        source_artifact=termination_source_artifact,
-        acquisition=termination_acquisition,
-    )
     return IFTTestEvidence(test_id, protocol, stages, termination)
 
 
@@ -688,6 +981,22 @@ class VIFTResult:
             raise ValueError("VIFT result operation is not registered")
         if self.observation.result.unit != KILOMETER_PER_HOUR:
             raise ValueError("VIFT must use km/h")
+        output_runs = tuple(
+            run
+            for run in self.observation.provenance.processing_runs
+            if run.output_entity_id == self.observation.observation_id
+        )
+        if len(output_runs) != 1:
+            raise ValueError("VIFT must preserve one output processing run")
+        if any(
+            not any(
+                edge.from_id == source.observation_id.qualified
+                and edge.to_id == output_runs[0].processing_run_id.qualified
+                for edge in self.observation.provenance.lineage_edges
+            )
+            for source in self.test.source_observations
+        ):
+            raise ValueError("VIFT result is missing source lineage")
         final = self.test.final_completed_stage
         if _numeric_scalar(self.observation) != final.target_stage_velocity_kmh:
             raise ValueError("VIFT scalar does not equal the final completed stage velocity")
@@ -849,6 +1158,7 @@ __all__ = [
     "IFT30_15ProtocolIdentity",
     "IFTRecoveryMode",
     "IFTStageCompletion",
+    "IFTStageCompletionEvidence",
     "IFTStageEvidence",
     "IFTTerminationEvidence",
     "IFTTerminationReason",
@@ -857,8 +1167,11 @@ __all__ = [
     "ThirtyFifteenIFTStageEvidence",
     "ThirtyFifteenIFTTestEvidence",
     "VIFTResult",
+    "build_ift_stage_completion_source_observation",
     "build_ift_stage_evidence",
+    "build_ift_stage_source_observation",
     "build_ift_termination_evidence",
+    "build_ift_termination_source_observation",
     "build_ift_test_evidence",
     "calculate_vift",
     "ift30_15_protocol_v1",

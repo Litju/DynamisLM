@@ -10,8 +10,10 @@ from dynamislm.measurement.field_testing import sprint as _sprint
 from dynamislm.measurement.field_testing._common import (
     FieldTestingScalarResult,
     FieldTestingSourceQualificationEvidence,
+    build_field_test_qualification_source_observation,
     build_field_testing_source_observation,
     build_source_qualification_observation,
+    normalize_field_test_qualification,
 )
 from dynamislm.measurement.field_testing.cod import *  # noqa: F403
 from dynamislm.measurement.field_testing.comparability import *  # noqa: F403
@@ -24,8 +26,10 @@ from dynamislm.measurement.field_testing.sprint import *  # noqa: F403
 __all__ = [
     "FieldTestingScalarResult",
     "FieldTestingSourceQualificationEvidence",
+    "build_field_test_qualification_source_observation",
     "build_field_testing_source_observation",
     "build_source_qualification_observation",
+    "normalize_field_test_qualification",
     *_identity.__all__,
     *_registry.__all__,
     *_sprint.__all__,

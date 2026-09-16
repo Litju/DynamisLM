@@ -15,7 +15,7 @@ from dynamislm.measurement.field_testing._common import (
     _refusal,
     _require_qualified,
     build_field_testing_source_observation,
-    build_source_qualification_observation,
+    normalize_field_test_qualification,
 )
 from dynamislm.measurement.field_testing.identity import (
     FieldTestFamily,
@@ -40,15 +40,15 @@ from dynamislm.measurement.field_testing.registry import (
     FIELD_TESTING_SOFTWARE_VERSION,
     METER,
     PERCENT,
-    PHOTOCELL_GATE_FINISH_TRIGGER,
-    PHOTOCELL_GATE_START_TRIGGER,
     RSA_6X40_SHUTTLE_PROTOCOL_V1,
     RSA_BEST_TIME_METRIC,
     RSA_BEST_TIME_OPERATION,
     RSA_CONSTRUCT,
+    RSA_CRITERION_SPRINT_SOURCE_OPERATION,
     RSA_MEAN_TIME_METRIC,
     RSA_MEAN_TIME_OPERATION,
     RSA_PERCENT_DECREMENT_ESTIMATOR,
+    RSA_PERCENT_DECREMENT_MEASURAND,
     RSA_PERCENT_DECREMENT_METRIC,
     RSA_PERCENT_DECREMENT_OPERATION,
     RSA_SPRINT_SOURCE_OPERATION,
@@ -111,6 +111,7 @@ class RSAProtocolIdentity(FieldTestingProtocolIdentity):
     recovery_duration_s: float
     recovery_mode: RSARecoveryMode
     departure_interval_s: float | None = None
+    pre_test_recovery_duration_s: float | None = None
 
     def __post_init__(self) -> None:
         FieldTestingProtocolIdentity.__post_init__(self)
@@ -143,6 +144,14 @@ class RSAProtocolIdentity(FieldTestingProtocolIdentity):
             if departure <= 0:
                 raise ValueError("departure_interval_s must be positive")
             object.__setattr__(self, "departure_interval_s", departure)
+        if self.pre_test_recovery_duration_s is not None:
+            pre_test_recovery = _finite(
+                self.pre_test_recovery_duration_s,
+                "pre_test_recovery_duration_s",
+            )
+            if pre_test_recovery < 0:
+                raise ValueError("pre_test_recovery_duration_s must be non-negative")
+            object.__setattr__(self, "pre_test_recovery_duration_s", pre_test_recovery)
         if self.shuttle_layout is not None:
             _require_tuple_items(
                 self.shuttle_layout, FieldTestingProtocolAttribute, "shuttle_layout"
@@ -156,13 +165,15 @@ class RSAProtocolIdentity(FieldTestingProtocolIdentity):
                 "repetitions": 6,
                 "recovery_duration_s": 20.0,
                 "recovery_mode": RSARecoveryMode.PASSIVE,
+                "pre_test_recovery_duration_s": 300.0,
                 "start_position": "standing",
-                "start_line_offset_m": 0.30,
-                "start_initiation_mode": StartInitiationMode.SELF_INITIATED_PHOTOCELL_CROSSING,
-                "reaction_time_semantics": ReactionTimeSemantics.EXCLUDED,
-                "sensor_modality": FieldTestSensorModality.TIMING_GATE,
-                "start_trigger": PHOTOCELL_GATE_START_TRIGGER,
-                "finish_trigger": PHOTOCELL_GATE_FINISH_TRIGGER,
+                "start_line_offset_m": None,
+                "start_initiation_mode": StartInitiationMode.ACOUSTIC_5_SECOND_COUNTDOWN,
+                "reaction_time_semantics": ReactionTimeSemantics.UNKNOWN,
+                "sensor_modality": FieldTestSensorModality.UNKNOWN,
+                "start_trigger": None,
+                "finish_trigger": None,
+                "surface": "natural grass",
             }
             for name, expected_value in expected.items():
                 if getattr(self, name) != expected_value:
@@ -176,19 +187,20 @@ class RSAProtocolIdentity(FieldTestingProtocolIdentity):
 
 
 def rsa_6x40m_shuttle_protocol_v1() -> RSAProtocolIdentity:
-    """Return the registered six-by-40-m, 20-second-recovery RSA protocol."""
+    """Return the evidence-bound six-by-40-m shuttle RSA protocol."""
 
     return RSAProtocolIdentity(
         family=FieldTestFamily.REPEATED_SPRINT_ABILITY,
         protocol_version=FIELD_TESTING_REGISTRY_VERSION,
         reference=RSA_6X40_SHUTTLE_PROTOCOL_V1,
         start_position="standing",
-        start_line_offset_m=0.30,
-        start_initiation_mode=StartInitiationMode.SELF_INITIATED_PHOTOCELL_CROSSING,
-        reaction_time_semantics=ReactionTimeSemantics.EXCLUDED,
-        start_trigger=PHOTOCELL_GATE_START_TRIGGER,
-        finish_trigger=PHOTOCELL_GATE_FINISH_TRIGGER,
-        sensor_modality=FieldTestSensorModality.TIMING_GATE,
+        surface="natural grass",
+        start_line_offset_m=None,
+        start_initiation_mode=StartInitiationMode.ACOUSTIC_5_SECOND_COUNTDOWN,
+        reaction_time_semantics=ReactionTimeSemantics.UNKNOWN,
+        start_trigger=None,
+        finish_trigger=None,
+        sensor_modality=FieldTestSensorModality.UNKNOWN,
         gate_topology=TimingGateTopology.UNKNOWN,
         course_layout=(
             FieldTestingProtocolAttribute("outbound_distance_m", 20.0, METER),
@@ -208,6 +220,7 @@ def rsa_6x40m_shuttle_protocol_v1() -> RSAProtocolIdentity:
         recovery_duration_s=20.0,
         recovery_mode=RSARecoveryMode.PASSIVE,
         departure_interval_s=None,
+        pre_test_recovery_duration_s=300.0,
     )
 
 
@@ -223,6 +236,7 @@ def _rsa_parameters(
         MetadataEntry("repetitions", protocol.repetitions),
         MetadataEntry("recovery_duration_s", protocol.recovery_duration_s),
         MetadataEntry("recovery_mode", protocol.recovery_mode.value),
+        MetadataEntry("pre_test_recovery_duration_s", protocol.pre_test_recovery_duration_s),
         MetadataEntry("movement_mode", protocol.movement_mode.value),
         MetadataEntry("cod_count", protocol.cod_count),
         MetadataEntry("turn_angle_deg", protocol.turn_angle_deg),
@@ -329,7 +343,6 @@ def build_rsa_repetition_observation(
     source_artifact: FieldTestingSourceArtifact,
     acquisition: FieldTestingAcquisitionRecord,
     processing_run: ProcessingRun | None = None,
-    qualification_status: FieldTestQualificationStatus | None = None,
 ) -> RSARepetitionObservation:
     """Create a typed RSA repetition; no tuple of floats is authoritative."""
 
@@ -399,32 +412,19 @@ def build_rsa_repetition_observation(
         acquisition=acquisition,
         processing_run=processing_run,
     )
-    repetition = RSARepetitionObservation(observation, set_id, sprint_index)
-    if qualification_status is None:
-        return repetition
-    qualification = build_source_qualification_observation(
-        target_observation=observation,
-        status=qualification_status,
-        source_artifact=source_artifact,
-        acquisition=acquisition,
-    )
-    return RSARepetitionObservation(observation, set_id, sprint_index, qualification)
+    return RSARepetitionObservation(observation, set_id, sprint_index)
 
 
 def qualify_rsa_repetition(
     repetition: RSARepetitionObservation,
     *,
-    status: FieldTestQualificationStatus,
-    source_artifact: FieldTestingSourceArtifact,
-    acquisition: FieldTestingAcquisitionRecord,
+    source_observation: ScientificMeasurementObservation,
 ) -> RSARepetitionObservation:
     if not isinstance(repetition, RSARepetitionObservation):
         raise ValueError("repetition must be an RSARepetitionObservation")
-    qualification = build_source_qualification_observation(
-        target_observation=repetition.observation,
-        status=status,
-        source_artifact=source_artifact,
-        acquisition=acquisition,
+    qualification = normalize_field_test_qualification(
+        source_observation,
+        repetition.observation,
     )
     return RSARepetitionObservation(
         repetition.observation,
@@ -434,8 +434,189 @@ def qualify_rsa_repetition(
     )
 
 
-def _rsa_source_key(repetition: RSARepetitionObservation) -> object:
-    identity = repetition.observation.identity
+def _rsa_criterion_parameters(
+    protocol: RSAProtocolIdentity,
+    set_id: InstanceIdentifier,
+) -> tuple[MetadataEntry, ...]:
+    return (
+        MetadataEntry("criterion_sprint", True),
+        MetadataEntry("set_id", set_id.qualified),
+        MetadataEntry("sprint_distance_m", protocol.sprint_distance_m),
+        MetadataEntry("outbound_distance_m", 20.0),
+        MetadataEntry("return_distance_m", 20.0),
+        MetadataEntry("turn_angle_deg", 180.0),
+        MetadataEntry("timing_origin", "UNKNOWN"),
+    )
+
+
+@register_serializable_type
+@dataclass(frozen=True, slots=True)
+class RSACriterionSprintEvidence:
+    """Source-qualified preliminary shuttle sprint bound to one RSA set."""
+
+    observation: ScientificMeasurementObservation
+    set_id: InstanceIdentifier
+    source_qualification: FieldTestingSourceQualificationEvidence
+
+    def __post_init__(self) -> None:
+        _require_instance(self.observation, ScientificMeasurementObservation, "observation")
+        _require_instance(self.set_id, InstanceIdentifier, "set_id")
+        if self.set_id.instance_type != "rsa-set":
+            raise ValueError("criterion set_id must identify an RSA set")
+        identity = self.observation.identity
+        if not isinstance(identity, RSAMeasurementIdentity):
+            raise ValueError("RSA criterion requires RSAMeasurementIdentity")
+        protocol = identity.semantic.protocol_identity
+        if not isinstance(protocol, RSAProtocolIdentity):
+            raise ValueError("RSA criterion requires RSAProtocolIdentity")
+        if protocol.reference != RSA_6X40_SHUTTLE_PROTOCOL_V1:
+            raise ValueError("RSA criterion requires the canonical RSA V1 protocol")
+        if identity.semantic.metric_definition != RSA_SPRINT_TIME_METRIC:
+            raise ValueError("RSA criterion has the wrong metric")
+        if identity.semantic.measurand != RSA_SPRINT_TIME_MEASURAND:
+            raise ValueError("RSA criterion has the wrong measurand")
+        if identity.processing.registered_operation != RSA_CRITERION_SPRINT_SOURCE_OPERATION:
+            raise ValueError("RSA criterion uses an unregistered source operation")
+        if self.observation.result.unit != SECOND:
+            raise ValueError("RSA criterion time must use seconds")
+        if _numeric_scalar(self.observation) <= 0:
+            raise ValueError("RSA criterion time must be positive")
+        if self.observation.result.classification.value_origin not in {
+            ValueOrigin.DIRECT_MEASUREMENT,
+            ValueOrigin.SOURCE_REPORTED,
+            ValueOrigin.PROVIDER_DERIVED,
+        }:
+            raise ValueError("RSA criterion cannot be a model estimate")
+        parameters = {entry.key: entry.value for entry in identity.processing.method_parameters}
+        if (
+            parameters.get("criterion_sprint") is not True
+            or parameters.get("set_id") != self.set_id.qualified
+        ):
+            raise ValueError("RSA criterion identity does not preserve criterion/set binding")
+        if self.observation.context.trial_id is None:
+            raise ValueError("RSA criterion must preserve a trial context")
+        _require_qualified(self.source_qualification, self.observation)
+
+    @property
+    def protocol(self) -> RSAProtocolIdentity:
+        identity = self.observation.identity
+        assert isinstance(identity, RSAMeasurementIdentity)
+        protocol = identity.semantic.protocol_identity
+        assert isinstance(protocol, RSAProtocolIdentity)
+        return protocol
+
+    @property
+    def time_seconds(self) -> float:
+        return _numeric_scalar(self.observation)
+
+
+def build_rsa_criterion_sprint_source_observation(
+    *,
+    observation_id: InstanceIdentifier,
+    context: ObservationContext,
+    protocol: RSAProtocolIdentity,
+    set_id: InstanceIdentifier,
+    time_seconds: float,
+    source_artifact: FieldTestingSourceArtifact,
+    acquisition: FieldTestingAcquisitionRecord,
+    value_origin: ValueOrigin = ValueOrigin.SOURCE_REPORTED,
+    processing_run: ProcessingRun | None = None,
+) -> ScientificMeasurementObservation:
+    """Ingest the preliminary 40 m shuttle criterion sprint result."""
+
+    if not isinstance(protocol, RSAProtocolIdentity):
+        raise ValueError("protocol must be an RSAProtocolIdentity")
+    if protocol.reference != RSA_6X40_SHUTTLE_PROTOCOL_V1:
+        raise ValueError("RSA criterion requires the canonical RSA V1 protocol")
+    _require_instance(set_id, InstanceIdentifier, "set_id")
+    if set_id.instance_type != "rsa-set":
+        raise ValueError("set_id must identify an RSA set")
+    _require_enum(value_origin, ValueOrigin, "value_origin")
+    if value_origin in {ValueOrigin.DYNAMISLM_DERIVED, ValueOrigin.MODEL_ESTIMATE}:
+        raise ValueError("RSA criterion source cannot be DynamisLM-derived or estimated")
+    value = _finite(time_seconds, "time_seconds")
+    if value <= 0:
+        raise ValueError("RSA criterion time must be positive")
+    parameters = _rsa_criterion_parameters(protocol, set_id)
+    identity = RSAMeasurementIdentity(
+        identity_id=ScientificIdentifier(
+            "dynamislm",
+            "measurement-identity",
+            f"rsa-criterion:{set_id.value}",
+            FIELD_TESTING_REGISTRY_VERSION,
+        ),
+        semantic=FieldTestingSemanticIdentity(
+            construct=RSA_CONSTRUCT,
+            test_family=RSA_TEST_FAMILY,
+            protocol=protocol.reference,
+            measurand=RSA_SPRINT_TIME_MEASURAND,
+            metric_definition=RSA_SPRINT_TIME_METRIC,
+            protocol_identity=protocol,
+        ),
+        acquisition=_acquisition_identity(source_artifact, acquisition),
+        processing=FieldTestingProcessingIdentity(
+            registered_operation=RSA_CRITERION_SPRINT_SOURCE_OPERATION,
+            method_parameters=parameters,
+            unit=SECOND,
+            filtering=_protocol_processing_components(protocol)[0],
+            filtering_status=_protocol_processing_components(protocol)[1],
+            smoothing=_protocol_processing_components(protocol)[2],
+            interpolation=_protocol_processing_components(protocol)[3],
+            processing_state=(
+                FieldTestProcessingState.PROVIDER_PROCESSED
+                if value_origin is ValueOrigin.PROVIDER_DERIVED
+                else FieldTestProcessingState.RAW_ACQUIRED
+            ),
+        ),
+        version=VersionIdentity(
+            processing_method=RSA_CRITERION_SPRINT_SOURCE_OPERATION,
+            method_registry_version=FIELD_TESTING_REGISTRY_VERSION,
+            software_version=FIELD_TESTING_SOFTWARE_VERSION,
+            hardware_firmware=acquisition.hardware_firmware,
+        ),
+    )
+    result = MeasurementResult(
+        result_id=InstanceIdentifier("result", f"{observation_id.value}:rsa-criterion"),
+        value=ScalarValue(value),
+        unit=SECOND,
+        classification=ScientificClassification(
+            value_origin, (ScientificRole.PERFORMANCE_OUTCOME,)
+        ),
+        quality=MeasurementQuality(),
+        uncertainty=UncertaintyMetadata(status=UncertaintyStatus.NOT_ASSESSED),
+        status=ResultStatus.VALID,
+    )
+    return build_field_testing_source_observation(
+        observation_id=observation_id,
+        context=context,
+        identity=identity,
+        result=result,
+        source_artifact=source_artifact,
+        acquisition=acquisition,
+        processing_run=processing_run,
+    )
+
+
+def build_rsa_criterion_sprint_evidence(
+    *,
+    source_observation: ScientificMeasurementObservation,
+    source_qualification_observation: ScientificMeasurementObservation,
+    set_id: InstanceIdentifier,
+) -> RSACriterionSprintEvidence:
+    """Normalize a pre-existing qualified criterion source observation."""
+
+    qualification = normalize_field_test_qualification(
+        source_qualification_observation,
+        source_observation,
+    )
+    return RSACriterionSprintEvidence(source_observation, set_id, qualification)
+
+
+def _rsa_source_key(
+    repetition: RSARepetitionObservation | RSACriterionSprintEvidence,
+) -> object:
+    observation = repetition.observation
+    identity = observation.identity
     if not isinstance(identity, RSAMeasurementIdentity):
         raise ValueError("RSA source must use RSAMeasurementIdentity")
     acquisition = identity.acquisition
@@ -454,15 +635,20 @@ def _rsa_source_key(repetition: RSARepetitionObservation) -> object:
         processing.smoothing,
         processing.interpolation,
         processing.processing_state,
-        repetition.observation.result.classification.value_origin,
+        observation.result.classification.value_origin,
         identity.version.software_version,
         identity.version.hardware_firmware,
     )
 
 
-def _validate_repetition_series(repetitions: tuple[RSARepetitionObservation, ...]) -> None:
+def _validate_repetition_series(
+    repetitions: tuple[RSARepetitionObservation, ...],
+    criterion: RSACriterionSprintEvidence | None,
+) -> None:
     if not isinstance(repetitions, tuple) or not repetitions:
         raise ValueError("RSA requires an immutable tuple of repetitions")
+    if not isinstance(criterion, RSACriterionSprintEvidence):
+        raise ValueError("RSA requires source-qualified criterion sprint evidence")
     if any(not isinstance(item, RSARepetitionObservation) for item in repetitions):
         raise ValueError("RSA repetitions must be typed")
     first = repetitions[0]
@@ -479,9 +665,26 @@ def _validate_repetition_series(repetitions: tuple[RSARepetitionObservation, ...
         raise ValueError("RSA repetitions must belong to one set")
     if any(item.protocol != protocol for item in repetitions[1:]):
         raise ValueError("RSA repetitions must use one exact protocol identity")
+    if criterion.protocol != protocol:
+        raise ValueError("RSA criterion must use one exact protocol identity")
+    if criterion.set_id != first.set_id:
+        raise ValueError("RSA criterion must belong to the repetition set")
+    criterion_context = criterion.observation.context
+    first_context = first.observation.context
+    if (
+        criterion_context.athlete_id != first_context.athlete_id
+        or criterion_context.session_id != first_context.session_id
+        or criterion_context.test_instance_id != first_context.test_instance_id
+        or criterion_context.population_context != first_context.population_context
+        or criterion_context.environment != first_context.environment
+    ):
+        raise ValueError("RSA criterion must share athlete/session/test scope")
+    if _rsa_source_key(criterion) != _rsa_source_key(first):
+        raise ValueError("RSA criterion must share timing/device/processing identity")
+    if first.time_seconds > criterion.time_seconds * 1.025:
+        raise ValueError("first RSA repetition exceeds the 2.5 percent criterion threshold")
     if any(not item.is_source_qualified for item in repetitions):
         raise ValueError("every RSA repetition must be source-qualified")
-    first_context = first.observation.context
     for item in repetitions[1:]:
         context = item.observation.context
         if (
@@ -509,6 +712,12 @@ def _metric_spec(metric: RegistryReference) -> tuple[RegistryReference, str]:
     raise ValueError("RSA metric is not registered")
 
 
+def _rsa_measurand(metric: RegistryReference) -> RegistryReference:
+    if metric == RSA_PERCENT_DECREMENT_METRIC:
+        return RSA_PERCENT_DECREMENT_MEASURAND
+    return RSA_SPRINT_TIME_MEASURAND
+
+
 @register_serializable_type
 @dataclass(frozen=True, slots=True)
 class RSAResult:
@@ -517,12 +726,14 @@ class RSAResult:
     observation: ScientificMeasurementObservation
     metric: RegistryReference
     repetitions: tuple[RSARepetitionObservation, ...]
+    criterion: RSACriterionSprintEvidence
 
     def __post_init__(self) -> None:
         _require_instance(self.observation, ScientificMeasurementObservation, "observation")
         _require_instance(self.metric, RegistryReference, "metric")
         _require_tuple_items(self.repetitions, RSARepetitionObservation, "repetitions")
-        _validate_repetition_series(self.repetitions)
+        _require_instance(self.criterion, RSACriterionSprintEvidence, "criterion")
+        _validate_repetition_series(self.repetitions, self.criterion)
         operation, _ = _metric_spec(self.metric)
         identity = self.observation.identity
         if not isinstance(identity, RSAMeasurementIdentity):
@@ -531,6 +742,16 @@ class RSAResult:
             raise ValueError("RSA aggregate context must be trial-free")
         if identity.semantic.metric_definition != self.metric:
             raise ValueError("RSA result metric does not match identity")
+        if identity.semantic.measurand != _rsa_measurand(self.metric):
+            raise ValueError("RSA result measurand does not match metric")
+        expected_unit = PERCENT if self.metric == RSA_PERCENT_DECREMENT_METRIC else SECOND
+        if self.observation.result.unit != expected_unit:
+            raise ValueError("RSA result unit does not match metric")
+        expected_estimator = (
+            RSA_PERCENT_DECREMENT_ESTIMATOR if self.metric == RSA_PERCENT_DECREMENT_METRIC else None
+        )
+        if identity.processing.estimator != expected_estimator:
+            raise ValueError("RSA result estimator does not match metric")
         if identity.processing.registered_operation != operation:
             raise ValueError("RSA result operation does not match metric")
         run_ids = tuple(
@@ -549,6 +770,12 @@ class RSAResult:
             for repetition in self.repetitions
         ):
             raise ValueError("RSA result is missing a repetition lineage edge")
+        if not any(
+            edge.from_id == self.criterion.observation.observation_id.qualified
+            and edge.to_id == run_ids[0]
+            for edge in self.observation.provenance.lineage_edges
+        ):
+            raise ValueError("RSA result is missing criterion lineage")
         values = tuple(item.time_seconds for item in self.repetitions)
         best = min(values)
         total = math.fsum(values)
@@ -560,6 +787,21 @@ class RSAResult:
         }[self.metric]
         if _numeric_scalar(self.observation) != expected:
             raise ValueError("RSA result scalar does not reproduce from repetitions")
+        parameters = {entry.key: entry.value for entry in identity.processing.method_parameters}
+        expected_source_ids = ",".join(
+            item.observation.observation_id.qualified for item in self.repetitions
+        )
+        if (
+            parameters.get("metric") != self.metric.stable_id
+            or parameters.get("operation") != operation.stable_id
+            or parameters.get("set_id") != self.repetitions[0].set_id.qualified
+            or parameters.get("repetition_count") != len(self.repetitions)
+            or parameters.get("criterion_observation_id")
+            != self.criterion.observation.observation_id.qualified
+            or parameters.get("criterion_time_seconds") != self.criterion.time_seconds
+            or parameters.get("source_observation_ids") != expected_source_ids
+        ):
+            raise ValueError("RSA result processing identity does not preserve its exact inputs")
 
     @property
     def value(self) -> float:
@@ -572,6 +814,7 @@ class RSAResult:
 
 def _calculate_rsa_metric(
     repetitions: tuple[RSARepetitionObservation, ...],
+    criterion: RSACriterionSprintEvidence | None,
     metric: RegistryReference,
     *,
     output_observation_id: InstanceIdentifier | None = None,
@@ -582,7 +825,9 @@ def _calculate_rsa_metric(
         if isinstance(item, RSARepetitionObservation)
     )
     try:
-        _validate_repetition_series(repetitions)
+        _validate_repetition_series(repetitions, criterion)
+        if not isinstance(criterion, RSACriterionSprintEvidence):
+            raise ValueError("RSA criterion evidence is required")
         operation, equation = _metric_spec(metric)
         values = tuple(item.time_seconds for item in repetitions)
         best = min(values)
@@ -606,6 +851,10 @@ def _calculate_rsa_metric(
             MetadataEntry("set_id", first.set_id.qualified),
             MetadataEntry("repetition_count", len(repetitions)),
             MetadataEntry(
+                "criterion_observation_id", criterion.observation.observation_id.qualified
+            ),
+            MetadataEntry("criterion_time_seconds", criterion.time_seconds),
+            MetadataEntry(
                 "source_observation_ids", ",".join(item.qualified for item in source_ids)
             ),
         )
@@ -621,7 +870,7 @@ def _calculate_rsa_metric(
                 construct=RSA_CONSTRUCT,
                 test_family=RSA_TEST_FAMILY,
                 protocol=protocol.reference,
-                measurand=RSA_SPRINT_TIME_MEASURAND,
+                measurand=_rsa_measurand(metric),
                 metric_definition=metric,
                 protocol_identity=protocol,
             ),
@@ -650,6 +899,9 @@ def _calculate_rsa_metric(
             ),
         )
         source_observations_list: list[ScientificMeasurementObservation] = []
+        source_observations_list.extend(
+            (criterion.observation, criterion.source_qualification.qualification_observation)
+        )
         for repetition in repetitions:
             assert repetition.source_qualification is not None
             source_observations_list.extend(
@@ -666,7 +918,7 @@ def _calculate_rsa_metric(
             output_observation_id=output_observation_id,
             extra_source_entities=(first.set_id,),
         )
-        return RSAResult(output, metric, repetitions)
+        return RSAResult(output, metric, repetitions, criterion)
     except (AttributeError, IndexError, TypeError, ValueError, ZeroDivisionError) as exc:
         return _refusal(
             "calculate registered RSA aggregate",
@@ -679,54 +931,62 @@ def _calculate_rsa_metric(
 
 def calculate_rsa_best_time(
     repetitions: tuple[RSARepetitionObservation, ...],
+    criterion: RSACriterionSprintEvidence | None = None,
     *,
     output_observation_id: InstanceIdentifier | None = None,
 ) -> RSAResult | RefusalResult:
     return _calculate_rsa_metric(
-        repetitions, RSA_BEST_TIME_METRIC, output_observation_id=output_observation_id
+        repetitions, criterion, RSA_BEST_TIME_METRIC, output_observation_id=output_observation_id
     )
 
 
 def calculate_rsa_mean_time(
     repetitions: tuple[RSARepetitionObservation, ...],
+    criterion: RSACriterionSprintEvidence | None = None,
     *,
     output_observation_id: InstanceIdentifier | None = None,
 ) -> RSAResult | RefusalResult:
     return _calculate_rsa_metric(
-        repetitions, RSA_MEAN_TIME_METRIC, output_observation_id=output_observation_id
+        repetitions, criterion, RSA_MEAN_TIME_METRIC, output_observation_id=output_observation_id
     )
 
 
 def calculate_rsa_total_time(
     repetitions: tuple[RSARepetitionObservation, ...],
+    criterion: RSACriterionSprintEvidence | None = None,
     *,
     output_observation_id: InstanceIdentifier | None = None,
 ) -> RSAResult | RefusalResult:
     return _calculate_rsa_metric(
-        repetitions, RSA_TOTAL_TIME_METRIC, output_observation_id=output_observation_id
+        repetitions, criterion, RSA_TOTAL_TIME_METRIC, output_observation_id=output_observation_id
     )
 
 
 def calculate_rsa_percent_decrement(
     repetitions: tuple[RSARepetitionObservation, ...],
+    criterion: RSACriterionSprintEvidence | None = None,
     *,
     output_observation_id: InstanceIdentifier | None = None,
 ) -> RSAResult | RefusalResult:
     return _calculate_rsa_metric(
-        repetitions, RSA_PERCENT_DECREMENT_METRIC, output_observation_id=output_observation_id
+        repetitions,
+        criterion,
+        RSA_PERCENT_DECREMENT_METRIC,
+        output_observation_id=output_observation_id,
     )
 
 
 def aggregate_rsa(
     repetitions: tuple[RSARepetitionObservation, ...],
+    criterion: RSACriterionSprintEvidence | None = None,
 ) -> tuple[RSAResult | RefusalResult, ...]:
     """Return the four registered RSA summaries for one complete repetition set."""
 
     return (
-        calculate_rsa_best_time(repetitions),
-        calculate_rsa_mean_time(repetitions),
-        calculate_rsa_total_time(repetitions),
-        calculate_rsa_percent_decrement(repetitions),
+        calculate_rsa_best_time(repetitions, criterion),
+        calculate_rsa_mean_time(repetitions, criterion),
+        calculate_rsa_total_time(repetitions, criterion),
+        calculate_rsa_percent_decrement(repetitions, criterion),
     )
 
 
@@ -770,6 +1030,7 @@ RepeatedSprintObservation = RSARepetitionObservation
 
 __all__ = [
     "RSAAggregateResult",
+    "RSACriterionSprintEvidence",
     "RSAMovementMode",
     "RSAProtocolIdentity",
     "RSARecoveryMode",
@@ -779,6 +1040,8 @@ __all__ = [
     "RepeatedSprintObservation",
     "RepeatedSprintProtocolIdentity",
     "aggregate_rsa",
+    "build_rsa_criterion_sprint_evidence",
+    "build_rsa_criterion_sprint_source_observation",
     "build_rsa_repetition_observation",
     "calculate_rsa_best",
     "calculate_rsa_best_time",

@@ -2,7 +2,7 @@
 
 DECISION_ID=RES67-DR-001
 STATUS=READY_FOR_FINAL_REVIEW
-MISSION=RES-67-IMPLEMENTATION
+MISSION=RES-67-REVIEW-FIX-1
 SERIALIZATION_VERSION=3
 
 ## Decision boundary
@@ -42,6 +42,58 @@ DEVICE_CORRELATION != DEVICE_AGREEMENT
 5. Which exact 30–15 IFT protocol and source-qualified stage evidence can mint
    VIFT?
 6. Which comparisons require exact identity or a device/method bridge?
+
+## Review-fix authority decisions
+
+Field-test quality control is not computed by DynamisLM. Source ingestion may
+construct a typed categorical observation from an imported/provider field, but
+the scientific path accepts only that pre-existing observation:
+
+```text
+SOURCE_INGESTION
+    → ScientificMeasurementObservation
+    → normalize_field_test_qualification(source_observation, target_observation)
+```
+
+The normalizer receives no caller verdict, eligibility flag, completion flag,
+miss count, termination reason or replacement provenance. It validates the
+qualification measurand/metric, target observation ID, exact context, source
+artifact/acquisition lineage, source/provider value origin and immutable
+processing lineage. `QUALIFIED` and `REJECTED` remain upstream categorical
+reports; neither can be minted by the DynamisLM normalization path.
+
+IFT stage completion is a separate source/provider categorical observation
+bound to the exact stage observation, canonical protocol, stage index and
+target velocity. Optional checkpoint/miss information is preserved as source
+metadata only. A bare `miss_count=3` never authorizes
+`THREE_CONSECUTIVE_CONTROL_ZONE_FAILURES`. V1 termination authority is an
+explicit source/provider termination observation; ordered-event derivation is
+an authorized future representation, not invented by this slice. VIFT is the
+velocity of the last source-qualified successfully completed canonical stage.
+
+RSA V1 is the Impellizzeri soccer repeated-shuttle method: natural grass,
+one preliminary 40 m shuttle criterion sprint, five minutes of recovery before
+the RSA set, six 40 m repetitions as 20 m out plus 20 m return with one 180°
+turn, and 20 s passive recovery. The start cue is an acoustic five-second
+countdown. The timing trigger and reaction-time inclusion/exclusion semantics
+remain `UNKNOWN`; no 30 cm start offset or photocell crossing semantics are
+inferred. A typed, source-qualified criterion sprint is mandatory for every
+RSA aggregation, and the first RSA repetition must satisfy:
+
+```text
+first_rsa_time <= criterion_time * 1.025
+```
+
+Failure returns an invalid/refused registered set and is never silently
+aggregated. `RSA_PERCENT_DECREMENT_METRIC` uses the dedicated
+`RSA_PERCENT_DECREMENT_MEASURAND` with unit `%` and the registered mechanical
+equation:
+
+```text
+100 * (total_sprint_time / (best_sprint_time * number_of_sprints) - 1)
+```
+
+It is not a fatigue, readiness, recovery or physiological measurand.
 
 ## Targeted evidence inspected
 
@@ -100,8 +152,11 @@ not promoted to individual-level agreement or universal device equivalence.
 * Impellizzeri et al. (2008), *Validity of a repeated-sprint test for
   football*, PMID [18415931](https://pubmed.ncbi.nlm.nih.gov/18415931/), DOI
   [10.1055/s-2008-1038491](https://doi.org/10.1055/s-2008-1038491).
-  The soccer RSSA protocol is six 40 m (20 + 20 m, 180° turn) shuttle
-  sprints with 20 s recovery, with timing-gate start/finish semantics.
+  The soccer RSSA protocol supports a preliminary 40 m shuttle criterion,
+  five minutes before the RSA set, six 40 m (20 + 20 m, 180° turn) shuttle
+  sprints with 20 s passive recovery, an acoustic five-second countdown, and
+  a first-repetition criterion of no more than 2.5% slowing. Exact timing
+  trigger and reaction-time semantics are not promoted when unresolved.
 * Castagna et al. (2018), *Reliability Characteristics and Applicability of
   a Repeated Sprint Ability Test*, PMID
   [28759539](https://pubmed.ncbi.nlm.nih.gov/28759539/).
@@ -194,9 +249,12 @@ not equal unless their own protocol identity is registered.
 ### RSA V1
 
 RSA is protocol-specific. V1 registers the soccer repeated-shuttle protocol:
-six 40 m repetitions (20 + 20 m, one 180° turn) with 20 s passive recovery.
-Linear tests, 5 × 30 m with 30 s active recovery, and any other distance,
-repetition, recovery, surface, timing or layout remain distinct identities.
+one preliminary 40 m shuttle criterion after five minutes of recovery, then
+six 40 m repetitions (20 + 20 m, one 180° turn) with 20 s passive recovery on
+natural grass. The start cue is an acoustic five-second countdown; timing
+trigger and reaction-time semantics are unknown. Linear tests, 5 × 30 m with
+30 s active recovery, and any other distance, repetition, recovery, surface,
+timing or layout remain distinct identities.
 
 ### 30–15 IFT V1
 
@@ -257,11 +315,14 @@ COD deficit requires a standard V1 505 aggregate and a registered mean
 wrong distance/protocol/selection, side rebinding and cross-athlete sources.
 It is a derived performance quantity only.
 
-RSA aggregation requires exactly one qualified repetition for every index
-`1..n`, with no missing or duplicate middle repetition. Best, mean, total and
-percent decrement have distinct metric identities and processing operations.
-The V1 decrement is a mechanical performance-decrement descriptor and the
-public refusal path explicitly rejects it as physiological fatigue.
+RSA aggregation requires one typed, source-qualified preliminary criterion
+sprint plus exactly one qualified repetition for every index `1..n`, with no
+missing or duplicate middle repetition. The first repetition must be no more
+than 2.5% slower than the criterion sprint. Best, mean, total and percent
+decrement have distinct metric identities and processing operations. The V1
+decrement uses its own percentage measurand and is a mechanical
+performance-decrement descriptor; the public refusal path explicitly rejects
+it as physiological fatigue.
 
 VIFT accepts only source-qualified stage/test evidence. For canonical stage
 index `k`:
@@ -271,9 +332,12 @@ stage_velocity(k) = 8.0 + 0.5 * (k - 1)  # km/h, 1-indexed
 VIFT = velocity of the last successfully completed stage
 ```
 
-Caller-provided stage counts or VIFT scalars cannot mint a result. Stage
-completion, miss count and termination evidence are bound to the source
-observation and protocol.
+Caller-provided stage counts, completion enums, termination enums or VIFT
+scalars cannot mint a result. Stage completion and termination are pre-existing
+source/provider observations bound to the source observation, exact protocol,
+context and immutable provenance. Miss counts are preserved only when the
+source supplies them and are never interpreted as consecutive failures by
+count alone.
 
 All multi-source results use the RES-66 deterministic trial-free analysis
 context and an exact union of source provenance with explicit lineage edges.
@@ -316,7 +380,8 @@ sprint, COD, RSA, IFT and comparability modules. Tests cover construction,
 immutability, Serialization V3 round trips, exact numerical gold fixtures,
 source/provenance binding, multi-source context lineage, protocol/device
 comparability and the adversarial relabelling/rebinding attacks listed in the
-RES-67 mission.
+RES-67 mission, including caller-minted adjudication, RSA criterion validity,
+IFT termination authority and percentage-measurand tampering.
 
 The decision receipt is maintained at
 `docs/decisions/RES67-RECEIPT.json`.
@@ -346,3 +411,20 @@ VIFT_AS_MSS=BLOCKED
 CANONICAL_FIELD_TEST_DATASET_MAPPING=NOT_AVAILABLE_IN_CURRENT_P2D_AUTHORITY
 TIMING_GATE_SEGMENT_AVERAGE_AS_MAX_SPEED=BLOCKED
 SPRINT_ACCELERATION_AUTHORITY=REPRESENT_BUT_DO_NOT_COMPUTE
+FIELD_TEST_QC_COMPUTED_BY_DYNAMISLM=NO
+FIELD_TEST_SOURCE_QUALIFICATION=PRE_EXISTING_TYPED_SOURCE_OBSERVATION_NORMALIZED_WITHOUT_VERDICT
+UPSTREAM_ADJUDICATION_AUTHORITY=PASS
+IFT_STAGE_COMPLETION_AUTHORITY=SOURCE_QUALIFIED
+IFT_TERMINATION_AUTHORITY=SOURCE_QUALIFIED_OR_ORDERED_EVENT_DERIVATION
+BARE_MISS_COUNT_AS_CONSECUTIVE_FAILURES=BLOCKED
+RSA_PROTOCOL_EVIDENCE_MATCH=PASS
+RSA_START_CUE=ACOUSTIC_5_SECOND_COUNTDOWN
+RSA_TIMING_TRIGGER=UNKNOWN
+RSA_REACTION_TIME_SEMANTICS=UNKNOWN
+RSA_CRITERION_SPRINT_REQUIRED=YES
+RSA_FIRST_REP_VALIDITY_THRESHOLD=2.5_PERCENT
+RSA_CRITERION_SPRINT_BOUND=PASS
+RSA_2_5_PERCENT_VALIDITY_RULE_BOUND=PASS
+RSA_PERCENT_DECREMENT_MEASURAND=dynamislm:measurand:rsa-percent-decrement@1.0.0
+RSA_PERCENT_DECREMENT_AS_FATIGUE=BLOCKED
+RSA_DECREMENT_AS_FATIGUE=BLOCKED

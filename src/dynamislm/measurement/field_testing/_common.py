@@ -9,6 +9,7 @@ from dataclasses import dataclass
 
 from dynamislm.measurement.field_testing.identity import (
     FieldTestArtifactStatus,
+    FieldTestingAcquisitionIdentity,
     FieldTestingAcquisitionRecord,
     FieldTestingMeasurementIdentity,
     FieldTestingProcessingIdentity,
@@ -35,6 +36,7 @@ from dynamislm.measurement.identity import (
     ScientificIdentifier,
     UnitReference,
     VersionIdentity,
+    _require_enum,
     _require_instance,
     _require_tuple_items,
 )
@@ -102,6 +104,33 @@ def _protocol_processing_components(
         filtering = ()
         filtering_status = FieldTestProcessingComponentStatus.NONE_DECLARED
     return filtering, filtering_status, protocol.smoothing, protocol.interpolation
+
+
+def _source_processing_state(value_origin: ValueOrigin) -> FieldTestProcessingState:
+    if value_origin is ValueOrigin.SOURCE_REPORTED:
+        return FieldTestProcessingState.RAW_ACQUIRED
+    if value_origin is ValueOrigin.PROVIDER_DERIVED:
+        return FieldTestProcessingState.PROVIDER_PROCESSED
+    raise ValueError("field-test source authority must be source-reported or provider-derived")
+
+
+def _field_testing_acquisition_identity(
+    source_artifact: FieldTestingSourceArtifact,
+    acquisition: FieldTestingAcquisitionRecord,
+) -> FieldTestingAcquisitionIdentity:
+    return FieldTestingAcquisitionIdentity(
+        device=acquisition.device,
+        raw_artifact=source_artifact.artifact_id,
+        sensor_channel=acquisition.sensor_channel,
+        sampling=acquisition.sampling,
+        calibration_reference=acquisition.calibration_reference,
+        hardware_firmware=acquisition.hardware_firmware,
+        acquisition_instance_id=acquisition.acquisition_id,
+        provider=acquisition.provider,
+        sensor_modality=acquisition.sensor_modality,
+        timebase=acquisition.timebase,
+        axis_or_frame=acquisition.axis_or_frame,
+    )
 
 
 def _numeric_scalar(observation: ScientificMeasurementObservation) -> float:
@@ -337,6 +366,68 @@ def _require_verified_field_artifact(artifact: FieldTestingSourceArtifact) -> No
         raise ValueError("field-test source artifact must use the typed artifact contract")
     if not artifact.immutable or artifact.status is not FieldTestArtifactStatus.VERIFIED:
         raise ValueError("field-test source artifact must be immutable and verified")
+
+
+def _require_field_testing_source_lineage(
+    observation: ScientificMeasurementObservation,
+) -> None:
+    identity = observation.identity
+    if not isinstance(identity, FieldTestingMeasurementIdentity):
+        raise ValueError("field-test source requires FieldTestingMeasurementIdentity")
+    artifacts = observation.provenance.source_artifacts
+    acquisitions = observation.provenance.acquisitions
+    if not artifacts or not acquisitions:
+        raise ValueError("field-test source must preserve artifact and acquisition lineage")
+    for artifact in artifacts:
+        if not isinstance(artifact, FieldTestingSourceArtifact):
+            raise ValueError("field-test source must preserve field-test artifacts")
+        _require_verified_field_artifact(artifact)
+    if any(
+        not isinstance(acquisition, FieldTestingAcquisitionRecord) for acquisition in acquisitions
+    ):
+        raise ValueError("field-test source must preserve typed acquisition lineage")
+    if identity.acquisition.raw_artifact not in {artifact.artifact_id for artifact in artifacts}:
+        raise ValueError("field-test source identity omits its raw artifact")
+    if identity.acquisition.acquisition_instance_id not in {
+        acquisition.acquisition_id for acquisition in acquisitions
+    }:
+        raise ValueError("field-test source identity omits its acquisition")
+    acquisition = next(
+        item
+        for item in acquisitions
+        if item.acquisition_id == identity.acquisition.acquisition_instance_id
+    )
+    if not isinstance(acquisition, FieldTestingAcquisitionRecord):
+        raise ValueError("field-test source identity acquisition is not typed")
+    acquisition_identity = identity.acquisition
+    if (
+        acquisition_identity.device != acquisition.device
+        or acquisition_identity.raw_artifact != acquisition.source_artifact_id
+        or acquisition_identity.sensor_channel != acquisition.sensor_channel
+        or acquisition_identity.sampling != acquisition.sampling
+        or acquisition_identity.calibration_reference != acquisition.calibration_reference
+        or acquisition_identity.hardware_firmware != acquisition.hardware_firmware
+        or acquisition_identity.provider != acquisition.provider
+        or acquisition_identity.sensor_modality != acquisition.sensor_modality
+        or acquisition_identity.timebase != acquisition.timebase
+        or acquisition_identity.axis_or_frame != acquisition.axis_or_frame
+    ):
+        raise ValueError("field-test source acquisition lineage does not match identity")
+    output_runs = tuple(
+        run
+        for run in observation.provenance.processing_runs
+        if run.output_entity_id == observation.observation_id
+    )
+    if len(output_runs) != 1:
+        raise ValueError("field-test source must preserve one output processing run")
+    run = output_runs[0]
+    if (
+        run.method != identity.version.processing_method
+        or run.parameters != identity.processing.method_parameters
+        or run.software_version != identity.version.software_version
+        or identity.acquisition.raw_artifact not in run.source_artifact_ids
+    ):
+        raise ValueError("field-test source processing lineage does not match identity")
 
 
 def build_field_testing_source_observation(
@@ -592,7 +683,7 @@ class FieldTestingScalarResult:
 @register_serializable_type
 @dataclass(frozen=True, slots=True)
 class FieldTestingSourceQualificationEvidence:
-    """Source-reported categorical qualification bound to one target observation."""
+    """Source/provider categorical qualification bound to one target observation."""
 
     target_observation_id: InstanceIdentifier
     qualification_observation: ScientificMeasurementObservation
@@ -604,6 +695,21 @@ class FieldTestingSourceQualificationEvidence:
             raise ValueError("target_observation_id must identify an observation")
         if not isinstance(self.qualification_observation, ScientificMeasurementObservation):
             raise ValueError("qualification_observation must be a scientific observation")
+        _require_field_testing_source_lineage(self.qualification_observation)
+        if any(
+            not isinstance(artifact, FieldTestingSourceArtifact)
+            or not artifact.immutable
+            or artifact.status is not FieldTestArtifactStatus.VERIFIED
+            for artifact in self.qualification_observation.provenance.source_artifacts
+        ):
+            raise ValueError(
+                "qualification observation must preserve verified field-test artifacts"
+            )
+        if any(
+            not isinstance(acquisition, FieldTestingAcquisitionRecord)
+            for acquisition in self.qualification_observation.provenance.acquisitions
+        ):
+            raise ValueError("qualification observation must preserve typed acquisitions")
         _require_instance(
             self.qualification_reference, RegistryReference, "qualification_reference"
         )
@@ -616,11 +722,11 @@ class FieldTestingSourceQualificationEvidence:
             FieldTestQualificationStatus(value.category)
         except ValueError as exc:
             raise ValueError("qualification category is not registered") from exc
-        if (
-            self.qualification_observation.result.classification.value_origin
-            is not ValueOrigin.SOURCE_REPORTED
-        ):
-            raise ValueError("qualification must remain source-reported")
+        if self.qualification_observation.result.classification.value_origin not in {
+            ValueOrigin.SOURCE_REPORTED,
+            ValueOrigin.PROVIDER_DERIVED,
+        }:
+            raise ValueError("qualification must remain source-reported or provider-derived")
         if self.qualification_observation.result.status is not ResultStatus.VALID:
             raise ValueError("qualification observation must be valid")
         identity = self.qualification_observation.identity
@@ -632,9 +738,16 @@ class FieldTestingSourceQualificationEvidence:
             raise ValueError("qualification observation has the wrong metric")
         if identity.processing.registered_operation != FIELD_TEST_SOURCE_QUALIFICATION_OPERATION:
             raise ValueError("qualification observation has the wrong operation")
+        expected_state = _source_processing_state(
+            self.qualification_observation.result.classification.value_origin
+        )
+        if identity.processing.processing_state is not expected_state:
+            raise ValueError("qualification processing state does not match source origin")
         parameters = {entry.key: entry.value for entry in identity.processing.method_parameters}
         if parameters.get("target_observation_id") != self.target_observation_id.qualified:
             raise ValueError("qualification evidence target is not preserved in source identity")
+        if parameters.get("source_status") != self.status.value:
+            raise ValueError("qualification status is not preserved in source identity")
 
     @property
     def status(self) -> FieldTestQualificationStatus:
@@ -647,29 +760,61 @@ class FieldTestingSourceQualificationEvidence:
         return self.qualification_observation.observation_id
 
 
-def build_source_qualification_observation(
+def build_field_test_qualification_source_observation(
     *,
     target_observation: ScientificMeasurementObservation,
-    status: FieldTestQualificationStatus,
+    reported_status: FieldTestQualificationStatus,
     source_artifact: FieldTestingSourceArtifact,
     acquisition: FieldTestingAcquisitionRecord,
+    value_origin: ValueOrigin = ValueOrigin.SOURCE_REPORTED,
+    adjudication_rule: RegistryReference | None = None,
+    reason_codes: tuple[str, ...] = (),
     output_observation_id: InstanceIdentifier | None = None,
     recorded_at: datetime_module.datetime | None = None,
-) -> FieldTestingSourceQualificationEvidence:
-    """Normalize source-reported qualification without running a QC algorithm."""
+) -> ScientificMeasurementObservation:
+    """Ingest a source/provider qualification field with immutable lineage.
+
+    This is the source-ingestion boundary. Scientific qualification must use
+    ``normalize_field_test_qualification`` on the resulting observation and
+    may not receive ``reported_status`` independently.
+    """
 
     if not isinstance(target_observation, ScientificMeasurementObservation):
         raise ValueError("target_observation must be a scientific observation")
-    if not isinstance(status, FieldTestQualificationStatus):
-        raise ValueError("status must be a FieldTestQualificationStatus")
+    _require_enum(reported_status, FieldTestQualificationStatus, "reported_status")
+    _require_enum(value_origin, ValueOrigin, "value_origin")
+    if value_origin not in {ValueOrigin.SOURCE_REPORTED, ValueOrigin.PROVIDER_DERIVED}:
+        raise ValueError(
+            "qualification ingestion requires source-reported or provider-derived data"
+        )
+    _require_verified_field_artifact(source_artifact)
+    if not isinstance(acquisition, FieldTestingAcquisitionRecord):
+        raise ValueError("acquisition must be a FieldTestingAcquisitionRecord")
     target_identity = target_observation.identity
     if not isinstance(target_identity, FieldTestingMeasurementIdentity):
         raise ValueError("target observation requires field-testing identity")
+    observation_id = output_observation_id or InstanceIdentifier(
+        "observation", f"field-test-qualification:{target_observation.observation_id.value}"
+    )
+    if observation_id == target_observation.observation_id:
+        raise ValueError("qualification observation must differ from target observation")
+    if not isinstance(reason_codes, tuple) or any(
+        not isinstance(code, str) for code in reason_codes
+    ):
+        raise ValueError("reason_codes must be an immutable tuple of strings")
+    parameters = [
+        MetadataEntry("target_observation_id", target_observation.observation_id.qualified),
+        MetadataEntry("source_status", reported_status.value),
+        MetadataEntry("reason_codes", canonical_json(reason_codes)),
+    ]
+    if adjudication_rule is not None:
+        _require_instance(adjudication_rule, RegistryReference, "adjudication_rule")
+        parameters.append(MetadataEntry("adjudication_rule", adjudication_rule.stable_id))
     qualification_identity = FieldTestingMeasurementIdentity(
         identity_id=ScientificIdentifier(
             "dynamislm",
             "measurement-identity",
-            f"field-test-qualification:{target_observation.observation_id.value}",
+            f"field-test-qualification:{observation_id.value}",
             FIELD_TESTING_REGISTRY_VERSION,
         ),
         semantic=FieldTestingSemanticIdentity(
@@ -680,30 +825,25 @@ def build_source_qualification_observation(
             metric_definition=FIELD_TEST_QUALIFICATION_METRIC,
             protocol_identity=target_identity.semantic.protocol_identity,
         ),
-        acquisition=target_identity.acquisition,
+        acquisition=_field_testing_acquisition_identity(source_artifact, acquisition),
         processing=FieldTestingProcessingIdentity(
             registered_operation=FIELD_TEST_SOURCE_QUALIFICATION_OPERATION,
-            method_parameters=(
-                MetadataEntry("target_observation_id", target_observation.observation_id.qualified),
-                MetadataEntry("source_status", status.value),
-            ),
-            processing_state=FieldTestProcessingState.RAW_ACQUIRED,
+            method_parameters=tuple(parameters),
+            processing_state=_source_processing_state(value_origin),
+            provider_algorithm=adjudication_rule,
         ),
         version=VersionIdentity(
             processing_method=FIELD_TEST_SOURCE_QUALIFICATION_OPERATION,
             method_registry_version=FIELD_TESTING_REGISTRY_VERSION,
             software_version=FIELD_TESTING_SOFTWARE_VERSION,
-            hardware_firmware=target_identity.version.hardware_firmware,
+            hardware_firmware=acquisition.hardware_firmware,
         ),
-    )
-    observation_id = output_observation_id or InstanceIdentifier(
-        "observation", f"field-test-qualification:{target_observation.observation_id.value}"
     )
     result = MeasurementResult(
         result_id=InstanceIdentifier("result", f"field-test-qualification:{observation_id.value}"),
-        value=CategoricalValue(status.value),
+        value=CategoricalValue(reported_status.value),
         unit=None,
-        classification=ScientificClassification(ValueOrigin.SOURCE_REPORTED, ()),
+        classification=ScientificClassification(value_origin, ()),
         quality=MeasurementQuality(),
         uncertainty=UncertaintyMetadata(status=UncertaintyStatus.NOT_ASSESSED),
         status=ResultStatus.VALID,
@@ -718,11 +858,88 @@ def build_source_qualification_observation(
         evidence_references=(EvidenceReference(RES67_DECISION_FIELD_TESTING),),
         recorded_at=recorded_at,
     )
-    return FieldTestingSourceQualificationEvidence(
+    return observation
+
+
+def normalize_field_test_qualification(
+    source_observation: ScientificMeasurementObservation,
+    target_observation: ScientificMeasurementObservation,
+) -> FieldTestingSourceQualificationEvidence:
+    """Bind pre-existing source/provider adjudication to one target observation."""
+
+    if not isinstance(source_observation, ScientificMeasurementObservation):
+        raise ValueError("source_observation must be a scientific observation")
+    if not isinstance(target_observation, ScientificMeasurementObservation):
+        raise ValueError("target_observation must be a scientific observation")
+    if source_observation.observation_id == target_observation.observation_id:
+        raise ValueError("qualification observation must differ from target observation")
+    target_identity = target_observation.identity
+    source_identity = source_observation.identity
+    if not isinstance(target_identity, FieldTestingMeasurementIdentity):
+        raise ValueError("target observation requires field-testing identity")
+    if not isinstance(source_identity, FieldTestingMeasurementIdentity):
+        raise ValueError("source qualification requires field-testing identity")
+    if (
+        source_identity.semantic.construct != target_identity.semantic.construct
+        or source_identity.semantic.test_family != target_identity.semantic.test_family
+        or source_identity.semantic.protocol != target_identity.semantic.protocol
+        or source_identity.semantic.protocol_identity != target_identity.semantic.protocol_identity
+    ):
+        raise ValueError("qualification source is bound to a different scientific target")
+    source_context = source_observation.context
+    target_context = target_observation.context
+    if (
+        source_context.athlete_id != target_context.athlete_id
+        or source_context.session_id != target_context.session_id
+        or source_context.test_instance_id != target_context.test_instance_id
+        or source_context.trial_id != target_context.trial_id
+        or source_context.observed_at != target_context.observed_at
+        or source_context.population_context != target_context.population_context
+        or source_context.environment != target_context.environment
+        or source_context.context_metadata != target_context.context_metadata
+    ):
+        raise ValueError("qualification source context does not match target observation")
+    target_artifacts = {
+        item.artifact_id: item for item in target_observation.provenance.source_artifacts
+    }
+    source_artifacts = {
+        item.artifact_id: item for item in source_observation.provenance.source_artifacts
+    }
+    target_artifact_ids = set(target_artifacts)
+    source_artifact_ids = set(source_artifacts)
+    if not source_artifact_ids or not source_artifact_ids.issubset(target_artifact_ids):
+        raise ValueError("qualification source is not bound to target source artifacts")
+    if any(target_artifacts[item_id] != item for item_id, item in source_artifacts.items()):
+        raise ValueError("qualification source artifact content was tampered")
+    target_acquisitions = {
+        item.acquisition_id: item for item in target_observation.provenance.acquisitions
+    }
+    source_acquisitions = {
+        item.acquisition_id: item for item in source_observation.provenance.acquisitions
+    }
+    target_acquisition_ids = set(target_acquisitions)
+    source_acquisition_ids = set(source_acquisitions)
+    if not source_acquisition_ids or not source_acquisition_ids.issubset(target_acquisition_ids):
+        raise ValueError("qualification source is not bound to target acquisitions")
+    if any(target_acquisitions[item_id] != item for item_id, item in source_acquisitions.items()):
+        raise ValueError("qualification source acquisition content was tampered")
+    evidence = FieldTestingSourceQualificationEvidence(
         target_observation_id=target_observation.observation_id,
-        qualification_observation=observation,
+        qualification_observation=source_observation,
         qualification_reference=FIELD_TEST_SOURCE_QUALIFICATION_OPERATION,
     )
+    if evidence.status is FieldTestQualificationStatus.UNKNOWN:
+        raise ValueError("qualification source must report QUALIFIED or REJECTED")
+    return evidence
+
+
+def build_source_qualification_observation(
+    source_observation: ScientificMeasurementObservation,
+    target_observation: ScientificMeasurementObservation,
+) -> FieldTestingSourceQualificationEvidence:
+    """Compatibility spelling for normalization; it accepts no caller verdict."""
+
+    return normalize_field_test_qualification(source_observation, target_observation)
 
 
 def _require_qualified(
@@ -731,36 +948,14 @@ def _require_qualified(
 ) -> None:
     if not isinstance(evidence, FieldTestingSourceQualificationEvidence):
         raise ValueError("source qualification evidence is required")
-    if evidence.target_observation_id != target_observation.observation_id:
-        raise ValueError("source qualification targets a different observation")
+    normalized = normalize_field_test_qualification(
+        evidence.qualification_observation,
+        target_observation,
+    )
+    if normalized != evidence:
+        raise ValueError("source qualification evidence was rebound or tampered")
     if evidence.status is not FieldTestQualificationStatus.QUALIFIED:
         raise ValueError("source observation is not source-qualified")
-    target_artifact_ids = {
-        item.artifact_id for item in target_observation.provenance.source_artifacts
-    }
-    qualification_artifact_ids = {
-        item.artifact_id for item in evidence.qualification_observation.provenance.source_artifacts
-    }
-    if not qualification_artifact_ids.issubset(target_artifact_ids):
-        raise ValueError("qualification evidence uses a different source artifact")
-    target_acquisition_ids = {
-        item.acquisition_id for item in target_observation.provenance.acquisitions
-    }
-    qualification_acquisition_ids = {
-        item.acquisition_id for item in evidence.qualification_observation.provenance.acquisitions
-    }
-    if not qualification_acquisition_ids.issubset(target_acquisition_ids):
-        raise ValueError("qualification evidence uses a different source acquisition")
-    left = evidence.qualification_observation.context
-    right = target_observation.context
-    if (
-        left.athlete_id != right.athlete_id
-        or left.session_id != right.session_id
-        or left.test_instance_id != right.test_instance_id
-        or left.observed_at != right.observed_at
-        or left.environment != right.environment
-    ):
-        raise ValueError("qualification context does not match target observation")
 
 
 def _refusal(
@@ -809,6 +1004,8 @@ __all__ = [
     "_refusal",
     "_require_qualified",
     "_structured_reference",
+    "build_field_test_qualification_source_observation",
     "build_field_testing_source_observation",
     "build_source_qualification_observation",
+    "normalize_field_test_qualification",
 ]

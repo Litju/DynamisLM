@@ -15,7 +15,7 @@ from dynamislm.measurement.field_testing._common import (
     _refusal,
     _require_qualified,
     build_field_testing_source_observation,
-    build_source_qualification_observation,
+    normalize_field_test_qualification,
 )
 from dynamislm.measurement.field_testing.identity import (
     FieldTestFamily,
@@ -297,7 +297,6 @@ def build_standard_505_trial_observation(
     source_artifact: FieldTestingSourceArtifact,
     acquisition: FieldTestingAcquisitionRecord,
     processing_run: ProcessingRun | None = None,
-    qualification_status: FieldTestQualificationStatus | None = None,
 ) -> Standard505TrialObservation:
     """Create a typed standard 505 source trial; no side is inferred."""
 
@@ -369,36 +368,19 @@ def build_standard_505_trial_observation(
         acquisition=acquisition,
         processing_run=processing_run,
     )
-    trial = Standard505TrialObservation(observation=observation, side=side)
-    if qualification_status is not None:
-        qualification = build_source_qualification_observation(
-            target_observation=observation,
-            status=qualification_status,
-            source_artifact=source_artifact,
-            acquisition=acquisition,
-        )
-        return Standard505TrialObservation(
-            observation=observation,
-            side=side,
-            source_qualification=qualification,
-        )
-    return trial
+    return Standard505TrialObservation(observation=observation, side=side)
 
 
 def qualify_standard_505_trial(
     trial: Standard505TrialObservation,
     *,
-    status: FieldTestQualificationStatus,
-    source_artifact: FieldTestingSourceArtifact,
-    acquisition: FieldTestingAcquisitionRecord,
+    source_observation: ScientificMeasurementObservation,
 ) -> Standard505TrialObservation:
     if not isinstance(trial, Standard505TrialObservation):
         raise ValueError("trial must be a Standard505TrialObservation")
-    qualification = build_source_qualification_observation(
-        target_observation=trial.observation,
-        status=status,
-        source_artifact=source_artifact,
-        acquisition=acquisition,
+    qualification = normalize_field_test_qualification(
+        source_observation,
+        trial.observation,
     )
     return Standard505TrialObservation(
         observation=trial.observation,
