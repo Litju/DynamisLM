@@ -263,6 +263,39 @@ source series digest, start/end indices and times, velocity unit/frame/sign,
 and method semantics. A support may explicitly include post-release samples
 when its metric definition does. There is no generic post-release invalidation.
 
+### Authority boundary correction
+
+```text
+TYPED_OBJECT != SCIENTIFIC_ADJUDICATION_AUTHORITY
+```
+
+The family builders do not treat a caller-constructed dataclass, index pair,
+boolean, status, or matching digest as scientific adjudication. Source/provider
+normalization is the authority boundary and must preserve the upstream
+processing run, exact source bindings, source/provider origin, and the
+registered method parameters before a downstream result is minted.
+
+For DJ, `DropJumpEventSourceEvidence` binds the event label, exact sample and
+time, source series/artifact/acquisition, detector parameters, event status and
+QC codes to the upstream event-processing provenance. The normalized
+`DropJumpEventOccurrence` preserves that upstream provenance; DynamisLM does
+not claim to have run the detector.
+
+For BPT, `BPTMetricSupportSourceEvidence` binds the exact source series,
+metric, inclusive support indices/timestamps, support definition, boundary
+method/convention, post-release policy, protocol context, source/provider
+origin and upstream processing provenance. Only its normalized
+`BenchPressThrowMetricSupport` may feed Vmax or DynamisLM time-weighted MV.
+
+For MBT, `MBTCoordinateSourceEvidence` binds origin/endpoint coordinates,
+coordinate frame, origin/endpoint and first-contact/no-roll conventions,
+source artifact/acquisition, protocol context, provider/origin and producing
+provenance before coordinate distance is derived. `MBTReleaseEventSourceEvidence`
+binds the release sample/time, trajectory digest, frame, release method,
+protocol context, source artifact/acquisition, provider/origin and producing
+provenance before release velocity is selected. Source-reported distance
+remains source-reported and does not require redundant coordinate derivation.
+
 ## K. Source qualification requirements
 
 Source/provider qualification is an upstream categorical observation, not a
@@ -314,17 +347,21 @@ requirements are met; it blocks only actual-drop-dependent claims.
 | Refusal condition | Blocked claim | Safe description retained |
 | --- | --- | --- |
 | DJ event absent/malformed/wrong family/source/protocol | Requested DJ derived metric | Independently valid typed event or earlier duration |
+| DJ caller-selected index/status without upstream event evidence | DJ event authority | Source observation and any independently preserved upstream event data |
 | DJ event order or duration non-positive/non-finite | Contact/flight/derived ratio as applicable | Event identities and recorded times |
 | DJ invalid/missing gravity or unresolved flight assumptions | DJ flight-time height | Contact and flight time where independently valid |
 | DJ JH/CT requested without valid jump height or denominator | RSI JH/CT | Contact time and any valid JH/flight output |
 | DJ RSR requested without valid flight time or denominator | RSR FT/CT | Contact time and any valid flight output |
 | Actual drop height missing for actual-drop claim | Equal exposure/normalization/mechanics claim | Rebound metrics not requiring actual height |
 | BPT raw caller support indices | Any derived BPT support metric | Source series/provider values |
+| BPT support without source/provider-qualified support evidence | Any derived BPT support metric | Exact source series/provider values |
 | BPT missing counterbalance/load system/provider/device/support identity | Claim requiring that dimension | Source observation without the unsupported comparison/derivation |
 | BPT provider MPV/power requested as DynamisLM arithmetic | Requested computation | Provider-reported value with origin/method if present |
 | BPT generic load × velocity power | Generic power claim | Bar velocity and load as separately identified values |
 | MBT scalar distance supplied as release velocity | Release velocity claim | Exact distance observation |
 | MBT missing origin/end/first-contact convention or variant | Distance comparison/derivation | Source value and known protocol fields |
+| MBT caller coordinates/endpoint booleans without coordinate source evidence | Derived MBT distance | Source-reported distance, if present |
+| MBT caller-selected release sample without release-event source evidence | Instrumented release velocity | Qualified trajectory without an emitted release velocity |
 | MBT distance relabelled power/normative score | Power/score claim | Exact distance |
 | Any missing source/provenance/processing lineage | Derived/qualified claim | Independently describable source observations |
 

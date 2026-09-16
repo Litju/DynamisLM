@@ -65,6 +65,16 @@ MBT_PUSH_PRESS_PROTOCOL = _reference(
 MBT_SOURCE_DISTANCE_OPERATION = _reference(
     "processing-method", "medicine-ball-throw-source-distance-v1", "MBT source distance V1"
 )
+MBT_COORDINATE_SOURCE_OPERATION = _reference(
+    "processing-method",
+    "medicine-ball-throw-coordinate-source-v1",
+    "MBT coordinate source V1",
+)
+MBT_COORDINATE_QUALIFICATION_RULE = _reference(
+    "source-adjudication-rule",
+    "medicine-ball-throw-coordinate-qualification-v1",
+    "MBT coordinate qualification V1",
+)
 MBT_DISTANCE_FROM_REGISTERED_COORDINATES_OPERATION = _reference(
     "registered-operation",
     "medicine-ball-throw-distance-from-registered-coordinates-v1",
@@ -74,6 +84,16 @@ MBT_RELEASE_VELOCITY_SOURCE_OPERATION = _reference(
     "processing-method",
     "medicine-ball-throw-release-velocity-source-v1",
     "MBT release-velocity source V1",
+)
+MBT_RELEASE_EVENT_SOURCE_OPERATION = _reference(
+    "processing-method",
+    "medicine-ball-throw-release-event-source-v1",
+    "MBT release-event source V1",
+)
+MBT_RELEASE_EVENT_QUALIFICATION_RULE = _reference(
+    "source-adjudication-rule",
+    "medicine-ball-throw-release-event-qualification-v1",
+    "MBT release-event qualification V1",
 )
 MBT_INSTRUMENTED_RELEASE_VELOCITY_OPERATION = _reference(
     "registered-operation",

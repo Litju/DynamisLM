@@ -262,6 +262,8 @@ def build_drop_jump_qualification_source_observation(
         raise ValueError("DJ qualification ingestion requires source/provider origin")
     _require_verified_artifact(source_artifact)
     _require_instance(acquisition, DropJumpAcquisitionRecord, "acquisition")
+    if adjudication_rule is not None:
+        _require_instance(adjudication_rule, RegistryReference, "adjudication_rule")
     target_identity = target_observation.identity
     if not isinstance(target_identity, DropJumpMeasurementIdentity):
         raise ValueError("target observation requires a DJ measurement identity")
@@ -281,8 +283,6 @@ def build_drop_jump_qualification_source_observation(
             else ()
         ),
     )
-    if adjudication_rule is not None:
-        _require_instance(adjudication_rule, RegistryReference, "adjudication_rule")
     identity = DropJumpMeasurementIdentity(
         identity_id=ScientificIdentifier(
             "dynamislm",

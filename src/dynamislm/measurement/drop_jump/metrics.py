@@ -12,6 +12,7 @@ from dynamislm.measurement.drop_jump.events import (
     DropJumpEventLabel,
     DropJumpEventOccurrence,
     DropJumpEventOccurrenceStatus,
+    _validate_event_source_evidence,
 )
 from dynamislm.measurement.drop_jump.identity import (
     DropJumpAcquisitionIdentity,
@@ -128,6 +129,14 @@ class DropJumpMetricResult:
         _finite(value.value, "DJ metric result")
         if self.observation.result.status is not ResultStatus.VALID:
             raise ValueError("DJ metric result must be valid")
+        if not self.source_events:
+            raise ValueError("DJ metric result must preserve source event evidence")
+        source_observation_ids = {item.observation_id for item in self.source_observations}
+        if any(
+            event.source_observation_id not in source_observation_ids
+            for event in self.source_events
+        ):
+            raise ValueError("DJ metric result must preserve event source observations")
         runs = tuple(
             run
             for run in self.observation.provenance.processing_runs
@@ -277,6 +286,10 @@ def _validate_source(
         for event in events
     ):
         raise ValueError("DJ event and source observation lineage do not match")
+    for event in events:
+        if event.source_evidence is None:
+            raise ValueError("DJ event must preserve typed source evidence")
+        _validate_event_source_evidence(event.source_evidence, source_observation)
     if source_observation.result.status is not ResultStatus.VALID:
         raise ValueError("DJ source observation must be valid")
     if qualification is not None:

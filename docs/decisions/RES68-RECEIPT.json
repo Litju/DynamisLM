@@ -1,12 +1,14 @@
 {
-  "mission": "RES-68-DESIGN-FIX-AND-IMPLEMENTATION-001",
+  "mission": "RES-68-REVIEW-FIX-001",
   "linear_issue": "RES-68",
   "project": "DynamisLM",
-  "status": "READY_FOR_REVIEW",
+  "status": "READY_FOR_FINAL_REVIEW",
   "decision_record": "docs/decisions/RES68-DR-001-explosive-test-family-closure.md",
-  "entry_head": "cb1a6e8631d1d42ba108d02a247e39688658efb5",
-  "achievement_commit_sha": "6bea4abd85e71201413e7ec040684bc7db2adb4a",
-  "pr_head_at_creation": "6bea4abd85e71201413e7ec040684bc7db2adb4a",
+  "base_main": "cb1a6e8631d1d42ba108d02a247e39688658efb5",
+  "entry_head": "8e2f7d63efa28a1be9a23426da73046cfbab3a6f",
+  "reviewed_head": "8e2f7d63efa28a1be9a23426da73046cfbab3a6f",
+  "historical_achievement_commit_sha": "6bea4abd85e71201413e7ec040684bc7db2adb4a",
+  "historical_pr_head_at_creation": "6bea4abd85e71201413e7ec040684bc7db2adb4a",
   "branch": "work/res-68-explosive-test-family-closure",
   "phase_a_design_fix": "PASS",
   "phase_b_implementation": "PASS",
@@ -15,9 +17,9 @@
   "codebase_memory": {
     "used": true,
     "project": "home-litju-projects-DynamisLM",
-    "initial_map": "Kernel observation/result/identity/provenance, CMJ event and flight-height authority, RES-66 velocity-series support, RES-67 source qualification, registries, V3 serialization, refusal/comparability and downstream patterns were mapped before edits.",
-    "changed_symbol_audit": "PASS",
-    "unexpected_downstream_impact": "NONE; exact direct production call/import audit found no external consumers of the new symbols; inbound consumers are the RES-68 synthetic tests.",
+    "initial_map": "Codebase Memory mapped all RES-68 DJ/BPT/MBT public entry points and consumers, generic ComparabilityRequest invariants, provenance, V3 serialization, RES-66 VBT phase authority, RES-67 source qualification, tests, decision record and receipt before edits.",
+    "changed_symbol_audit": "PASS; exact reindexed symbol lookup and caller traces completed after repair",
+    "unexpected_downstream_impact": "NONE; all changed production symbols remain within RES-68 family modules and their tests",
     "graph_note": "Similarity and short-name graph edges into existing families were treated as non-authoritative false positives and checked against exact source paths."
   },
   "dispositions": {
@@ -66,26 +68,30 @@
     "mypy": "PASS",
     "repository_policy": "PASS",
     "pytest": "PASS",
-    "hosted_ci": "PASS",
+    "hosted_ci": "HISTORICAL_PASS_ONLY",
     "hosted_ci_run": "https://github.com/Litju/DynamisLM/actions/runs/35153538223",
+    "hosted_ci_tested_commit": "8e2f7d63efa28a1be9a23426da73046cfbab3a6f",
+    "fresh_hosted_ci": "REQUIRED_ON_REPAIR_HEAD",
     "advisory_review": "PENDING",
-    "test_count": 742,
+    "test_count": 749,
     "tracked_mutation": "NONE",
     "git_diff_check": "PASS",
-    "command": "./scripts/ci.sh"
+    "command": "./scripts/ci.sh",
+    "local_qa_tested_commit": "review-fix working tree before final commit"
   },
   "git": {
     "commit_created": true,
     "pushed_existing_branch": true,
-    "pr_created": true,
+    "pr_created_by_this_mission": false,
     "pr_number": 30,
-    "pr_head": "6bea4abd85e71201413e7ec040684bc7db2adb4a",
-    "changed_files": 22,
+    "historical_pr_head": "6bea4abd85e71201413e7ec040684bc7db2adb4a",
+    "repair_head": "reported in final handoff; not a current-head assertion in this receipt",
+    "changed_files_in_review_repair": 17,
     "unrelated_tracked_mutation": "NONE"
   },
   "linear_res68_status": "IN_REVIEW",
   "scientific_review": "PENDING_FINAL_REVIEW",
   "unresolved_scientific_blockers": [],
-  "merge_readiness": "READY_FOR_REVIEW",
-  "next": "RES-68-FINAL-REVIEW-001"
+  "merge_readiness": "READY_FOR_FINAL_REVIEW",
+  "next": "RES-68-FINAL-REVIEW-002"
 }

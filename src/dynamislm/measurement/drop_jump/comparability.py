@@ -61,6 +61,37 @@ class DropJumpComparabilityRequest:
         )
 
 
+def _fallback_observation_id(item: object, side: str) -> InstanceIdentifier:
+    if isinstance(item, DropJumpMetricResult):
+        try:
+            observation_id = item.observation.observation_id
+            if isinstance(observation_id, InstanceIdentifier):
+                return observation_id
+        except (AttributeError, TypeError, ValueError):
+            pass
+    return InstanceIdentifier("observation", f"invalid-dj-{side}")
+
+
+def _fallback_request(left: object, right: object, claim: object) -> ComparabilityRequest:
+    safe_claim = claim if isinstance(claim, str) and claim.strip() else "invalid DJ comparison"
+    left_id = _fallback_observation_id(left, "left")
+    right_id = _fallback_observation_id(right, "right")
+    if left_id == right_id:
+        right_id = InstanceIdentifier("observation", f"{right_id.value}:right-envelope")
+    request_id = InstanceIdentifier(
+        "comparability-request",
+        canonical_hash({"left": left_id, "right": right_id, "claim": safe_claim}).removeprefix(
+            "sha256:"
+        )[:24],
+    )
+    return ComparabilityRequest(
+        request_id=request_id,
+        left_observation_id=left_id,
+        right_observation_id=right_id,
+        claim=safe_claim,
+    )
+
+
 def _result(
     request: ComparabilityRequest,
     state: ComparabilityState,
@@ -184,29 +215,23 @@ def compare_drop_jump_metric_results(
 ) -> ComparabilityResult:
     """Adjudicate two DJ outputs without accepting a manual override."""
 
-    left_token = (
-        left.observation.observation_id
-        if isinstance(left, DropJumpMetricResult)
-        else InstanceIdentifier("observation", "invalid-left")
-    )
-    right_token = (
-        right.observation.observation_id
-        if isinstance(right, DropJumpMetricResult)
-        else InstanceIdentifier("observation", "invalid-right")
-    )
-    request_id = InstanceIdentifier(
-        "comparability-request",
-        canonical_hash(
-            {
-                "left": left_token,
-                "right": right_token,
-                "claim": claim,
-            }
-        ).removeprefix("sha256:")[:24],
-    )
     try:
+        if not isinstance(claim, str) or not claim.strip():
+            raise ValueError("DJ comparison claim must be non-empty text")
         _require_instance(left, DropJumpMetricResult, "left")
         _require_instance(right, DropJumpMetricResult, "right")
+        left_token = left.observation.observation_id
+        right_token = right.observation.observation_id
+        request_id = InstanceIdentifier(
+            "comparability-request",
+            canonical_hash(
+                {
+                    "left": left_token,
+                    "right": right_token,
+                    "claim": claim,
+                }
+            ).removeprefix("sha256:")[:24],
+        )
         request = ComparabilityRequest(
             request_id=request_id,
             left_observation_id=left.observation.observation_id,
@@ -222,24 +247,13 @@ def compare_drop_jump_metric_results(
             ),
         )
     except (AttributeError, TypeError, ValueError):
-        fallback = ComparabilityRequest(
-            request_id=request_id,
-            left_observation_id=left_token,
-            right_observation_id=right_token,
-            claim=claim or "invalid DJ comparison",
+        fallback = _fallback_request(left, right, claim)
+        missing = (
+            ("two distinct observations",)
+            if fallback.right_observation_id.value.endswith(":right-envelope")
+            else ("two typed DJ metric results",)
         )
-        if hasattr(left, "observation") and hasattr(right, "observation"):
-            return _result(
-                fallback,
-                ComparabilityState.NOT_COMPARABLE,
-                (ComparabilityReasonCode.METRIC_FAMILY_MISMATCH,),
-            )
-        return _result(
-            fallback,
-            ComparabilityState.INSUFFICIENT_INFORMATION,
-            (ComparabilityReasonCode.MISSING_METADATA,),
-            missing=("two typed DJ metric results",),
-        )
+        return ComparabilityResult.insufficient(fallback, missing_information=missing)
 
     left_identity = left.observation.identity
     right_identity = right.observation.identity

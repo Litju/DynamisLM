@@ -8,7 +8,7 @@ from typing import cast
 
 import pytest
 
-from dynamislm.comparability.models import ComparabilityState
+from dynamislm.comparability.models import ComparabilityResult, ComparabilityState
 from dynamislm.measurement.bench_press_throw import (
     BenchPressThrowAcquisitionIdentity,
     BenchPressThrowAcquisitionRecord,
@@ -28,6 +28,7 @@ from dynamislm.measurement.bench_press_throw import (
     BPTLoadIdentity,
     BPTLoadKind,
     BPTMachineType,
+    BPTMetricSupportSourceEvidence,
     BPTMovementPattern,
     BPTPauseTouchBounce,
     BPTProcessingState,
@@ -47,6 +48,7 @@ from dynamislm.measurement.bench_press_throw import (
     calculate_bpt_sampled_maximum_bar_velocity,
     compare_bpt_metric_results,
     create_bpt_velocity_series_evidence,
+    normalize_bpt_metric_support,
     normalize_bpt_qualification,
     wrap_bpt_provider_metric,
 )
@@ -54,7 +56,18 @@ from dynamislm.measurement.bench_press_throw.registry import (
     BPT_BAR_VELOCITY_MEASURAND,
     BPT_CONSTRUCT,
     BPT_DYNAMISLM_TIME_WEIGHTED_MEAN_BAR_VELOCITY_METRIC,
+    BPT_MEAN_POWER_MEASURAND,
+    BPT_MEAN_PROPULSIVE_VELOCITY_MEASURAND,
+    BPT_METRIC_SUPPORT_BOUNDARY_CONVENTION,
+    BPT_METRIC_SUPPORT_METHOD,
+    BPT_METRIC_SUPPORT_QUALIFICATION_RULE,
+    BPT_METRIC_SUPPORT_SOURCE_OPERATION,
+    BPT_PEAK_POWER_MEASURAND,
+    BPT_PROVIDER_MAXIMUM_VELOCITY_METRIC,
+    BPT_PROVIDER_MEAN_POWER_METRIC,
+    BPT_PROVIDER_MEAN_PROPULSIVE_VELOCITY_METRIC,
     BPT_PROVIDER_MEAN_VELOCITY_METRIC,
+    BPT_PROVIDER_PEAK_POWER_METRIC,
     BPT_REGISTRY_VERSION,
     BPT_SAMPLED_MAXIMUM_BAR_VELOCITY_METRIC,
     BPT_SOURCE_VELOCITY_SERIES_OPERATION,
@@ -62,9 +75,13 @@ from dynamislm.measurement.bench_press_throw.registry import (
     BPT_VELOCITY_SERIES_METRIC,
     KILOGRAM,
     METER_PER_SECOND,
+    WATT,
 )
 from dynamislm.measurement.cmj.weighing import STANDARD_GRAVITY
 from dynamislm.measurement.drop_jump import (
+    DROP_JUMP_REBOUND_TAKEOFF_DETECTOR,
+    DROP_JUMP_SUBSEQUENT_LANDING_DETECTOR,
+    DROP_JUMP_TOUCHDOWN_DETECTOR,
     DropJumpAcquisitionIdentity,
     DropJumpAcquisitionRecord,
     DropJumpArmCondition,
@@ -73,6 +90,8 @@ from dynamislm.measurement.drop_jump import (
     DropJumpEventDetectorParameters,
     DropJumpEventLabel,
     DropJumpEventOccurrence,
+    DropJumpEventOccurrenceStatus,
+    DropJumpEventSourceEvidence,
     DropJumpFlightTimeApplicability,
     DropJumpInitiationMode,
     DropJumpMeasurementIdentity,
@@ -123,8 +142,10 @@ from dynamislm.measurement.medicine_ball_throw import (
     MBTArtifactStatus,
     MBTBodyPosture,
     MBTCoordinateEvidence,
+    MBTCoordinateSourceEvidence,
     MBTQualificationStatus,
     MBTReleaseEvent,
+    MBTReleaseEventSourceEvidence,
     MBTReleaseSemantics,
     MBTReleaseVelocityEvidence,
     MBTSensorModality,
@@ -145,16 +166,26 @@ from dynamislm.measurement.medicine_ball_throw import (
     calculate_mbt_release_velocity_from_distance,
     calculate_mbt_throw_distance,
     compare_mbt_metric_results,
+    normalize_mbt_coordinate_evidence,
     normalize_mbt_qualification,
+)
+from dynamislm.measurement.medicine_ball_throw.qualification import _release_event_source_parameters
+from dynamislm.measurement.medicine_ball_throw.registry import (
+    MBT_COORDINATE_QUALIFICATION_RULE,
+    MBT_COORDINATE_SOURCE_OPERATION,
+    MBT_RELEASE_EVENT_QUALIFICATION_RULE,
+    MBT_RELEASE_EVENT_SOURCE_OPERATION,
 )
 from dynamislm.measurement.observation import ObservationContext, ScientificMeasurementObservation
 from dynamislm.measurement.result import (
     MeasurementQuality,
     MeasurementResult,
+    ScalarValue,
     StructuredOutputReference,
     UncertaintyMetadata,
 )
 from dynamislm.measurement.taxonomy import ScientificClassification, ValueOrigin
+from dynamislm.provenance import LineageEdge, LineageRelation, ProcessingRun, Provenance
 from dynamislm.refusal.models import RefusalResult
 from dynamislm.serialization import (
     SERIALIZATION_VERSION,
@@ -162,6 +193,7 @@ from dynamislm.serialization import (
     canonical_json,
     from_canonical_json,
 )
+from test_cmj_jump_height import _flight_events
 
 
 def _ref(object_type: str, key: str, label: str) -> RegistryReference:
@@ -205,6 +237,126 @@ def _mbt_result(
 def _refused(value: object) -> RefusalResult:
     assert isinstance(value, RefusalResult)
     return value
+
+
+def _dj_event_source(
+    source: ScientificMeasurementObservation,
+    *,
+    label: DropJumpEventLabel,
+    sample_index: int,
+    source_sample_count: int,
+    source_series_digest: str,
+    detector_parameters: DropJumpEventDetectorParameters,
+    prefix: str,
+) -> DropJumpEventSourceEvidence:
+    artifact = next(
+        item
+        for item in source.provenance.source_artifacts
+        if isinstance(item, DropJumpSourceArtifact)
+    )
+    acquisition = next(
+        item
+        for item in source.provenance.acquisitions
+        if isinstance(item, DropJumpAcquisitionRecord)
+    )
+    identity = source.identity
+    if (
+        not isinstance(identity, DropJumpMeasurementIdentity)
+        or identity.acquisition.timebase is None
+    ):
+        raise AssertionError("DJ fixture requires a typed timebase")
+    timebase = identity.acquisition.timebase
+    detector = {
+        DropJumpEventLabel.TOUCHDOWN: DROP_JUMP_TOUCHDOWN_DETECTOR,
+        DropJumpEventLabel.REBOUND_TAKEOFF: DROP_JUMP_REBOUND_TAKEOFF_DETECTOR,
+        DropJumpEventLabel.SUBSEQUENT_LANDING: DROP_JUMP_SUBSEQUENT_LANDING_DETECTOR,
+    }[label]
+    event_id = InstanceIdentifier("event-occurrence", f"{prefix}-{label.value.lower()}")
+    signal_id = InstanceIdentifier(
+        "signal", f"drop-jump:{source_series_digest.removeprefix('sha256:')[:24]}"
+    )
+    source_value_origin = ValueOrigin.SOURCE_REPORTED
+    source_parameters = (
+        MetadataEntry("source_event_id", event_id.qualified),
+        MetadataEntry("source_observation_id", source.observation_id.qualified),
+        MetadataEntry("source_signal_id", signal_id.qualified),
+        MetadataEntry("source_artifact_id", artifact.artifact_id.qualified),
+        MetadataEntry("source_acquisition_id", acquisition.acquisition_id.qualified),
+        MetadataEntry("source_series_digest", source_series_digest),
+        MetadataEntry("source_sample_count", source_sample_count),
+        MetadataEntry("label", label.value),
+        MetadataEntry("sample_index", sample_index),
+        MetadataEntry("event_time_s", timebase.time_at(sample_index)),
+        MetadataEntry("detector_parameters", canonical_hash(detector_parameters)),
+        MetadataEntry("status", "VALID"),
+        MetadataEntry("qc_codes", canonical_hash(())),
+        MetadataEntry("source_value_origin", source_value_origin.value),
+        MetadataEntry("preceding_event_id", None),
+    )
+    run_id = InstanceIdentifier("processing-run", f"{event_id.value}:source")
+    run = ProcessingRun(
+        processing_run_id=run_id,
+        source_artifact_ids=(artifact.artifact_id,),
+        method=detector.reference,
+        parameters=source_parameters,
+        software_version="synthetic-upstream-dj-event-v1",
+        output_entity_id=event_id,
+    )
+    provenance = Provenance(
+        provenance_id=InstanceIdentifier("provenance", event_id.value),
+        source_artifacts=(artifact,),
+        acquisitions=(acquisition,),
+        processing_runs=(run,),
+        lineage_edges=(
+            LineageEdge(
+                artifact.artifact_id.qualified,
+                acquisition.acquisition_id.qualified,
+                LineageRelation.ACQUIRED_AS,
+            ),
+            LineageEdge(
+                source.observation_id.qualified,
+                run_id.qualified,
+                LineageRelation.DERIVED_FROM,
+            ),
+            LineageEdge(signal_id.qualified, run_id.qualified, LineageRelation.DERIVED_FROM),
+            LineageEdge(
+                artifact.artifact_id.qualified, run_id.qualified, LineageRelation.DERIVED_FROM
+            ),
+            LineageEdge(
+                acquisition.acquisition_id.qualified,
+                run_id.qualified,
+                LineageRelation.DERIVED_FROM,
+            ),
+            LineageEdge(
+                detector.decision_reference.stable_id,
+                run_id.qualified,
+                LineageRelation.SUPPORTED_BY,
+            ),
+            LineageEdge(run_id.qualified, event_id.qualified, LineageRelation.PRODUCED),
+        ),
+    )
+    return DropJumpEventSourceEvidence(
+        source_event_id=event_id,
+        source_context=source.context,
+        source_observation_id=source.observation_id,
+        source_signal_id=signal_id,
+        source_artifact_id=artifact.artifact_id,
+        source_acquisition_id=acquisition.acquisition_id,
+        source_measurement_identity=identity,
+        source_timebase=timebase,
+        source_series_digest=source_series_digest,
+        source_sample_count=source_sample_count,
+        label=label,
+        sample_index=sample_index,
+        event_time_s=timebase.time_at(sample_index),
+        detector_method=detector,
+        detector_parameters=detector_parameters,
+        status=DropJumpEventOccurrenceStatus.VALID,
+        qc_codes=(),
+        source_value_origin=source_value_origin,
+        upstream_processing_run_id=run_id,
+        provenance=provenance,
+    )
 
 
 def _dj_fixture(
@@ -311,6 +463,9 @@ def _dj_fixture(
         source_artifact=artifact,
         acquisition=acquisition,
     )
+    parameters = DropJumpEventDetectorParameters(
+        (MetadataEntry("threshold_semantics", "exact source detector output"),)
+    )
     events = {
         label: build_drop_jump_event_occurrence(
             source_observation=source,
@@ -318,8 +473,15 @@ def _dj_fixture(
             sample_index=index,
             source_sample_count=len(samples),
             source_series_digest=series_digest,
-            detector_parameters=DropJumpEventDetectorParameters(
-                (MetadataEntry("threshold_semantics", "exact source detector output"),)
+            detector_parameters=parameters,
+            source_evidence=_dj_event_source(
+                source,
+                label=label,
+                sample_index=index,
+                source_sample_count=len(samples),
+                source_series_digest=series_digest,
+                detector_parameters=parameters,
+                prefix=prefix,
             ),
         )
         for label, index in (
@@ -517,6 +679,95 @@ def test_dj_cmj_event_is_not_accepted_and_v3_roundtrip_is_stable() -> None:
         )
     ).blocks_claim
 
+    cmj_takeoff, cmj_landing, _ = _flight_events("res68-real-cmj")
+    real_cmj_refusal = calculate_drop_jump_flight_time_jump_height(
+        cast(DropJumpEventOccurrence, cmj_takeoff),
+        cast(DropJumpEventOccurrence, cmj_landing),
+        STANDARD_GRAVITY,
+        source,
+        applicability,
+    )
+    assert isinstance(real_cmj_refusal, RefusalResult)
+    assert "EVENT_SOURCE_MISMATCH" in real_cmj_refusal.reason_codes
+
+
+def test_dj_adjudication_rule_is_validated_before_stable_id_access() -> None:
+    source, _, _ = _dj_fixture(prefix="synthetic-dj-bad-adjudication")
+    artifact = next(
+        item
+        for item in source.provenance.source_artifacts
+        if isinstance(item, DropJumpSourceArtifact)
+    )
+    acquisition = next(
+        item
+        for item in source.provenance.acquisitions
+        if isinstance(item, DropJumpAcquisitionRecord)
+    )
+    with pytest.raises(ValueError, match="adjudication_rule"):
+        build_drop_jump_qualification_source_observation(
+            target_observation=source,
+            reported_status=DropJumpQualificationStatus.QUALIFIED,
+            source_artifact=artifact,
+            acquisition=acquisition,
+            adjudication_rule=cast(RegistryReference, object()),
+        )
+
+
+def test_dj_event_authority_requires_upstream_event_evidence() -> None:
+    source, events, _ = _dj_fixture(prefix="synthetic-dj-event-authority")
+    valid_event = events[DropJumpEventLabel.TOUCHDOWN]
+    assert valid_event.source_evidence is not None
+    source_evidence = valid_event.source_evidence
+    with pytest.raises(ValueError, match="source evidence"):
+        build_drop_jump_event_occurrence(
+            source_observation=source,
+            label=DropJumpEventLabel.TOUCHDOWN,
+            sample_index=100,
+            source_sample_count=1000,
+            source_series_digest=valid_event.source_series_digest,
+            status=DropJumpEventOccurrenceStatus.VALID,
+        )
+    with pytest.raises(ValueError):
+        replace(source_evidence, detector_method=DROP_JUMP_REBOUND_TAKEOFF_DETECTOR)
+    with pytest.raises(ValueError):
+        replace(
+            source_evidence,
+            provenance=replace(source_evidence.provenance, lineage_edges=()),
+        )
+    with pytest.raises(ValueError):
+        replace(source_evidence, source_series_digest="sha256:forged")
+    context_mismatch = replace(source_evidence, source_context=_context("other-dj-context"))
+    with pytest.raises(ValueError, match="source"):
+        build_drop_jump_event_occurrence(
+            source_observation=source,
+            source_evidence=context_mismatch,
+        )
+    with pytest.raises(ValueError):
+        replace(source_evidence, source_artifact_id=InstanceIdentifier("artifact", "other"))
+    with pytest.raises(ValueError):
+        replace(source_evidence, source_acquisition_id=InstanceIdentifier("acquisition", "other"))
+    other_source, _, _ = _dj_fixture(prefix="synthetic-dj-other-protocol", actual_drop_height_m=0.3)
+    assert isinstance(other_source.identity, DropJumpMeasurementIdentity)
+    protocol_mismatch = replace(
+        source_evidence,
+        source_measurement_identity=other_source.identity,
+    )
+    with pytest.raises(ValueError, match="source observation"):
+        build_drop_jump_event_occurrence(
+            source_observation=source,
+            source_evidence=protocol_mismatch,
+        )
+    assert (
+        valid_event.provenance.processing_runs[-1].method == valid_event.detector_method.reference
+    )
+    assert valid_event.provenance.processing_runs[-1].software_version.startswith(
+        "synthetic-upstream"
+    )
+    encoded = canonical_json(source_evidence)
+    restored = from_canonical_json(encoded, type(source_evidence))
+    assert restored == source_evidence
+    assert canonical_hash(restored) == canonical_hash(source_evidence)
+
 
 def test_source_qualification_is_upstream_typed_and_cannot_be_minted() -> None:
     source, events, _ = _dj_fixture(prefix="synthetic-dj-qualified")
@@ -603,12 +854,121 @@ def test_source_qualification_is_upstream_typed_and_cannot_be_minted() -> None:
     ).blocks_claim
 
 
+def _bpt_support_source(
+    *,
+    context: ObservationContext,
+    identity: BenchPressThrowMeasurementIdentity,
+    series: BenchPressThrowVelocitySeries,
+    artifact: BenchPressThrowSourceArtifact,
+    acquisition: BenchPressThrowAcquisitionRecord,
+    metric: RegistryReference,
+    support_definition: str,
+    includes_post_release_samples: bool,
+    prefix: str,
+) -> BPTMetricSupportSourceEvidence:
+    support_id = InstanceIdentifier("support", f"{prefix}-{metric.identifier.key}")
+    run_id = InstanceIdentifier("processing-run", f"{support_id.value}:source")
+    source_origin = ValueOrigin.PROVIDER_DERIVED
+    source = BPTMetricSupportSourceEvidence(
+        support_id=support_id,
+        source_context=context,
+        source_observation_id=InstanceIdentifier("observation", f"{prefix}-series"),
+        source_series_id=series.series_id,
+        source_artifact_id=artifact.artifact_id,
+        source_acquisition_id=acquisition.acquisition_id,
+        source_measurement_identity_id=identity.identity_id,
+        source_series_digest=series.canonical_content_digest(),
+        source_timebase=series.timebase,
+        source_sample_count=len(series.samples),
+        metric=metric,
+        start_index=0,
+        end_index=len(series.samples) - 1,
+        start_time_s=series.samples[0][0],
+        end_time_s=series.samples[-1][0],
+        support_definition=support_definition,
+        boundary_method=BPT_METRIC_SUPPORT_METHOD,
+        boundary_convention=BPT_METRIC_SUPPORT_BOUNDARY_CONVENTION,
+        includes_post_release_samples=includes_post_release_samples,
+        value_origin=source_origin,
+        upstream_processing_run_id=run_id,
+        provenance=Provenance(
+            provenance_id=InstanceIdentifier("provenance", support_id.value),
+            source_artifacts=(artifact,),
+            acquisitions=(acquisition,),
+            processing_runs=(),
+            lineage_edges=(),
+        ),
+    )
+    parameters = (
+        MetadataEntry("support_id", source.support_id.qualified),
+        MetadataEntry("source_context_id", source.source_context.context_id.qualified),
+        MetadataEntry("source_observation_id", source.source_observation_id.qualified),
+        MetadataEntry("source_series_id", source.source_series_id.qualified),
+        MetadataEntry("source_artifact_id", source.source_artifact_id.qualified),
+        MetadataEntry("source_acquisition_id", source.source_acquisition_id.qualified),
+        MetadataEntry(
+            "source_measurement_identity_id", source.source_measurement_identity_id.stable_id
+        ),
+        MetadataEntry("source_series_digest", source.source_series_digest),
+        MetadataEntry("source_timebase", canonical_json(source.source_timebase)),
+        MetadataEntry("source_sample_count", source.source_sample_count),
+        MetadataEntry("metric", source.metric.stable_id),
+        MetadataEntry("start_index", source.start_index),
+        MetadataEntry("end_index", source.end_index),
+        MetadataEntry("start_time_s", source.start_time_s),
+        MetadataEntry("end_time_s", source.end_time_s),
+        MetadataEntry("support_definition", source.support_definition),
+        MetadataEntry("boundary_method", source.boundary_method.stable_id),
+        MetadataEntry("boundary_convention", source.boundary_convention.stable_id),
+        MetadataEntry("boundary_parameters", canonical_json(source.boundary_parameters)),
+        MetadataEntry("includes_post_release_samples", source.includes_post_release_samples),
+        MetadataEntry("value_origin", source.value_origin.value),
+    )
+    run = ProcessingRun(
+        processing_run_id=run_id,
+        source_artifact_ids=(artifact.artifact_id,),
+        method=BPT_METRIC_SUPPORT_SOURCE_OPERATION,
+        parameters=parameters,
+        software_version="synthetic-upstream-bpt-support-v1",
+        output_entity_id=support_id,
+    )
+    provenance = replace(
+        source.provenance,
+        processing_runs=(run,),
+        lineage_edges=(
+            LineageEdge(
+                source.source_observation_id.qualified,
+                run_id.qualified,
+                LineageRelation.DERIVED_FROM,
+            ),
+            LineageEdge(series.series_id.qualified, run_id.qualified, LineageRelation.DERIVED_FROM),
+            LineageEdge(
+                artifact.artifact_id.qualified, run_id.qualified, LineageRelation.DERIVED_FROM
+            ),
+            LineageEdge(
+                acquisition.acquisition_id.qualified,
+                run_id.qualified,
+                LineageRelation.DERIVED_FROM,
+            ),
+            LineageEdge(
+                BPT_METRIC_SUPPORT_QUALIFICATION_RULE.stable_id,
+                run_id.qualified,
+                LineageRelation.SUPPORTED_BY,
+            ),
+            LineageEdge(run_id.qualified, support_id.qualified, LineageRelation.PRODUCED),
+        ),
+    )
+    return replace(source, provenance=provenance)
+
+
 def _bpt_fixture(
     *,
     movement: BPTMovementPattern = BPTMovementPattern.CONCENTRIC_ONLY,
     prefix: str = "synthetic-bpt",
     explicit_timebase: bool = False,
     counterbalance_status: BPTCounterbalanceStatus = BPTCounterbalanceStatus.ABSENT,
+    support_metric: RegistryReference = BPT_SAMPLED_MAXIMUM_BAR_VELOCITY_METRIC,
+    includes_post_release_samples: bool = True,
 ) -> tuple[
     BenchPressThrowVelocitySeriesEvidence,
     BenchPressThrowProtocolIdentity,
@@ -733,42 +1093,43 @@ def _bpt_fixture(
         sign_convention=sign,
         processing_state=BPTProcessingState.PROVIDER_PROCESSED,
     )
-    support = BenchPressThrowMetricSupport(
-        support_id=InstanceIdentifier("support", f"{prefix}-vmax"),
-        metric=BPT_SAMPLED_MAXIMUM_BAR_VELOCITY_METRIC,
-        start_index=0,
-        end_index=4,
-        start_time_s=0.0,
-        end_time_s=samples[-1][0],
+    context = _context(prefix)
+    support_source = _bpt_support_source(
+        context=context,
+        identity=identity,
+        series=series,
+        artifact=artifact,
+        acquisition=acquisition,
+        metric=support_metric,
         support_definition=(
             "first positive bar velocity through explicit release/maximum-height support"
         ),
-        source_series_digest=series_digest,
-        includes_post_release_samples=True,
+        includes_post_release_samples=includes_post_release_samples,
+        prefix=prefix,
     )
     evidence = create_bpt_velocity_series_evidence(
         observation_id=InstanceIdentifier("observation", f"{prefix}-series"),
         result_id=InstanceIdentifier("result", f"{prefix}-series"),
-        context=_context(prefix),
+        context=context,
         identity=identity,
         series=series,
         source_artifact=artifact,
         acquisition=acquisition,
-        support=support,
+        support=support_source,
     )
-    return evidence, protocol, support, series_digest, acquisition, artifact
+    return evidence, protocol, evidence.support, series_digest, acquisition, artifact
 
 
 def test_bpt_vmax_time_weighted_mean_and_post_release_support() -> None:
     evidence, protocol, _, _, _, _ = _bpt_fixture()
     vmax = _bpt_result(calculate_bpt_sampled_maximum_bar_velocity(evidence))
     assert vmax.value_m_per_s == pytest.approx(1.0)
-    mean_support = replace(
-        evidence.support,
-        support_id=InstanceIdentifier("support", "synthetic-bpt-mean"),
-        metric=BPT_DYNAMISLM_TIME_WEIGHTED_MEAN_BAR_VELOCITY_METRIC,
+    assert evidence.support_source_evidence is not None
+    assert evidence.support_source_evidence.includes_post_release_samples
+    mean_evidence, _, _, _, _, _ = _bpt_fixture(
+        prefix="synthetic-bpt-mean",
+        support_metric=BPT_DYNAMISLM_TIME_WEIGHTED_MEAN_BAR_VELOCITY_METRIC,
     )
-    mean_evidence = replace(evidence, support=mean_support)
     mean = _bpt_result(calculate_bpt_dynamislm_time_weighted_mean_bar_velocity(mean_evidence))
     assert mean.value_m_per_s == pytest.approx(0.4375)
     assert (
@@ -776,6 +1137,15 @@ def test_bpt_vmax_time_weighted_mean_and_post_release_support() -> None:
         == BPT_DYNAMISLM_TIME_WEIGHTED_MEAN_BAR_VELOCITY_METRIC
     )
     assert protocol.release_semantics is BPTReleaseSemantics.RELEASED
+    no_post_release, _, _, _, _, _ = _bpt_fixture(
+        prefix="synthetic-bpt-no-post-release",
+        includes_post_release_samples=False,
+    )
+    assert no_post_release.support_source_evidence is not None
+    assert not no_post_release.support_source_evidence.includes_post_release_samples
+    assert _bpt_result(
+        calculate_bpt_sampled_maximum_bar_velocity(no_post_release)
+    ).value_m_per_s == pytest.approx(1.0)
 
 
 def test_bpt_metric_support_and_provider_origin_are_distinct() -> None:
@@ -805,6 +1175,118 @@ def test_bpt_metric_support_and_provider_origin_are_distinct() -> None:
     )
 
 
+def test_bpt_provider_metrics_use_exact_measurands() -> None:
+    _, protocol, _, _, acquisition, artifact = _bpt_fixture(prefix="synthetic-bpt-measurands")
+    cases = (
+        (
+            BPT_PROVIDER_MEAN_VELOCITY_METRIC,
+            METER_PER_SECOND,
+            BPT_BAR_VELOCITY_MEASURAND,
+        ),
+        (
+            BPT_PROVIDER_MAXIMUM_VELOCITY_METRIC,
+            METER_PER_SECOND,
+            BPT_BAR_VELOCITY_MEASURAND,
+        ),
+        (
+            BPT_PROVIDER_MEAN_PROPULSIVE_VELOCITY_METRIC,
+            METER_PER_SECOND,
+            BPT_MEAN_PROPULSIVE_VELOCITY_MEASURAND,
+        ),
+        (BPT_PROVIDER_MEAN_POWER_METRIC, WATT, BPT_MEAN_POWER_MEASURAND),
+        (BPT_PROVIDER_PEAK_POWER_METRIC, WATT, BPT_PEAK_POWER_MEASURAND),
+    )
+    for metric, unit, measurand in cases:
+        observation = build_bpt_provider_metric_observation(
+            observation_id=InstanceIdentifier(
+                "observation", f"synthetic-bpt-provider-{metric.identifier.key}"
+            ),
+            result_id=InstanceIdentifier(
+                "result", f"synthetic-bpt-provider-{metric.identifier.key}"
+            ),
+            context=_context(f"synthetic-bpt-provider-{metric.identifier.key}"),
+            protocol_identity=protocol,
+            metric=metric,
+            value=1.0,
+            unit=unit,
+            source_artifact=artifact,
+            acquisition=acquisition,
+            value_origin=ValueOrigin.PROVIDER_DERIVED,
+        )
+        assert observation.identity.semantic.measurand == measurand
+
+
+def test_bpt_metric_support_requires_upstream_source_authority() -> None:
+    evidence, _, _, _, acquisition, artifact = _bpt_fixture(prefix="synthetic-bpt-authority")
+    raw_support = BenchPressThrowMetricSupport(
+        support_id=InstanceIdentifier("support", "raw-bpt-support"),
+        metric=BPT_SAMPLED_MAXIMUM_BAR_VELOCITY_METRIC,
+        start_index=0,
+        end_index=4,
+        start_time_s=0.0,
+        end_time_s=0.4,
+        support_definition="caller-selected support",
+        source_series_digest=evidence.source_series_digest,
+        includes_post_release_samples=True,
+    )
+    with pytest.raises(ValueError, match="upstream BPT metric support"):
+        create_bpt_velocity_series_evidence(
+            observation_id=evidence.observation.observation_id,
+            result_id=evidence.observation.result.result_id,
+            context=evidence.observation.context,
+            identity=evidence.identity,
+            series=evidence.series,
+            source_artifact=artifact,
+            acquisition=acquisition,
+            support=raw_support,
+        )
+    source = evidence.support_source_evidence
+    assert source is not None
+    for mutated in (
+        replace(source, source_series_digest="sha256:wrong"),
+        replace(source, source_context=_context("synthetic-bpt-other-context")),
+        replace(source, source_artifact_id=InstanceIdentifier("artifact", "other")),
+        replace(source, source_acquisition_id=InstanceIdentifier("acquisition", "other")),
+        replace(source, metric=BPT_DYNAMISLM_TIME_WEIGHTED_MEAN_BAR_VELOCITY_METRIC),
+        replace(source, start_index=1),
+        replace(source, end_time_s=99.0),
+        replace(source, boundary_method=_ref("support-method", "other", "Other support")),
+        replace(
+            source,
+            boundary_convention=_ref("boundary-convention", "other", "Other convention"),
+        ),
+        replace(
+            source,
+            provenance=replace(
+                source.provenance,
+                lineage_edges=(
+                    LineageEdge(
+                        source.upstream_processing_run_id.qualified,
+                        source.support_id.qualified,
+                        LineageRelation.PRODUCED,
+                    ),
+                ),
+            ),
+        ),
+    ):
+        with pytest.raises(ValueError):
+            normalize_bpt_metric_support(
+                mutated,
+                evidence.observation,
+                evidence.series,
+                artifact,
+                acquisition,
+            )
+    normalized = normalize_bpt_metric_support(
+        source, evidence.observation, evidence.series, artifact, acquisition
+    )
+    assert normalized == evidence.support
+    assert normalized.authority_source_id == source.support_id
+    restored = from_canonical_json(canonical_json(source), type(source))
+    assert restored == source
+    assert canonical_hash(restored) == canonical_hash(source)
+
+
 def test_bpt_metric_specific_refusals_and_serialization() -> None:
     evidence, _, _, _, _, _ = _bpt_fixture()
     assert calculate_bpt_mean_propulsive_velocity(evidence).blocks_claim
@@ -820,18 +1302,81 @@ def test_bpt_metric_specific_refusals_and_serialization() -> None:
     assert result.observation.result.classification.value_origin is ValueOrigin.DYNAMISLM_DERIVED
 
 
-def test_bpt_irregular_timebase_and_same_method_comparability() -> None:
-    explicit, _, _, _, _, _ = _bpt_fixture(prefix="synthetic-bpt-explicit", explicit_timebase=True)
-    mean_support = replace(
-        explicit.support,
-        support_id=InstanceIdentifier("support", "synthetic-bpt-explicit-mean"),
-        metric=BPT_DYNAMISLM_TIME_WEIGHTED_MEAN_BAR_VELOCITY_METRIC,
+def _assert_unresolved_comparison(value: object, missing: str) -> ComparabilityResult:
+    assert isinstance(value, ComparabilityResult)
+    assert value.state is ComparabilityState.INSUFFICIENT_INFORMATION
+    assert value.decided_by.value == "UNRESOLVED"
+    assert value.rule_reference is None
+    assert missing in value.missing_information
+    return value
+
+
+def test_res68_comparators_fail_closed_for_refusals_malformed_inputs_and_duplicate_ids() -> None:
+    bpt_evidence, _, _, _, _, _ = _bpt_fixture(prefix="synthetic-bpt-comparability")
+    bpt_result = _bpt_result(calculate_bpt_sampled_maximum_bar_velocity(bpt_evidence))
+    bpt_refusal = _refused(calculate_bpt_mean_power(bpt_evidence))
+    _assert_unresolved_comparison(
+        compare_bpt_metric_results(cast(BenchPressThrowMetricResult, bpt_refusal), bpt_result),
+        "two typed BPT metric results",
     )
-    mean = _bpt_result(
-        calculate_bpt_dynamislm_time_weighted_mean_bar_velocity(
-            replace(explicit, support=mean_support)
+    _assert_unresolved_comparison(
+        compare_bpt_metric_results(bpt_result, cast(BenchPressThrowMetricResult, bpt_refusal)),
+        "two typed BPT metric results",
+    )
+    _assert_unresolved_comparison(
+        compare_bpt_metric_results(cast(BenchPressThrowMetricResult, object()), bpt_result),
+        "two typed BPT metric results",
+    )
+    duplicate_bpt = replace(bpt_result, metric=bpt_result.metric)
+    _assert_unresolved_comparison(
+        compare_bpt_metric_results(duplicate_bpt, bpt_result), "two distinct observations"
+    )
+
+    dj_source, dj_events, _ = _dj_fixture(prefix="synthetic-dj-comparability")
+    dj_result = _dj_result(
+        calculate_drop_jump_contact_time(
+            dj_events[DropJumpEventLabel.TOUCHDOWN],
+            dj_events[DropJumpEventLabel.REBOUND_TAKEOFF],
+            dj_source,
         )
     )
+    _assert_unresolved_comparison(
+        compare_drop_jump_metric_results(cast(DropJumpMetricResult, object()), dj_result),
+        "two typed DJ metric results",
+    )
+    _assert_unresolved_comparison(
+        compare_drop_jump_metric_results(dj_result, dj_result), "two distinct observations"
+    )
+    duplicate_dj = replace(dj_result, metric=dj_result.metric)
+    _assert_unresolved_comparison(
+        compare_drop_jump_metric_results(duplicate_dj, dj_result), "two distinct observations"
+    )
+
+    mbt_source, mbt_coordinate, _, _, _, _ = _mbt_distance_fixture(
+        prefix="synthetic-mbt-comparability"
+    )
+    mbt_result = _mbt_result(calculate_mbt_throw_distance(mbt_coordinate, mbt_source))
+    _assert_unresolved_comparison(
+        compare_mbt_metric_results(cast(MedicineBallThrowMetricResult, object()), mbt_result),
+        "two typed MBT metric results",
+    )
+    _assert_unresolved_comparison(
+        compare_mbt_metric_results(mbt_result, mbt_result), "two distinct observations"
+    )
+    duplicate_mbt = replace(mbt_result, metric=mbt_result.metric)
+    _assert_unresolved_comparison(
+        compare_mbt_metric_results(duplicate_mbt, mbt_result), "two distinct observations"
+    )
+
+
+def test_bpt_irregular_timebase_and_same_method_comparability() -> None:
+    explicit, _, _, _, _, _ = _bpt_fixture(prefix="synthetic-bpt-explicit", explicit_timebase=True)
+    mean_evidence, _, _, _, _, _ = _bpt_fixture(
+        prefix="synthetic-bpt-explicit-mean",
+        explicit_timebase=True,
+        support_metric=BPT_DYNAMISLM_TIME_WEIGHTED_MEAN_BAR_VELOCITY_METRIC,
+    )
+    mean = _bpt_result(calculate_bpt_dynamislm_time_weighted_mean_bar_velocity(mean_evidence))
     assert mean.value_m_per_s == pytest.approx(0.3775 / 0.9)
     other, _, _, _, _, _ = _bpt_fixture(prefix="synthetic-bpt-other", explicit_timebase=True)
     other_vmax = _bpt_result(calculate_bpt_sampled_maximum_bar_velocity(other))
@@ -862,6 +1407,119 @@ def test_bpt_unresolved_counterbalance_and_movement_mismatch_refuse_or_bridge() 
         ).state
         is ComparabilityState.BRIDGE_VALIDATION_REQUIRED
     )
+
+
+def _mbt_coordinate_source(
+    *,
+    source_observation: ScientificMeasurementObservation,
+    protocol: MedicineBallThrowProtocolIdentity,
+    artifact: MedicineBallThrowSourceArtifact,
+    acquisition: MedicineBallThrowAcquisitionRecord,
+    origin_coordinate_m: float,
+    endpoint_coordinate_m: float,
+    coordinate_frame: RegistryReference,
+    origin_convention: RegistryReference,
+    endpoint_convention: RegistryReference,
+    first_contact_no_roll_convention: RegistryReference,
+    first_contact_observed: bool,
+    no_roll_observed: bool,
+    prefix: str,
+) -> MBTCoordinateSourceEvidence:
+    coordinate_id = InstanceIdentifier("coordinate-evidence", f"{prefix}-coordinate")
+    run_id = InstanceIdentifier("processing-run", f"{coordinate_id.value}:source")
+    source = MBTCoordinateSourceEvidence(
+        source_coordinate_id=coordinate_id,
+        source_context_id=source_observation.context.context_id,
+        source_observation_id=source_observation.observation_id,
+        source_artifact_id=artifact.artifact_id,
+        source_acquisition_id=acquisition.acquisition_id,
+        source_measurement_identity_id=source_observation.identity.identity_id,
+        protocol_reference=protocol.reference,
+        origin_coordinate_m=origin_coordinate_m,
+        endpoint_coordinate_m=endpoint_coordinate_m,
+        coordinate_frame=coordinate_frame,
+        origin_convention=origin_convention,
+        endpoint_convention=endpoint_convention,
+        first_contact_no_roll_convention=first_contact_no_roll_convention,
+        first_contact_observed=first_contact_observed,
+        no_roll_observed=no_roll_observed,
+        source_content_digest=artifact.content_digest,
+        provider=acquisition.provider,
+        source_value_origin=source_observation.result.classification.value_origin.value,
+        upstream_processing_run_id=run_id,
+        provenance=Provenance(
+            provenance_id=InstanceIdentifier("provenance", coordinate_id.value),
+            source_artifacts=(artifact,),
+            acquisitions=(acquisition,),
+            processing_runs=(),
+            lineage_edges=(),
+        ),
+    )
+    parameters = (
+        MetadataEntry("source_coordinate_id", source.source_coordinate_id.qualified),
+        MetadataEntry("source_context_id", source.source_context_id.qualified),
+        MetadataEntry("source_observation_id", source.source_observation_id.qualified),
+        MetadataEntry("source_artifact_id", source.source_artifact_id.qualified),
+        MetadataEntry("source_acquisition_id", source.source_acquisition_id.qualified),
+        MetadataEntry(
+            "source_measurement_identity_id", source.source_measurement_identity_id.stable_id
+        ),
+        MetadataEntry("protocol_reference", source.protocol_reference.stable_id),
+        MetadataEntry("origin_coordinate_m", source.origin_coordinate_m),
+        MetadataEntry("endpoint_coordinate_m", source.endpoint_coordinate_m),
+        MetadataEntry("coordinate_frame", source.coordinate_frame.stable_id),
+        MetadataEntry("origin_convention", source.origin_convention.stable_id),
+        MetadataEntry("endpoint_convention", source.endpoint_convention.stable_id),
+        MetadataEntry(
+            "first_contact_no_roll_convention",
+            source.first_contact_no_roll_convention.stable_id,
+        ),
+        MetadataEntry("first_contact_observed", source.first_contact_observed),
+        MetadataEntry("no_roll_observed", source.no_roll_observed),
+        MetadataEntry("source_content_digest", source.source_content_digest),
+        MetadataEntry("provider", source.provider),
+        MetadataEntry("method_parameters", canonical_json(source.method_parameters)),
+        MetadataEntry("source_value_origin", source.source_value_origin),
+    )
+    run = ProcessingRun(
+        processing_run_id=run_id,
+        source_artifact_ids=(artifact.artifact_id,),
+        method=MBT_COORDINATE_SOURCE_OPERATION,
+        parameters=parameters,
+        software_version="synthetic-upstream-mbt-coordinate-v1",
+        output_entity_id=coordinate_id,
+    )
+    provenance = replace(
+        source.provenance,
+        processing_runs=(run,),
+        lineage_edges=(
+            LineageEdge(
+                artifact.artifact_id.qualified,
+                acquisition.acquisition_id.qualified,
+                LineageRelation.ACQUIRED_AS,
+            ),
+            LineageEdge(
+                source_observation.observation_id.qualified,
+                run_id.qualified,
+                LineageRelation.DERIVED_FROM,
+            ),
+            LineageEdge(
+                artifact.artifact_id.qualified, run_id.qualified, LineageRelation.DERIVED_FROM
+            ),
+            LineageEdge(
+                acquisition.acquisition_id.qualified,
+                run_id.qualified,
+                LineageRelation.DERIVED_FROM,
+            ),
+            LineageEdge(
+                MBT_COORDINATE_QUALIFICATION_RULE.stable_id,
+                run_id.qualified,
+                LineageRelation.SUPPORTED_BY,
+            ),
+            LineageEdge(run_id.qualified, coordinate_id.qualified, LineageRelation.PRODUCED),
+        ),
+    )
+    return replace(source, provenance=provenance)
 
 
 def _mbt_distance_fixture(
@@ -916,14 +1574,30 @@ def _mbt_distance_fixture(
         sensor_modality=MBTSensorModality.MEASURING_TAPE,
         axis_or_frame=frame,
     )
+    context = _context(prefix)
     source = build_mbt_source_distance_observation(
         observation_id=InstanceIdentifier("observation", prefix),
         result_id=InstanceIdentifier("result", prefix),
-        context=_context(prefix),
+        context=context,
         protocol_identity=protocol,
         distance_m=4.5,
         source_artifact=artifact,
         acquisition=acquisition,
+    )
+    coordinate_source = _mbt_coordinate_source(
+        source_observation=source,
+        protocol=protocol,
+        artifact=artifact,
+        acquisition=acquisition,
+        origin_coordinate_m=1.0,
+        endpoint_coordinate_m=5.5,
+        coordinate_frame=frame,
+        origin_convention=origin,
+        endpoint_convention=endpoint,
+        first_contact_no_roll_convention=no_roll,
+        first_contact_observed=True,
+        no_roll_observed=True,
+        prefix=prefix,
     )
     coordinate = MBTCoordinateEvidence(
         source_observation_id=source.observation_id,
@@ -937,6 +1611,7 @@ def _mbt_distance_fixture(
         no_roll_observed=True,
         source_artifact_id=artifact.artifact_id,
         acquisition_id=acquisition.acquisition_id,
+        source_evidence=coordinate_source,
     )
     return source, coordinate, protocol, artifact, acquisition, frame
 
@@ -966,11 +1641,95 @@ def test_mbt_protocol_conventions_and_variant_comparability() -> None:
         compare_mbt_metric_results(distance, standing_distance).state
         is ComparabilityState.NOT_COMPARABLE
     )
-    bad_coordinate = replace(
-        coordinate,
-        endpoint_convention=_ref("distance-endpoint", "rolled", "Rolled endpoint"),
+    with pytest.raises(ValueError, match="upstream coordinate evidence"):
+        replace(
+            coordinate,
+            endpoint_convention=_ref("distance-endpoint", "rolled", "Rolled endpoint"),
+        )
+
+
+def test_mbt_coordinate_authority_requires_upstream_adjudication() -> None:
+    source, coordinate, protocol, artifact, acquisition, frame = _mbt_distance_fixture(
+        prefix="synthetic-mbt-coordinate-authority"
     )
-    assert _refused(calculate_mbt_throw_distance(bad_coordinate, source)).blocks_claim
+    assert protocol.distance_origin_convention is not None
+    assert protocol.distance_endpoint_convention is not None
+    assert protocol.first_contact_no_roll_convention is not None
+    raw_coordinate = MBTCoordinateEvidence(
+        source_observation_id=source.observation_id,
+        origin_coordinate_m=1.0,
+        endpoint_coordinate_m=5.5,
+        coordinate_frame=frame,
+        origin_convention=protocol.distance_origin_convention,
+        endpoint_convention=protocol.distance_endpoint_convention,
+        first_contact_no_roll_convention=protocol.first_contact_no_roll_convention,
+        first_contact_observed=True,
+        no_roll_observed=True,
+        source_artifact_id=artifact.artifact_id,
+        acquisition_id=acquisition.acquisition_id,
+    )
+    assert _refused(calculate_mbt_throw_distance(raw_coordinate, source)).blocks_claim
+    source_evidence = coordinate.source_evidence
+    assert source_evidence is not None
+    with pytest.raises(ValueError):
+        normalize_mbt_coordinate_evidence(
+            replace(source_evidence, source_content_digest="sha256:wrong"), source
+        )
+    with pytest.raises(ValueError):
+        normalize_mbt_coordinate_evidence(
+            replace(source_evidence, source_context_id=InstanceIdentifier("context", "other")),
+            source,
+        )
+    with pytest.raises(ValueError):
+        normalize_mbt_coordinate_evidence(
+            replace(source_evidence, protocol_reference=_ref("protocol", "other", "Other")),
+            source,
+        )
+    with pytest.raises(ValueError):
+        normalize_mbt_coordinate_evidence(
+            replace(source_evidence, source_artifact_id=InstanceIdentifier("artifact", "other")),
+            source,
+        )
+    with pytest.raises(ValueError):
+        normalize_mbt_coordinate_evidence(
+            replace(
+                source_evidence,
+                source_acquisition_id=InstanceIdentifier("acquisition", "other"),
+            ),
+            source,
+        )
+    with pytest.raises(ValueError):
+        normalize_mbt_coordinate_evidence(
+            replace(
+                source_evidence,
+                endpoint_convention=_ref("distance-endpoint", "other", "Other endpoint"),
+            ),
+            source,
+        )
+    with pytest.raises(ValueError):
+        normalize_mbt_coordinate_evidence(
+            replace(source_evidence, coordinate_frame=_ref("frame", "other", "Other frame")),
+            source,
+        )
+    with pytest.raises(ValueError):
+        normalize_mbt_coordinate_evidence(
+            replace(
+                source_evidence,
+                provenance=replace(source_evidence.provenance, lineage_edges=()),
+            ),
+            source,
+        )
+    normalized = normalize_mbt_coordinate_evidence(source_evidence, source, coordinate)
+    assert normalized == coordinate
+    restored = from_canonical_json(canonical_json(source_evidence), type(source_evidence))
+    assert restored == source_evidence
+    assert canonical_hash(restored) == canonical_hash(source_evidence)
+    distance = _mbt_result(calculate_mbt_throw_distance(normalized, source))
+    assert distance.value_m == pytest.approx(4.5)
+    assert source.result.classification.value_origin is ValueOrigin.SOURCE_REPORTED
+    assert isinstance(source.result.value, ScalarValue)
+    assert source.result.value.value == pytest.approx(4.5)
+    assert acquisition.axis_or_frame == frame
 
 
 def test_mbt_instrumented_release_velocity_requires_qualified_event_evidence() -> None:
@@ -1024,8 +1783,108 @@ def test_mbt_instrumented_release_velocity_requires_qualified_event_evidence() -
         timebase=timebase,
         axis_or_frame=frame,
     )
+    context = _context("synthetic-mbt-release")
+    event_id = InstanceIdentifier("event-occurrence", "synthetic-mbt-release")
+    release_source = MBTReleaseEventSourceEvidence(
+        source_event_id=event_id,
+        source_context_id=context.context_id,
+        source_observation_id=InstanceIdentifier("observation", "synthetic-mbt-release"),
+        source_series_id=InstanceIdentifier("signal", "synthetic-mbt-release"),
+        source_artifact_id=artifact.artifact_id,
+        source_acquisition_id=acquisition.acquisition_id,
+        source_measurement_identity_id=ScientificIdentifier(
+            "dynamislm", "measurement-identity", "mbt-release:synthetic-mbt-release", "1.0.0"
+        ),
+        source_series_digest=digest,
+        source_timebase=timebase,
+        sample_index=2,
+        event_time_s=0.2,
+        release_method=velocity_definition,
+        coordinate_frame=frame,
+        protocol_reference=protocol.reference,
+        provider=acquisition.provider,
+        upstream_processing_run_id=InstanceIdentifier(
+            "processing-run", "synthetic-mbt-release:event-source"
+        ),
+        provenance=Provenance(
+            provenance_id=InstanceIdentifier("provenance", "synthetic-mbt-release:event-source"),
+            source_artifacts=(artifact,),
+            acquisitions=(acquisition,),
+            processing_runs=(),
+            lineage_edges=(),
+        ),
+    )
+    release_source_parameters = (
+        MetadataEntry("source_event_id", release_source.source_event_id.qualified),
+        MetadataEntry("source_context_id", release_source.source_context_id.qualified),
+        MetadataEntry("source_observation_id", release_source.source_observation_id.qualified),
+        MetadataEntry("source_series_id", release_source.source_series_id.qualified),
+        MetadataEntry("source_artifact_id", release_source.source_artifact_id.qualified),
+        MetadataEntry("source_acquisition_id", release_source.source_acquisition_id.qualified),
+        MetadataEntry(
+            "source_measurement_identity_id",
+            release_source.source_measurement_identity_id.stable_id,
+        ),
+        MetadataEntry("source_series_digest", release_source.source_series_digest),
+        MetadataEntry("source_timebase", canonical_json(release_source.source_timebase)),
+        MetadataEntry("sample_index", release_source.sample_index),
+        MetadataEntry("event_time_s", release_source.event_time_s),
+        MetadataEntry("release_method", release_source.release_method.stable_id),
+        MetadataEntry("coordinate_frame", release_source.coordinate_frame.stable_id),
+        MetadataEntry("protocol_reference", release_source.protocol_reference.stable_id),
+        MetadataEntry("provider", release_source.provider),
+        MetadataEntry("method_parameters", canonical_json(release_source.method_parameters)),
+        MetadataEntry("source_value_origin", release_source.source_value_origin),
+    )
+    release_run = ProcessingRun(
+        processing_run_id=release_source.upstream_processing_run_id,
+        source_artifact_ids=(artifact.artifact_id,),
+        method=MBT_RELEASE_EVENT_SOURCE_OPERATION,
+        parameters=release_source_parameters,
+        software_version="synthetic-upstream-mbt-release-event-v1",
+        output_entity_id=event_id,
+    )
+    release_source = replace(
+        release_source,
+        provenance=replace(
+            release_source.provenance,
+            processing_runs=(release_run,),
+            lineage_edges=(
+                LineageEdge(
+                    release_source.source_observation_id.qualified,
+                    release_run.processing_run_id.qualified,
+                    LineageRelation.DERIVED_FROM,
+                ),
+                LineageEdge(
+                    release_source.source_series_id.qualified,
+                    release_run.processing_run_id.qualified,
+                    LineageRelation.DERIVED_FROM,
+                ),
+                LineageEdge(
+                    artifact.artifact_id.qualified,
+                    release_run.processing_run_id.qualified,
+                    LineageRelation.DERIVED_FROM,
+                ),
+                LineageEdge(
+                    acquisition.acquisition_id.qualified,
+                    release_run.processing_run_id.qualified,
+                    LineageRelation.DERIVED_FROM,
+                ),
+                LineageEdge(
+                    MBT_RELEASE_EVENT_QUALIFICATION_RULE.stable_id,
+                    release_run.processing_run_id.qualified,
+                    LineageRelation.SUPPORTED_BY,
+                ),
+                LineageEdge(
+                    release_run.processing_run_id.qualified,
+                    event_id.qualified,
+                    LineageRelation.PRODUCED,
+                ),
+            ),
+        ),
+    )
     event = MBTReleaseEvent(
-        event_id=InstanceIdentifier("event-occurrence", "synthetic-mbt-release"),
+        event_id=event_id,
         source_observation_id=InstanceIdentifier("observation", "synthetic-mbt-release"),
         source_series_id=InstanceIdentifier("signal", "synthetic-mbt-release"),
         source_artifact_id=artifact.artifact_id,
@@ -1035,11 +1894,12 @@ def test_mbt_instrumented_release_velocity_requires_qualified_event_evidence() -
         release_method=velocity_definition,
         coordinate_frame=frame,
         source_series_digest=digest,
+        source_evidence=release_source,
     )
     evidence = build_mbt_release_velocity_evidence(
         observation_id=event.source_observation_id,
         result_id=InstanceIdentifier("result", "synthetic-mbt-release"),
-        context=_context("synthetic-mbt-release"),
+        context=context,
         protocol_identity=protocol,
         release_event=event,
         trajectory_samples=trajectory,
@@ -1050,8 +1910,290 @@ def test_mbt_instrumented_release_velocity_requires_qualified_event_evidence() -
         source_artifact=artifact,
         acquisition=acquisition,
     )
+    raw_event = replace(event, source_evidence=None)
+    with pytest.raises(ValueError, match="source.evidence"):
+        build_mbt_release_velocity_evidence(
+            observation_id=event.source_observation_id,
+            result_id=InstanceIdentifier("result", "synthetic-mbt-release-raw"),
+            context=context,
+            protocol_identity=protocol,
+            release_event=raw_event,
+            trajectory_samples=trajectory,
+            velocity_samples=velocity,
+            timebase=timebase,
+            coordinate_frame=frame,
+            velocity_definition=velocity_definition,
+            source_artifact=artifact,
+            acquisition=acquisition,
+        )
+    with pytest.raises(ValueError):
+        replace(event, sample_index=1)
+    with pytest.raises(ValueError):
+        replace(event, event_time_s=0.1)
+    with pytest.raises(ValueError):
+        replace(event, release_method=_ref("velocity-definition", "other", "Other velocity"))
+    with pytest.raises(ValueError):
+        replace(event, source_artifact_id=InstanceIdentifier("artifact", "other-artifact"))
+    with pytest.raises(ValueError):
+        replace(event, acquisition_id=InstanceIdentifier("acquisition", "other-acquisition"))
+    assert event.source_evidence is not None
+    forged_protocol_event = replace(
+        event,
+        source_evidence=replace(
+            event.source_evidence,
+            protocol_reference=_ref("protocol", "other", "Other protocol"),
+        ),
+    )
+    with pytest.raises(ValueError):
+        build_mbt_release_velocity_evidence(
+            observation_id=event.source_observation_id,
+            result_id=InstanceIdentifier("result", "synthetic-mbt-release-forged-protocol"),
+            context=context,
+            protocol_identity=protocol,
+            release_event=forged_protocol_event,
+            trajectory_samples=trajectory,
+            velocity_samples=velocity,
+            timebase=timebase,
+            coordinate_frame=frame,
+            velocity_definition=velocity_definition,
+            source_artifact=artifact,
+            acquisition=acquisition,
+        )
+    forged_provenance_event = replace(
+        event,
+        source_evidence=replace(
+            event.source_evidence,
+            provenance=replace(
+                event.source_evidence.provenance,
+                lineage_edges=(
+                    LineageEdge(
+                        event.source_evidence.upstream_processing_run_id.qualified,
+                        event.event_id.qualified,
+                        LineageRelation.PRODUCED,
+                    ),
+                ),
+            ),
+        ),
+    )
+    with pytest.raises(ValueError):
+        build_mbt_release_velocity_evidence(
+            observation_id=event.source_observation_id,
+            result_id=InstanceIdentifier("result", "synthetic-mbt-release-forged-provenance"),
+            context=context,
+            protocol_identity=protocol,
+            release_event=forged_provenance_event,
+            trajectory_samples=trajectory,
+            velocity_samples=velocity,
+            timebase=timebase,
+            coordinate_frame=frame,
+            velocity_definition=velocity_definition,
+            source_artifact=artifact,
+            acquisition=acquisition,
+        )
+    forged_origin_event = replace(
+        event,
+        source_evidence=replace(event.source_evidence, source_value_origin="SOURCE_REPORTED"),
+    )
+    with pytest.raises(ValueError):
+        build_mbt_release_velocity_evidence(
+            observation_id=event.source_observation_id,
+            result_id=InstanceIdentifier("result", "synthetic-mbt-release-forged-origin"),
+            context=context,
+            protocol_identity=protocol,
+            release_event=forged_origin_event,
+            trajectory_samples=trajectory,
+            velocity_samples=velocity,
+            timebase=timebase,
+            coordinate_frame=frame,
+            velocity_definition=velocity_definition,
+            source_artifact=artifact,
+            acquisition=acquisition,
+        )
     result = _mbt_result(calculate_mbt_instrumented_release_velocity(evidence))
     assert result.value_m_per_s == pytest.approx(3.5)
+    assert evidence.release_event.source_evidence is not None
+    encoded = canonical_json(evidence.release_event.source_evidence)
+    restored = from_canonical_json(encoded, type(evidence.release_event.source_evidence))
+    assert restored == evidence.release_event.source_evidence
+    assert canonical_hash(restored) == canonical_hash(evidence.release_event.source_evidence)
+
+
+def _mbt_release_fixture(
+    trajectory_samples: tuple[tuple[int | float, int | float], ...],
+    velocity_samples: tuple[tuple[int | float, int | float], ...],
+    *,
+    prefix: str,
+) -> MBTReleaseVelocityEvidence:
+    normalized_trajectory = tuple((float(time), float(value)) for time, value in trajectory_samples)
+    normalized_velocity = tuple((float(time), float(value)) for time, value in velocity_samples)
+    timebase = MBTTimebase(
+        MBTTimebaseKind.EXPLICIT,
+        times_s=tuple(time for time, _ in normalized_trajectory),
+    )
+    frame = _ref("frame", f"{prefix}-forward", "Ball forward frame")
+    device = _ref("device", f"{prefix}-radar", "Synthetic radar")
+    protocol = MedicineBallThrowProtocolIdentity(
+        throw_type=MBTThrowVariant.STANDING_CHEST,
+        body_posture=MBTBodyPosture.STANDING,
+        support_restraint_condition=MBTSupportCondition.FREE_STANDING,
+        ball_mass_kg=2.0,
+        countermovement=MBTAllowedState.ALLOWED,
+        lower_body_contribution=MBTAllowedState.ALLOWED,
+        throw_arm_technique="two-hand chest throw",
+        starting_position="ball at chest",
+        release_semantics=MBTReleaseSemantics.EXPLICIT_RELEASE_EVENT,
+        measurement_method=_ref("measurement-method", f"{prefix}-radar", "Synthetic radar"),
+        provider="synthetic-provider",
+        device=device,
+        sensor_modality=MBTSensorModality.RADAR,
+    )
+    digest = canonical_hash(
+        {
+            "trajectory_samples": normalized_trajectory,
+            "velocity_samples": normalized_velocity,
+            "timebase": timebase,
+            "coordinate_frame": frame,
+        }
+    )
+    artifact = MedicineBallThrowSourceArtifact(
+        artifact_id=InstanceIdentifier("artifact", prefix),
+        content_digest=digest,
+        media_type="application/vnd.synthetic.mbt-trajectory",
+        status=MBTArtifactStatus.VERIFIED,
+        hash_scope=MBTArtifactHashScope.CANONICAL_SERIES_REPRESENTATION,
+    )
+    acquisition = MedicineBallThrowAcquisitionRecord(
+        acquisition_id=InstanceIdentifier("acquisition", prefix),
+        device=device,
+        source_artifact_id=artifact.artifact_id,
+        provider="synthetic-provider",
+        sensor_modality=MBTSensorModality.RADAR,
+        timebase=timebase,
+        axis_or_frame=frame,
+    )
+    context = _context(prefix)
+    observation_id = InstanceIdentifier("observation", prefix)
+    event_id = InstanceIdentifier("event-occurrence", prefix)
+    source_event = MBTReleaseEventSourceEvidence(
+        source_event_id=event_id,
+        source_context_id=context.context_id,
+        source_observation_id=observation_id,
+        source_series_id=InstanceIdentifier("signal", prefix),
+        source_artifact_id=artifact.artifact_id,
+        source_acquisition_id=acquisition.acquisition_id,
+        source_measurement_identity_id=ScientificIdentifier(
+            "dynamislm", "measurement-identity", f"mbt-release:{prefix}", "1.0.0"
+        ),
+        source_series_digest=digest,
+        source_timebase=timebase,
+        sample_index=len(normalized_velocity) - 1,
+        event_time_s=normalized_velocity[-1][0],
+        release_method=_ref("velocity-definition", f"{prefix}-sample", "Exact release sample"),
+        coordinate_frame=frame,
+        protocol_reference=protocol.reference,
+        provider=acquisition.provider,
+        upstream_processing_run_id=InstanceIdentifier(
+            "processing-run", f"{prefix}:release-event-source"
+        ),
+        provenance=Provenance(
+            provenance_id=InstanceIdentifier("provenance", f"{prefix}:release-event-source"),
+            source_artifacts=(artifact,),
+            acquisitions=(acquisition,),
+            processing_runs=(),
+            lineage_edges=(),
+        ),
+    )
+    source_event = replace(
+        source_event,
+        provenance=replace(
+            source_event.provenance,
+            processing_runs=(
+                ProcessingRun(
+                    processing_run_id=source_event.upstream_processing_run_id,
+                    source_artifact_ids=(artifact.artifact_id,),
+                    method=MBT_RELEASE_EVENT_SOURCE_OPERATION,
+                    parameters=_release_event_source_parameters(source_event),
+                    software_version="synthetic-upstream-mbt-release-event-v1",
+                    output_entity_id=event_id,
+                ),
+            ),
+            lineage_edges=(
+                LineageEdge(
+                    observation_id.qualified,
+                    source_event.upstream_processing_run_id.qualified,
+                    LineageRelation.DERIVED_FROM,
+                ),
+                LineageEdge(
+                    source_event.source_series_id.qualified,
+                    source_event.upstream_processing_run_id.qualified,
+                    LineageRelation.DERIVED_FROM,
+                ),
+                LineageEdge(
+                    artifact.artifact_id.qualified,
+                    source_event.upstream_processing_run_id.qualified,
+                    LineageRelation.DERIVED_FROM,
+                ),
+                LineageEdge(
+                    acquisition.acquisition_id.qualified,
+                    source_event.upstream_processing_run_id.qualified,
+                    LineageRelation.DERIVED_FROM,
+                ),
+                LineageEdge(
+                    MBT_RELEASE_EVENT_QUALIFICATION_RULE.stable_id,
+                    source_event.upstream_processing_run_id.qualified,
+                    LineageRelation.SUPPORTED_BY,
+                ),
+                LineageEdge(
+                    source_event.upstream_processing_run_id.qualified,
+                    event_id.qualified,
+                    LineageRelation.PRODUCED,
+                ),
+            ),
+        ),
+    )
+    event = MBTReleaseEvent(
+        event_id=event_id,
+        source_observation_id=observation_id,
+        source_series_id=source_event.source_series_id,
+        source_artifact_id=artifact.artifact_id,
+        acquisition_id=acquisition.acquisition_id,
+        sample_index=source_event.sample_index,
+        event_time_s=source_event.event_time_s,
+        release_method=source_event.release_method,
+        coordinate_frame=frame,
+        source_series_digest=digest,
+        source_evidence=source_event,
+    )
+    return build_mbt_release_velocity_evidence(
+        observation_id=observation_id,
+        result_id=InstanceIdentifier("result", prefix),
+        context=context,
+        protocol_identity=protocol,
+        release_event=event,
+        trajectory_samples=trajectory_samples,
+        velocity_samples=velocity_samples,
+        timebase=timebase,
+        coordinate_frame=frame,
+        velocity_definition=source_event.release_method,
+        source_artifact=artifact,
+        acquisition=acquisition,
+    )
+
+
+def test_mbt_integer_and_float_samples_have_one_authoritative_digest() -> None:
+    integer_evidence = _mbt_release_fixture(
+        ((0, 0), (1, 2), (2, 3)),
+        ((0, 0), (1, 2), (2, 3)),
+        prefix="synthetic-mbt-numeric-equivalence",
+    )
+    float_evidence = _mbt_release_fixture(
+        ((0.0, 0.0), (1.0, 2.0), (2.0, 3.0)),
+        ((0.0, 0.0), (1.0, 2.0), (2.0, 3.0)),
+        prefix="synthetic-mbt-numeric-equivalence",
+    )
+    assert integer_evidence == float_evidence
+    assert canonical_hash(integer_evidence) == canonical_hash(float_evidence)
+    assert integer_evidence.release_velocity_m_per_s == pytest.approx(3.0)
     assert _refused(
         calculate_mbt_instrumented_release_velocity(cast(MBTReleaseVelocityEvidence, object()))
     ).blocks_claim

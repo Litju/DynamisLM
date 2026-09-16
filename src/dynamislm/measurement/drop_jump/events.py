@@ -7,15 +7,17 @@ from dataclasses import dataclass
 from enum import StrEnum
 
 from dynamislm.measurement.drop_jump.identity import (
+    DropJumpAcquisitionRecord,
     DropJumpMeasurementIdentity,
+    DropJumpSourceArtifact,
     DropJumpTimebase,
 )
 from dynamislm.measurement.drop_jump.registry import (
     DROP_JUMP_REBOUND_TAKEOFF_EVENT_DEFINITION,
     DROP_JUMP_REBOUND_TAKEOFF_EVENT_METHOD,
-    DROP_JUMP_SOFTWARE_VERSION,
     DROP_JUMP_SUBSEQUENT_LANDING_EVENT_DEFINITION,
     DROP_JUMP_SUBSEQUENT_LANDING_EVENT_METHOD,
+    DROP_JUMP_TEST_FAMILY,
     DROP_JUMP_TOUCHDOWN_EVENT_DEFINITION,
     DROP_JUMP_TOUCHDOWN_EVENT_METHOD,
     RES68_DECISION_EXPLOSIVE_TEST_FAMILY,
@@ -30,12 +32,10 @@ from dynamislm.measurement.identity import (
     _require_tuple_items,
     require_tuple,
 )
-from dynamislm.measurement.observation import ScientificMeasurementObservation
+from dynamislm.measurement.observation import ObservationContext, ScientificMeasurementObservation
+from dynamislm.measurement.taxonomy import ValueOrigin
 from dynamislm.provenance.models import (
-    EvidenceReference,
-    LineageEdge,
     LineageRelation,
-    ProcessingRun,
     Provenance,
 )
 from dynamislm.refusal.models import RefusalClass, RefusalReasonCode, RefusalResult, RefusalStatus
@@ -149,8 +149,289 @@ _DETECTOR_BY_LABEL = {
 
 @register_serializable_type
 @dataclass(frozen=True, slots=True)
+class DropJumpEventSourceEvidence:
+    """Upstream declaration that gives one DJ event occurrence authority."""
+
+    source_event_id: InstanceIdentifier
+    source_context: ObservationContext
+    source_observation_id: InstanceIdentifier
+    source_signal_id: InstanceIdentifier
+    source_artifact_id: InstanceIdentifier
+    source_acquisition_id: InstanceIdentifier
+    source_measurement_identity: DropJumpMeasurementIdentity
+    source_timebase: DropJumpTimebase
+    source_series_digest: str
+    source_sample_count: int
+    label: DropJumpEventLabel
+    sample_index: int
+    event_time_s: float
+    detector_method: DropJumpEventDetectorMethod
+    detector_parameters: DropJumpEventDetectorParameters
+    status: DropJumpEventOccurrenceStatus
+    qc_codes: tuple[str, ...]
+    source_value_origin: ValueOrigin
+    upstream_processing_run_id: InstanceIdentifier
+    provenance: Provenance
+    preceding_event_id: InstanceIdentifier | None = None
+
+    def __post_init__(self) -> None:
+        _require_instance(self.source_event_id, InstanceIdentifier, "source_event_id")
+        if self.source_event_id.instance_type != "event-occurrence":
+            raise ValueError("source_event_id must identify an event occurrence")
+        _require_instance(self.source_context, ObservationContext, "source_context")
+        for field_name, value, expected in (
+            ("source_observation_id", self.source_observation_id, "observation"),
+            ("source_signal_id", self.source_signal_id, "signal"),
+            ("source_artifact_id", self.source_artifact_id, "artifact"),
+            ("source_acquisition_id", self.source_acquisition_id, "acquisition"),
+        ):
+            _require_instance(value, InstanceIdentifier, field_name)
+            if value.instance_type != expected:
+                raise ValueError(f"{field_name} must identify a {expected}")
+        _require_instance(
+            self.source_measurement_identity,
+            DropJumpMeasurementIdentity,
+            "source_measurement_identity",
+        )
+        _require_instance(self.source_timebase, DropJumpTimebase, "source_timebase")
+        _require_text(self.source_series_digest, "source_series_digest")
+        if type(self.source_sample_count) is not int or self.source_sample_count < 1:
+            raise ValueError("source_sample_count must be positive")
+        _require_enum(self.label, DropJumpEventLabel, "label")
+        if (
+            type(self.sample_index) is not int
+            or self.sample_index < 0
+            or self.sample_index >= self.source_sample_count
+        ):
+            raise ValueError("source event sample_index must be inside source sample support")
+        _finite(self.event_time_s, "source event time")
+        if self.source_timebase.time_at(self.sample_index) != self.event_time_s:
+            raise ValueError("source event time must equal the exact source timebase sample")
+        _require_instance(self.detector_method, DropJumpEventDetectorMethod, "detector_method")
+        if self.detector_method != _DETECTOR_BY_LABEL[self.label]:
+            raise ValueError("source event detector method is not the registered DJ method")
+        if self.detector_method.event_definition.label is not self.label:
+            raise ValueError("source event label does not match detector method")
+        _require_instance(
+            self.detector_parameters,
+            DropJumpEventDetectorParameters,
+            "detector_parameters",
+        )
+        _require_enum(self.status, DropJumpEventOccurrenceStatus, "status")
+        _require_tuple_items(self.qc_codes, str, "qc_codes")
+        _require_enum(self.source_value_origin, ValueOrigin, "source_value_origin")
+        if self.source_value_origin not in {
+            ValueOrigin.SOURCE_REPORTED,
+            ValueOrigin.PROVIDER_DERIVED,
+        }:
+            raise ValueError("DJ event source origin must remain source/provider-origin")
+        _require_instance(
+            self.upstream_processing_run_id,
+            InstanceIdentifier,
+            "upstream_processing_run_id",
+        )
+        if self.upstream_processing_run_id.instance_type != "processing-run":
+            raise ValueError("upstream_processing_run_id must identify a processing run")
+        _require_instance(self.provenance, Provenance, "provenance")
+        expected_signal_id = InstanceIdentifier(
+            "signal", f"drop-jump:{self.source_series_digest.removeprefix('sha256:')[:24]}"
+        )
+        if self.source_signal_id != expected_signal_id:
+            raise ValueError("source event signal does not preserve source-series identity")
+        source_artifacts = tuple(
+            item
+            for item in self.provenance.source_artifacts
+            if item.artifact_id == self.source_artifact_id
+        )
+        source_acquisitions = tuple(
+            item
+            for item in self.provenance.acquisitions
+            if item.acquisition_id == self.source_acquisition_id
+        )
+        if (
+            len(source_artifacts) != 1
+            or not isinstance(source_artifacts[0], DropJumpSourceArtifact)
+            or not source_artifacts[0].immutable
+            or source_artifacts[0].status.value != "VERIFIED"
+            or source_artifacts[0].content_digest != self.source_series_digest
+            or len(source_acquisitions) != 1
+            or not isinstance(source_acquisitions[0], DropJumpAcquisitionRecord)
+        ):
+            raise ValueError("source event provenance must preserve a verified source series")
+        run = next(
+            (
+                item
+                for item in self.provenance.processing_runs
+                if item.output_entity_id == self.source_event_id
+            ),
+            None,
+        )
+        if run is None or run.processing_run_id != self.upstream_processing_run_id:
+            raise ValueError("source event provenance must preserve its producing run")
+        if run.method != self.detector_method.reference:
+            raise ValueError("source event producing run method does not match detector")
+        if run.parameters != _event_source_parameters(self):
+            raise ValueError("source event producing run parameters do not reproduce")
+        if self.source_artifact_id not in run.source_artifact_ids:
+            raise ValueError("source event producing run omits source artifact")
+        for from_id, relation in (
+            (self.source_observation_id.qualified, LineageRelation.DERIVED_FROM),
+            (self.source_signal_id.qualified, LineageRelation.DERIVED_FROM),
+            (self.source_artifact_id.qualified, LineageRelation.DERIVED_FROM),
+            (self.source_acquisition_id.qualified, LineageRelation.DERIVED_FROM),
+            (self.detector_method.decision_reference.stable_id, LineageRelation.SUPPORTED_BY),
+        ):
+            if not any(
+                edge.from_id == from_id
+                and edge.to_id == run.processing_run_id.qualified
+                and edge.relation is relation
+                for edge in self.provenance.lineage_edges
+            ):
+                raise ValueError("source event provenance omits an authority lineage edge")
+        if not any(
+            edge.from_id == run.processing_run_id.qualified
+            and edge.to_id == self.source_event_id.qualified
+            and edge.relation is LineageRelation.PRODUCED
+            for edge in self.provenance.lineage_edges
+        ):
+            raise ValueError("source event provenance omits the produced event edge")
+        if self.preceding_event_id is not None:
+            _require_instance(self.preceding_event_id, InstanceIdentifier, "preceding_event_id")
+            if self.preceding_event_id.instance_type != "event-occurrence":
+                raise ValueError("preceding_event_id must identify an event occurrence")
+
+
+def _event_source_parameters(
+    source: DropJumpEventSourceEvidence,
+) -> tuple[MetadataEntry, ...]:
+    return (
+        MetadataEntry("source_event_id", source.source_event_id.qualified),
+        MetadataEntry("source_observation_id", source.source_observation_id.qualified),
+        MetadataEntry("source_signal_id", source.source_signal_id.qualified),
+        MetadataEntry("source_artifact_id", source.source_artifact_id.qualified),
+        MetadataEntry("source_acquisition_id", source.source_acquisition_id.qualified),
+        MetadataEntry("source_series_digest", source.source_series_digest),
+        MetadataEntry("source_sample_count", source.source_sample_count),
+        MetadataEntry("label", source.label.value),
+        MetadataEntry("sample_index", source.sample_index),
+        MetadataEntry("event_time_s", source.event_time_s),
+        MetadataEntry("detector_parameters", canonical_hash(source.detector_parameters)),
+        MetadataEntry("status", source.status.value),
+        MetadataEntry("qc_codes", canonical_hash(source.qc_codes)),
+        MetadataEntry("source_value_origin", source.source_value_origin.value),
+        MetadataEntry(
+            "preceding_event_id",
+            source.preceding_event_id.qualified if source.preceding_event_id is not None else None,
+        ),
+    )
+
+
+def _validate_event_source_evidence(
+    source: DropJumpEventSourceEvidence,
+    source_observation: ScientificMeasurementObservation,
+) -> None:
+    _require_instance(source, DropJumpEventSourceEvidence, "source_event_evidence")
+    _require_instance(source_observation, ScientificMeasurementObservation, "source_observation")
+    identity = source_observation.identity
+    if not isinstance(identity, DropJumpMeasurementIdentity):
+        raise ValueError("DJ event source observation requires DJ identity")
+    if (
+        source.source_context != source_observation.context
+        or source.source_observation_id != source_observation.observation_id
+        or source.source_measurement_identity != identity
+        or source.source_timebase != identity.acquisition.timebase
+    ):
+        raise ValueError("DJ event source is not bound to the source observation")
+    if source_observation.result.status.name != "VALID":
+        raise ValueError("DJ event source observation must be valid")
+    if source_observation.result.classification.value_origin is not source.source_value_origin:
+        raise ValueError("DJ event source origin does not match source observation")
+    if (
+        identity.semantic.test_family != DROP_JUMP_TEST_FAMILY
+        or source.source_measurement_identity.semantic.test_family != DROP_JUMP_TEST_FAMILY
+    ):
+        raise ValueError("DJ event source identity has an inconsistent family")
+    source_artifacts = tuple(
+        item
+        for item in source.provenance.source_artifacts
+        if item.artifact_id == source.source_artifact_id
+    )
+    source_acquisitions = tuple(
+        item
+        for item in source.provenance.acquisitions
+        if item.acquisition_id == source.source_acquisition_id
+    )
+    if len(source_artifacts) != 1 or not isinstance(source_artifacts[0], DropJumpSourceArtifact):
+        raise ValueError("DJ event source provenance must preserve a typed source artifact")
+    if (
+        not source_artifacts[0].immutable
+        or source_artifacts[0].status.value != "VERIFIED"
+        or len(source_acquisitions) != 1
+        or not isinstance(source_acquisitions[0], DropJumpAcquisitionRecord)
+    ):
+        raise ValueError("DJ event source provenance must preserve verified artifact/acquisition")
+    observation_artifacts = tuple(
+        item
+        for item in source_observation.provenance.source_artifacts
+        if item.artifact_id == source.source_artifact_id
+    )
+    observation_acquisitions = tuple(
+        item
+        for item in source_observation.provenance.acquisitions
+        if item.acquisition_id == source.source_acquisition_id
+    )
+    if observation_artifacts != source_artifacts or observation_acquisitions != source_acquisitions:
+        raise ValueError("DJ event source is not bound to source provenance")
+    if source_artifacts[0].content_digest != source.source_series_digest:
+        raise ValueError("DJ event source digest does not match source artifact")
+    if (
+        identity.acquisition.source_series_digest is not None
+        and identity.acquisition.source_series_digest != source.source_series_digest
+    ):
+        raise ValueError("DJ event source digest does not match source identity")
+    run = next(
+        (
+            item
+            for item in source.provenance.processing_runs
+            if item.output_entity_id == source.source_event_id
+        ),
+        None,
+    )
+    if run is None or run.processing_run_id != source.upstream_processing_run_id:
+        raise ValueError("DJ event source provenance must preserve its producing run")
+    if run.method != source.detector_method.reference:
+        raise ValueError("DJ event source run method does not match detector method")
+    if run.parameters != _event_source_parameters(source):
+        raise ValueError("DJ event source run parameters do not reproduce")
+    if source.source_artifact_id not in run.source_artifact_ids:
+        raise ValueError("DJ event source run omits source artifact")
+    for from_id, relation in (
+        (source.source_observation_id.qualified, LineageRelation.DERIVED_FROM),
+        (source.source_signal_id.qualified, LineageRelation.DERIVED_FROM),
+        (source.source_artifact_id.qualified, LineageRelation.DERIVED_FROM),
+        (source.source_acquisition_id.qualified, LineageRelation.DERIVED_FROM),
+        (source.detector_method.decision_reference.stable_id, LineageRelation.SUPPORTED_BY),
+    ):
+        if not any(
+            edge.from_id == from_id
+            and edge.to_id == run.processing_run_id.qualified
+            and edge.relation is relation
+            for edge in source.provenance.lineage_edges
+        ):
+            raise ValueError("DJ event source provenance omits an authority lineage edge")
+    if not any(
+        edge.from_id == run.processing_run_id.qualified
+        and edge.to_id == source.source_event_id.qualified
+        and edge.relation is LineageRelation.PRODUCED
+        for edge in source.provenance.lineage_edges
+    ):
+        raise ValueError("DJ event source provenance omits the produced event edge")
+
+
+@register_serializable_type
+@dataclass(frozen=True, slots=True)
 class DropJumpEventOccurrence:
-    """Sample-attached DJ event with complete source and detector lineage."""
+    """Sample-attached DJ event preserving upstream detector lineage."""
 
     occurrence_id: InstanceIdentifier
     definition: DropJumpEventDefinition
@@ -170,6 +451,7 @@ class DropJumpEventOccurrence:
     qc_codes: tuple[str, ...]
     provenance: Provenance
     preceding_event_id: InstanceIdentifier | None = None
+    source_evidence: DropJumpEventSourceEvidence | None = None
 
     def __post_init__(self) -> None:
         if self.occurrence_id.instance_type != "event-occurrence":
@@ -210,6 +492,30 @@ class DropJumpEventOccurrence:
         _require_enum(self.status, DropJumpEventOccurrenceStatus, "status")
         _require_tuple_items(self.qc_codes, str, "qc_codes")
         _require_instance(self.provenance, Provenance, "provenance")
+        source_evidence = self.source_evidence
+        if not isinstance(source_evidence, DropJumpEventSourceEvidence):
+            raise ValueError("source_evidence must be DropJumpEventSourceEvidence")
+        if (
+            source_evidence.source_event_id != self.occurrence_id
+            or source_evidence.source_observation_id != self.source_observation_id
+            or source_evidence.source_signal_id != self.source_signal_id
+            or source_evidence.source_artifact_id != self.source_artifact_id
+            or source_evidence.source_acquisition_id != self.source_acquisition_id
+            or source_evidence.source_measurement_identity != self.source_measurement_identity
+            or source_evidence.source_timebase != self.source_timebase
+            or source_evidence.source_series_digest != self.source_series_digest
+            or source_evidence.source_sample_count != self.source_sample_count
+            or source_evidence.label is not self.label
+            or source_evidence.sample_index != self.sample_index
+            or source_evidence.event_time_s != self.event_time_s
+            or source_evidence.detector_method != self.detector_method
+            or source_evidence.detector_parameters != self.detector_parameters
+            or source_evidence.status is not self.status
+            or source_evidence.qc_codes != self.qc_codes
+            or source_evidence.preceding_event_id != self.preceding_event_id
+            or self.provenance != source_evidence.provenance
+        ):
+            raise ValueError("DJ event occurrence does not preserve upstream source evidence")
         matching_runs = tuple(
             run
             for run in self.provenance.processing_runs
@@ -225,175 +531,60 @@ class DropJumpEventOccurrence:
         return self.definition.label
 
 
-def _event_provenance(
-    source: Provenance,
-    *,
-    occurrence_id: InstanceIdentifier,
-    source_observation_id: InstanceIdentifier,
-    detector: DropJumpEventDetectorMethod,
-    parameters: DropJumpEventDetectorParameters,
-) -> Provenance:
-    run = ProcessingRun(
-        processing_run_id=InstanceIdentifier("processing-run", occurrence_id.value),
-        source_artifact_ids=tuple(
-            sorted(
-                (item.artifact_id for item in source.source_artifacts),
-                key=lambda item: item.qualified,
-            )
-        ),
-        method=detector.reference,
-        parameters=parameters.parameters,
-        software_version=DROP_JUMP_SOFTWARE_VERSION,
-        output_entity_id=occurrence_id,
-    )
-    if not run.source_artifact_ids:
-        raise ValueError("DJ event requires source artifact provenance")
-    edges = list(source.lineage_edges)
-    for artifact_id in run.source_artifact_ids:
-        edge = LineageEdge(
-            artifact_id.qualified,
-            run.processing_run_id.qualified,
-            LineageRelation.DERIVED_FROM,
-        )
-        if edge not in edges:
-            edges.append(edge)
-    for source_id in (
-        source_observation_id,
-        *tuple(item.artifact_id for item in source.source_artifacts),
-        *tuple(item.acquisition_id for item in source.acquisitions),
-    ):
-        edge = LineageEdge(
-            source_id.qualified,
-            run.processing_run_id.qualified,
-            LineageRelation.DERIVED_FROM,
-        )
-        if edge not in edges:
-            edges.append(edge)
-    for evidence in (EvidenceReference(RES68_DECISION_EXPLOSIVE_TEST_FAMILY),):
-        edge = LineageEdge(
-            evidence.reference.stable_id,
-            run.processing_run_id.qualified,
-            LineageRelation.SUPPORTED_BY,
-        )
-        if edge not in edges:
-            edges.append(edge)
-    output_edge = LineageEdge(
-        run.processing_run_id.qualified,
-        occurrence_id.qualified,
-        LineageRelation.PRODUCED,
-    )
-    if output_edge not in edges:
-        edges.append(output_edge)
-    return Provenance(
-        provenance_id=InstanceIdentifier("provenance", occurrence_id.value),
-        source_artifacts=source.source_artifacts,
-        acquisitions=source.acquisitions,
-        processing_runs=(*source.processing_runs, run),
-        lineage_edges=tuple(edges),
-        evidence_references=(
-            *source.evidence_references,
-            EvidenceReference(RES68_DECISION_EXPLOSIVE_TEST_FAMILY),
-        ),
-        metrological_traceability=source.metrological_traceability,
-        recorded_at=source.recorded_at,
-    )
-
-
 def build_drop_jump_event_occurrence(
     *,
     source_observation: ScientificMeasurementObservation,
-    label: DropJumpEventLabel,
-    sample_index: int,
-    source_sample_count: int,
-    source_series_digest: str,
+    label: DropJumpEventLabel | None = None,
+    sample_index: int | None = None,
+    source_sample_count: int | None = None,
+    source_series_digest: str | None = None,
     detector_parameters: DropJumpEventDetectorParameters | None = None,
-    status: DropJumpEventOccurrenceStatus = DropJumpEventOccurrenceStatus.VALID,
-    qc_codes: tuple[str, ...] = (),
+    status: DropJumpEventOccurrenceStatus | None = None,
+    qc_codes: tuple[str, ...] | None = None,
     occurrence_id: InstanceIdentifier | None = None,
     preceding_event_id: InstanceIdentifier | None = None,
+    source_evidence: DropJumpEventSourceEvidence | None = None,
 ) -> DropJumpEventOccurrence:
-    """Bind an already-detected sample to a registered DJ event method.
+    """Normalize an upstream DJ event declaration without claiming detection."""
 
-    This constructor records the exact supplied event; it does not sort,
-    interpolate, backshift, or repair a caller's event.
-    """
-
-    if not isinstance(source_observation, ScientificMeasurementObservation):
-        raise ValueError("source_observation must be a scientific observation")
-    if not isinstance(source_observation.identity, DropJumpMeasurementIdentity):
-        raise ValueError("source observation must carry DropJumpMeasurementIdentity")
-    _require_enum(label, DropJumpEventLabel, "label")
-    if type(sample_index) is not int or sample_index < 0:
-        raise ValueError("sample_index must be a non-negative integer")
-    if type(source_sample_count) is not int or source_sample_count < 1:
-        raise ValueError("source_sample_count must be a positive integer")
-    if sample_index >= source_sample_count:
-        raise ValueError("sample_index must be inside source sample support")
-    _require_text(source_series_digest, "source_series_digest")
-    timebase = source_observation.identity.acquisition.timebase
-    if timebase is None:
-        raise ValueError("DJ event source requires an explicit acquisition timebase")
-    if source_observation.identity.acquisition.raw_artifact is None:
-        raise ValueError("DJ event source requires a raw artifact identity")
-    if source_observation.identity.acquisition.acquisition_instance_id is None:
-        raise ValueError("DJ event source requires an acquisition identity")
-    if source_observation.identity.acquisition.raw_artifact not in {
-        artifact.artifact_id for artifact in source_observation.provenance.source_artifacts
-    }:
-        raise ValueError("DJ event source artifact is absent from source provenance")
-    if source_observation.identity.acquisition.acquisition_instance_id not in {
-        acquisition.acquisition_id for acquisition in source_observation.provenance.acquisitions
-    }:
-        raise ValueError("DJ event source acquisition is absent from source provenance")
-    if (
-        source_observation.identity.acquisition.source_series_digest is not None
-        and source_observation.identity.acquisition.source_series_digest != source_series_digest
-    ):
-        raise ValueError("DJ event digest does not match source identity")
-    detector = _DETECTOR_BY_LABEL[label]
-    parameters = detector_parameters or DropJumpEventDetectorParameters()
-    event_time = timebase.time_at(sample_index)
-    digest = canonical_hash(
-        {
-            "label": label,
-            "sample_index": sample_index,
-            "source_observation_id": source_observation.observation_id,
-            "source_series_digest": source_series_digest,
-            "detector": detector,
-            "parameters": parameters,
-        }
-    ).removeprefix("sha256:")[:24]
-    output_id = occurrence_id or InstanceIdentifier("event-occurrence", f"drop-jump:{digest}")
-    if output_id.instance_type != "event-occurrence":
-        raise ValueError("occurrence_id must identify an event occurrence")
-    signal_id = InstanceIdentifier(
-        "signal", f"drop-jump:{source_series_digest.removeprefix('sha256:')[:24]}"
+    if source_evidence is None:
+        raise ValueError("typed upstream DJ event source evidence is required")
+    _validate_event_source_evidence(source_evidence, source_observation)
+    supplied = (
+        ("label", label, source_evidence.label),
+        ("sample_index", sample_index, source_evidence.sample_index),
+        ("source_sample_count", source_sample_count, source_evidence.source_sample_count),
+        ("source_series_digest", source_series_digest, source_evidence.source_series_digest),
+        ("detector_parameters", detector_parameters, source_evidence.detector_parameters),
+        ("status", status, source_evidence.status),
+        ("qc_codes", qc_codes, source_evidence.qc_codes),
+        ("preceding_event_id", preceding_event_id, source_evidence.preceding_event_id),
     )
+    if any(value is not None and value != expected for _, value, expected in supplied):
+        raise ValueError("raw DJ event fields must match upstream source evidence")
+    output_id = occurrence_id or source_evidence.source_event_id
+    if output_id != source_evidence.source_event_id:
+        raise ValueError("occurrence_id must preserve the upstream event identity")
     return DropJumpEventOccurrence(
         occurrence_id=output_id,
-        definition=detector.event_definition,
-        source_observation_id=source_observation.observation_id,
-        source_signal_id=signal_id,
-        source_artifact_id=source_observation.identity.acquisition.raw_artifact,
-        source_acquisition_id=source_observation.identity.acquisition.acquisition_instance_id,
-        source_measurement_identity=source_observation.identity,
-        source_timebase=timebase,
-        source_series_digest=source_series_digest,
-        detector_method=detector,
-        detector_parameters=parameters,
-        source_sample_count=source_sample_count,
-        sample_index=sample_index,
-        event_time_s=event_time,
-        status=status,
-        qc_codes=qc_codes,
-        provenance=_event_provenance(
-            source_observation.provenance,
-            occurrence_id=output_id,
-            source_observation_id=source_observation.observation_id,
-            detector=detector,
-            parameters=parameters,
-        ),
-        preceding_event_id=preceding_event_id,
+        definition=source_evidence.detector_method.event_definition,
+        source_observation_id=source_evidence.source_observation_id,
+        source_signal_id=source_evidence.source_signal_id,
+        source_artifact_id=source_evidence.source_artifact_id,
+        source_acquisition_id=source_evidence.source_acquisition_id,
+        source_measurement_identity=source_evidence.source_measurement_identity,
+        source_timebase=source_evidence.source_timebase,
+        source_series_digest=source_evidence.source_series_digest,
+        detector_method=source_evidence.detector_method,
+        detector_parameters=source_evidence.detector_parameters,
+        source_sample_count=source_evidence.source_sample_count,
+        sample_index=source_evidence.sample_index,
+        event_time_s=source_evidence.event_time_s,
+        status=source_evidence.status,
+        qc_codes=source_evidence.qc_codes,
+        provenance=source_evidence.provenance,
+        preceding_event_id=source_evidence.preceding_event_id,
+        source_evidence=source_evidence,
     )
 
 
@@ -496,6 +687,7 @@ __all__ = [
     "DropJumpEventLabel",
     "DropJumpEventOccurrence",
     "DropJumpEventOccurrenceStatus",
+    "DropJumpEventSourceEvidence",
     "build_drop_jump_event_occurrence",
     "validate_drop_jump_event_order",
 ]

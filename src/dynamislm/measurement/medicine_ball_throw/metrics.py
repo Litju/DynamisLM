@@ -31,6 +31,8 @@ from dynamislm.measurement.medicine_ball_throw.identity import (
 from dynamislm.measurement.medicine_ball_throw.qualification import (
     MBTReleaseVelocityEvidence,
     MBTSourceQualificationEvidence,
+    _merge_provenance,
+    normalize_mbt_coordinate_evidence,
     require_qualified_mbt,
 )
 from dynamislm.measurement.medicine_ball_throw.registry import (
@@ -103,6 +105,35 @@ class MedicineBallThrowMetricResult:
         _finite(value.value, "MBT result")
         if self.observation.result.status is not ResultStatus.VALID:
             raise ValueError("MBT result must be valid")
+        if (
+            self.coordinate_evidence is not None
+            and self.coordinate_evidence.source_evidence is None
+        ):
+            raise ValueError("MBT coordinate result must preserve upstream coordinate evidence")
+        if self.metric == MBT_THROW_DISTANCE_METRIC and self.coordinate_evidence is None:
+            raise ValueError("MBT distance result must preserve coordinate evidence")
+        if self.metric == MBT_THROW_DISTANCE_METRIC:
+            assert self.coordinate_evidence is not None
+            coordinate_source = self.coordinate_evidence.source_evidence
+            assert coordinate_source is not None
+            source_observation = next(
+                (
+                    item
+                    for item in self.source_observations
+                    if item.observation_id == coordinate_source.source_observation_id
+                ),
+                None,
+            )
+            if source_observation is None:
+                raise ValueError("MBT distance result is missing coordinate source observation")
+            normalize_mbt_coordinate_evidence(
+                coordinate_source, source_observation, self.coordinate_evidence
+            )
+        if self.metric == MBT_INSTRUMENTED_RELEASE_VELOCITY_METRIC and (
+            self.release_evidence is None
+            or self.release_evidence.release_event.source_evidence is None
+        ):
+            raise ValueError("MBT release result must preserve release-event evidence")
         runs = tuple(
             run
             for run in self.observation.provenance.processing_runs
@@ -172,12 +203,21 @@ def _refusal(
 def _validate_distance_source(
     source_observation: ScientificMeasurementObservation,
     coordinate: MBTCoordinateEvidence,
-) -> MedicineBallThrowMeasurementIdentity:
+) -> tuple[MedicineBallThrowMeasurementIdentity, MBTCoordinateEvidence]:
+    _require_instance(coordinate, MBTCoordinateEvidence, "coordinate")
     if not isinstance(source_observation, ScientificMeasurementObservation):
         raise ValueError("MBT source observation is required")
     identity = source_observation.identity
     if not isinstance(identity, MedicineBallThrowMeasurementIdentity):
         raise ValueError("MBT source observation requires MBT identity")
+    if coordinate.source_evidence is None:
+        raise ValueError("MBT distance requires typed upstream coordinate evidence")
+    normalized_coordinate = normalize_mbt_coordinate_evidence(
+        coordinate.source_evidence,
+        source_observation,
+        coordinate,
+    )
+    coordinate = normalized_coordinate
     protocol = identity.semantic.protocol_identity
     if protocol is None:
         raise ValueError("MBT protocol identity is required")
@@ -210,7 +250,7 @@ def _validate_distance_source(
         raise ValueError("MBT throw type/posture is unresolved")
     if protocol.ball_mass_kg is None:
         raise ValueError("MBT ball mass is required")
-    return identity
+    return identity, coordinate
 
 
 def _output_identity(
@@ -291,6 +331,15 @@ def _build_derived(
     if not isinstance(source_observation.identity, MedicineBallThrowMeasurementIdentity):
         raise ValueError("MBT source identity is required")
     _require_instance(source_observation.context, ObservationContext, "context")
+    base_provenance = source_observation.provenance
+    if coordinate_evidence is not None and coordinate_evidence.source_evidence is not None:
+        base_provenance = _merge_provenance(
+            base_provenance, coordinate_evidence.source_evidence.provenance
+        )
+    if release_evidence is not None and release_evidence.release_event.source_evidence is not None:
+        base_provenance = _merge_provenance(
+            base_provenance, release_evidence.release_event.source_evidence.provenance
+        )
     numeric = _finite(value, "MBT derived value")
     identity = _output_identity(
         source_observation.identity,
@@ -322,7 +371,7 @@ def _build_derived(
         ),
         source_artifact_ids=tuple(
             sorted(
-                (item.artifact_id for item in source_observation.provenance.source_artifacts),
+                (item.artifact_id for item in base_provenance.source_artifacts),
                 key=lambda item: item.qualified,
             )
         ),
@@ -333,7 +382,7 @@ def _build_derived(
     )
     if not run.source_artifact_ids:
         raise ValueError("MBT derived result requires source artifacts")
-    edges = list(source_observation.provenance.lineage_edges)
+    edges = list(base_provenance.lineage_edges)
     for source_id in (
         source_observation.observation_id,
         *(run.source_artifact_ids),
@@ -343,7 +392,7 @@ def _build_derived(
         )
         if edge not in edges:
             edges.append(edge)
-    for acquisition in source_observation.provenance.acquisitions:
+    for acquisition in base_provenance.acquisitions:
         edge = LineageEdge(
             acquisition.acquisition_id.qualified,
             run.processing_run_id.qualified,
@@ -370,26 +419,25 @@ def _build_derived(
         provenance_id=InstanceIdentifier("provenance", output_id.value),
         source_artifacts=tuple(
             sorted(
-                (*source_observation.provenance.source_artifacts, output_artifact),
+                (*base_provenance.source_artifacts, output_artifact),
                 key=lambda item: item.artifact_id.qualified,
             )
         ),
-        acquisitions=source_observation.provenance.acquisitions,
-        processing_runs=(*source_observation.provenance.processing_runs, run),
+        acquisitions=base_provenance.acquisitions,
+        processing_runs=(*base_provenance.processing_runs, run),
         lineage_edges=tuple(
             sorted(edges, key=lambda item: (item.from_id, item.to_id, item.relation.value))
         ),
         evidence_references=tuple(
             dict.fromkeys(
                 (
-                    *source_observation.provenance.evidence_references,
+                    *base_provenance.evidence_references,
                     EvidenceReference(RES68_DECISION_EXPLOSIVE_TEST_FAMILY),
                 )
             )
         ),
-        metrological_traceability=source_observation.provenance.metrological_traceability,
-        recorded_at=source_observation.provenance.recorded_at
-        or source_observation.context.observed_at,
+        metrological_traceability=base_provenance.metrological_traceability,
+        recorded_at=base_provenance.recorded_at or source_observation.context.observed_at,
     )
     observation = ScientificMeasurementObservation(
         observation_id=output_id,
@@ -429,7 +477,7 @@ def calculate_mbt_throw_distance(
 
     claim = "calculate medicine-ball throw distance"
     try:
-        _validate_distance_source(source_observation, coordinate_evidence)
+        _, coordinate_evidence = _validate_distance_source(source_observation, coordinate_evidence)
         if qualification is not None:
             require_qualified_mbt(qualification, source_observation)
         value = coordinate_evidence.endpoint_coordinate_m - coordinate_evidence.origin_coordinate_m

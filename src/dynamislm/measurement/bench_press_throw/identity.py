@@ -530,7 +530,7 @@ class BenchPressThrowVelocitySeries:
 @register_serializable_type
 @dataclass(frozen=True, slots=True)
 class BenchPressThrowMetricSupport:
-    """Exact inclusive support for one BPT metric method."""
+    """Exact inclusive support; authority is supplied by upstream evidence."""
 
     support_id: InstanceIdentifier
     metric: RegistryReference
@@ -541,6 +541,10 @@ class BenchPressThrowMetricSupport:
     support_definition: str
     source_series_digest: str
     includes_post_release_samples: bool = False
+    boundary_method: RegistryReference | None = None
+    boundary_convention: RegistryReference | None = None
+    boundary_parameters: tuple[MetadataEntry, ...] = ()
+    authority_source_id: InstanceIdentifier | None = None
 
     def __post_init__(self) -> None:
         if self.support_id.instance_type != "support":
@@ -564,6 +568,19 @@ class BenchPressThrowMetricSupport:
         _require_text(self.source_series_digest, "source_series_digest")
         if not isinstance(self.includes_post_release_samples, bool):
             raise ValueError("includes_post_release_samples must be a boolean")
+        _require_optional_instance(self.boundary_method, RegistryReference, "boundary_method")
+        _require_optional_instance(
+            self.boundary_convention, RegistryReference, "boundary_convention"
+        )
+        _require_tuple_items(self.boundary_parameters, MetadataEntry, "boundary_parameters")
+        _require_optional_instance(
+            self.authority_source_id, InstanceIdentifier, "authority_source_id"
+        )
+        if (
+            self.authority_source_id is not None
+            and self.authority_source_id.instance_type != "support"
+        ):
+            raise ValueError("authority_source_id must identify a support")
 
 
 # Short names are aliases to the same registered classes, not new wire types.

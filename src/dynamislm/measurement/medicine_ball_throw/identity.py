@@ -15,6 +15,7 @@ from dynamislm.measurement.identity import (
     ProcessingIdentity,
     RegistryReference,
     SamplingCharacteristics,
+    ScientificIdentifier,
     SemanticIdentity,
     _require_enum,
     _require_instance,
@@ -24,10 +25,12 @@ from dynamislm.measurement.identity import (
     require_tuple,
 )
 from dynamislm.measurement.medicine_ball_throw.registry import (
+    MBT_COORDINATE_SOURCE_OPERATION,
+    MBT_RELEASE_EVENT_SOURCE_OPERATION,
     MEDICINE_BALL_THROW_PROTOCOL_V1,
     MEDICINE_BALL_THROW_TEST_FAMILY,
 )
-from dynamislm.provenance.models import AcquisitionRecord, SourceArtifact
+from dynamislm.provenance.models import AcquisitionRecord, Provenance, SourceArtifact
 from dynamislm.serialization import canonical_hash, register_serializable_type
 
 
@@ -367,9 +370,90 @@ class MedicineBallThrowAcquisitionRecord(AcquisitionRecord):
 
 
 @register_serializable_type
+@dataclass(frozen=True, slots=True, kw_only=True)
+class MBTCoordinateSourceEvidence:
+    """Upstream coordinate/contact adjudication bound to one MBT observation."""
+
+    source_coordinate_id: InstanceIdentifier
+    source_context_id: InstanceIdentifier
+    source_observation_id: InstanceIdentifier
+    source_artifact_id: InstanceIdentifier
+    source_acquisition_id: InstanceIdentifier
+    source_measurement_identity_id: ScientificIdentifier
+    protocol_reference: RegistryReference
+    origin_coordinate_m: float
+    endpoint_coordinate_m: float
+    coordinate_frame: RegistryReference
+    origin_convention: RegistryReference
+    endpoint_convention: RegistryReference
+    first_contact_no_roll_convention: RegistryReference
+    first_contact_observed: bool
+    no_roll_observed: bool
+    source_content_digest: str
+    provider: str | None
+    processing_method: RegistryReference = MBT_COORDINATE_SOURCE_OPERATION
+    method_parameters: tuple[MetadataEntry, ...] = ()
+    source_value_origin: str = "SOURCE_REPORTED"
+    upstream_processing_run_id: InstanceIdentifier
+    provenance: Provenance
+
+    def __post_init__(self) -> None:
+        for field_name, value, expected in (
+            ("source_coordinate_id", self.source_coordinate_id, "coordinate-evidence"),
+            ("source_context_id", self.source_context_id, "context"),
+            ("source_observation_id", self.source_observation_id, "observation"),
+            ("source_artifact_id", self.source_artifact_id, "artifact"),
+            ("source_acquisition_id", self.source_acquisition_id, "acquisition"),
+        ):
+            _require_instance(value, InstanceIdentifier, field_name)
+            if value.instance_type != expected:
+                raise ValueError(f"{field_name} must identify a {expected}")
+        _require_instance(
+            self.source_measurement_identity_id,
+            ScientificIdentifier,
+            "source_measurement_identity_id",
+        )
+        if self.source_measurement_identity_id.object_type != "measurement-identity":
+            raise ValueError("source_measurement_identity_id must identify a measurement")
+        _require_instance(self.protocol_reference, RegistryReference, "protocol_reference")
+        origin = _finite(self.origin_coordinate_m, "origin_coordinate_m")
+        endpoint = _finite(self.endpoint_coordinate_m, "endpoint_coordinate_m")
+        if endpoint < origin:
+            raise ValueError("MBT endpoint coordinate must not precede origin coordinate")
+        object.__setattr__(self, "origin_coordinate_m", origin)
+        object.__setattr__(self, "endpoint_coordinate_m", endpoint)
+        for field_name in (
+            "coordinate_frame",
+            "origin_convention",
+            "endpoint_convention",
+            "first_contact_no_roll_convention",
+        ):
+            _require_instance(getattr(self, field_name), RegistryReference, field_name)
+        if not isinstance(self.first_contact_observed, bool) or not isinstance(
+            self.no_roll_observed, bool
+        ):
+            raise ValueError("MBT coordinate adjudications must be booleans")
+        _require_text(self.source_content_digest, "source_content_digest")
+        if self.provider is not None:
+            _require_text(self.provider, "provider")
+        _require_instance(self.processing_method, RegistryReference, "processing_method")
+        _require_tuple_items(self.method_parameters, MetadataEntry, "method_parameters")
+        if self.source_value_origin not in {"SOURCE_REPORTED", "PROVIDER_DERIVED"}:
+            raise ValueError("MBT coordinate source origin must remain source/provider-origin")
+        _require_instance(
+            self.upstream_processing_run_id,
+            InstanceIdentifier,
+            "upstream_processing_run_id",
+        )
+        if self.upstream_processing_run_id.instance_type != "processing-run":
+            raise ValueError("upstream_processing_run_id must identify a processing run")
+        _require_instance(self.provenance, Provenance, "provenance")
+
+
+@register_serializable_type
 @dataclass(frozen=True, slots=True)
 class MBTCoordinateEvidence:
-    """Exact coordinate endpoints for one protocol-defined throw distance."""
+    """Exact coordinate endpoints with optional upstream authority evidence."""
 
     source_observation_id: InstanceIdentifier
     origin_coordinate_m: float
@@ -382,6 +466,7 @@ class MBTCoordinateEvidence:
     no_roll_observed: bool
     source_artifact_id: InstanceIdentifier
     acquisition_id: InstanceIdentifier
+    source_evidence: MBTCoordinateSourceEvidence | None = None
 
     def __post_init__(self) -> None:
         for name, value, expected in (
@@ -409,12 +494,99 @@ class MBTCoordinateEvidence:
             self.no_roll_observed, bool
         ):
             raise ValueError("MBT contact/no-roll observations must be booleans")
+        _require_optional_instance(
+            self.source_evidence, MBTCoordinateSourceEvidence, "source_evidence"
+        )
+        if self.source_evidence is not None and (
+            self.source_evidence.source_observation_id != self.source_observation_id
+            or self.source_evidence.source_artifact_id != self.source_artifact_id
+            or self.source_evidence.source_acquisition_id != self.acquisition_id
+            or self.source_evidence.origin_coordinate_m != self.origin_coordinate_m
+            or self.source_evidence.endpoint_coordinate_m != self.endpoint_coordinate_m
+            or self.source_evidence.coordinate_frame != self.coordinate_frame
+            or self.source_evidence.origin_convention != self.origin_convention
+            or self.source_evidence.endpoint_convention != self.endpoint_convention
+            or self.source_evidence.first_contact_no_roll_convention
+            != self.first_contact_no_roll_convention
+            or self.source_evidence.first_contact_observed != self.first_contact_observed
+            or self.source_evidence.no_roll_observed != self.no_roll_observed
+        ):
+            raise ValueError("MBT coordinate does not preserve upstream coordinate evidence")
+
+
+@register_serializable_type
+@dataclass(frozen=True, slots=True, kw_only=True)
+class MBTReleaseEventSourceEvidence:
+    """Upstream release-event adjudication bound to one exact MBT sample."""
+
+    source_event_id: InstanceIdentifier
+    source_context_id: InstanceIdentifier
+    source_observation_id: InstanceIdentifier
+    source_series_id: InstanceIdentifier
+    source_artifact_id: InstanceIdentifier
+    source_acquisition_id: InstanceIdentifier
+    source_measurement_identity_id: ScientificIdentifier
+    source_series_digest: str
+    source_timebase: MBTTimebase
+    sample_index: int
+    event_time_s: float
+    release_method: RegistryReference
+    coordinate_frame: RegistryReference
+    protocol_reference: RegistryReference
+    provider: str | None
+    method_parameters: tuple[MetadataEntry, ...] = ()
+    source_value_origin: str = "PROVIDER_DERIVED"
+    processing_method: RegistryReference = MBT_RELEASE_EVENT_SOURCE_OPERATION
+    upstream_processing_run_id: InstanceIdentifier
+    provenance: Provenance
+
+    def __post_init__(self) -> None:
+        for field_name, value, expected in (
+            ("source_event_id", self.source_event_id, "event-occurrence"),
+            ("source_context_id", self.source_context_id, "context"),
+            ("source_observation_id", self.source_observation_id, "observation"),
+            ("source_series_id", self.source_series_id, "signal"),
+            ("source_artifact_id", self.source_artifact_id, "artifact"),
+            ("source_acquisition_id", self.source_acquisition_id, "acquisition"),
+        ):
+            _require_instance(value, InstanceIdentifier, field_name)
+            if value.instance_type != expected:
+                raise ValueError(f"{field_name} must identify a {expected}")
+        _require_instance(
+            self.source_measurement_identity_id,
+            ScientificIdentifier,
+            "source_measurement_identity_id",
+        )
+        if self.source_measurement_identity_id.object_type != "measurement-identity":
+            raise ValueError("source_measurement_identity_id must identify a measurement")
+        _require_text(self.source_series_digest, "source_series_digest")
+        _require_instance(self.source_timebase, MBTTimebase, "source_timebase")
+        if type(self.sample_index) is not int or self.sample_index < 0:
+            raise ValueError("MBT release source sample index must be non-negative")
+        _finite(self.event_time_s, "event_time_s")
+        _require_instance(self.release_method, RegistryReference, "release_method")
+        _require_instance(self.coordinate_frame, RegistryReference, "coordinate_frame")
+        _require_instance(self.protocol_reference, RegistryReference, "protocol_reference")
+        if self.provider is not None:
+            _require_text(self.provider, "provider")
+        _require_tuple_items(self.method_parameters, MetadataEntry, "method_parameters")
+        if self.source_value_origin not in {"SOURCE_REPORTED", "PROVIDER_DERIVED"}:
+            raise ValueError("MBT release source origin must remain source/provider-origin")
+        _require_instance(self.processing_method, RegistryReference, "processing_method")
+        _require_instance(
+            self.upstream_processing_run_id,
+            InstanceIdentifier,
+            "upstream_processing_run_id",
+        )
+        if self.upstream_processing_run_id.instance_type != "processing-run":
+            raise ValueError("upstream_processing_run_id must identify a processing run")
+        _require_instance(self.provenance, Provenance, "provenance")
 
 
 @register_serializable_type
 @dataclass(frozen=True, slots=True)
 class MBTReleaseEvent:
-    """Explicit release event bound to an instrumented source trajectory."""
+    """Explicit release event; authoritative use requires source evidence."""
 
     event_id: InstanceIdentifier
     source_observation_id: InstanceIdentifier
@@ -426,6 +598,7 @@ class MBTReleaseEvent:
     release_method: RegistryReference
     coordinate_frame: RegistryReference
     source_series_digest: str
+    source_evidence: MBTReleaseEventSourceEvidence | None = None
 
     def __post_init__(self) -> None:
         for name, value, expected in (
@@ -444,6 +617,22 @@ class MBTReleaseEvent:
         _require_instance(self.release_method, RegistryReference, "release_method")
         _require_instance(self.coordinate_frame, RegistryReference, "coordinate_frame")
         _require_text(self.source_series_digest, "source_series_digest")
+        _require_optional_instance(
+            self.source_evidence, MBTReleaseEventSourceEvidence, "source_evidence"
+        )
+        if self.source_evidence is not None and (
+            self.source_evidence.source_event_id != self.event_id
+            or self.source_evidence.source_observation_id != self.source_observation_id
+            or self.source_evidence.source_series_id != self.source_series_id
+            or self.source_evidence.source_artifact_id != self.source_artifact_id
+            or self.source_evidence.source_acquisition_id != self.acquisition_id
+            or self.source_evidence.sample_index != self.sample_index
+            or self.source_evidence.event_time_s != self.event_time_s
+            or self.source_evidence.release_method != self.release_method
+            or self.source_evidence.coordinate_frame != self.coordinate_frame
+            or self.source_evidence.source_series_digest != self.source_series_digest
+        ):
+            raise ValueError("MBT release event does not preserve upstream event evidence")
 
 
 def canonical_mbt_trajectory_digest(
@@ -480,6 +669,7 @@ __all__ = [
     "MBTArtifactStatus",
     "MBTBodyPosture",
     "MBTCoordinateEvidence",
+    "MBTCoordinateSourceEvidence",
     "MBTHashAlgorithm",
     "MBTMeasurementIdentity",
     "MBTProcessingIdentity",
@@ -487,6 +677,7 @@ __all__ = [
     "MBTProtocolIdentity",
     "MBTQualificationStatus",
     "MBTReleaseEvent",
+    "MBTReleaseEventSourceEvidence",
     "MBTReleaseSemantics",
     "MBTSemanticIdentity",
     "MBTSensorModality",

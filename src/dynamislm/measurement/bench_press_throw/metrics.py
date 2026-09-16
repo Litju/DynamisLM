@@ -104,6 +104,17 @@ class BenchPressThrowMetricResult:
         _finite(value.value, "BPT result")
         if self.observation.result.status is not ResultStatus.VALID:
             raise ValueError("BPT result must be valid")
+        implemented_metrics = {
+            BPT_SAMPLED_MAXIMUM_BAR_VELOCITY_METRIC,
+            BPT_DYNAMISLM_TIME_WEIGHTED_MEAN_BAR_VELOCITY_METRIC,
+        }
+        if self.metric in implemented_metrics and self.source_evidence is None:
+            raise ValueError("implemented BPT result must preserve source-series evidence")
+        if (
+            self.source_evidence is not None
+            and self.source_evidence.observation not in self.source_observations
+        ):
+            raise ValueError("BPT result must preserve its source observation")
         runs = tuple(
             run
             for run in self.observation.provenance.processing_runs

@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import datetime as datetime_module
-from dataclasses import dataclass
+import math
+from dataclasses import dataclass, replace
 
 from dynamislm.measurement.bench_press_throw.identity import (
     BenchPressThrowAcquisitionRecord,
@@ -19,12 +20,18 @@ from dynamislm.measurement.bench_press_throw.identity import (
     BPTProcessingState,
     BPTQualificationStatus,
     BPTSensorModality,
+    BPTTimebase,
 )
 from dynamislm.measurement.bench_press_throw.registry import (
     BPT_BAR_VELOCITY_MEASURAND,
     BPT_CONSTRUCT,
     BPT_DYNAMISLM_TIME_WEIGHTED_MEAN_BAR_VELOCITY_METRIC,
     BPT_MEAN_POWER_MEASURAND,
+    BPT_MEAN_PROPULSIVE_VELOCITY_MEASURAND,
+    BPT_METRIC_SUPPORT_BOUNDARY_CONVENTION,
+    BPT_METRIC_SUPPORT_METHOD,
+    BPT_METRIC_SUPPORT_QUALIFICATION_RULE,
+    BPT_METRIC_SUPPORT_SOURCE_OPERATION,
     BPT_PEAK_POWER_MEASURAND,
     BPT_PROVIDER_MAXIMUM_VELOCITY_METRIC,
     BPT_PROVIDER_MEAN_POWER_METRIC,
@@ -54,6 +61,8 @@ from dynamislm.measurement.identity import (
     UnitReference,
     VersionIdentity,
     _require_instance,
+    _require_text,
+    _require_tuple_items,
 )
 from dynamislm.measurement.observation import (
     ObservationContext,
@@ -78,6 +87,15 @@ from dynamislm.provenance.models import (
     Provenance,
 )
 from dynamislm.serialization import canonical_json, register_serializable_type
+
+
+def _finite(value: object, field_name: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        raise ValueError(f"{field_name} must be numeric")
+    result = float(value)
+    if not math.isfinite(result):
+        raise ValueError(f"{field_name} must be finite")
+    return result
 
 
 def _origin_for_series(state: BPTProcessingState) -> ValueOrigin:
@@ -123,6 +141,12 @@ def _validate_acquisition_binding(
     if series is not None:
         if (
             identity.acquisition.source_series_digest != series.canonical_content_digest()
+            or (
+                identity.semantic.protocol_identity is not None
+                and identity.semantic.protocol_identity.source_series_digest is not None
+                and identity.semantic.protocol_identity.source_series_digest
+                != series.canonical_content_digest()
+            )
             or identity.acquisition.timebase != series.timebase
             or identity.acquisition.device != acquisition.device
         ):
@@ -153,6 +177,7 @@ class BenchPressThrowVelocitySeriesEvidence:
     source_artifact: BenchPressThrowSourceArtifact
     acquisition: BenchPressThrowAcquisitionRecord
     support: BenchPressThrowMetricSupport
+    support_source_evidence: BPTMetricSupportSourceEvidence | None = None
 
     def __post_init__(self) -> None:
         _require_instance(self.observation, ScientificMeasurementObservation, "observation")
@@ -161,6 +186,9 @@ class BenchPressThrowVelocitySeriesEvidence:
         _require_verified_artifact(self.source_artifact)
         _require_instance(self.acquisition, BenchPressThrowAcquisitionRecord, "acquisition")
         _require_instance(self.support, BenchPressThrowMetricSupport, "support")
+        support_source_evidence = self.support_source_evidence
+        if not isinstance(support_source_evidence, BPTMetricSupportSourceEvidence):
+            raise ValueError("support_source_evidence must be BPTMetricSupportSourceEvidence")
         if self.observation.identity != self.identity:
             raise ValueError("BPT evidence observation and identity do not agree")
         if self.identity.semantic.measurand != BPT_BAR_VELOCITY_MEASURAND:
@@ -207,10 +235,328 @@ class BenchPressThrowVelocitySeriesEvidence:
         )
         if len(output_runs) != 1 or output_runs[0].method != BPT_SOURCE_VELOCITY_SERIES_OPERATION:
             raise ValueError("BPT source evidence must preserve its registered processing run")
+        normalized_support = normalize_bpt_metric_support(
+            support_source_evidence,
+            self.observation,
+            self.series,
+            self.source_artifact,
+            self.acquisition,
+        )
+        if self.support != normalized_support:
+            raise ValueError("BPT metric support does not preserve upstream support authority")
 
     @property
     def source_series_digest(self) -> str:
         return self.series.canonical_content_digest()
+
+
+@register_serializable_type
+@dataclass(frozen=True, slots=True, kw_only=True)
+class BPTMetricSupportSourceEvidence:
+    """Upstream declaration that gives one BPT support interval authority."""
+
+    support_id: InstanceIdentifier
+    source_context: ObservationContext
+    source_observation_id: InstanceIdentifier
+    source_series_id: InstanceIdentifier
+    source_artifact_id: InstanceIdentifier
+    source_acquisition_id: InstanceIdentifier
+    source_measurement_identity_id: ScientificIdentifier
+    source_series_digest: str
+    source_timebase: BPTTimebase
+    source_sample_count: int
+    metric: RegistryReference
+    start_index: int
+    end_index: int
+    start_time_s: float
+    end_time_s: float
+    support_definition: str
+    boundary_method: RegistryReference = BPT_METRIC_SUPPORT_METHOD
+    boundary_convention: RegistryReference = BPT_METRIC_SUPPORT_BOUNDARY_CONVENTION
+    boundary_parameters: tuple[MetadataEntry, ...] = ()
+    includes_post_release_samples: bool = False
+    value_origin: ValueOrigin = ValueOrigin.PROVIDER_DERIVED
+    upstream_processing_run_id: InstanceIdentifier
+    provenance: Provenance
+
+    def __post_init__(self) -> None:
+        _require_instance(self.support_id, InstanceIdentifier, "support_id")
+        if self.support_id.instance_type != "support":
+            raise ValueError("support_id must identify a support")
+        _require_instance(self.source_context, ObservationContext, "source_context")
+        for field_name, value, expected in (
+            ("source_observation_id", self.source_observation_id, "observation"),
+            ("source_series_id", self.source_series_id, "signal"),
+            ("source_artifact_id", self.source_artifact_id, "artifact"),
+            ("source_acquisition_id", self.source_acquisition_id, "acquisition"),
+        ):
+            _require_instance(value, InstanceIdentifier, field_name)
+            if value.instance_type != expected:
+                raise ValueError(f"{field_name} must identify a {expected}")
+        _require_instance(
+            self.source_measurement_identity_id,
+            ScientificIdentifier,
+            "source_measurement_identity_id",
+        )
+        if self.source_measurement_identity_id.object_type != "measurement-identity":
+            raise ValueError("source_measurement_identity_id must identify a measurement")
+        _require_text(self.source_series_digest, "source_series_digest")
+        _require_instance(self.source_timebase, BPTTimebase, "source_timebase")
+        if type(self.source_sample_count) is not int or self.source_sample_count < 1:
+            raise ValueError("source_sample_count must be positive")
+        _require_instance(self.metric, RegistryReference, "metric")
+        if self.metric not in {
+            BPT_SAMPLED_MAXIMUM_BAR_VELOCITY_METRIC,
+            BPT_DYNAMISLM_TIME_WEIGHTED_MEAN_BAR_VELOCITY_METRIC,
+        }:
+            raise ValueError("BPT support source must identify an implemented metric")
+        if (
+            type(self.start_index) is not int
+            or type(self.end_index) is not int
+            or self.start_index < 0
+            or self.end_index < self.start_index
+        ):
+            raise ValueError("BPT support source must satisfy 0 <= start <= end")
+        _finite(self.start_time_s, "support source start time")
+        _finite(self.end_time_s, "support source end time")
+        if self.end_time_s < self.start_time_s:
+            raise ValueError("support source end time must not precede start time")
+        _require_text(self.support_definition, "support_definition")
+        _require_instance(self.boundary_method, RegistryReference, "boundary_method")
+        _require_instance(self.boundary_convention, RegistryReference, "boundary_convention")
+        _require_tuple_items(self.boundary_parameters, MetadataEntry, "boundary_parameters")
+        if not isinstance(self.includes_post_release_samples, bool):
+            raise ValueError("includes_post_release_samples must be a boolean")
+        _require_instance(self.value_origin, ValueOrigin, "value_origin")
+        if self.value_origin not in {ValueOrigin.SOURCE_REPORTED, ValueOrigin.PROVIDER_DERIVED}:
+            raise ValueError("BPT support source must remain source/provider-origin")
+        _require_instance(
+            self.upstream_processing_run_id,
+            InstanceIdentifier,
+            "upstream_processing_run_id",
+        )
+        if self.upstream_processing_run_id.instance_type != "processing-run":
+            raise ValueError("upstream_processing_run_id must identify a processing run")
+        _require_instance(self.provenance, Provenance, "provenance")
+
+
+def _support_source_parameters(
+    source: BPTMetricSupportSourceEvidence,
+) -> tuple[MetadataEntry, ...]:
+    return (
+        MetadataEntry("support_id", source.support_id.qualified),
+        MetadataEntry("source_context_id", source.source_context.context_id.qualified),
+        MetadataEntry("source_observation_id", source.source_observation_id.qualified),
+        MetadataEntry("source_series_id", source.source_series_id.qualified),
+        MetadataEntry("source_artifact_id", source.source_artifact_id.qualified),
+        MetadataEntry("source_acquisition_id", source.source_acquisition_id.qualified),
+        MetadataEntry(
+            "source_measurement_identity_id", source.source_measurement_identity_id.stable_id
+        ),
+        MetadataEntry("source_series_digest", source.source_series_digest),
+        MetadataEntry("source_timebase", canonical_json(source.source_timebase)),
+        MetadataEntry("source_sample_count", source.source_sample_count),
+        MetadataEntry("metric", source.metric.stable_id),
+        MetadataEntry("start_index", source.start_index),
+        MetadataEntry("end_index", source.end_index),
+        MetadataEntry("start_time_s", source.start_time_s),
+        MetadataEntry("end_time_s", source.end_time_s),
+        MetadataEntry("support_definition", source.support_definition),
+        MetadataEntry("boundary_method", source.boundary_method.stable_id),
+        MetadataEntry("boundary_convention", source.boundary_convention.stable_id),
+        MetadataEntry("boundary_parameters", canonical_json(source.boundary_parameters)),
+        MetadataEntry("includes_post_release_samples", source.includes_post_release_samples),
+        MetadataEntry("value_origin", source.value_origin.value),
+    )
+
+
+def _validate_support_source_for_evidence(
+    source: BPTMetricSupportSourceEvidence,
+    observation: ScientificMeasurementObservation,
+    series: BenchPressThrowVelocitySeries,
+    source_artifact: BenchPressThrowSourceArtifact,
+    acquisition: BenchPressThrowAcquisitionRecord,
+) -> None:
+    _require_instance(source, BPTMetricSupportSourceEvidence, "support_source_evidence")
+    _require_instance(observation, ScientificMeasurementObservation, "observation")
+    _require_instance(series, BenchPressThrowVelocitySeries, "series")
+    _require_verified_artifact(source_artifact)
+    _require_instance(acquisition, BenchPressThrowAcquisitionRecord, "acquisition")
+    identity = observation.identity
+    if not isinstance(identity, BenchPressThrowMeasurementIdentity):
+        raise ValueError("BPT support source requires BPT measurement identity")
+    expected_digest = series.canonical_content_digest()
+    if (
+        source.source_context != observation.context
+        or source.source_observation_id != observation.observation_id
+        or source.source_series_id != series.series_id
+        or source.source_artifact_id != source_artifact.artifact_id
+        or source.source_acquisition_id != acquisition.acquisition_id
+        or source.source_measurement_identity_id != identity.identity_id
+        or source.source_series_digest != expected_digest
+        or source.source_timebase != series.timebase
+        or source.source_sample_count != len(series.samples)
+    ):
+        raise ValueError("BPT support source is not bound to the exact series observation")
+    if source_artifact.content_digest != expected_digest:
+        raise ValueError("BPT support source artifact digest does not match series")
+    if source.metric not in {
+        BPT_SAMPLED_MAXIMUM_BAR_VELOCITY_METRIC,
+        BPT_DYNAMISLM_TIME_WEIGHTED_MEAN_BAR_VELOCITY_METRIC,
+    }:
+        raise ValueError("BPT support source metric is not implemented")
+    if source.boundary_method != BPT_METRIC_SUPPORT_METHOD:
+        raise ValueError("BPT support boundary method is not registered")
+    if source.boundary_convention != BPT_METRIC_SUPPORT_BOUNDARY_CONVENTION:
+        raise ValueError("BPT support boundary convention is not registered")
+    if source.end_index >= len(series.samples):
+        raise ValueError("BPT support source end index is outside the series")
+    if (
+        source.start_time_s != series.samples[source.start_index][0]
+        or source.end_time_s != series.samples[source.end_index][0]
+    ):
+        raise ValueError("BPT support source times must equal exact sample timestamps")
+    if identity.semantic.metric_definition != BPT_VELOCITY_SERIES_METRIC:
+        raise ValueError("BPT support source observation is not a velocity series")
+    if identity.processing.registered_operation != BPT_SOURCE_VELOCITY_SERIES_OPERATION:
+        raise ValueError("BPT support source observation uses the wrong operation")
+    if observation.result.status is not ResultStatus.VALID:
+        raise ValueError("BPT support source observation must be valid")
+    if observation.result.classification.value_origin is not source.value_origin:
+        raise ValueError("BPT support source origin does not match observation")
+    provenance = source.provenance
+    artifact_items = tuple(
+        item
+        for item in provenance.source_artifacts
+        if item.artifact_id == source_artifact.artifact_id
+    )
+    acquisition_items = tuple(
+        item
+        for item in provenance.acquisitions
+        if item.acquisition_id == acquisition.acquisition_id
+    )
+    if artifact_items != (source_artifact,) or acquisition_items != (acquisition,):
+        raise ValueError("BPT support source provenance does not preserve artifact/acquisition")
+    run = next(
+        (item for item in provenance.processing_runs if item.output_entity_id == source.support_id),
+        None,
+    )
+    if run is None or run.processing_run_id != source.upstream_processing_run_id:
+        raise ValueError("BPT support source provenance must preserve its producing run")
+    if run.method != BPT_METRIC_SUPPORT_SOURCE_OPERATION:
+        raise ValueError("BPT support source run uses an unregistered method")
+    if run.parameters != _support_source_parameters(source):
+        raise ValueError("BPT support source run parameters do not reproduce")
+    if source_artifact.artifact_id not in run.source_artifact_ids:
+        raise ValueError("BPT support source run omits source artifact")
+    required_edges = (
+        (source.source_observation_id.qualified, LineageRelation.DERIVED_FROM),
+        (source.source_series_id.qualified, LineageRelation.DERIVED_FROM),
+        (source.source_artifact_id.qualified, LineageRelation.DERIVED_FROM),
+        (source.source_acquisition_id.qualified, LineageRelation.DERIVED_FROM),
+        (BPT_METRIC_SUPPORT_QUALIFICATION_RULE.stable_id, LineageRelation.SUPPORTED_BY),
+    )
+    for from_id, relation in required_edges:
+        if not any(
+            edge.from_id == from_id
+            and edge.to_id == run.processing_run_id.qualified
+            and edge.relation is relation
+            for edge in provenance.lineage_edges
+        ):
+            raise ValueError("BPT support source provenance omits an authority lineage edge")
+    if not any(
+        edge.from_id == run.processing_run_id.qualified
+        and edge.to_id == source.support_id.qualified
+        and edge.relation is LineageRelation.PRODUCED
+        for edge in provenance.lineage_edges
+    ):
+        raise ValueError("BPT support source provenance omits the produced support edge")
+
+
+def normalize_bpt_metric_support(
+    source: BPTMetricSupportSourceEvidence,
+    observation: ScientificMeasurementObservation,
+    series: BenchPressThrowVelocitySeries,
+    source_artifact: BenchPressThrowSourceArtifact,
+    acquisition: BenchPressThrowAcquisitionRecord,
+) -> BenchPressThrowMetricSupport:
+    """Normalize upstream support authority into the metric-support identity."""
+
+    _validate_support_source_for_evidence(source, observation, series, source_artifact, acquisition)
+    return BenchPressThrowMetricSupport(
+        support_id=source.support_id,
+        metric=source.metric,
+        start_index=source.start_index,
+        end_index=source.end_index,
+        start_time_s=source.start_time_s,
+        end_time_s=source.end_time_s,
+        support_definition=source.support_definition,
+        source_series_digest=source.source_series_digest,
+        includes_post_release_samples=source.includes_post_release_samples,
+        boundary_method=source.boundary_method,
+        boundary_convention=source.boundary_convention,
+        boundary_parameters=source.boundary_parameters,
+        authority_source_id=source.support_id,
+    )
+
+
+def _merge_provenance(left: Provenance, right: Provenance) -> Provenance:
+    artifacts = list(left.source_artifacts)
+    for artifact_item in right.source_artifacts:
+        prior_artifact = next(
+            (value for value in artifacts if value.artifact_id == artifact_item.artifact_id),
+            None,
+        )
+        if prior_artifact is not None and prior_artifact != artifact_item:
+            raise ValueError("BPT provenance contains conflicting source artifacts")
+        if prior_artifact is None:
+            artifacts.append(artifact_item)
+    acquisitions = list(left.acquisitions)
+    for acquisition_item in right.acquisitions:
+        prior_acquisition = next(
+            (
+                value
+                for value in acquisitions
+                if value.acquisition_id == acquisition_item.acquisition_id
+            ),
+            None,
+        )
+        if prior_acquisition is not None and prior_acquisition != acquisition_item:
+            raise ValueError("BPT provenance contains conflicting acquisitions")
+        if prior_acquisition is None:
+            acquisitions.append(acquisition_item)
+    runs = list(left.processing_runs)
+    for run_item in right.processing_runs:
+        prior_run = next(
+            (value for value in runs if value.processing_run_id == run_item.processing_run_id),
+            None,
+        )
+        if prior_run is not None and prior_run != run_item:
+            raise ValueError("BPT provenance contains conflicting processing runs")
+        if prior_run is None:
+            runs.append(run_item)
+    edges = list(left.lineage_edges)
+    for edge_item in right.lineage_edges:
+        if edge_item not in edges:
+            edges.append(edge_item)
+    evidence = list(left.evidence_references)
+    for evidence_item in right.evidence_references:
+        if evidence_item not in evidence:
+            evidence.append(evidence_item)
+    traceability = list(left.metrological_traceability)
+    for traceability_item in right.metrological_traceability:
+        if traceability_item not in traceability:
+            traceability.append(traceability_item)
+    return Provenance(
+        provenance_id=left.provenance_id,
+        source_artifacts=tuple(artifacts),
+        acquisitions=tuple(acquisitions),
+        processing_runs=tuple(runs),
+        lineage_edges=tuple(edges),
+        evidence_references=tuple(evidence),
+        metrological_traceability=tuple(traceability),
+        recorded_at=left.recorded_at or right.recorded_at,
+    )
 
 
 def create_bpt_velocity_series_evidence(
@@ -222,7 +568,7 @@ def create_bpt_velocity_series_evidence(
     series: BenchPressThrowVelocitySeries,
     source_artifact: BenchPressThrowSourceArtifact,
     acquisition: BenchPressThrowAcquisitionRecord,
-    support: BenchPressThrowMetricSupport,
+    support: BPTMetricSupportSourceEvidence | BenchPressThrowMetricSupport,
     evidence_references: tuple[EvidenceReference, ...] = (),
     recorded_at: datetime_module.datetime | None = None,
 ) -> BenchPressThrowVelocitySeriesEvidence:
@@ -233,6 +579,11 @@ def create_bpt_velocity_series_evidence(
     _require_instance(series, BenchPressThrowVelocitySeries, "series")
     _require_verified_artifact(source_artifact)
     _require_instance(acquisition, BenchPressThrowAcquisitionRecord, "acquisition")
+    if not isinstance(support, BPTMetricSupportSourceEvidence):
+        raise ValueError(
+            "typed upstream BPT metric support source evidence is required; "
+            "raw support is not authority"
+        )
     if observation_id.instance_type != "observation" or result_id.instance_type != "result":
         raise ValueError("BPT evidence requires observation and result identifiers")
     if identity.processing.registered_operation != BPT_SOURCE_VELOCITY_SERIES_OPERATION:
@@ -315,13 +666,21 @@ def create_bpt_velocity_series_evidence(
         ),
         provenance=provenance,
     )
+    normalized_support = normalize_bpt_metric_support(
+        support, observation, series, source_artifact, acquisition
+    )
+    observation = replace(
+        observation,
+        provenance=_merge_provenance(observation.provenance, support.provenance),
+    )
     return BenchPressThrowVelocitySeriesEvidence(
         observation=observation,
         identity=identity,
         series=series,
         source_artifact=source_artifact,
         acquisition=acquisition,
-        support=support,
+        support=normalized_support,
+        support_source_evidence=support,
     )
 
 
@@ -371,13 +730,17 @@ def build_bpt_provider_metric_observation(
         raise ValueError("BPT provider power must use watts")
     if metric not in power_metrics and unit != METER_PER_SECOND:
         raise ValueError("BPT provider velocity must use m/s")
-    measurand = (
-        BPT_BAR_VELOCITY_MEASURAND
-        if unit == METER_PER_SECOND
-        else BPT_MEAN_POWER_MEASURAND
-        if metric == BPT_PROVIDER_MEAN_POWER_METRIC
-        else BPT_PEAK_POWER_MEASURAND
-    )
+    if metric in {
+        BPT_PROVIDER_MEAN_VELOCITY_METRIC,
+        BPT_PROVIDER_MAXIMUM_VELOCITY_METRIC,
+    }:
+        measurand = BPT_BAR_VELOCITY_MEASURAND
+    elif metric == BPT_PROVIDER_MEAN_PROPULSIVE_VELOCITY_METRIC:
+        measurand = BPT_MEAN_PROPULSIVE_VELOCITY_MEASURAND
+    elif metric == BPT_PROVIDER_MEAN_POWER_METRIC:
+        measurand = BPT_MEAN_POWER_MEASURAND
+    else:
+        measurand = BPT_PEAK_POWER_MEASURAND
     parameters = (
         MetadataEntry("provider_metric", metric.stable_id),
         MetadataEntry("value_origin", value_origin.value),
@@ -567,6 +930,8 @@ def build_bpt_qualification_source_observation(
     observation_id = output_observation_id or InstanceIdentifier(
         "observation", f"bpt-qualification:{target_observation.observation_id.value}"
     )
+    if observation_id == target_observation.observation_id:
+        raise ValueError("BPT qualification observation must differ from target")
     parameters = (
         MetadataEntry("target_observation_id", target_observation.observation_id.qualified),
         MetadataEntry("source_status", reported_status.value),
@@ -757,11 +1122,13 @@ def require_qualified_bpt(
 
 
 __all__ = [
+    "BPTMetricSupportSourceEvidence",
     "BPTSourceQualificationEvidence",
     "BenchPressThrowVelocitySeriesEvidence",
     "build_bpt_provider_metric_observation",
     "build_bpt_qualification_source_observation",
     "create_bpt_velocity_series_evidence",
+    "normalize_bpt_metric_support",
     "normalize_bpt_qualification",
     "require_qualified_bpt",
 ]

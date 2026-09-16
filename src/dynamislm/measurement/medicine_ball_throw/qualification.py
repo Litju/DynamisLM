@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import datetime as datetime_module
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from itertools import pairwise
 
 from dynamislm.measurement.identity import (
@@ -18,9 +18,12 @@ from dynamislm.measurement.identity import (
 )
 from dynamislm.measurement.medicine_ball_throw.identity import (
     MBTArtifactStatus,
+    MBTCoordinateEvidence,
+    MBTCoordinateSourceEvidence,
     MBTProcessingState,
     MBTQualificationStatus,
     MBTReleaseEvent,
+    MBTReleaseEventSourceEvidence,
     MBTSensorModality,
     MBTTimebase,
     MedicineBallThrowAcquisitionIdentity,
@@ -32,11 +35,15 @@ from dynamislm.measurement.medicine_ball_throw.identity import (
     MedicineBallThrowSourceArtifact,
 )
 from dynamislm.measurement.medicine_ball_throw.registry import (
+    MBT_COORDINATE_QUALIFICATION_RULE,
+    MBT_COORDINATE_SOURCE_OPERATION,
     MBT_INSTRUMENTED_RELEASE_VELOCITY_MEASURAND,
     MBT_INSTRUMENTED_RELEASE_VELOCITY_METRIC,
     MBT_QUALIFICATION_MEASURAND,
     MBT_QUALIFICATION_METRIC,
     MBT_REGISTRY_VERSION,
+    MBT_RELEASE_EVENT_QUALIFICATION_RULE,
+    MBT_RELEASE_EVENT_SOURCE_OPERATION,
     MBT_RELEASE_VELOCITY_SCHEMA,
     MBT_RELEASE_VELOCITY_SOURCE_OPERATION,
     MBT_SOFTWARE_VERSION,
@@ -278,19 +285,418 @@ def build_mbt_source_distance_observation(
     )
 
 
+def _normalize_samples(
+    samples: tuple[tuple[float, float], ...],
+    label: str,
+) -> tuple[tuple[float, float], ...]:
+    if not isinstance(samples, tuple) or not samples:
+        raise ValueError(f"MBT {label} samples must be a non-empty tuple")
+    normalized: list[tuple[float, float]] = []
+    for sample in samples:
+        if not isinstance(sample, tuple) or len(sample) != 2:
+            raise ValueError(f"MBT {label} samples must be (time, value) tuples")
+        normalized.append(
+            (
+                _finite(sample[0], f"{label} sample time"),
+                _finite(sample[1], f"{label} sample value"),
+            )
+        )
+    if any(right[0] <= left[0] for left, right in pairwise(normalized)):
+        raise ValueError(f"MBT {label} timestamps must increase")
+    return tuple(normalized)
+
+
 def _trajectory_digest(
     trajectory_samples: tuple[tuple[float, float], ...],
     velocity_samples: tuple[tuple[float, float], ...],
     timebase: MBTTimebase,
     coordinate_frame: RegistryReference,
 ) -> str:
+    normalized_trajectory = _normalize_samples(trajectory_samples, "trajectory")
+    normalized_velocity = _normalize_samples(velocity_samples, "velocity")
     return canonical_hash(
         {
-            "trajectory_samples": trajectory_samples,
-            "velocity_samples": velocity_samples,
+            "trajectory_samples": normalized_trajectory,
+            "velocity_samples": normalized_velocity,
             "timebase": timebase,
             "coordinate_frame": coordinate_frame,
         }
+    )
+
+
+def _coordinate_source_parameters(
+    source: MBTCoordinateSourceEvidence,
+) -> tuple[MetadataEntry, ...]:
+    return (
+        MetadataEntry("source_coordinate_id", source.source_coordinate_id.qualified),
+        MetadataEntry("source_context_id", source.source_context_id.qualified),
+        MetadataEntry("source_observation_id", source.source_observation_id.qualified),
+        MetadataEntry("source_artifact_id", source.source_artifact_id.qualified),
+        MetadataEntry("source_acquisition_id", source.source_acquisition_id.qualified),
+        MetadataEntry(
+            "source_measurement_identity_id", source.source_measurement_identity_id.stable_id
+        ),
+        MetadataEntry("protocol_reference", source.protocol_reference.stable_id),
+        MetadataEntry("origin_coordinate_m", source.origin_coordinate_m),
+        MetadataEntry("endpoint_coordinate_m", source.endpoint_coordinate_m),
+        MetadataEntry("coordinate_frame", source.coordinate_frame.stable_id),
+        MetadataEntry("origin_convention", source.origin_convention.stable_id),
+        MetadataEntry("endpoint_convention", source.endpoint_convention.stable_id),
+        MetadataEntry(
+            "first_contact_no_roll_convention",
+            source.first_contact_no_roll_convention.stable_id,
+        ),
+        MetadataEntry("first_contact_observed", source.first_contact_observed),
+        MetadataEntry("no_roll_observed", source.no_roll_observed),
+        MetadataEntry("source_content_digest", source.source_content_digest),
+        MetadataEntry("provider", source.provider),
+        MetadataEntry("method_parameters", canonical_json(source.method_parameters)),
+        MetadataEntry("source_value_origin", source.source_value_origin),
+    )
+
+
+def _validate_coordinate_source_evidence(
+    source: MBTCoordinateSourceEvidence,
+    source_observation: ScientificMeasurementObservation,
+) -> None:
+    _require_instance(source, MBTCoordinateSourceEvidence, "coordinate_source_evidence")
+    _require_instance(source_observation, ScientificMeasurementObservation, "source_observation")
+    identity = source_observation.identity
+    if not isinstance(identity, MedicineBallThrowMeasurementIdentity):
+        raise ValueError("MBT coordinate source requires MBT identity")
+    protocol = identity.semantic.protocol_identity
+    if protocol is None:
+        raise ValueError("MBT coordinate source requires protocol identity")
+    observation_acquisition = next(
+        (
+            item
+            for item in source_observation.provenance.acquisitions
+            if item.acquisition_id == source.source_acquisition_id
+        ),
+        None,
+    )
+    if not isinstance(observation_acquisition, MedicineBallThrowAcquisitionRecord):
+        raise ValueError("MBT coordinate source requires its typed acquisition")
+    if (
+        source.source_context_id != source_observation.context.context_id
+        or source.source_observation_id != source_observation.observation_id
+        or source.source_measurement_identity_id != identity.identity_id
+        or source.protocol_reference != protocol.reference
+        or source.provider != observation_acquisition.provider
+        or source.coordinate_frame != observation_acquisition.axis_or_frame
+    ):
+        raise ValueError("MBT coordinate source is not bound to the source observation")
+    if source_observation.result.status is not ResultStatus.VALID:
+        raise ValueError("MBT coordinate source observation must be valid")
+    if source.source_value_origin != source_observation.result.classification.value_origin.value:
+        raise ValueError("MBT coordinate source origin does not match observation")
+    if source.processing_method != MBT_COORDINATE_SOURCE_OPERATION:
+        raise ValueError("MBT coordinate source processing method is not registered")
+    if source.source_artifact_id not in {
+        item.artifact_id for item in source_observation.provenance.source_artifacts
+    } or source.source_acquisition_id not in {
+        item.acquisition_id for item in source_observation.provenance.acquisitions
+    }:
+        raise ValueError("MBT coordinate source is not bound to source provenance")
+    source_artifacts = tuple(
+        item
+        for item in source.provenance.source_artifacts
+        if item.artifact_id == source.source_artifact_id
+    )
+    source_acquisitions = tuple(
+        item
+        for item in source.provenance.acquisitions
+        if item.acquisition_id == source.source_acquisition_id
+    )
+    observation_artifact = next(
+        item
+        for item in source_observation.provenance.source_artifacts
+        if item.artifact_id == source.source_artifact_id
+    )
+    observation_acquisition = next(
+        item
+        for item in source_observation.provenance.acquisitions
+        if item.acquisition_id == source.source_acquisition_id
+    )
+    if (
+        source_artifacts != (observation_artifact,)
+        or source_acquisitions != (observation_acquisition,)
+        or not isinstance(observation_artifact, MedicineBallThrowSourceArtifact)
+        or not observation_artifact.immutable
+        or observation_artifact.status is not MBTArtifactStatus.VERIFIED
+    ):
+        raise ValueError("MBT coordinate source provenance must preserve verified source objects")
+    if source.source_content_digest != observation_artifact.content_digest:
+        raise ValueError("MBT coordinate source digest does not match source artifact")
+    if protocol.provider is not None and protocol.provider != source.provider:
+        raise ValueError("MBT coordinate source provider does not match protocol")
+    if protocol.distance_origin_convention != source.origin_convention:
+        raise ValueError("MBT coordinate origin convention does not match protocol")
+    if protocol.distance_endpoint_convention != source.endpoint_convention:
+        raise ValueError("MBT coordinate endpoint convention does not match protocol")
+    if protocol.first_contact_no_roll_convention != source.first_contact_no_roll_convention:
+        raise ValueError("MBT coordinate contact/no-roll convention does not match protocol")
+    run = next(
+        (
+            item
+            for item in source.provenance.processing_runs
+            if item.output_entity_id == source.source_coordinate_id
+        ),
+        None,
+    )
+    if run is None or run.processing_run_id != source.upstream_processing_run_id:
+        raise ValueError("MBT coordinate source provenance must preserve its producing run")
+    if run.method != source.processing_method:
+        raise ValueError("MBT coordinate source run method does not match processing method")
+    if run.parameters != _coordinate_source_parameters(source):
+        raise ValueError("MBT coordinate source run parameters do not reproduce")
+    for from_id, relation in (
+        (source.source_observation_id.qualified, LineageRelation.DERIVED_FROM),
+        (source.source_artifact_id.qualified, LineageRelation.DERIVED_FROM),
+        (source.source_acquisition_id.qualified, LineageRelation.DERIVED_FROM),
+        (MBT_COORDINATE_QUALIFICATION_RULE.stable_id, LineageRelation.SUPPORTED_BY),
+    ):
+        if not any(
+            edge.from_id == from_id
+            and edge.to_id == run.processing_run_id.qualified
+            and edge.relation is relation
+            for edge in source.provenance.lineage_edges
+        ):
+            raise ValueError("MBT coordinate source provenance omits an authority lineage edge")
+    if not any(
+        edge.from_id == run.processing_run_id.qualified
+        and edge.to_id == source.source_coordinate_id.qualified
+        and edge.relation is LineageRelation.PRODUCED
+        for edge in source.provenance.lineage_edges
+    ):
+        raise ValueError("MBT coordinate source provenance omits the produced coordinate edge")
+
+
+def normalize_mbt_coordinate_evidence(
+    source: MBTCoordinateSourceEvidence,
+    source_observation: ScientificMeasurementObservation,
+    coordinate: MBTCoordinateEvidence | None = None,
+) -> MBTCoordinateEvidence:
+    """Normalize qualified upstream coordinates into distance evidence."""
+
+    _validate_coordinate_source_evidence(source, source_observation)
+    normalized = MBTCoordinateEvidence(
+        source_observation_id=source.source_observation_id,
+        origin_coordinate_m=source.origin_coordinate_m,
+        endpoint_coordinate_m=source.endpoint_coordinate_m,
+        coordinate_frame=source.coordinate_frame,
+        origin_convention=source.origin_convention,
+        endpoint_convention=source.endpoint_convention,
+        first_contact_no_roll_convention=source.first_contact_no_roll_convention,
+        first_contact_observed=source.first_contact_observed,
+        no_roll_observed=source.no_roll_observed,
+        source_artifact_id=source.source_artifact_id,
+        acquisition_id=source.source_acquisition_id,
+        source_evidence=source,
+    )
+    if coordinate is not None and coordinate != normalized:
+        raise ValueError("MBT coordinate does not preserve upstream coordinate evidence")
+    return normalized
+
+
+def _release_event_source_parameters(
+    source: MBTReleaseEventSourceEvidence,
+) -> tuple[MetadataEntry, ...]:
+    return (
+        MetadataEntry("source_event_id", source.source_event_id.qualified),
+        MetadataEntry("source_context_id", source.source_context_id.qualified),
+        MetadataEntry("source_observation_id", source.source_observation_id.qualified),
+        MetadataEntry("source_series_id", source.source_series_id.qualified),
+        MetadataEntry("source_artifact_id", source.source_artifact_id.qualified),
+        MetadataEntry("source_acquisition_id", source.source_acquisition_id.qualified),
+        MetadataEntry(
+            "source_measurement_identity_id", source.source_measurement_identity_id.stable_id
+        ),
+        MetadataEntry("source_series_digest", source.source_series_digest),
+        MetadataEntry("source_timebase", canonical_json(source.source_timebase)),
+        MetadataEntry("sample_index", source.sample_index),
+        MetadataEntry("event_time_s", source.event_time_s),
+        MetadataEntry("release_method", source.release_method.stable_id),
+        MetadataEntry("coordinate_frame", source.coordinate_frame.stable_id),
+        MetadataEntry("protocol_reference", source.protocol_reference.stable_id),
+        MetadataEntry("provider", source.provider),
+        MetadataEntry("method_parameters", canonical_json(source.method_parameters)),
+        MetadataEntry("source_value_origin", source.source_value_origin),
+    )
+
+
+def _validate_release_event_source_evidence(
+    source: MBTReleaseEventSourceEvidence,
+    observation: ScientificMeasurementObservation,
+    release_event: MBTReleaseEvent,
+    protocol: MedicineBallThrowProtocolIdentity,
+    timebase: MBTTimebase,
+    coordinate_frame: RegistryReference,
+    source_series_digest: str,
+) -> None:
+    _require_instance(source, MBTReleaseEventSourceEvidence, "release_event_source_evidence")
+    identity = observation.identity
+    if not isinstance(identity, MedicineBallThrowMeasurementIdentity):
+        raise ValueError("MBT release source requires MBT identity")
+    observation_acquisition = next(
+        (
+            item
+            for item in observation.provenance.acquisitions
+            if item.acquisition_id == source.source_acquisition_id
+        ),
+        None,
+    )
+    if not isinstance(observation_acquisition, MedicineBallThrowAcquisitionRecord):
+        raise ValueError("MBT release source requires its typed acquisition")
+    if (
+        source != release_event.source_evidence
+        or source.source_context_id != observation.context.context_id
+        or source.source_observation_id != observation.observation_id
+        or source.source_measurement_identity_id != identity.identity_id
+        or source.protocol_reference != protocol.reference
+        or source.source_timebase != timebase
+        or source.source_series_digest != source_series_digest
+        or source.coordinate_frame != coordinate_frame
+        or source.provider != observation_acquisition.provider
+    ):
+        raise ValueError("MBT release event source is not bound to the exact observation")
+    if observation.result.status is not ResultStatus.VALID:
+        raise ValueError("MBT release source observation must be valid")
+    if source.source_value_origin != observation.result.classification.value_origin.value:
+        raise ValueError("MBT release source origin does not match observation")
+    if source.processing_method != MBT_RELEASE_EVENT_SOURCE_OPERATION:
+        raise ValueError("MBT release event source processing method is not registered")
+    if protocol.provider is not None and source.provider != protocol.provider:
+        raise ValueError("MBT release event source provider does not match protocol")
+    if source.source_artifact_id not in {
+        item.artifact_id for item in observation.provenance.source_artifacts
+    } or source.source_acquisition_id not in {
+        item.acquisition_id for item in observation.provenance.acquisitions
+    }:
+        raise ValueError("MBT release event source is not bound to source provenance")
+    source_artifact = next(
+        item
+        for item in observation.provenance.source_artifacts
+        if item.artifact_id == source.source_artifact_id
+    )
+    if not isinstance(source_artifact, MedicineBallThrowSourceArtifact):
+        raise ValueError("MBT release source must preserve its typed artifact")
+    if (
+        not source_artifact.immutable
+        or source_artifact.status is not MBTArtifactStatus.VERIFIED
+        or source_artifact.content_digest != source_series_digest
+    ):
+        raise ValueError("MBT release source artifact digest is not verified")
+    source_artifacts = tuple(
+        item
+        for item in source.provenance.source_artifacts
+        if item.artifact_id == source.source_artifact_id
+    )
+    source_acquisitions = tuple(
+        item
+        for item in source.provenance.acquisitions
+        if item.acquisition_id == source.source_acquisition_id
+    )
+    observation_acquisition = next(
+        item
+        for item in observation.provenance.acquisitions
+        if item.acquisition_id == source.source_acquisition_id
+    )
+    if source_artifacts != (source_artifact,) or source_acquisitions != (observation_acquisition,):
+        raise ValueError("MBT release source provenance does not preserve source objects")
+    run = next(
+        (
+            item
+            for item in source.provenance.processing_runs
+            if item.output_entity_id == source.source_event_id
+        ),
+        None,
+    )
+    if run is None or run.processing_run_id != source.upstream_processing_run_id:
+        raise ValueError("MBT release source provenance must preserve its producing run")
+    if run.method != source.processing_method:
+        raise ValueError("MBT release source run method does not match processing method")
+    if run.parameters != _release_event_source_parameters(source):
+        raise ValueError("MBT release source run parameters do not reproduce")
+    for from_id, relation in (
+        (source.source_observation_id.qualified, LineageRelation.DERIVED_FROM),
+        (source.source_series_id.qualified, LineageRelation.DERIVED_FROM),
+        (source.source_artifact_id.qualified, LineageRelation.DERIVED_FROM),
+        (source.source_acquisition_id.qualified, LineageRelation.DERIVED_FROM),
+        (MBT_RELEASE_EVENT_QUALIFICATION_RULE.stable_id, LineageRelation.SUPPORTED_BY),
+    ):
+        if not any(
+            edge.from_id == from_id
+            and edge.to_id == run.processing_run_id.qualified
+            and edge.relation is relation
+            for edge in source.provenance.lineage_edges
+        ):
+            raise ValueError("MBT release source provenance omits an authority lineage edge")
+    if not any(
+        edge.from_id == run.processing_run_id.qualified
+        and edge.to_id == source.source_event_id.qualified
+        and edge.relation is LineageRelation.PRODUCED
+        for edge in source.provenance.lineage_edges
+    ):
+        raise ValueError("MBT release source provenance omits the produced event edge")
+
+
+def _merge_provenance(left: Provenance, right: Provenance) -> Provenance:
+    artifacts = list(left.source_artifacts)
+    for artifact_item in right.source_artifacts:
+        prior_artifact = next(
+            (value for value in artifacts if value.artifact_id == artifact_item.artifact_id),
+            None,
+        )
+        if prior_artifact is not None and prior_artifact != artifact_item:
+            raise ValueError("MBT provenance contains conflicting source artifacts")
+        if prior_artifact is None:
+            artifacts.append(artifact_item)
+    acquisitions = list(left.acquisitions)
+    for acquisition_item in right.acquisitions:
+        prior_acquisition = next(
+            (
+                value
+                for value in acquisitions
+                if value.acquisition_id == acquisition_item.acquisition_id
+            ),
+            None,
+        )
+        if prior_acquisition is not None and prior_acquisition != acquisition_item:
+            raise ValueError("MBT provenance contains conflicting acquisitions")
+        if prior_acquisition is None:
+            acquisitions.append(acquisition_item)
+    runs = list(left.processing_runs)
+    for run_item in right.processing_runs:
+        prior_run = next(
+            (value for value in runs if value.processing_run_id == run_item.processing_run_id),
+            None,
+        )
+        if prior_run is not None and prior_run != run_item:
+            raise ValueError("MBT provenance contains conflicting processing runs")
+        if prior_run is None:
+            runs.append(run_item)
+    edges = list(left.lineage_edges)
+    for edge_item in right.lineage_edges:
+        if edge_item not in edges:
+            edges.append(edge_item)
+    evidence = list(left.evidence_references)
+    for evidence_item in right.evidence_references:
+        if evidence_item not in evidence:
+            evidence.append(evidence_item)
+    traceability = list(left.metrological_traceability)
+    for traceability_item in right.metrological_traceability:
+        if traceability_item not in traceability:
+            traceability.append(traceability_item)
+    return Provenance(
+        provenance_id=left.provenance_id,
+        source_artifacts=tuple(artifacts),
+        acquisitions=tuple(acquisitions),
+        processing_runs=tuple(runs),
+        lineage_edges=tuple(edges),
+        evidence_references=tuple(evidence),
+        metrological_traceability=tuple(traceability),
+        recorded_at=left.recorded_at or right.recorded_at,
     )
 
 
@@ -316,6 +722,9 @@ class MBTReleaseVelocityEvidence:
         _require_instance(self.velocity_definition, RegistryReference, "velocity_definition")
         if self.observation.observation_id != self.release_event.source_observation_id:
             raise ValueError("release event must bind the source observation")
+        release_source_evidence = self.release_event.source_evidence
+        if not isinstance(release_source_evidence, MBTReleaseEventSourceEvidence):
+            raise ValueError("release_event.source_evidence must be MBTReleaseEventSourceEvidence")
         identity = self.observation.identity
         if not isinstance(identity, MedicineBallThrowMeasurementIdentity):
             raise ValueError("MBT release evidence requires MBT measurement identity")
@@ -357,23 +766,12 @@ class MBTReleaseVelocityEvidence:
             (self.trajectory_samples, "trajectory"),
             (self.velocity_samples, "velocity"),
         ):
-            normalized = []
-            for sample in samples:
-                if not isinstance(sample, tuple) or len(sample) != 2:
-                    raise ValueError(f"MBT {label} samples must be (time, value) tuples")
-                normalized.append(
-                    (
-                        _finite(sample[0], f"{label} sample time"),
-                        _finite(sample[1], f"{label} sample value"),
-                    )
-                )
-            if any(right[0] <= left[0] for left, right in pairwise(normalized)):
-                raise ValueError(f"MBT {label} timestamps must increase")
+            normalized = _normalize_samples(samples, label)
             if any(
                 self.timebase.time_at(index) != sample[0] for index, sample in enumerate(normalized)
             ):
                 raise ValueError(f"MBT {label} timestamps must match timebase")
-            object.__setattr__(self, f"{label}_samples", tuple(normalized))
+            object.__setattr__(self, f"{label}_samples", normalized)
         digest = _trajectory_digest(
             self.trajectory_samples, self.velocity_samples, self.timebase, self.coordinate_frame
         )
@@ -416,6 +814,18 @@ class MBTReleaseVelocityEvidence:
             raise ValueError("MBT release source evidence must remain source/provider-origin")
         if self.observation.result.status is not ResultStatus.VALID:
             raise ValueError("MBT release source observation must be valid")
+        protocol = identity.semantic.protocol_identity
+        if protocol is None:
+            raise ValueError("MBT release evidence requires protocol identity")
+        _validate_release_event_source_evidence(
+            release_source_evidence,
+            self.observation,
+            self.release_event,
+            protocol,
+            self.timebase,
+            self.coordinate_frame,
+            self.source_series_digest,
+        )
 
     @property
     def release_velocity_m_per_s(self) -> float:
@@ -505,6 +915,9 @@ def build_mbt_release_velocity_evidence(
     _require_instance(protocol_identity, MedicineBallThrowProtocolIdentity, "protocol_identity")
     _require_instance(release_event, MBTReleaseEvent, "release_event")
     _require_instance(timebase, MBTTimebase, "timebase")
+    release_source_evidence = release_event.source_evidence
+    if not isinstance(release_source_evidence, MBTReleaseEventSourceEvidence):
+        raise ValueError("release_event.source_evidence must be MBTReleaseEventSourceEvidence")
     if release_event.source_observation_id != observation_id:
         raise ValueError("MBT release event source observation must match observation_id")
     if release_event.source_artifact_id != source_artifact.artifact_id:
@@ -515,7 +928,11 @@ def build_mbt_release_velocity_evidence(
         raise ValueError("MBT release event method must match velocity definition")
     if value_origin not in {ValueOrigin.SOURCE_REPORTED, ValueOrigin.PROVIDER_DERIVED}:
         raise ValueError("MBT release evidence must remain source/provider-origin")
-    digest = _trajectory_digest(trajectory_samples, velocity_samples, timebase, coordinate_frame)
+    normalized_trajectory = _normalize_samples(trajectory_samples, "trajectory")
+    normalized_velocity = _normalize_samples(velocity_samples, "velocity")
+    digest = _trajectory_digest(
+        normalized_trajectory, normalized_velocity, timebase, coordinate_frame
+    )
     if release_event.source_series_digest != digest:
         raise ValueError("release event digest does not match exact instrumented samples")
     _require_verified_artifact(source_artifact)
@@ -594,11 +1011,24 @@ def build_mbt_release_velocity_evidence(
         acquisition=acquisition,
         recorded_at=recorded_at,
     )
+    _validate_release_event_source_evidence(
+        release_source_evidence,
+        observation,
+        release_event,
+        protocol_identity,
+        timebase,
+        coordinate_frame,
+        digest,
+    )
+    observation = replace(
+        observation,
+        provenance=_merge_provenance(observation.provenance, release_source_evidence.provenance),
+    )
     return MBTReleaseVelocityEvidence(
         observation=observation,
         release_event=release_event,
-        trajectory_samples=trajectory_samples,
-        velocity_samples=velocity_samples,
+        trajectory_samples=normalized_trajectory,
+        velocity_samples=normalized_velocity,
         timebase=timebase,
         coordinate_frame=coordinate_frame,
         velocity_definition=velocity_definition,
@@ -629,6 +1059,8 @@ def build_mbt_qualification_source_observation(
     observation_id = output_observation_id or InstanceIdentifier(
         "observation", f"mbt-qualification:{target_observation.observation_id.value}"
     )
+    if observation_id == target_observation.observation_id:
+        raise ValueError("MBT qualification observation must differ from target")
     parameters = (
         MetadataEntry("target_observation_id", target_observation.observation_id.qualified),
         MetadataEntry("source_status", reported_status.value),
@@ -763,6 +1195,7 @@ __all__ = [
     "build_mbt_qualification_source_observation",
     "build_mbt_release_velocity_evidence",
     "build_mbt_source_distance_observation",
+    "normalize_mbt_coordinate_evidence",
     "normalize_mbt_qualification",
     "require_qualified_mbt",
 ]

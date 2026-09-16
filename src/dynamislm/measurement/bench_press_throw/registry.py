@@ -54,6 +54,16 @@ BPT_SOURCE_QUALIFICATION_OPERATION = _reference(
     "bench-press-throw-source-qualification-v1",
     "BPT source qualification V1",
 )
+BPT_METRIC_SUPPORT_SOURCE_OPERATION = _reference(
+    "processing-method",
+    "bench-press-throw-metric-support-source-v1",
+    "BPT metric support source V1",
+)
+BPT_METRIC_SUPPORT_QUALIFICATION_RULE = _reference(
+    "source-adjudication-rule",
+    "bench-press-throw-metric-support-qualification-v1",
+    "BPT metric support qualification V1",
+)
 BPT_VELOCITY_SERIES_SCHEMA = _reference(
     "schema", "bench-press-throw-velocity-series-v1", "BPT velocity series V1"
 )
@@ -138,6 +148,11 @@ BPT_MEAN_PROPULSIVE_VELOCITY_OPERATION = _reference(
 
 BPT_METRIC_SUPPORT_METHOD = _reference(
     "support-method", "bench-press-throw-metric-specific-support-v1", "BPT metric-specific support"
+)
+BPT_METRIC_SUPPORT_BOUNDARY_CONVENTION = _reference(
+    "boundary-convention",
+    "bench-press-throw-metric-support-inclusive-v1",
+    "BPT inclusive metric support boundary convention",
 )
 BPT_TIME_WEIGHTED_TRAPEZOIDAL_METHOD = _reference(
     "integration-method",

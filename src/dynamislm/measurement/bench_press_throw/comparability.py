@@ -84,6 +84,46 @@ def _observation(
     return item.observation
 
 
+def _fallback_observation_id(
+    item: object,
+    side: str,
+) -> InstanceIdentifier:
+    if isinstance(item, BenchPressThrowMetricResult | BPTProviderMetricResult):
+        try:
+            observation = item.observation
+            if isinstance(observation, ScientificMeasurementObservation) and isinstance(
+                observation.observation_id, InstanceIdentifier
+            ):
+                return observation.observation_id
+        except (AttributeError, TypeError, ValueError):
+            pass
+    return InstanceIdentifier("observation", f"invalid-bpt-{side}")
+
+
+def _fallback_request(
+    left: object,
+    right: object,
+    claim: object,
+) -> ComparabilityRequest:
+    safe_claim = claim if isinstance(claim, str) and claim.strip() else "invalid BPT comparison"
+    left_id = _fallback_observation_id(left, "left")
+    right_id = _fallback_observation_id(right, "right")
+    if left_id == right_id:
+        right_id = InstanceIdentifier("observation", f"{right_id.value}:right-envelope")
+    request_id = InstanceIdentifier(
+        "comparability-request",
+        canonical_hash({"left": left_id, "right": right_id, "claim": safe_claim}).removeprefix(
+            "sha256:"
+        )[:24],
+    )
+    return ComparabilityRequest(
+        request_id=request_id,
+        left_observation_id=left_id,
+        right_observation_id=right_id,
+        claim=safe_claim,
+    )
+
+
 def _protocol_signature(protocol: BPTProtocolIdentity) -> tuple[object, ...]:
     """Compare method/mechanics, not source-instance or provider metadata."""
 
@@ -149,6 +189,9 @@ def _support_signature(result: BenchPressThrowMetricResult) -> tuple[object, ...
     return (
         support.metric,
         support.support_definition,
+        support.boundary_method,
+        support.boundary_convention,
+        support.boundary_parameters,
         support.includes_post_release_samples,
         evidence.series.timebase,
         evidence.series.velocity_frame,
@@ -163,21 +206,23 @@ def compare_bpt_metric_results(
 ) -> ComparabilityResult:
     """Adjudicate BPT comparisons using exact metric and mechanical identity."""
 
-    left_observation = _observation(left)
-    right_observation = _observation(right)
-    left_id = left_observation.observation_id
-    right_id = right_observation.observation_id
-    request_id = InstanceIdentifier(
-        "comparability-request",
-        canonical_hash({"left": left_id, "right": right_id, "claim": claim}).removeprefix(
-            "sha256:"
-        )[:24],
-    )
     try:
+        if not isinstance(claim, str) or not claim.strip():
+            raise ValueError("BPT comparison claim must be non-empty text")
         if not isinstance(
             left, BenchPressThrowMetricResult | BPTProviderMetricResult
         ) or not isinstance(right, BenchPressThrowMetricResult | BPTProviderMetricResult):
             raise ValueError("typed BPT metric results are required")
+        left_observation = _observation(left)
+        right_observation = _observation(right)
+        left_id = left_observation.observation_id
+        right_id = right_observation.observation_id
+        request_id = InstanceIdentifier(
+            "comparability-request",
+            canonical_hash({"left": left_id, "right": right_id, "claim": claim}).removeprefix(
+                "sha256:"
+            )[:24],
+        )
         request = ComparabilityRequest(
             request_id=request_id,
             left_observation_id=left.observation.observation_id,
@@ -195,24 +240,13 @@ def compare_bpt_metric_results(
             ),
         )
     except (AttributeError, TypeError, ValueError):
-        fallback = ComparabilityRequest(
-            request_id=request_id,
-            left_observation_id=left_id,
-            right_observation_id=right_id,
-            claim=claim or "invalid BPT comparison",
+        fallback = _fallback_request(left, right, claim)
+        missing = (
+            ("two distinct observations",)
+            if fallback.right_observation_id.value.endswith(":right-envelope")
+            else ("two typed BPT metric results",)
         )
-        if hasattr(left, "observation") and hasattr(right, "observation"):
-            return _result(
-                fallback,
-                ComparabilityState.NOT_COMPARABLE,
-                (ComparabilityReasonCode.METRIC_FAMILY_MISMATCH,),
-            )
-        return _result(
-            fallback,
-            ComparabilityState.INSUFFICIENT_INFORMATION,
-            (ComparabilityReasonCode.MISSING_METADATA,),
-            missing=("two typed BPT metric results",),
-        )
+        return ComparabilityResult.insufficient(fallback, missing_information=missing)
 
     left_metric = left.metric
     right_metric = right.metric

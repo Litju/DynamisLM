@@ -27,7 +27,6 @@ from dynamislm.measurement.medicine_ball_throw.registry import (
     MEDICINE_BALL_THROW_TEST_FAMILY,
     RES68_DECISION_EXPLOSIVE_TEST_FAMILY,
 )
-from dynamislm.measurement.observation import ScientificMeasurementObservation
 from dynamislm.serialization import canonical_hash, register_serializable_type
 
 
@@ -46,6 +45,37 @@ class MBTComparabilityRequest:
             raise ValueError("MBT comparison requires two observations")
         if not self.claim.strip():
             raise ValueError("MBT claim must not be empty")
+
+
+def _fallback_observation_id(item: object, side: str) -> InstanceIdentifier:
+    if isinstance(item, MedicineBallThrowMetricResult):
+        try:
+            observation_id = item.observation.observation_id
+            if isinstance(observation_id, InstanceIdentifier):
+                return observation_id
+        except (AttributeError, TypeError, ValueError):
+            pass
+    return InstanceIdentifier("observation", f"invalid-mbt-{side}")
+
+
+def _fallback_request(left: object, right: object, claim: object) -> ComparabilityRequest:
+    safe_claim = claim if isinstance(claim, str) and claim.strip() else "invalid MBT comparison"
+    left_id = _fallback_observation_id(left, "left")
+    right_id = _fallback_observation_id(right, "right")
+    if left_id == right_id:
+        right_id = InstanceIdentifier("observation", f"{right_id.value}:right-envelope")
+    request_id = InstanceIdentifier(
+        "comparability-request",
+        canonical_hash({"left": left_id, "right": right_id, "claim": safe_claim}).removeprefix(
+            "sha256:"
+        )[:24],
+    )
+    return ComparabilityRequest(
+        request_id=request_id,
+        left_observation_id=left_id,
+        right_observation_id=right_id,
+        claim=safe_claim,
+    )
 
 
 def _result(
@@ -143,21 +173,19 @@ def compare_mbt_metric_results(
     right: MedicineBallThrowMetricResult,
     claim: str = "compare MBT metric results",
 ) -> ComparabilityResult:
-    left_id = getattr(left, "observation", None)
-    right_id = getattr(right, "observation", None)
-    request_id = InstanceIdentifier(
-        "comparability-request",
-        canonical_hash(
-            {
-                "left": getattr(left_id, "observation_id", "invalid-left"),
-                "right": getattr(right_id, "observation_id", "invalid-right"),
-                "claim": claim,
-            }
-        ).removeprefix("sha256:")[:24],
-    )
     try:
+        if not isinstance(claim, str) or not claim.strip():
+            raise ValueError("MBT comparison claim must be non-empty text")
         _require_instance(left, MedicineBallThrowMetricResult, "left")
         _require_instance(right, MedicineBallThrowMetricResult, "right")
+        left_id = left.observation.observation_id
+        right_id = right.observation.observation_id
+        request_id = InstanceIdentifier(
+            "comparability-request",
+            canonical_hash({"left": left_id, "right": right_id, "claim": claim}).removeprefix(
+                "sha256:"
+            )[:24],
+        )
         request = ComparabilityRequest(
             request_id=request_id,
             left_observation_id=left.observation.observation_id,
@@ -175,35 +203,13 @@ def compare_mbt_metric_results(
             ),
         )
     except (AttributeError, TypeError, ValueError):
-        fallback = ComparabilityRequest(
-            request_id=request_id,
-            left_observation_id=InstanceIdentifier("observation", "invalid-left"),
-            right_observation_id=InstanceIdentifier("observation", "invalid-right"),
-            claim=claim or "invalid MBT comparison",
+        fallback = _fallback_request(left, right, claim)
+        missing = (
+            ("two distinct observations",)
+            if fallback.right_observation_id.value.endswith(":right-envelope")
+            else ("two typed MBT metric results",)
         )
-        if hasattr(left, "observation") and hasattr(right, "observation"):
-            left_observation = left.observation
-            right_observation = right.observation
-            if isinstance(left_observation, ScientificMeasurementObservation) and isinstance(
-                right_observation, ScientificMeasurementObservation
-            ):
-                fallback = ComparabilityRequest(
-                    request_id=request_id,
-                    left_observation_id=left_observation.observation_id,
-                    right_observation_id=right_observation.observation_id,
-                    claim=claim or "invalid MBT comparison",
-                )
-                return _result(
-                    fallback,
-                    ComparabilityState.NOT_COMPARABLE,
-                    (ComparabilityReasonCode.METRIC_FAMILY_MISMATCH,),
-                )
-        return _result(
-            fallback,
-            ComparabilityState.INSUFFICIENT_INFORMATION,
-            (ComparabilityReasonCode.MISSING_METADATA,),
-            missing=("two typed MBT metric results",),
-        )
+        return ComparabilityResult.insufficient(fallback, missing_information=missing)
     if left.metric != right.metric:
         return _result(
             request,
