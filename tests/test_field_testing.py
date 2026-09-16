@@ -127,6 +127,7 @@ from dynamislm.measurement.identity import (
 )
 from dynamislm.measurement.observation import ObservationContext, ScientificMeasurementObservation
 from dynamislm.measurement.result import CategoricalValue
+from dynamislm.refusal.models import RefusalResult
 from dynamislm.serialization import canonical_hash, canonical_json, from_canonical_json
 
 OBSERVED_AT = datetime(2026, 1, 1, tzinfo=UTC)
@@ -443,6 +444,16 @@ def _linear_reference(*, athlete: str = "athlete-1") -> SprintTimeObservation:
     return reference
 
 
+def test_standard_505_non_iterable_returns_refusal() -> None:
+    result = aggregate_standard_505_trials(None)  # type: ignore[arg-type]
+    assert isinstance(result, RefusalResult)
+
+
+def test_linear_sprint_reference_non_iterable_returns_refusal() -> None:
+    result = aggregate_linear_sprint_30m_reference(None)  # type: ignore[arg-type]
+    assert isinstance(result, RefusalResult)
+
+
 def test_standard_505_and_cod_deficit_gold_fixture() -> None:
     from dynamislm.measurement.field_testing.identity import FieldTestSide
 
@@ -545,6 +556,13 @@ def _rsa_criterion(
         source_qualification_observation=qualification,
         set_id=first.set_id,
     )
+
+
+def test_rsa_total_time_non_iterable_returns_refusal() -> None:
+    repetitions = _rsa_repetitions()
+    criterion = _rsa_criterion(repetitions)
+    result = calculate_rsa_total_time(None, criterion)  # type: ignore[arg-type]
+    assert isinstance(result, RefusalResult)
 
 
 def test_rsa_best_mean_total_and_percent_decrement_gold_fixture() -> None:

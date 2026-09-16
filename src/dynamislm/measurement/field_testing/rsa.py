@@ -819,12 +819,13 @@ def _calculate_rsa_metric(
     *,
     output_observation_id: InstanceIdentifier | None = None,
 ) -> RSAResult | RefusalResult:
-    ids = tuple(
-        item.observation.observation_id
-        for item in repetitions
-        if isinstance(item, RSARepetitionObservation)
-    )
+    ids: tuple[InstanceIdentifier, ...] = ()
     try:
+        ids = tuple(
+            item.observation.observation_id
+            for item in repetitions
+            if isinstance(item, RSARepetitionObservation)
+        )
         _validate_repetition_series(repetitions, criterion)
         if not isinstance(criterion, RSACriterionSprintEvidence):
             raise ValueError("RSA criterion evidence is required")

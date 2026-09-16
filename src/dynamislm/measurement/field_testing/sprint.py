@@ -533,12 +533,13 @@ def aggregate_linear_sprint_30m_reference(
 ) -> SprintTimeObservation | RefusalResult:
     """Build the registered mean 0-10 m reference from three qualified trials."""
 
-    ids = tuple(
-        trial.observation.observation_id
-        for trial in trials
-        if isinstance(trial, SprintTimeObservation)
-    )
+    ids: tuple[InstanceIdentifier, ...] = ()
     try:
+        ids = tuple(
+            trial.observation.observation_id
+            for trial in trials
+            if isinstance(trial, SprintTimeObservation)
+        )
         if not isinstance(trials, tuple) or len(trials) != 3:
             raise ValueError("the registered linear reference requires exactly three trials")
         if any(not isinstance(trial, SprintTimeObservation) for trial in trials):

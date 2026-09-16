@@ -249,12 +249,12 @@ not equal unless their own protocol identity is registered.
 ### RSA V1
 
 RSA is protocol-specific. V1 registers the soccer repeated-shuttle protocol:
-one preliminary 40 m shuttle criterion after five minutes of recovery, then
-six 40 m repetitions (20 + 20 m, one 180° turn) with 20 s passive recovery on
-natural grass. The start cue is an acoustic five-second countdown; timing
-trigger and reaction-time semantics are unknown. Linear tests, 5 × 30 m with
-30 s active recovery, and any other distance, repetition, recovery, surface,
-timing or layout remain distinct identities.
+one preliminary 40 m shuttle criterion sprint, followed by five minutes of
+recovery, then the RSA set of six 40 m repetitions (20 + 20 m, one 180° turn)
+with 20 s passive recovery on natural grass. The start cue is an acoustic
+five-second countdown; timing trigger and reaction-time semantics are unknown.
+Linear tests, 5 × 30 m with 30 s active recovery, and any other distance,
+repetition, recovery, surface, timing or layout remain distinct identities.
 
 ### 30–15 IFT V1
 

@@ -457,12 +457,13 @@ def aggregate_standard_505_trials(
 ) -> Standard505Result | RefusalResult:
     """Aggregate exactly three source-qualified trials for one side."""
 
-    ids = tuple(
-        trial.observation.observation_id
-        for trial in trials
-        if isinstance(trial, Standard505TrialObservation)
-    )
+    ids: tuple[InstanceIdentifier, ...] = ()
     try:
+        ids = tuple(
+            trial.observation.observation_id
+            for trial in trials
+            if isinstance(trial, Standard505TrialObservation)
+        )
         if not isinstance(trials, tuple) or len(trials) != 3:
             raise ValueError("the registered 505 selection requires exactly three trials")
         if any(not isinstance(trial, Standard505TrialObservation) for trial in trials):
