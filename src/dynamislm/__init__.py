@@ -358,6 +358,7 @@ from dynamislm.measurement import (
     VersionIdentity,
     create_derived_observation,
 )
+from dynamislm.measurement import field_testing as _field_testing
 from dynamislm.population import (
     CANONICAL_POPULATION_DIMENSIONS,
     CANONICAL_POPULATION_QUALIFICATION_METHOD,
@@ -424,7 +425,14 @@ from dynamislm.serialization import (
     from_canonical_json,
 )
 
+# Import the vertical once so every registered Serialization V3 type is
+# available, while preserving existing top-level names such as the RES-64
+# ``METER`` and ``SECOND`` unit references on collisions.
+for _field_testing_name in _field_testing.__all__:
+    globals().setdefault(_field_testing_name, getattr(_field_testing, _field_testing_name))
+
 __all__ = [
+    *_field_testing.__all__,
     "BUILD_LONGITUDINAL_SOURCE_MANIFEST",
     "CANONICAL_POPULATION_DIMENSIONS",
     "CANONICAL_POPULATION_QUALIFICATION_METHOD",
