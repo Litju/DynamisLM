@@ -31,8 +31,10 @@ from dynamislm.measurement.identity import (
 )
 from dynamislm.measurement.observation import ObservationContext, ScientificMeasurementObservation
 from dynamislm.measurement.result import (
+    CategoricalValue,
     MeasurementQuality,
     MeasurementResult,
+    QualityStatus,
     ResultStatus,
     ScalarValue,
     StructuredOutputReference,
@@ -100,6 +102,9 @@ from dynamislm.measurement.strength.registry import (
     IMTP_TRAPEZOIDAL_INTEGRATION_METHOD,
     IMTP_TRIAL_AGGREGATION_OPERATION,
     IMTP_TRIAL_QC_OPERATION,
+    IMTP_TRIAL_QUALIFICATION_CONSTRUCT,
+    IMTP_TRIAL_QUALIFICATION_MEASURAND,
+    IMTP_TRIAL_QUALIFICATION_METRIC,
     IMTP_TRIAL_SUPPORT_METHOD,
     IMTP_VERTICAL_FORCE_MEASURAND,
     KILOGRAM,
@@ -2489,126 +2494,322 @@ class IMTPTrialQualificationStatus(StrEnum):
 
 
 class IMTPTrialQualificationSource(StrEnum):
-    REGISTERED_DETERMINISTIC_QC = "REGISTERED_DETERMINISTIC_QC"
     QUALIFIED_SOURCE_REPORTED_QC = "QUALIFIED_SOURCE_REPORTED_QC"
+
+
+def _imtp_trial_qualification_parameters(
+    *,
+    result_observation_id: str,
+    trial_id: str,
+    status: IMTPTrialQualificationStatus,
+    source: IMTPTrialQualificationSource,
+    reason_codes: tuple[str, ...],
+) -> tuple[MetadataEntry, ...]:
+    return (
+        MetadataEntry("operation_id", IMTP_TRIAL_QC_OPERATION.stable_id),
+        MetadataEntry("qualification_rule", IMTP_TRIAL_QC_OPERATION.stable_id),
+        MetadataEntry("source_authority", source.value),
+        MetadataEntry("qualification_status", status.value),
+        MetadataEntry("reason_codes", canonical_json(reason_codes)),
+        MetadataEntry("target_result_observation_id", result_observation_id),
+        MetadataEntry("target_trial_id", trial_id),
+    )
+
+
+def _imtp_trial_qualification_source_values(
+    observation: ScientificMeasurementObservation,
+) -> tuple[
+    IMTPTrialQualificationStatus,
+    IMTPTrialQualificationSource,
+    RegistryReference,
+    tuple[str, ...],
+    str,
+    str,
+]:
+    identity = observation.identity
+    if not isinstance(identity, IMTPMeasurementIdentity):
+        raise ValueError("IMTP trial qualification requires an IMTP source identity")
+    semantic = identity.semantic
+    if (
+        semantic.construct != IMTP_TRIAL_QUALIFICATION_CONSTRUCT
+        or semantic.test_family != IMTP_TEST_FAMILY
+        or semantic.protocol != IMTP_PROTOCOL_V1
+        or semantic.measurand != IMTP_TRIAL_QUALIFICATION_MEASURAND
+        or semantic.metric_definition != IMTP_TRIAL_QUALIFICATION_METRIC
+        or semantic.protocol_identity is None
+    ):
+        raise ValueError("IMTP trial qualification source semantic identity is not registered")
+    processing = identity.processing
+    if (
+        processing.registered_operation != IMTP_TRIAL_QC_OPERATION
+        or identity.version.processing_method != IMTP_TRIAL_QC_OPERATION
+        or identity.version.method_registry_version != STRENGTH_REGISTRY_VERSION
+    ):
+        raise ValueError("IMTP trial qualification source processing identity is not registered")
+    if observation.result.status is not ResultStatus.VALID:
+        raise ValueError("IMTP trial qualification source observation is not valid")
+    if observation.result.unit is not None:
+        raise ValueError("IMTP trial qualification source observation must be unitless")
+    value = observation.result.value
+    if not isinstance(value, CategoricalValue) or value.ordinal is not None:
+        raise ValueError("IMTP trial qualification source must contain a categorical status")
+    try:
+        status = IMTPTrialQualificationStatus(value.category)
+    except ValueError as exc:
+        raise ValueError("IMTP trial qualification source status is not registered") from exc
+    parameters = {entry.key: entry.value for entry in processing.method_parameters}
+    source_value = parameters.get("source_authority")
+    if not isinstance(source_value, str):
+        raise ValueError("IMTP trial qualification source authority is not registered")
+    try:
+        source = IMTPTrialQualificationSource(source_value)
+    except ValueError as exc:
+        raise ValueError("IMTP trial qualification source authority is not registered") from exc
+    qualification_rule = parameters.get("qualification_rule")
+    target_result_observation_id = parameters.get("target_result_observation_id")
+    target_trial_id = parameters.get("target_trial_id")
+    if (
+        qualification_rule != IMTP_TRIAL_QC_OPERATION.stable_id
+        or not isinstance(target_result_observation_id, str)
+        or not isinstance(target_trial_id, str)
+    ):
+        raise ValueError("IMTP trial qualification source target binding is incomplete")
+    reason_codes = observation.result.quality.flags
+    if not reason_codes or any(not item.strip() for item in reason_codes):
+        raise ValueError("IMTP trial qualification source requires reason codes")
+    expected_quality_status = {
+        IMTPTrialQualificationStatus.QUALIFIED: QualityStatus.ACCEPTED,
+        IMTPTrialQualificationStatus.EXCLUDED: QualityStatus.REJECTED,
+        IMTPTrialQualificationStatus.UNRESOLVED: QualityStatus.UNKNOWN,
+    }[status]
+    if observation.result.quality.status is not expected_quality_status:
+        raise ValueError("IMTP trial qualification source quality status does not reproduce")
+    expected_parameters = _imtp_trial_qualification_parameters(
+        result_observation_id=target_result_observation_id,
+        trial_id=target_trial_id,
+        status=status,
+        source=source,
+        reason_codes=reason_codes,
+    )
+    if processing.method_parameters != expected_parameters:
+        raise ValueError("IMTP trial qualification source parameters do not reproduce")
+    if observation.result.classification.value_origin is not ValueOrigin.SOURCE_REPORTED:
+        raise ValueError("IMTP trial qualification source must be SOURCE_REPORTED")
+    if observation.result.classification.scientific_roles:
+        raise ValueError("IMTP trial qualification source must not carry an interpretive role")
+    return (
+        status,
+        source,
+        IMTP_TRIAL_QC_OPERATION,
+        reason_codes,
+        target_result_observation_id,
+        target_trial_id,
+    )
+
+
+@register_serializable_type
+@dataclass(frozen=True, slots=True)
+class IMTPTrialQualificationEvidence:
+    """Source-reported eligibility adjudication for one exact IMTP metric result."""
+
+    source_observation: ScientificMeasurementObservation
+    result: IMTPMetricResult
+    source_artifact: SourceArtifact
+    source_acquisition: AcquisitionRecord
+
+    def __post_init__(self) -> None:
+        _validate_imtp_trial_qualification_evidence(self)
+
+    @property
+    def result_observation(self) -> ScientificMeasurementObservation:
+        return self.result.observation
+
+    @property
+    def status(self) -> IMTPTrialQualificationStatus:
+        return _imtp_trial_qualification_source_values(self.source_observation)[0]
+
+    @property
+    def source(self) -> IMTPTrialQualificationSource:
+        return _imtp_trial_qualification_source_values(self.source_observation)[1]
+
+    @property
+    def qualification_rule(self) -> RegistryReference:
+        return _imtp_trial_qualification_source_values(self.source_observation)[2]
+
+    @property
+    def reason_codes(self) -> tuple[str, ...]:
+        return _imtp_trial_qualification_source_values(self.source_observation)[3]
+
+    @property
+    def trial_id(self) -> InstanceIdentifier:
+        trial_id = self.result.observation.context.trial_id
+        if trial_id is None:
+            raise ValueError("source-qualified IMTP evidence requires a trial ID")
+        return trial_id
+
+    @property
+    def source_value_origin(self) -> ValueOrigin:
+        return self.source_observation.result.classification.value_origin
+
+    @property
+    def provenance(self) -> Provenance:
+        return self.source_observation.provenance
+
+
+def _validate_imtp_trial_qualification_evidence(
+    evidence: IMTPTrialQualificationEvidence,
+) -> None:
+    if not isinstance(evidence.source_observation, ScientificMeasurementObservation):
+        raise ValueError("IMTP trial qualification requires a source observation")
+    if not isinstance(evidence.result, IMTPMetricResult):
+        raise ValueError("IMTP trial qualification requires an exact IMTP metric result")
+    _require_instance(evidence.source_artifact, SourceArtifact, "source_artifact")
+    _require_instance(evidence.source_acquisition, AcquisitionRecord, "source_acquisition")
+    (
+        _status,
+        _source,
+        _qualification_rule,
+        _reason_codes,
+        target_result_observation_id,
+        target_trial_id,
+    ) = _imtp_trial_qualification_source_values(evidence.source_observation)
+    result_observation = evidence.result.observation
+    if evidence.source_observation.observation_id == result_observation.observation_id:
+        raise ValueError("IMTP trial qualification source and target observations must differ")
+    if evidence.source_observation.context != result_observation.context:
+        raise ValueError("IMTP trial qualification source context was rebound")
+    result_trial_id = result_observation.context.trial_id
+    if result_trial_id is None:
+        raise ValueError("source-qualified IMTP evidence requires a target trial ID")
+    if target_result_observation_id != result_observation.observation_id.qualified:
+        raise ValueError("IMTP trial qualification source is not bound to the exact metric result")
+    if target_trial_id != result_trial_id.qualified:
+        raise ValueError("IMTP trial qualification source is not bound to the exact trial")
+    source_identity = evidence.source_observation.identity
+    if not isinstance(source_identity, IMTPMeasurementIdentity):
+        raise ValueError("IMTP trial qualification source requires IMTP identity")
+    result_identity = result_observation.identity
+    if not isinstance(result_identity, IMTPMeasurementIdentity):
+        raise ValueError("IMTP trial qualification target requires IMTP identity")
+    if source_identity.semantic.protocol_identity != result_identity.semantic.protocol_identity:
+        raise ValueError("IMTP trial qualification source protocol identity was rebound")
+    source_acquisition_identity = source_identity.acquisition
+    if (
+        source_acquisition_identity.raw_artifact != evidence.source_artifact.artifact_id
+        or source_acquisition_identity.acquisition_instance_id
+        != evidence.source_acquisition.acquisition_id
+        or source_acquisition_identity.device != evidence.source_acquisition.device
+        or source_acquisition_identity.sensor_channel != evidence.source_acquisition.sensor_channel
+        or source_acquisition_identity.sampling != evidence.source_acquisition.sampling
+    ):
+        raise ValueError("IMTP trial qualification source acquisition identity was rebound")
+    if not evidence.source_artifact.immutable:
+        raise ValueError("IMTP trial qualification source artifact must be immutable")
+    if evidence.source_acquisition.source_artifact_id != evidence.source_artifact.artifact_id:
+        raise ValueError("IMTP trial qualification acquisition does not preserve its artifact")
+    provenance = evidence.source_observation.provenance
+    if evidence.source_artifact not in provenance.source_artifacts:
+        raise ValueError("IMTP trial qualification provenance omits its source artifact")
+    if evidence.source_acquisition not in provenance.acquisitions:
+        raise ValueError("IMTP trial qualification provenance omits its source acquisition")
+    if not any(
+        edge.from_id == evidence.source_artifact.artifact_id.qualified
+        and edge.to_id == evidence.source_acquisition.acquisition_id.qualified
+        and edge.relation is LineageRelation.ACQUIRED_AS
+        for edge in provenance.lineage_edges
+    ) or not any(
+        edge.from_id == evidence.source_acquisition.acquisition_id.qualified
+        and edge.to_id == evidence.source_observation.observation_id.qualified
+        and edge.relation is LineageRelation.PRODUCED
+        for edge in provenance.lineage_edges
+    ):
+        raise ValueError("IMTP trial qualification provenance omits its source path")
+    if not any(
+        edge.from_id == result_observation.observation_id.qualified
+        and edge.to_id == evidence.source_observation.observation_id.qualified
+        and edge.relation is LineageRelation.DERIVED_FROM
+        for edge in provenance.lineage_edges
+    ):
+        raise ValueError("IMTP trial qualification provenance omits the target result binding")
 
 
 @register_serializable_type
 @dataclass(frozen=True, slots=True)
 class IMTPTrialQualification:
-    """Provenanced qualification authority for one IMTP metric result."""
+    """Normalized source-qualified trial authority for one IMTP metric result."""
 
     qualification_id: InstanceIdentifier
-    trial_id: InstanceIdentifier
     result_observation_id: InstanceIdentifier
-    status: IMTPTrialQualificationStatus
-    source: IMTPTrialQualificationSource
-    qualification_rule: RegistryReference
-    reason_codes: tuple[str, ...]
-    source_observation_id: InstanceIdentifier
-    source_artifact_ids: tuple[InstanceIdentifier, ...]
-    processing_run_id: InstanceIdentifier
-    provenance: Provenance
+    source_evidence: IMTPTrialQualificationEvidence
 
     def __post_init__(self) -> None:
-        for field_name, value, expected in (
-            ("qualification_id", self.qualification_id, "trial-qualification"),
-            ("trial_id", self.trial_id, "trial"),
-            ("result_observation_id", self.result_observation_id, "observation"),
-            ("source_observation_id", self.source_observation_id, "observation"),
-            ("processing_run_id", self.processing_run_id, "processing-run"),
-        ):
-            if value.instance_type != expected:
-                raise ValueError(f"{field_name} has the wrong identifier type")
-        _require_enum(self.status, IMTPTrialQualificationStatus, "status")
-        _require_enum(self.source, IMTPTrialQualificationSource, "source")
-        if self.qualification_rule != IMTP_TRIAL_QC_OPERATION:
-            raise ValueError("IMTP qualification rule is not registered")
-        _require_tuple_items(self.reason_codes, str, "reason_codes")
-        if not self.reason_codes or any(not item.strip() for item in self.reason_codes):
-            raise ValueError("IMTP qualification requires reason codes")
-        _require_tuple_items(self.source_artifact_ids, InstanceIdentifier, "source_artifact_ids")
-        if not self.source_artifact_ids or any(
-            item.instance_type != "artifact" for item in self.source_artifact_ids
-        ):
-            raise ValueError("IMTP qualification requires source artifacts")
-        _require_instance(self.provenance, Provenance, "provenance")
-        matching_runs = tuple(
-            run
-            for run in self.provenance.processing_runs
-            if run.output_entity_id == self.qualification_id
-        )
-        if len(matching_runs) != 1 or matching_runs[0].processing_run_id != self.processing_run_id:
-            raise ValueError("IMTP qualification must preserve one producing run")
-        run = matching_runs[0]
-        if run.method != IMTP_TRIAL_QC_OPERATION or run.parameters == ():
-            raise ValueError("IMTP qualification run does not preserve its registered source")
-        if tuple(sorted(run.source_artifact_ids, key=lambda item: item.qualified)) != tuple(
-            sorted(self.source_artifact_ids, key=lambda item: item.qualified)
-        ):
-            raise ValueError("IMTP qualification run source artifacts do not match")
-        parameters = {entry.key: entry.value for entry in run.parameters}
-        expected_parameters = {
-            "operation_id": IMTP_TRIAL_QC_OPERATION.stable_id,
-            "result_observation_id": self.result_observation_id.qualified,
-            "trial_id": self.trial_id.qualified,
-            "status": self.status.value,
-            "source": self.source.value,
-            "reason_codes": canonical_json(self.reason_codes),
-        }
-        for key, expected in expected_parameters.items():
-            if parameters.get(key) != expected:
-                raise ValueError("IMTP qualification run does not preserve its decision fields")
-        if not any(
-            edge.from_id == self.source_observation_id.qualified
-            and edge.to_id == run.processing_run_id.qualified
-            and edge.relation is LineageRelation.DERIVED_FROM
-            for edge in self.provenance.lineage_edges
-        ):
-            raise ValueError("IMTP qualification provenance omits source observation")
+        if self.qualification_id.instance_type != "trial-qualification":
+            raise ValueError("qualification_id has the wrong identifier type")
+        if not isinstance(self.source_evidence, IMTPTrialQualificationEvidence):
+            raise ValueError("IMTP qualification requires source-qualified evidence")
+        if self.result_observation_id != self.source_evidence.result_observation.observation_id:
+            raise ValueError("IMTP qualification target result ID was rebound")
+
+    @property
+    def trial_id(self) -> InstanceIdentifier:
+        return self.source_evidence.trial_id
+
+    @property
+    def status(self) -> IMTPTrialQualificationStatus:
+        return self.source_evidence.status
+
+    @property
+    def source(self) -> IMTPTrialQualificationSource:
+        return self.source_evidence.source
+
+    @property
+    def qualification_rule(self) -> RegistryReference:
+        return self.source_evidence.qualification_rule
+
+    @property
+    def reason_codes(self) -> tuple[str, ...]:
+        return self.source_evidence.reason_codes
+
+    @property
+    def source_observation_id(self) -> InstanceIdentifier:
+        return self.source_evidence.source_observation.observation_id
+
+    @property
+    def source_artifact_ids(self) -> tuple[InstanceIdentifier, ...]:
+        return (self.source_evidence.source_artifact.artifact_id,)
+
+    @property
+    def provenance(self) -> Provenance:
+        return self.source_evidence.provenance
 
 
 def qualify_imtp_trial(
-    result: IMTPMetricResult,
+    result: IMTPTrialQualificationEvidence | IMTPMetricResult,
     *,
-    status: IMTPTrialQualificationStatus = IMTPTrialQualificationStatus.QUALIFIED,
-    source: IMTPTrialQualificationSource = IMTPTrialQualificationSource.REGISTERED_DETERMINISTIC_QC,
-    reason_codes: tuple[str, ...] = ("REGISTERED_IMTP_TRIAL_QC",),
+    status: IMTPTrialQualificationStatus | None = None,
+    source: IMTPTrialQualificationSource | None = None,
+    reason_codes: tuple[str, ...] | None = None,
     output_qualification_id: InstanceIdentifier | None = None,
 ) -> IMTPTrialQualification | RefusalResult:
-    """Create an explicit, replayable trial qualification from registered QC."""
+    """Normalize source-qualified IMTP trial evidence without computing QC."""
 
     claim = "qualify IMTP trial for registered selection"
     try:
-        if not isinstance(result, IMTPMetricResult):
-            raise ValueError("IMTPMetricResult is required")
-        if not isinstance(status, IMTPTrialQualificationStatus):
-            raise ValueError("typed IMTP qualification status is required")
-        if not isinstance(source, IMTPTrialQualificationSource):
-            raise ValueError("typed IMTP qualification source is required")
-        if source is not IMTPTrialQualificationSource.REGISTERED_DETERMINISTIC_QC:
-            raise ValueError("RES-66 V1 only registers deterministic IMTP trial QC")
-        if not reason_codes:
-            raise ValueError("qualification reason codes are required")
-        source_refusal = _validate_force_input(result.force_input, claim)
-        if source_refusal is not None:
-            return source_refusal
-        source_artifact_ids = tuple(
-            sorted(
-                (
-                    artifact.artifact_id
-                    for artifact in result.observation.provenance.source_artifacts
-                ),
-                key=lambda item: item.qualified,
+        if not isinstance(result, IMTPTrialQualificationEvidence):
+            raise ValueError("source-qualified IMTP trial evidence is required")
+        if status is not None or source is not None or reason_codes is not None:
+            raise ValueError(
+                "qualification status, source, and reason codes must come from "
+                "the source observation"
             )
-        )
+        evidence = result
         digest = canonical_hash(
             {
-                "result_observation_id": result.observation.observation_id,
-                "trial_id": result.observation.context.trial_id,
-                "status": status,
-                "source": source,
-                "reason_codes": reason_codes,
+                "result_observation_id": evidence.result_observation.observation_id,
+                "source_observation_id": evidence.source_observation.observation_id,
+                "status": evidence.status,
+                "source": evidence.source,
+                "reason_codes": evidence.reason_codes,
             }
         ).removeprefix("sha256:")[:24]
         qualification_id = output_qualification_id or InstanceIdentifier(
@@ -2616,54 +2817,16 @@ def qualify_imtp_trial(
         )
         if qualification_id.instance_type != "trial-qualification":
             raise ValueError("output_qualification_id must identify a trial qualification")
-        trial_id = result.observation.context.trial_id
-        if trial_id is None:
-            raise ValueError("qualified IMTP trial requires a source trial ID")
-        parameters = (
-            MetadataEntry("operation_id", IMTP_TRIAL_QC_OPERATION.stable_id),
-            MetadataEntry("result_observation_id", result.observation.observation_id.qualified),
-            MetadataEntry("trial_id", trial_id.qualified),
-            MetadataEntry("status", status.value),
-            MetadataEntry("source", source.value),
-            MetadataEntry("reason_codes", canonical_json(reason_codes)),
-        )
-        run = ProcessingRun(
-            processing_run_id=InstanceIdentifier("processing-run", f"imtp-trial-qc:{digest}"),
-            source_artifact_ids=source_artifact_ids,
-            method=IMTP_TRIAL_QC_OPERATION,
-            parameters=parameters,
-            software_version=RES66_SOFTWARE_VERSION,
-            output_entity_id=qualification_id,
-        )
-        provenance = _provenance_with_run(
-            result.observation.provenance,
-            processing_run=run,
-            output_entity_id=qualification_id,
-            source_observation_ids=(result.observation.observation_id,),
-            source_acquisition_ids=tuple(
-                acquisition.acquisition_id
-                for acquisition in result.observation.provenance.acquisitions
-            ),
-            supported_by=(RES66_DECISION_STRENGTH_IMTP_VBT,),
-        )
         return IMTPTrialQualification(
             qualification_id=qualification_id,
-            trial_id=trial_id,
-            result_observation_id=result.observation.observation_id,
-            status=status,
-            source=source,
-            qualification_rule=IMTP_TRIAL_QC_OPERATION,
-            reason_codes=reason_codes,
-            source_observation_id=result.observation.observation_id,
-            source_artifact_ids=source_artifact_ids,
-            processing_run_id=run.processing_run_id,
-            provenance=provenance,
+            result_observation_id=evidence.result_observation.observation_id,
+            source_evidence=evidence,
         )
     except (AttributeError, IndexError, TypeError, ValueError) as exc:
         return _refusal(
             claim,
-            (RefusalReasonCode.TRIAL_NOT_ELIGIBLE,),
-            (f"qualified IMTP trial QC source: {exc}",),
+            (RefusalReasonCode.TRIAL_NOT_ELIGIBLE, RefusalReasonCode.NO_REGISTERED_OPERATION),
+            (f"source-qualified IMTP trial evidence: {exc}",),
             (result.observation.observation_id,) if isinstance(result, IMTPMetricResult) else (),
             refusal_class=RefusalClass.ANALYSIS_DESIGN_MISMATCH,
         )
@@ -2687,8 +2850,8 @@ class IMTPTrialMetricInput:
             or self.qualification.trial_id != self.result.observation.context.trial_id
         ):
             raise ValueError("trial qualification is not bound to the exact metric result")
-        if self.qualification.source_observation_id != self.result.observation.observation_id:
-            raise ValueError("trial qualification source is not the exact metric result")
+        if self.qualification.source_evidence.result != self.result:
+            raise ValueError("trial qualification source is not bound to the exact metric result")
 
     @property
     def is_qualified(self) -> bool:
@@ -2857,21 +3020,18 @@ def _build_aggregation_observation(
         base,
         processing_run=run,
         output_entity_id=observation_id,
-        source_observation_ids=tuple(item.result.observation.observation_id for item in candidates),
+        source_observation_ids=tuple(
+            source_id
+            for item in candidates
+            for source_id in (
+                item.result.observation.observation_id,
+                item.qualification.source_observation_id,
+            )
+        ),
         source_acquisition_ids=tuple(item.acquisition_id for item in base.acquisitions),
         output_artifacts=(output_artifact,),
         supported_by=(RES66_DECISION_STRENGTH_IMTP_VBT,),
     )
-    lineage_edges = list(provenance.lineage_edges)
-    for item in candidates:
-        edge = LineageEdge(
-            item.qualification.qualification_id.qualified,
-            run.processing_run_id.qualified,
-            LineageRelation.DERIVED_FROM,
-        )
-        if edge not in lineage_edges:
-            lineage_edges.append(edge)
-    provenance = replace(provenance, lineage_edges=tuple(lineage_edges))
     return ScientificMeasurementObservation(
         observation_id=observation_id,
         context=analysis_context,
@@ -3010,7 +3170,7 @@ def _validate_imtp_aggregation_result(result: IMTPTrialAggregationResult) -> Non
             for item in result.candidate_results
             for entity_id in (
                 item.result.observation.observation_id,
-                item.qualification.qualification_id,
+                item.qualification.source_observation_id,
             )
         ),
     )
@@ -3056,6 +3216,7 @@ __all__ = [
     "IMTPTrialAggregationResult",
     "IMTPTrialMetricInput",
     "IMTPTrialQualification",
+    "IMTPTrialQualificationEvidence",
     "IMTPTrialQualificationSource",
     "IMTPTrialQualificationStatus",
     "IMTPTrialSelectionRule",

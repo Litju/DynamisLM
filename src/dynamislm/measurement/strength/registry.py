@@ -83,11 +83,27 @@ IMTP_ONSET_TO_SOURCE_END_SUPPORT_METHOD = _reference(
     "imtp-onset-to-qualified-source-end-v1",
     "IMTP onset to qualified source-series end",
 )
-IMTP_TRIAL_QC_OPERATION = _reference(
-    "registered-operation",
-    "imtp-trial-qualification-v1",
-    "IMTP qualified-trial QC declaration",
+IMTP_TRIAL_QUALIFICATION_CONSTRUCT = _reference(
+    "construct",
+    "imtp-trial-qualification",
+    "IMTP trial qualification and adjudication",
 )
+IMTP_TRIAL_QUALIFICATION_MEASURAND = _reference(
+    "measurand",
+    "imtp-trial-qualification",
+    "IMTP trial qualification status",
+)
+IMTP_TRIAL_QUALIFICATION_METRIC = _reference(
+    "metric",
+    "imtp-trial-qualification",
+    "IMTP trial qualification observation",
+)
+IMTP_TRIAL_QC_OPERATION = _reference(
+    "source-adjudication-rule",
+    "imtp-trial-qualification-source-v1",
+    "IMTP source-qualified trial adjudication",
+)
+IMTP_TRIAL_QUALIFICATION_SOURCE_OPERATION = IMTP_TRIAL_QC_OPERATION
 IMTP_ONSET_EVENT_DEFINITION = _reference(
     "event-definition", "imtp-force-onset-v1", "IMTP force onset"
 )
@@ -315,7 +331,7 @@ VBT_MEASURED_1RM_METRIC = _reference("metric", "measured-one-repetition-maximum"
 VBT_MEASURED_1RM_OPERATION = _reference(
     "registered-operation",
     "measured-one-repetition-maximum-v1",
-    "VBT measured successful-repetition 1RM",
+    "VBT measured 1RM from qualified maximal assessment",
 )
 VBT_SUCCESSFUL_REPETITION_CRITERION = _reference(
     "rep-criterion",
@@ -324,8 +340,8 @@ VBT_SUCCESSFUL_REPETITION_CRITERION = _reference(
 )
 VBT_MEASURED_1RM_SELECTION_RULE = _reference(
     "selection-rule",
-    "measured-1rm-explicit-successful-repetition-v1",
-    "Measured 1RM explicit successful-repetition selection",
+    "measured-1rm-qualified-maximal-assessment-v1",
+    "Measured 1RM qualified maximal assessment",
 )
 VBT_DIRECT_1RM_ASSESSMENT_OPERATION = _reference(
     "registered-operation",

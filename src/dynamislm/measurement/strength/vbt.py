@@ -7,6 +7,7 @@ import math
 from dataclasses import dataclass, replace
 from enum import StrEnum
 from itertools import pairwise
+from typing import NoReturn
 
 from dynamislm.comparability.models import (
     ComparabilityDecisionSource,
@@ -1771,9 +1772,22 @@ class MeasuredOneRepMaxAssessmentEvidence:
     source_value_origin: ValueOrigin
 
     def __post_init__(self) -> None:
+        if not isinstance(self.source_observation, ScientificMeasurementObservation):
+            raise ValueError("direct 1RM assessment requires a source observation")
+        if not isinstance(self.protocol_identity, StrengthProtocolIdentity):
+            raise ValueError("direct 1RM assessment requires a typed protocol identity")
+        if not isinstance(self.measured_load, StrengthLoadIdentity):
+            raise ValueError("direct 1RM assessment requires a typed measured load")
         if not isinstance(self.source_observation.identity, VBTMeasurementIdentity):
             raise ValueError("direct 1RM assessment requires a VBT strength identity")
-        if self.source_observation.identity.semantic.protocol_identity != self.protocol_identity:
+        source_identity = self.source_observation.identity
+        if (
+            source_identity.semantic.construct != STRENGTH_MAXIMUM_STRENGTH_CONSTRUCT
+            or source_identity.semantic.measurand != VBT_MEASURED_1RM_MEASURAND
+            or source_identity.semantic.metric_definition != VBT_MEASURED_1RM_METRIC
+        ):
+            raise ValueError("direct 1RM source semantic identity is not measured 1RM")
+        if source_identity.semantic.protocol_identity != self.protocol_identity:
             raise ValueError("direct 1RM source protocol identity is not preserved")
         if self.assessment_method != VBT_DIRECT_1RM_ASSESSMENT_OPERATION:
             raise ValueError("direct 1RM assessment method is not registered")
@@ -1795,8 +1809,19 @@ class MeasuredOneRepMaxAssessmentEvidence:
             raise ValueError(
                 "direct 1RM assessment requires execution variant, ROM, and pause semantics"
             )
+        if (
+            self.protocol_identity.external_load_status is not StrengthExternalLoadStatus.DEFINED
+            or self.protocol_identity.external_load is None
+        ):
+            raise ValueError("direct 1RM assessment requires a protocol-defined physical load")
+        if self.protocol_identity.external_load != self.measured_load:
+            raise ValueError("direct 1RM protocol load does not equal the measured load")
         if self.measured_load.unit != KILOGRAM or not self.measured_load.is_physical_load:
             raise ValueError("direct 1RM assessment requires a physical kilogram load")
+        if _load_value_kg(self.protocol_identity.external_load) != _load_value_kg(
+            self.measured_load
+        ):
+            raise ValueError("direct 1RM protocol physical load does not equal the measured load")
         if self.source_value_origin not in {
             ValueOrigin.DIRECT_MEASUREMENT,
             ValueOrigin.SOURCE_REPORTED,
@@ -1822,7 +1847,10 @@ class MeasuredOneRepMaxAssessmentEvidence:
             raise ValueError("direct 1RM source requires strength acquisition identity")
         if not isinstance(identity.processing, StrengthProcessingIdentity):
             raise ValueError("direct 1RM source requires strength processing identity")
-        if identity.processing.registered_operation != self.assessment_method:
+        if (
+            identity.processing.registered_operation != VBT_DIRECT_1RM_ASSESSMENT_OPERATION
+            or identity.version.processing_method != VBT_DIRECT_1RM_ASSESSMENT_OPERATION
+        ):
             raise ValueError("direct 1RM source processing operation is not registered")
         if identity.acquisition.raw_artifact != self.source_artifact.artifact_id:
             raise ValueError("direct 1RM source identity does not preserve its artifact")
@@ -2016,8 +2044,26 @@ def _validate_measured_1rm_result(result: MeasuredOneRepMax) -> None:
     if result.selection_rule != VBT_MEASURED_1RM_SELECTION_RULE:
         raise ValueError("measured 1RM selection rule is not registered")
     source_observation = assessment.source_observation
-    if source_observation.identity != assessment.source_observation.identity:
-        raise ValueError("direct assessment source identity was rebound")
+    if not isinstance(source_observation.identity, VBTMeasurementIdentity):
+        raise ValueError("direct assessment source requires VBT measurement identity")
+    source_identity = source_observation.identity
+    if (
+        source_identity.semantic.construct != STRENGTH_MAXIMUM_STRENGTH_CONSTRUCT
+        or source_identity.semantic.measurand != VBT_MEASURED_1RM_MEASURAND
+        or source_identity.semantic.metric_definition != VBT_MEASURED_1RM_METRIC
+        or source_identity.semantic.protocol_identity != assessment.protocol_identity
+    ):
+        raise ValueError("direct assessment source semantic identity was rebound")
+    if (
+        source_identity.processing.registered_operation != VBT_DIRECT_1RM_ASSESSMENT_OPERATION
+        or source_identity.version.processing_method != VBT_DIRECT_1RM_ASSESSMENT_OPERATION
+    ):
+        raise ValueError("direct assessment source processing identity was rebound")
+    if (
+        assessment.protocol_identity.external_load_status is not StrengthExternalLoadStatus.DEFINED
+        or assessment.protocol_identity.external_load != assessment.measured_load
+    ):
+        raise ValueError("direct assessment protocol load was rebound")
     identity = result.observation.identity
     if not isinstance(identity, VBTMeasurementIdentity):
         raise ValueError("measured 1RM requires VBT identity")
@@ -2086,7 +2132,7 @@ def build_measured_1rm(
 ) -> MeasuredOneRepMax | RefusalResult:
     """Create measured 1RM only from qualified maximal-assessment evidence."""
 
-    claim = "build measured 1RM from a successful repetition"
+    claim = "build measured 1RM from qualified maximal-assessment evidence"
     try:
         if isinstance(assessment, VBTSuccessfulRepetition):
             raise ValueError(
@@ -2117,7 +2163,7 @@ def build_measured_1rm(
 @register_serializable_type
 @dataclass(frozen=True, slots=True)
 class TerminalVelocityAssumption:
-    """Registered terminal velocity assumption for one exact protocol application."""
+    """Represented terminal-velocity evidence whose numeric V1 application is deferred."""
 
     reference: RegistryReference
     value_m_per_s: float
@@ -2180,7 +2226,8 @@ SMITH_BENCH_GENERAL_TERMINAL_VELOCITY_017 = TerminalVelocityAssumption(
     reference=VBT_SMITH_BENCH_GENERAL_TERMINAL_VELOCITY,
     value_m_per_s=0.17,
     description=(
-        "0.17 m/s general V1RM for the Janicijevic Smith-machine touch-and-go bench protocol."
+        "0.17 m/s terminal velocity reported for the Janicijevic Smith-machine touch-and-go "
+        "bench protocol; numeric RES-66 application is deferred."
     ),
     exercise=VBT_BENCH_PRESS_EXERCISE,
     equipment=VBT_SMITH_MACHINE_EQUIPMENT,
@@ -2202,7 +2249,10 @@ VBT_SMITH_BENCH_GENERAL_TERMINAL_VELOCITY_017 = SMITH_BENCH_GENERAL_TERMINAL_VEL
 SMITH_BENCH_PAUSED_TERMINAL_VELOCITY_017 = replace(
     SMITH_BENCH_GENERAL_TERMINAL_VELOCITY_017,
     reference=VBT_SMITH_BENCH_PAUSED_TERMINAL_VELOCITY,
-    description="0.17 m/s general V1RM for the Janicijevic Smith-machine paused bench protocol.",
+    description=(
+        "0.17 m/s terminal velocity reported for the Janicijevic Smith-machine paused bench "
+        "protocol; numeric RES-66 application is deferred."
+    ),
     exercise_variant=VBT_BENCH_PRESS_PAUSED_VARIANT,
     pause_semantics=StrengthProtocolAttribute(
         "pause_semantics", VBT_BENCH_PRESS_TWO_SECOND_PAUSE.stable_id
@@ -2621,60 +2671,21 @@ def _estimated_1rm_value(
     model: LoadVelocityModel,
     terminal_velocity_assumption: TerminalVelocityAssumption,
 ) -> float:
-    if model.velocity_metric is not VBTMetric.MEAN_CONCENTRIC_VELOCITY:
-        raise ValueError("V1 estimated 1RM requires mean concentric velocity")
-    value = (
-        terminal_velocity_assumption.value_m_per_s - model.intercept_m_per_s
-    ) / model.slope_m_per_s_per_kg
-    if not math.isfinite(value) or value <= 0:
-        raise ValueError("estimated 1RM is not a finite positive physical load")
-    maximum_calibration_load = max(_load_value_kg(load) for load in model.calibration_loads)
-    minimum_calibration_velocity = min(model.calibration_velocities_m_per_s)
-    if (
-        terminal_velocity_assumption.value_m_per_s >= minimum_calibration_velocity
-        or value <= maximum_calibration_load
-    ):
-        raise ValueError("terminal velocity requires unsupported non-extrapolating 1RM application")
-    return value
+    raise ValueError(
+        "estimated 1RM is deferred: the registered terminal-velocity evidence does not bind "
+        "an exact velocity-measurement device/method, agreement bridge, or calibration design"
+    )
 
 
 def _validate_terminal_velocity_applicability(
     model: LoadVelocityModel,
     assumption: TerminalVelocityAssumption,
-) -> None:
-    protocol = model.protocol_identity
-    if (
-        protocol.exercise != assumption.exercise
-        or protocol.equipment != assumption.equipment
-        or protocol.equipment_mode != assumption.equipment_mode
-        or protocol.exercise_variant != assumption.exercise_variant
-        or protocol.range_of_motion != assumption.range_of_motion
-        or protocol.pause_semantics != assumption.pause_semantics
-        or protocol.sampling != assumption.sampling
-    ):
-        raise ValueError("terminal velocity protocol applicability is not exact")
-    if model.model_reference != assumption.model_family:
-        raise ValueError("terminal velocity model family is not exact")
-    if model.velocity_metric is not assumption.velocity_metric:
-        raise ValueError("terminal velocity velocity metric is not exact")
-    if any(load.semantics is not assumption.load_semantics for load in model.calibration_loads):
-        raise ValueError("terminal velocity load semantics are not exact")
-    for result in model.calibration_results:
-        source_protocol = result.evidence.identity.semantic.protocol_identity
-        if source_protocol is None or (
-            source_protocol.exercise != assumption.exercise
-            or source_protocol.equipment != assumption.equipment
-            or source_protocol.equipment_mode != assumption.equipment_mode
-            or source_protocol.exercise_variant != assumption.exercise_variant
-            or source_protocol.range_of_motion != assumption.range_of_motion
-            or source_protocol.pause_semantics != assumption.pause_semantics
-            or source_protocol.sampling != assumption.sampling
-        ):
-            raise ValueError("calibration point does not satisfy terminal velocity applicability")
-        if result.evidence.identity.acquisition.sampling != assumption.sampling:
-            raise ValueError(
-                "calibration sampling does not satisfy terminal velocity applicability"
-            )
+) -> NoReturn:
+    raise ValueError(
+        "exact terminal-velocity applicability is deferred: registered evidence lacks a typed "
+        "velocity-measurement device/method identity or agreement bridge and an evidence-bound "
+        "calibration design"
+    )
 
 
 def _model_output_lineage(
@@ -2731,6 +2742,7 @@ def _build_estimated_1rm_observation(
     value: float,
     output_observation_id: InstanceIdentifier | None,
 ) -> ScientificMeasurementObservation:
+    _validate_terminal_velocity_applicability(model, terminal_velocity_assumption)
     first = model.calibration_results[0]
     source_identity = first.evidence.identity
     parameters = (
@@ -2931,8 +2943,8 @@ def estimate_1rm_from_load_velocity_model(
     terminal_velocity_assumption: TerminalVelocityAssumption | None = None,
     *,
     output_observation_id: InstanceIdentifier | None = None,
-) -> EstimatedOneRepMax | RefusalResult:
-    """Estimate 1RM only under the registered Smith-machine bench assumption."""
+) -> RefusalResult:
+    """Refuse numeric terminal-velocity 1RM output until exact applicability is registered."""
 
     claim = "estimate 1RM from registered individual load-velocity model"
     try:
@@ -2943,20 +2955,31 @@ def estimate_1rm_from_load_velocity_model(
         if not isinstance(assumption, TerminalVelocityAssumption):
             raise ValueError("terminal velocity assumption must be typed")
         _validate_terminal_velocity_applicability(model, assumption)
-        value = _estimated_1rm_value(model, assumption)
-        observation = _build_estimated_1rm_observation(
-            model, assumption, value, output_observation_id
-        )
-        return EstimatedOneRepMax(observation, model, assumption)
     except (AttributeError, IndexError, OverflowError, TypeError, ValueError) as exc:
         return _refusal(
             claim,
-            (RefusalReasonCode.UNKNOWN_THRESHOLD,),
-            (f"registered protocol-specific terminal velocity and model: {exc}",),
+            (
+                RefusalReasonCode.UNKNOWN_THRESHOLD,
+                RefusalReasonCode.UNKNOWN_THRESHOLD_BASIS,
+                RefusalReasonCode.DEVICE_BRIDGE_NOT_REGISTERED,
+                RefusalReasonCode.NO_REGISTERED_OPERATION,
+            ),
+            (
+                "exact evidence-supported velocity-measurement device/method identity or "
+                "registered agreement bridge",
+                "evidence-supported terminal-velocity calibration design without circular %1RM "
+                "knowledge",
+                f"deferred terminal-velocity applicability: {exc}",
+            ),
             tuple(item.observation.observation_id for item in model.calibration_results)
             if isinstance(model, LoadVelocityModel)
             else (),
             refusal_class=RefusalClass.COMPUTATION_NOT_REGISTERED,
+            safe_descriptions=(
+                "the individual linear load-velocity model remains independently describable",
+                "the represented 0.17 m/s terminal-velocity assumption remains source-qualified",
+                "no numeric estimated 1RM is emitted without exact applicability authority",
+            ),
         )
 
 
@@ -2971,7 +2994,7 @@ def refuse_estimated_1rm_as_measured(
         refusal_class=RefusalClass.IDENTITY_UNRESOLVED,
         safe_descriptions=(
             "the model estimate remains describable as an estimated 1RM",
-            "no measured 1RM is created without a successful direct repetition",
+            "no measured 1RM is created without qualified direct maximal-assessment evidence",
         ),
     )
 

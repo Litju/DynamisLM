@@ -11,6 +11,7 @@ import pytest
 from dynamislm.comparability import ComparabilityState
 from dynamislm.measurement import (
     AcquisitionIdentity,
+    CategoricalValue,
     InstanceIdentifier,
     MeasurementIdentity,
     MeasurementQuality,
@@ -18,6 +19,7 @@ from dynamislm.measurement import (
     MetadataEntry,
     ObservationContext,
     ProcessingIdentity,
+    QualityStatus,
     RegistryReference,
     ResultStatus,
     ScalarValue,
@@ -62,6 +64,9 @@ from dynamislm.measurement.strength.imtp import (
     IMTPOnsetParameters,
     IMTPThresholdDirection,
     IMTPTrialMetricInput,
+    IMTPTrialQualification,
+    IMTPTrialQualificationEvidence,
+    IMTPTrialQualificationSource,
     IMTPTrialQualificationStatus,
     IMTPTrialSelectionRule,
     aggregate_imtp_metric_results,
@@ -88,6 +93,10 @@ from dynamislm.measurement.strength.registry import (
     IMTP_ONSET_BASELINE_FIVE_SD_METHOD,
     IMTP_PROTOCOL_V1,
     IMTP_TEST_FAMILY,
+    IMTP_TRIAL_QC_OPERATION,
+    IMTP_TRIAL_QUALIFICATION_CONSTRUCT,
+    IMTP_TRIAL_QUALIFICATION_MEASURAND,
+    IMTP_TRIAL_QUALIFICATION_METRIC,
     IMTP_VERTICAL_FORCE_MEASURAND,
     KILOGRAM,
     METER_PER_SECOND,
@@ -120,7 +129,6 @@ from dynamislm.measurement.strength.registry import (
 )
 from dynamislm.measurement.strength.vbt import (
     VBT_SMITH_BENCH_GENERAL_TERMINAL_VELOCITY_017,
-    EstimatedOneRepMax,
     MeasuredOneRepMax,
     MeasuredOneRepMaxAssessmentEvidence,
     TerminalVelocityAssumption,
@@ -611,6 +619,147 @@ def _measured_assessment(
     )
 
 
+def _imtp_qualification_evidence(
+    result: IMTPMetricResult,
+    *,
+    status: IMTPTrialQualificationStatus = IMTPTrialQualificationStatus.QUALIFIED,
+    reason_codes: tuple[str, ...] | None = None,
+) -> IMTPTrialQualificationEvidence:
+    trial_id = result.observation.context.trial_id
+    assert trial_id is not None
+    target_identity = result.observation.identity
+    assert isinstance(target_identity, IMTPMeasurementIdentity)
+    reason_codes = reason_codes or (f"SOURCE_ADJUDICATION_{status.value}",)
+    source_device = _ref("device", "source-trial-qc", "Synthetic source trial adjudication")
+    source_artifact_id = InstanceIdentifier(
+        "artifact", f"imtp-qc-artifact-{trial_id.value}-{status.value.lower()}"
+    )
+    source_acquisition_id = InstanceIdentifier(
+        "acquisition", f"imtp-qc-acquisition-{trial_id.value}-{status.value.lower()}"
+    )
+    source_observation_id = InstanceIdentifier(
+        "observation", f"imtp-qc-source-{trial_id.value}-{status.value.lower()}"
+    )
+    source_sampling = SamplingCharacteristics(1.0, ("qualification",))
+    source_artifact = SourceArtifact(
+        source_artifact_id,
+        canonical_hash({"trial_id": trial_id, "status": status, "reason_codes": reason_codes}),
+        "application/vnd.synthetic.imtp.trial-qualification",
+        immutable=True,
+    )
+    source_acquisition = AcquisitionRecord(
+        source_acquisition_id,
+        source_device,
+        source_artifact_id,
+        "qualification",
+        source_sampling,
+    )
+    source_identity = IMTPMeasurementIdentity(
+        identity_id=ScientificIdentifier(
+            "synthetic-res66",
+            "measurement-identity",
+            f"imtp-qc-source-{trial_id.value}-{status.value.lower()}",
+            STRENGTH_REGISTRY_VERSION,
+        ),
+        semantic=replace(
+            target_identity.semantic,
+            construct=IMTP_TRIAL_QUALIFICATION_CONSTRUCT,
+            measurand=IMTP_TRIAL_QUALIFICATION_MEASURAND,
+            metric_definition=IMTP_TRIAL_QUALIFICATION_METRIC,
+        ),
+        acquisition=replace(
+            target_identity.acquisition,
+            device=source_device,
+            raw_artifact=source_artifact_id,
+            sensor_channel="qualification",
+            sampling=source_sampling,
+            timebase=None,
+            unit=None,
+            physical_axis=None,
+            reference_frame=None,
+            sign_convention=None,
+            processing_state=StrengthProcessingState.PROVIDER_PROCESSED,
+            acquisition_instance_id=source_acquisition_id,
+        ),
+        processing=StrengthProcessingIdentity(
+            registered_operation=IMTP_TRIAL_QC_OPERATION,
+            method_parameters=(
+                MetadataEntry("operation_id", IMTP_TRIAL_QC_OPERATION.stable_id),
+                MetadataEntry("qualification_rule", IMTP_TRIAL_QC_OPERATION.stable_id),
+                MetadataEntry("source_authority", "QUALIFIED_SOURCE_REPORTED_QC"),
+                MetadataEntry("qualification_status", status.value),
+                MetadataEntry("reason_codes", canonical_json(reason_codes)),
+                MetadataEntry(
+                    "target_result_observation_id", result.observation.observation_id.qualified
+                ),
+                MetadataEntry("target_trial_id", trial_id.qualified),
+            ),
+            unit=None,
+            sign_convention=None,
+            filtering_status=StrengthProcessingComponentStatus.NOT_APPLICABLE,
+            smoothing=StrengthProcessingStep(StrengthProcessingComponentStatus.NOT_APPLICABLE),
+            resampling=StrengthProcessingStep(StrengthProcessingComponentStatus.NOT_APPLICABLE),
+            processing_state=StrengthProcessingState.PROVIDER_PROCESSED,
+        ),
+        version=replace(
+            target_identity.version,
+            processing_method=IMTP_TRIAL_QC_OPERATION,
+            method_registry_version=STRENGTH_REGISTRY_VERSION,
+            software_version="synthetic-source-trial-qualification-1",
+            hardware_firmware=source_device,
+        ),
+    )
+    source_quality_status = {
+        IMTPTrialQualificationStatus.QUALIFIED: QualityStatus.ACCEPTED,
+        IMTPTrialQualificationStatus.EXCLUDED: QualityStatus.REJECTED,
+        IMTPTrialQualificationStatus.UNRESOLVED: QualityStatus.UNKNOWN,
+    }[status]
+    source_observation = ScientificMeasurementObservation(
+        source_observation_id,
+        result.observation.context,
+        source_identity,
+        MeasurementResult(
+            InstanceIdentifier("result", f"imtp-qc-source-{trial_id.value}-{status.value.lower()}"),
+            CategoricalValue(status.value),
+            None,
+            ScientificClassification(ValueOrigin.SOURCE_REPORTED, ()),
+            MeasurementQuality(status=source_quality_status, flags=reason_codes),
+            UncertaintyMetadata(),
+            ResultStatus.VALID,
+        ),
+        Provenance(
+            InstanceIdentifier("provenance", source_observation_id.value),
+            (source_artifact,),
+            (source_acquisition,),
+            (),
+            (
+                LineageEdge(
+                    source_artifact_id.qualified,
+                    source_acquisition_id.qualified,
+                    LineageRelation.ACQUIRED_AS,
+                ),
+                LineageEdge(
+                    source_acquisition_id.qualified,
+                    source_observation_id.qualified,
+                    LineageRelation.PRODUCED,
+                ),
+                LineageEdge(
+                    result.observation.observation_id.qualified,
+                    source_observation_id.qualified,
+                    LineageRelation.DERIVED_FROM,
+                ),
+            ),
+            (EvidenceReference(RES66_DECISION_STRENGTH_IMTP_VBT, "synthetic source adjudication"),),
+        ),
+    )
+    return IMTPTrialQualificationEvidence(
+        source_observation=source_observation,
+        result=result,
+        source_artifact=source_artifact,
+        source_acquisition=source_acquisition,
+    )
+
+
 def test_imtp_analytic_metrics_and_roundtrip() -> None:
     force, baseline, onset, _ = _imtp_fixture()
     assert isinstance(baseline, IMTPBaseline)
@@ -742,7 +891,9 @@ def test_imtp_trial_aggregation_requires_explicit_rule() -> None:
     force, _, onset, _ = _imtp_fixture()
     peak = calculate_imtp_peak_force(force, onset)
     assert isinstance(peak, IMTPMetricResult)
-    qualification = qualify_imtp_trial(peak, status=IMTPTrialQualificationStatus.EXCLUDED)
+    qualification = qualify_imtp_trial(
+        _imtp_qualification_evidence(peak, status=IMTPTrialQualificationStatus.EXCLUDED)
+    )
     assert not isinstance(qualification, RefusalResult)
     ineligible = IMTPTrialMetricInput(peak, qualification)
     selected = aggregate_imtp_metric_results((ineligible,), IMTPTrialSelectionRule.BEST_PEAK_FORCE)
@@ -757,8 +908,8 @@ def test_imtp_trial_aggregation_replays_explicit_eligible_trials() -> None:
     peak_b = calculate_imtp_peak_force(force_b, onset_b)
     assert isinstance(peak_a, IMTPMetricResult)
     assert isinstance(peak_b, IMTPMetricResult)
-    qualification_a = qualify_imtp_trial(peak_a)
-    qualification_b = qualify_imtp_trial(peak_b)
+    qualification_a = qualify_imtp_trial(_imtp_qualification_evidence(peak_a))
+    qualification_b = qualify_imtp_trial(_imtp_qualification_evidence(peak_b))
     assert not isinstance(qualification_a, RefusalResult)
     assert not isinstance(qualification_b, RefusalResult)
     aggregated = aggregate_imtp_metric_results(
@@ -770,6 +921,251 @@ def test_imtp_trial_aggregation_replays_explicit_eligible_trials() -> None:
     )
     assert not isinstance(aggregated, RefusalResult)
     assert aggregated.value == pytest.approx(510.0)
+
+
+def test_imtp_trial_qc_is_source_qualified_and_not_caller_minted() -> None:
+    force, _, onset, _ = _imtp_fixture()
+    peak = calculate_imtp_peak_force(force, onset)
+    assert isinstance(peak, IMTPMetricResult)
+    source_evidence = _imtp_qualification_evidence(peak)
+    qualification = qualify_imtp_trial(source_evidence)
+    assert isinstance(qualification, IMTPTrialQualification)
+    assert qualification.status is IMTPTrialQualificationStatus.QUALIFIED
+    assert qualification.source.value == "QUALIFIED_SOURCE_REPORTED_QC"
+    assert qualification.qualification_rule == IMTP_TRIAL_QC_OPERATION
+    assert qualification.reason_codes == source_evidence.reason_codes
+    assert qualification.source_observation_id == source_evidence.source_observation.observation_id
+    assert qualification.provenance == source_evidence.provenance
+    assert source_evidence.source_value_origin is ValueOrigin.SOURCE_REPORTED
+    assert not any(
+        run.method == IMTP_TRIAL_QC_OPERATION for run in qualification.provenance.processing_runs
+    )
+    assert isinstance(qualify_imtp_trial(peak), RefusalResult)
+    assert isinstance(
+        qualify_imtp_trial(peak, status=IMTPTrialQualificationStatus.QUALIFIED), RefusalResult
+    )
+    assert isinstance(qualify_imtp_trial(peak, reason_codes=("CALLER_MINTED",)), RefusalResult)
+    with pytest.raises(ValueError):
+        IMTPTrialQualificationSource("REGISTERED_DETERMINISTIC_QC")
+
+
+def test_imtp_source_excluded_trial_is_preserved_but_not_selected() -> None:
+    force, _, onset, _ = _imtp_fixture()
+    peak = calculate_imtp_peak_force(force, onset)
+    assert isinstance(peak, IMTPMetricResult)
+    source_evidence = _imtp_qualification_evidence(
+        peak,
+        status=IMTPTrialQualificationStatus.EXCLUDED,
+        reason_codes=("SOURCE_ADJUDICATION_EXCLUDED", "SOURCE_ARTIFACT_FLAGGED"),
+    )
+    qualification = qualify_imtp_trial(source_evidence)
+    assert isinstance(qualification, IMTPTrialQualification)
+    assert qualification.status is IMTPTrialQualificationStatus.EXCLUDED
+    assert qualification.reason_codes == (
+        "SOURCE_ADJUDICATION_EXCLUDED",
+        "SOURCE_ARTIFACT_FLAGGED",
+    )
+    refused = aggregate_imtp_metric_results(
+        (IMTPTrialMetricInput(peak, qualification),),
+        IMTPTrialSelectionRule.BEST_PEAK_FORCE,
+    )
+    assert isinstance(refused, RefusalResult)
+    assert "TRIAL_NOT_ELIGIBLE" in refused.reason_codes
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        "construct",
+        "measurand",
+        "metric",
+        "processing_operation",
+        "version_method",
+        "status",
+        "reason_codes",
+        "target_result",
+        "target_trial",
+        "context",
+        "provenance",
+        "artifact",
+        "acquisition",
+    ),
+)
+def test_imtp_trial_qualification_source_bindings_are_adversarially_closed(
+    mutation: str,
+) -> None:
+    force, _, onset, _ = _imtp_fixture()
+    peak = calculate_imtp_peak_force(force, onset)
+    assert isinstance(peak, IMTPMetricResult)
+    source_evidence = _imtp_qualification_evidence(peak)
+    source_observation = source_evidence.source_observation
+    source_identity = source_observation.identity
+    source_artifact = source_evidence.source_artifact
+    source_acquisition = source_evidence.source_acquisition
+    assert isinstance(source_identity, IMTPMeasurementIdentity)
+    if mutation == "construct":
+        identity = replace(
+            source_identity,
+            semantic=replace(source_identity.semantic, construct=IMTP_CONSTRUCT),
+        )
+        source_observation = replace(source_observation, identity=identity)
+    elif mutation == "measurand":
+        identity = replace(
+            source_identity,
+            semantic=replace(source_identity.semantic, measurand=IMTP_VERTICAL_FORCE_MEASURAND),
+        )
+        source_observation = replace(source_observation, identity=identity)
+    elif mutation == "metric":
+        identity = replace(
+            source_identity,
+            semantic=replace(
+                source_identity.semantic, metric_definition=IMTP_FORCE_TIME_SERIES_METRIC
+            ),
+        )
+        source_observation = replace(source_observation, identity=identity)
+    elif mutation == "processing_operation":
+        identity = replace(
+            source_identity,
+            processing=replace(
+                source_identity.processing,
+                registered_operation=IMTP_INPUT_OPERATION,
+            ),
+        )
+        source_observation = replace(source_observation, identity=identity)
+    elif mutation == "version_method":
+        identity = replace(
+            source_identity,
+            version=replace(source_identity.version, processing_method=IMTP_INPUT_OPERATION),
+        )
+        source_observation = replace(source_observation, identity=identity)
+    elif mutation == "status":
+        source_observation = replace(
+            source_observation,
+            result=replace(
+                source_observation.result,
+                value=CategoricalValue(IMTPTrialQualificationStatus.EXCLUDED.value),
+            ),
+        )
+    elif mutation == "reason_codes":
+        source_observation = replace(
+            source_observation,
+            result=replace(
+                source_observation.result,
+                quality=replace(
+                    source_observation.result.quality,
+                    flags=("CALLER_MINTED_REASON",),
+                ),
+            ),
+        )
+    elif mutation in {"target_result", "target_trial"}:
+        changed_parameters = tuple(
+            replace(
+                entry,
+                value=(
+                    "observation:other-result"
+                    if mutation == "target_result" and entry.key == "target_result_observation_id"
+                    else "trial:other-trial"
+                    if mutation == "target_trial" and entry.key == "target_trial_id"
+                    else entry.value
+                ),
+            )
+            for entry in source_identity.processing.method_parameters
+        )
+        identity = replace(
+            source_identity,
+            processing=replace(
+                source_identity.processing,
+                method_parameters=changed_parameters,
+            ),
+        )
+        source_observation = replace(source_observation, identity=identity)
+    elif mutation == "context":
+        source_observation = replace(
+            source_observation,
+            context=replace(
+                source_observation.context,
+                session_id=InstanceIdentifier("session", "other-session"),
+            ),
+        )
+    elif mutation == "provenance":
+        source_observation = replace(
+            source_observation,
+            provenance=replace(
+                source_observation.provenance,
+                source_artifacts=(),
+                acquisitions=(),
+                lineage_edges=(),
+            ),
+        )
+    elif mutation == "artifact":
+        source_artifact = replace(
+            source_evidence.source_artifact,
+            artifact_id=InstanceIdentifier("artifact", "other-source-artifact"),
+        )
+    elif mutation == "acquisition":
+        source_acquisition = replace(
+            source_evidence.source_acquisition,
+            acquisition_id=InstanceIdentifier("acquisition", "other-source-acquisition"),
+        )
+    with pytest.raises(ValueError, match="source|target|parameters|context|provenance|acquisition"):
+        IMTPTrialQualificationEvidence(
+            source_observation=source_observation,
+            result=peak,
+            source_artifact=source_artifact,
+            source_acquisition=source_acquisition,
+        )
+
+
+def test_imtp_trial_qualification_roundtrip_preserves_source_evidence() -> None:
+    force, _, onset, _ = _imtp_fixture()
+    peak = calculate_imtp_peak_force(force, onset)
+    assert isinstance(peak, IMTPMetricResult)
+    qualification = qualify_imtp_trial(_imtp_qualification_evidence(peak))
+    assert isinstance(qualification, IMTPTrialQualification)
+    restored = from_canonical_json(canonical_json(qualification), IMTPTrialQualification)
+    assert restored == qualification
+    assert canonical_hash(restored) == canonical_hash(qualification)
+
+
+def test_imtp_generic_source_observation_and_wrong_target_result_are_blocked() -> None:
+    force, _, onset, _ = _imtp_fixture()
+    peak = calculate_imtp_peak_force(force, onset)
+    assert isinstance(peak, IMTPMetricResult)
+    source_evidence = _imtp_qualification_evidence(peak)
+    source_identity = source_evidence.source_observation.identity
+    assert isinstance(source_identity, IMTPMeasurementIdentity)
+    generic_identity = MeasurementIdentity(
+        identity_id=source_identity.identity_id,
+        semantic=SemanticIdentity(
+            construct=source_identity.semantic.construct,
+            test_family=source_identity.semantic.test_family,
+            protocol=source_identity.semantic.protocol,
+            measurand=source_identity.semantic.measurand,
+            metric_definition=source_identity.semantic.metric_definition,
+        ),
+        acquisition=source_identity.acquisition,
+        processing=source_identity.processing,
+        version=source_identity.version,
+    )
+    with pytest.raises(ValueError, match="IMTP source identity|semantic identity"):
+        IMTPTrialQualificationEvidence(
+            source_observation=replace(
+                source_evidence.source_observation, identity=generic_identity
+            ),
+            result=peak,
+            source_artifact=source_evidence.source_artifact,
+            source_acquisition=source_evidence.source_acquisition,
+        )
+    other_force, _, other_onset, _ = _imtp_fixture("-other")
+    other_peak = calculate_imtp_peak_force(other_force, other_onset)
+    assert isinstance(other_peak, IMTPMetricResult)
+    with pytest.raises(ValueError, match="exact metric result|context|target"):
+        IMTPTrialQualificationEvidence(
+            source_observation=source_evidence.source_observation,
+            result=other_peak,
+            source_artifact=source_evidence.source_artifact,
+            source_acquisition=source_evidence.source_acquisition,
+        )
 
 
 def test_vbt_time_mean_peak_and_mpv_noncollapse() -> None:
@@ -861,12 +1257,9 @@ def test_vbt_measured_and_estimated_1rm_origins_are_invariant() -> None:
     estimate = estimate_1rm_from_load_velocity_model(
         model, VBT_SMITH_BENCH_GENERAL_TERMINAL_VELOCITY_017
     )
-    assert isinstance(estimate, EstimatedOneRepMax)
-    assert estimate.value_kg == pytest.approx(166.33333333333331)
-    assert estimate.observation.result.classification.value_origin.value == "MODEL_ESTIMATE"
-    refused = refuse_estimated_1rm_as_measured(
-        observation_ids=(estimate.observation.observation_id,)
-    )
+    assert isinstance(estimate, RefusalResult)
+    assert "DEVICE_BRIDGE_NOT_REGISTERED" in estimate.reason_codes
+    refused = refuse_estimated_1rm_as_measured()
     assert "MODEL_ESTIMATE" in refused.missing_information[0]
 
 
@@ -1124,17 +1517,9 @@ def test_load_velocity_model_coefficients_and_estimated_origin_cannot_be_forged(
     estimate = estimate_1rm_from_load_velocity_model(
         model, VBT_SMITH_BENCH_GENERAL_TERMINAL_VELOCITY_017
     )
-    assert isinstance(estimate, EstimatedOneRepMax)
-    forged_result = replace(
-        estimate.observation.result,
-        classification=ScientificClassification(ValueOrigin.DIRECT_MEASUREMENT, ()),
-    )
-    with pytest.raises(ValueError, match="model estimate|MODEL_ESTIMATE"):
-        EstimatedOneRepMax(
-            replace(estimate.observation, result=forged_result),
-            model,
-            estimate.terminal_velocity_assumption,
-        )
+    assert isinstance(estimate, RefusalResult)
+    assert estimate.refusal_class == "COMPUTATION_NOT_REGISTERED"
+    assert "UNKNOWN_THRESHOLD_BASIS" in estimate.reason_codes
 
 
 def test_vbt_raw_indices_cannot_create_phase_authority() -> None:
@@ -1186,14 +1571,149 @@ def test_measured_1rm_direct_assessment_binds_source_origin_and_maximality() -> 
     assert measured.assessment.attempt_id.instance_type == "attempt"
 
 
+def test_measured_1rm_source_reported_and_direct_origins_are_allowed() -> None:
+    evidence = _vbt_evidence(1, load_kg=50.0, velocity=1.2)
+    assessment = _measured_assessment(evidence)
+    direct_source_observation = replace(
+        assessment.source_observation,
+        result=replace(
+            assessment.source_observation.result,
+            classification=ScientificClassification(ValueOrigin.DIRECT_MEASUREMENT, ()),
+        ),
+    )
+    direct_assessment = replace(
+        assessment,
+        source_observation=direct_source_observation,
+        source_value_origin=ValueOrigin.DIRECT_MEASUREMENT,
+    )
+    measured = build_measured_1rm(direct_assessment)
+    assert isinstance(measured, MeasuredOneRepMax)
+    assert measured.observation.result.classification.value_origin is ValueOrigin.DIRECT_MEASUREMENT
+    assert VBT_MEASURED_1RM_SELECTION_RULE.identifier.key == (
+        "measured-1rm-qualified-maximal-assessment-v1"
+    )
+    assert VBT_MEASURED_1RM_SELECTION_RULE.display_label == (
+        "Measured 1RM qualified maximal assessment"
+    )
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        "construct",
+        "measurand",
+        "metric",
+        "assessment_operation",
+        "version_method",
+        "model_origin",
+    ),
+)
+def test_measured_1rm_source_semantic_identity_is_adversarially_closed(mutation: str) -> None:
+    evidence = _vbt_evidence(1, load_kg=50.0, velocity=1.2)
+    assessment = _measured_assessment(evidence)
+    source_observation = assessment.source_observation
+    source_identity = source_observation.identity
+    assert isinstance(source_identity, VBTMeasurementIdentity)
+    if mutation == "construct":
+        identity = replace(
+            source_identity,
+            semantic=replace(
+                source_identity.semantic,
+                construct=VBT_BAR_VELOCITY_CONSTRUCT,
+            ),
+        )
+        source_observation = replace(source_observation, identity=identity)
+    elif mutation == "measurand":
+        identity = replace(
+            source_identity,
+            semantic=replace(source_identity.semantic, measurand=VBT_VELOCITY_MEASURAND),
+        )
+        source_observation = replace(source_observation, identity=identity)
+    elif mutation == "metric":
+        identity = replace(
+            source_identity,
+            semantic=replace(
+                source_identity.semantic, metric_definition=VBT_VELOCITY_SERIES_METRIC
+            ),
+        )
+        source_observation = replace(source_observation, identity=identity)
+    elif mutation == "assessment_operation":
+        identity = replace(
+            source_identity,
+            processing=replace(
+                source_identity.processing,
+                registered_operation=VBT_INPUT_OPERATION,
+            ),
+        )
+        source_observation = replace(source_observation, identity=identity)
+    elif mutation == "version_method":
+        identity = replace(
+            source_identity,
+            version=replace(source_identity.version, processing_method=VBT_INPUT_OPERATION),
+        )
+        source_observation = replace(source_observation, identity=identity)
+    else:
+        source_observation = replace(
+            source_observation,
+            result=replace(
+                source_observation.result,
+                classification=ScientificClassification(ValueOrigin.MODEL_ESTIMATE, ()),
+            ),
+        )
+    with pytest.raises(ValueError, match="source|semantic|processing|origin"):
+        replace(assessment, source_observation=source_observation)
+
+
+@pytest.mark.parametrize("load_case", ("missing", "differs", "percent"))
+def test_measured_1rm_protocol_load_authority_is_required(load_case: str) -> None:
+    evidence = _vbt_evidence(1, load_kg=50.0, velocity=1.2)
+    assessment = _measured_assessment(evidence)
+    if load_case == "missing":
+        protocol = replace(
+            assessment.protocol_identity,
+            external_load_status=StrengthExternalLoadStatus.UNKNOWN,
+            external_load=None,
+        )
+    elif load_case == "differs":
+        protocol = replace(
+            assessment.protocol_identity,
+            external_load=replace(
+                assessment.measured_load, value=60.0, total_external_load_kg=60.0
+            ),
+        )
+    else:
+        percent_load = replace(
+            assessment.measured_load,
+            semantics=StrengthLoadSemantics.PERCENT_ONE_RM,
+            percentage_1rm=0.5,
+            total_external_load_kg=None,
+        )
+        protocol = replace(assessment.protocol_identity, external_load=percent_load)
+    with pytest.raises(ValueError, match="load|protocol|physical"):
+        replace(assessment, protocol_identity=protocol)
+
+
 def test_measured_1rm_qualification_tampering_is_blocked() -> None:
     force, _, onset, _ = _imtp_fixture()
     peak = calculate_imtp_peak_force(force, onset)
     assert isinstance(peak, IMTPMetricResult)
-    qualification = qualify_imtp_trial(peak)
+    qualification_evidence = _imtp_qualification_evidence(peak)
+    qualification = qualify_imtp_trial(qualification_evidence)
     assert not isinstance(qualification, RefusalResult)
-    with pytest.raises(ValueError, match="decision fields"):
-        replace(qualification, reason_codes=("TAMPERED",))
+    forged_source_observation = replace(
+        qualification_evidence.source_observation,
+        result=replace(
+            qualification_evidence.source_observation.result,
+            value=CategoricalValue(IMTPTrialQualificationStatus.EXCLUDED.value),
+        ),
+    )
+    with pytest.raises(ValueError, match="parameters|quality status|source"):
+        IMTPTrialQualificationEvidence(
+            source_observation=forged_source_observation,
+            result=peak,
+            source_artifact=qualification_evidence.source_artifact,
+            source_acquisition=qualification_evidence.source_acquisition,
+        )
 
 
 def test_imtp_peak_support_is_source_end_and_free_end_index_is_blocked() -> None:
@@ -1218,8 +1738,8 @@ def test_imtp_multisource_context_is_deterministic_and_trial_free() -> None:
     peak_b = calculate_imtp_peak_force(force_b, onset_b)
     assert isinstance(peak_a, IMTPMetricResult)
     assert isinstance(peak_b, IMTPMetricResult)
-    qualification_a = qualify_imtp_trial(peak_a)
-    qualification_b = qualify_imtp_trial(peak_b)
+    qualification_a = qualify_imtp_trial(_imtp_qualification_evidence(peak_a))
+    qualification_b = qualify_imtp_trial(_imtp_qualification_evidence(peak_b))
     assert not isinstance(qualification_a, RefusalResult)
     assert not isinstance(qualification_b, RefusalResult)
     aggregated = aggregate_imtp_metric_results(
@@ -1247,8 +1767,9 @@ def test_load_velocity_model_and_estimate_use_full_calibration_context() -> None
     estimate = estimate_1rm_from_load_velocity_model(
         model, VBT_SMITH_BENCH_GENERAL_TERMINAL_VELOCITY_017
     )
-    assert isinstance(estimate, EstimatedOneRepMax)
-    assert estimate.observation.context == model.analysis_context
+    assert isinstance(estimate, RefusalResult)
+    assert "NO_REGISTERED_OPERATION" in estimate.reason_codes
+    assert model.analysis_context.trial_id is None
 
 
 @pytest.mark.parametrize(
@@ -1368,3 +1889,63 @@ def test_terminal_velocity_wrong_metric_and_pause_contracts_are_blocked() -> Non
             VBT_SMITH_BENCH_GENERAL_TERMINAL_VELOCITY_017,
             pause_semantics=StrengthProtocolAttribute("pause_semantics", "unresolved"),
         )
+
+
+@pytest.mark.parametrize(
+    "field",
+    (
+        "exercise",
+        "equipment",
+        "equipment_mode",
+        "exercise_variant",
+        "range_of_motion",
+        "pause_semantics",
+        "velocity_metric",
+        "load_semantics",
+        "model_family",
+        "sampling",
+    ),
+)
+def test_terminal_velocity_assumption_material_fields_are_exactly_bound(field: str) -> None:
+    changes: dict[str, Any] = {
+        "exercise": _ref("exercise", "squat", "Squat"),
+        "equipment": _ref("equipment", "free-weight", "Free weight"),
+        "equipment_mode": StrengthEquipmentMode.FREE_WEIGHT,
+        "exercise_variant": _ref("exercise-variant", "generic", "Generic"),
+        "range_of_motion": StrengthProtocolAttribute("range_of_motion", "partial"),
+        "pause_semantics": StrengthProtocolAttribute("pause_semantics", "no-pause"),
+        "velocity_metric": VBTMetric.PEAK_VELOCITY,
+        "load_semantics": StrengthLoadSemantics.ADDED_EXTERNAL_LOAD,
+        "model_family": VBT_INPUT_OPERATION,
+        "sampling": SamplingCharacteristics(2000.0, ("bar",)),
+    }
+    with pytest.raises(ValueError, match="applicability|registered|exact|unresolved|mean"):
+        replace(
+            VBT_SMITH_BENCH_GENERAL_TERMINAL_VELOCITY_017,
+            **{field: changes[field]},
+        )
+
+
+def test_terminal_velocity_numeric_estimation_is_deferred_without_exact_evidence_authority() -> (
+    None
+):
+    points = tuple(
+        _vbt_metric(index, load=load, velocity=velocity)
+        for index, (load, velocity) in enumerate(((50.0, 1.2), (100.0, 0.7)), 1)
+    )
+    model = fit_load_velocity_model(
+        points,
+        terminal_velocity_assumption=VBT_SMITH_BENCH_GENERAL_TERMINAL_VELOCITY_017,
+    )
+    assert not isinstance(model, RefusalResult)
+    assert model.terminal_velocity_m_per_s == pytest.approx(0.17)
+    refused = estimate_1rm_from_load_velocity_model(model)
+    assert isinstance(refused, RefusalResult)
+    assert refused.refusal_class == "COMPUTATION_NOT_REGISTERED"
+    assert "DEVICE_BRIDGE_NOT_REGISTERED" in refused.reason_codes
+    assert "UNKNOWN_THRESHOLD_BASIS" in refused.reason_codes
+    assert any("calibration design" in item for item in refused.missing_information)
+    assert any(
+        "individual linear load-velocity model" in item
+        for item in refused.what_can_still_be_safely_described
+    )

@@ -1,16 +1,17 @@
 # RES66-DR-001 — Strength, IMTP and VBT scientific engine
 
 DECISION_ID=RES66-DR-001
-STATUS=REVIEW_FIX_1_REPAIRED_PENDING_FINAL_REVIEW
-MISSION=RES-66-REVIEW-FIX-1
+STATUS=READY_FOR_FINAL_REVIEW
+MISSION=RES-66-REVIEW-FIX-2
 SERIALIZATION_VERSION=3
 
 ## Review-fix disposition
 
-The RES-66 review-fix preserves the accepted metric equations and closes the
-eight scientific-authority seams identified at the entry head. The executed
-method now equals the declared method, proven source authority, output
-identity, output context, and provenance.
+The RES-66 review-fix-2 preserves the accepted metric equations and closes the
+three residual scientific-authority seams identified in review. It does not
+invent an IMTP QC algorithm or a terminal-velocity device bridge. Source
+qualification and maximal-assessment evidence remain explicit typed authority;
+unsupported numeric claims refuse or defer at the first unresolved boundary.
 
 ```text
 VBT_PHASE_AUTHORITY_STATUS=QUALIFIED_UPSTREAM_EXPLICIT_PHASE_REQUIRED
@@ -24,9 +25,12 @@ ARBITRARY_TRIAL_END_INDEX=BLOCKED
 LOAD_VELOCITY_PROCESSING_IDENTITY_BOUND=PASS
 IMTP_V1_DWELL_SAMPLES=1
 IMTP_TRIAL_QC_STATUS=REPRESENT_BUT_DO_NOT_COMPUTE
-IMTP_TRIAL_SELECTION_STATUS=IMPLEMENT_FROM_QUALIFIED_TRIALS
-TERMINAL_VELOCITY_APPLICABILITY=PASS_EXACT_SUPPORTED_SMITH_BENCH_VARIANTS
-ESTIMATED_1RM_STATUS=IMPLEMENT_PROTOCOL_SPECIFIC_EXACT_APPLICABILITY
+IMTP_TRIAL_SELECTION_STATUS=IMPLEMENT_FROM_SOURCE_QUALIFIED_TRIALS
+IMTP_TRIAL_QC_CALLER_MINTING=BLOCKED
+DYNAMISLM_COMPUTED_QC=NO
+TERMINAL_VELOCITY_APPLICABILITY=DEFERRED_WITH_REASON
+ESTIMATED_1RM_STATUS=DEFERRED_WITH_REASON
+LOAD_VELOCITY_MODEL_STATUS=IMPLEMENT_INDIVIDUAL_LINEAR_OLS
 RFD_EVIDENCE_ATTRIBUTION=NARROWED
 ```
 
@@ -44,16 +48,23 @@ submaximal repetition and a model estimate remain non-maximal and
 Results derived from multiple trial observations use a deterministic
 trial-free analysis context whose identity includes the complete source set,
 operation, and shared analysis scope. IMTP aggregation, the load-velocity
-model, estimated 1RM, and velocity loss do not inherit the first trial
-context.
+model, and velocity loss do not inherit the first trial context.
 
-The 0.17 m/s terminal-velocity assumption is bound to the Janicijevic et al.
-protocol-specific Smith-machine bench variants, execution semantics, full
-range of motion, mean concentric velocity, total external load, 1000 Hz
-sampling, and individual linear model family. The source reports paused and
-touch-and-go bench press in a Smith machine, 45/60/75/90% (or 45/90%)
-calibration loads, and mean concentric velocity; it does not authorize generic
-Smith-machine or free-weight application. [Janicijevic et al., PMID
+IMTP trial QC is represented but not computed by DynamisLM. A source-qualified
+trial must carry a source-reported categorical qualification observation with
+registered qualification semantics, source authority, status, reason codes,
+the exact target IMTP metric observation, matching trial/context, and immutable
+source provenance. `qualify_imtp_trial` only normalizes that evidence; it
+rejects a raw metric result or caller-supplied status/reason codes.
+
+The 0.17 m/s terminal-velocity assumption remains represented with the
+Janicijevic et al. Smith-machine bench protocol fields, but it is not an
+executable estimated-1RM authority in this V1 contract. Current typed inputs do
+not establish the evidence-authoritative velocity-measurement device/method or
+a registered agreement bridge, and they do not establish a non-circular
+evidence-supported calibration design. Therefore the individual linear OLS
+load-velocity model remains implemented while numeric terminal-velocity 1RM
+output is deferred. [Janicijevic et al., PMID
 33771947](https://pubmed.ncbi.nlm.nih.gov/33771947/)
 
 ## Question and scope
@@ -158,15 +169,15 @@ Every candidate quantity has exactly one RES-66 disposition.
 | IMTP RFD | Average endpoint RFD `((F(T) - F(onset)) / T)` for registered 0–50, 0–100, 0–150 and 0–200 ms windows, exact endpoints, gross/net quantity retained. | IMPLEMENT |
 | IMTP peak/derivative RFD | Differentiated-sample peak RFD, arbitrary moving windows and unregistered regressions are not V1 authority. | REJECT_FROM_RES66 |
 | IMTP normalization | Absolute N and N/kg only. N/kg requires a typed, context-bound BODY_MASS observation; arbitrary caller scalars and allometric normalization are refused. | IMPLEMENT |
-| IMTP trial selection/aggregation | Explicit best sampled peak, mean of all qualified trials, and mean of best N rules. Qualification is typed, source-backed and reason-provenanced; a free eligibility boolean is not authority. Short/traditional protocols remain distinct. | IMPLEMENT_FROM_QUALIFIED_TRIALS |
+| IMTP trial selection/aggregation | Explicit best sampled peak, mean of all source-qualified trials, and mean of best N rules. Qualification is typed, source-backed and reason-provenanced; a free eligibility verdict is not authority. Short/traditional protocols remain distinct. | IMPLEMENT_FROM_SOURCE_QUALIFIED_TRIALS |
 | Mean concentric velocity | Time mean `integral(v dt) / duration` over an exact qualified concentric support using actual timestamps. It is not a sample arithmetic mean or a vendor scalar relabel. | IMPLEMENT |
 | Mean propulsive velocity | Represented as a distinct metric, but no V1 computation: acceleration/gravity/differentiation/filtering/boundary authority is not frozen for the target input contract. | REPRESENT_BUT_DO_NOT_COMPUTE |
 | Peak velocity | Maximum sampled velocity over exact qualified concentric support; no interpolation. | IMPLEMENT |
 | Repetition/phase authority | Set, rep, exercise/protocol, load, source-series digest and exact concentric support are required from a qualified upstream phase-source declaration with source processing provenance. Scalar velocity or caller indices cannot create a phase. | IMPLEMENT_QUALIFIED_UPSTREAM_ONLY |
 | Fixed-load longitudinal comparison | Same complete method identity and exact physical load may compare. Device differences require a registered bridge; protocol, metric, phase, processing, sampling, attachment, ROM or load mismatches fail closed. | IMPLEMENT |
 | Measured 1RM | First-class direct/source-reported result from qualified maximal-assessment evidence with explicit protocol/execution, load, attempt, maximality declaration, source observation and provenance. A successful repetition alone is insufficient and it cannot be constructed from a model. | IMPLEMENT_QUALIFIED_DIRECT_ASSESSMENT_ONLY |
-| Estimated 1RM | Only a `MODEL_ESTIMATE` result from a registered individual linear model and an exact protocol-specific terminal-velocity applicability contract. The Janicijevic Smith-machine paused/touch-and-go bench contract is the V1 supported case; unresolved or mismatched fields refuse. | IMPLEMENT_PROTOCOL_SPECIFIC_EXACT_APPLICABILITY |
-| Individual load-velocity model | Deterministic ordinary least-squares linear fit of typed calibration points with the same athlete/protocol and one registered velocity metric. The full calibration key binds device/provider/modality/attachment, sampling/timebase, unit/axis/frame/sign, filtering/smoothing/resampling/state, source operation/parameters, software/firmware/registry version, and phase method/convention/parameters. | IMPLEMENT |
+| Estimated 1RM | Numeric output remains deferred. The registered 0.17 m/s evidence does not currently bind an evidence-authoritative velocity-measurement device/method or agreement bridge plus a non-circular calibration design, so no estimated 1RM is emitted. | DEFERRED_WITH_REASON |
+| Individual load-velocity model | Deterministic ordinary least-squares linear fit of typed calibration points with the same athlete/protocol and one registered velocity metric. The full calibration key binds device/provider/modality/attachment, sampling/timebase, unit/axis/frame/sign, filtering/smoothing/resampling/state, source operation/parameters, software/firmware/registry version, and phase method/convention/parameters. | IMPLEMENT_INDIVIDUAL_LINEAR_OLS |
 | Velocity loss | Mechanical within-set percentage with explicit first/fastest/best-previous reference rule, same set/rep metric/load identity and exact source provenance. It carries no fatigue/readiness authority. | IMPLEMENT |
 | Canonical strength dataset mapping | Current promoted P2D authority contains no qualified IMTP force-time or VBT repetition series mapping. | REJECT_FROM_RES66 |
 
@@ -218,11 +229,12 @@ differentiation, filtering, sampling and boundary semantics.
 The individual load-velocity fit is `v = intercept + slope * load` with
 ordinary least squares over at least two distinct physical loads, requiring a
 negative slope for inverse load-velocity use. Calibration points must share a
-complete processing identity, not merely a device label. Estimated 1RM is
-`(terminal_velocity - intercept) / slope`, only for the exact registered
-Smith-machine paused or touch-and-go bench protocol and 0.17 m/s assumption.
-Both outputs remain model-derived and retain calibration provenance; a high R
-or R² never creates device agreement or measured-strength authority.
+complete processing identity, not merely a device label. The represented
+terminal-velocity equation is retained as a deferred scientific rule; no
+numeric estimated 1RM is emitted until exact velocity-measurement method/device
+authority, any required agreement bridge, and a non-circular calibration design
+are registered. A high R or R² never creates device agreement or measured-
+strength authority.
 
 `RES66_ENDPOINT_RFD = PROJECT_REGISTERED_EXPLICIT_METHOD` with equation
 `(F(T) - F(onset)) / T`. The cited RFD literature is used narrowly for onset
@@ -262,25 +274,30 @@ IMTP_FORCE_AT_TIME_STATUS=IMPLEMENT
 IMTP_IMPULSE_STATUS=IMPLEMENT
 IMTP_RFD_STATUS=IMPLEMENT
 IMTP_NORMALIZATION_STATUS=IMPLEMENT
-IMTP_TRIAL_SELECTION_STATUS=IMPLEMENT_FROM_QUALIFIED_TRIALS
+IMTP_TRIAL_SELECTION_STATUS=IMPLEMENT_FROM_SOURCE_QUALIFIED_TRIALS
 VBT_MEAN_CONCENTRIC_VELOCITY_STATUS=IMPLEMENT
 VBT_MEAN_PROPULSIVE_VELOCITY_STATUS=REPRESENT_BUT_DO_NOT_COMPUTE
 VBT_PEAK_VELOCITY_STATUS=IMPLEMENT
 VBT_REP_PHASE_AUTHORITY=QUALIFIED_UPSTREAM_EXPLICIT_PHASE_REQUIRED
 VBT_FIXED_LOAD_COMPARISON_STATUS=IMPLEMENT
 MEASURED_1RM_STATUS=IMPLEMENT_QUALIFIED_DIRECT_ASSESSMENT_ONLY
-ESTIMATED_1RM_STATUS=IMPLEMENT_PROTOCOL_SPECIFIC_EXACT_APPLICABILITY
+MEASURED_1RM_SOURCE_SEMANTICS_BOUND=YES
+MEASURED_1RM_PROTOCOL_LOAD_BOUND=YES
+ESTIMATED_1RM_STATUS=DEFERRED_WITH_REASON
 LOAD_VELOCITY_MODEL_STATUS=IMPLEMENT_INDIVIDUAL_LINEAR_OLS
 MULTISOURCE_CONTEXT_AUTHORITY=PASS
 IMTP_PEAK_SUPPORT_AUTHORITY=PASS
 LOAD_VELOCITY_PROCESSING_IDENTITY_BOUND=PASS
 IMTP_V1_DWELL_SAMPLES=1
 IMTP_TRIAL_QC_STATUS=REPRESENT_BUT_DO_NOT_COMPUTE
-TERMINAL_VELOCITY_APPLICABILITY=PASS_EXACT_SUPPORTED_SMITH_BENCH_VARIANTS
+IMTP_TRIAL_QC_CALLER_MINTING=BLOCKED
+DYNAMISLM_COMPUTED_QC=NO
+TERMINAL_VELOCITY_APPLICABILITY=DEFERRED_WITH_REASON
 RFD_EVIDENCE_ATTRIBUTION=NARROWED
 VELOCITY_LOSS_STATUS=IMPLEMENT_MECHANICAL_WITHIN_SET_ONLY
 CANONICAL_STRENGTH_DATASET_MAPPING=NOT_AVAILABLE_IN_CURRENT_P2D_AUTHORITY
 DEFERRED_WITH_REASON=VBT_MEAN_PROPULSIVE_VELOCITY requires unregistered acceleration/gravity/differentiation/filtering/sampling and propulsive-boundary semantics; scalar concentric velocity cannot be relabelled as MPV.
+DEFERRED_WITH_REASON_ESTIMATED_1RM=The registered 0.17 m/s terminal-velocity literature does not authorize cross-device or unconstrained calibration-design application under current typed evidence; DynamisLM retains the qualified individual load-velocity model without emitting an estimated 1RM.
 ```
 
 RES66_VERSION=1.0.0
