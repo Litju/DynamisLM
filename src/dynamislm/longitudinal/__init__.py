@@ -115,3 +115,10 @@ __all__ = [
     "validate_provenance_graph",
     "validate_source_artifact_qualification_binding",
 ]
+
+# RES-69 is an additive statistical layer over the immutable RES-62 objects.
+from dynamislm.longitudinal import statistics as _statistics
+
+for _statistics_name in _statistics.__all__:
+    globals()[_statistics_name] = getattr(_statistics, _statistics_name)
+__all__ += [name for name in _statistics.__all__ if name not in __all__]

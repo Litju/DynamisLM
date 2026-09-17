@@ -326,6 +326,7 @@ from dynamislm.longitudinal import (
     validate_provenance_graph,
     validate_source_artifact_qualification_binding,
 )
+from dynamislm.longitudinal import statistics as _longitudinal_statistics
 from dynamislm.measurement import (
     AcquisitionIdentity,
     CategoricalValue,
@@ -838,3 +839,7 @@ __all__ += [
     "summarize_velocity_threshold",
     "threshold_summary_from_velocity_series",
 ]
+
+for _statistics_name in _longitudinal_statistics.__all__:
+    globals().setdefault(_statistics_name, getattr(_longitudinal_statistics, _statistics_name))
+__all__ += [name for name in _longitudinal_statistics.__all__ if name not in __all__]
