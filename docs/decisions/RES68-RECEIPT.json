@@ -70,7 +70,7 @@
     "pytest": "PASS",
     "hosted_ci": "HISTORICAL_PASS_ONLY",
     "hosted_ci_run": "https://github.com/Litju/DynamisLM/actions/runs/35153538223",
-    "hosted_ci_tested_commit": "8e2f7d63efa28a1be9a23426da73046cfbab3a6f",
+    "hosted_ci_tested_commit": "6bea4abd85e71201413e7ec040684bc7db2adb4a",
     "fresh_hosted_ci": "REQUIRED_ON_REPAIR_HEAD",
     "advisory_review": "PENDING",
     "test_count": 749,

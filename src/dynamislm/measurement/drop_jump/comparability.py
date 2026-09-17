@@ -298,7 +298,8 @@ def compare_drop_jump_metric_results(
         )
     left_protocol = left_identity.semantic.protocol_identity
     right_protocol = right_identity.semantic.protocol_identity
-    if _is_actual_claim(claim):
+    actual_claim = _is_actual_claim(claim)
+    if actual_claim:
         if (
             left_protocol.actual_drop_height_m is None
             or right_protocol.actual_drop_height_m is None
@@ -331,8 +332,8 @@ def compare_drop_jump_metric_results(
         )
     # Unknown actual height is deliberately ignored for claims whose equation
     # does not use it. Other protocol attributes remain material.
-    if _protocol_signature(left_protocol, include_actual=False) != _protocol_signature(
-        right_protocol, include_actual=False
+    if _protocol_signature(left_protocol, include_actual=actual_claim) != _protocol_signature(
+        right_protocol, include_actual=actual_claim
     ):
         return _result(
             request,

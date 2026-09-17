@@ -362,6 +362,8 @@ def _dj_event_source(
 def _dj_fixture(
     *,
     actual_drop_height_m: float | None = None,
+    actual_drop_height_method: RegistryReference | None = None,
+    actual_drop_height_source: RegistryReference | None = None,
     arms: DropJumpArmCondition = DropJumpArmCondition.PROHIBITED,
     prefix: str = "synthetic-dj",
 ) -> tuple[
@@ -396,14 +398,19 @@ def _dj_fixture(
         nominal_box_height_m=0.30,
         actual_drop_height_m=actual_drop_height_m,
         actual_drop_height_method=(
-            _ref(
-                "measurement-method",
-                "synthetic-drop-height",
-                "Synthetic independent drop-height method",
+            actual_drop_height_method
+            if actual_drop_height_method is not None
+            else (
+                _ref(
+                    "measurement-method",
+                    "synthetic-drop-height",
+                    "Synthetic independent drop-height method",
+                )
+                if actual_drop_height_m is not None
+                else None
             )
-            if actual_drop_height_m is not None
-            else None
         ),
+        actual_drop_height_source=actual_drop_height_source,
         initiation_mode=DropJumpInitiationMode.STEP_OFF,
         pre_drop_posture="quiet standing on box",
         pre_drop_stillness=True,
@@ -625,6 +632,116 @@ def test_dj_nominal_actual_height_and_claim_relative_comparability() -> None:
             "compare actual drop exposure",
         ).state
         is ComparabilityState.INSUFFICIENT_INFORMATION
+    )
+
+
+def test_dj_actual_height_identity_requires_complete_claim_relative_metadata() -> None:
+    actual_method = _ref(
+        "measurement-method",
+        "synthetic-drop-height-complete",
+        "Synthetic independent drop-height method",
+    )
+    actual_source = _ref(
+        "measurement-source",
+        "synthetic-drop-height-complete",
+        "Synthetic independent drop-height source",
+    )
+
+    def contact_result(
+        source: ScientificMeasurementObservation,
+        events: dict[DropJumpEventLabel, DropJumpEventOccurrence],
+    ) -> DropJumpMetricResult:
+        return _dj_result(
+            calculate_drop_jump_contact_time(
+                events[DropJumpEventLabel.TOUCHDOWN],
+                events[DropJumpEventLabel.REBOUND_TAKEOFF],
+                source,
+            )
+        )
+
+    same_a_source, same_a_events, _ = _dj_fixture(
+        actual_drop_height_m=0.30,
+        actual_drop_height_method=actual_method,
+        actual_drop_height_source=actual_source,
+        prefix="synthetic-dj-actual-same-a",
+    )
+    same_b_source, same_b_events, _ = _dj_fixture(
+        actual_drop_height_m=0.30,
+        actual_drop_height_method=actual_method,
+        actual_drop_height_source=actual_source,
+        prefix="synthetic-dj-actual-same-b",
+    )
+    same_a = contact_result(same_a_source, same_a_events)
+    same_b = contact_result(same_b_source, same_b_events)
+    assert (
+        compare_drop_jump_metric_results(same_a, same_b, "compare actual drop exposure").state
+        is ComparabilityState.COMPARABLE
+    )
+
+    different_method_source, different_method_events, _ = _dj_fixture(
+        actual_drop_height_m=0.30,
+        actual_drop_height_method=_ref(
+            "measurement-method",
+            "synthetic-drop-height-different-method",
+            "Different synthetic independent drop-height method",
+        ),
+        actual_drop_height_source=actual_source,
+        prefix="synthetic-dj-actual-different-method",
+    )
+    assert (
+        compare_drop_jump_metric_results(
+            same_a,
+            contact_result(different_method_source, different_method_events),
+            "compare actual drop exposure",
+        ).state
+        is ComparabilityState.BRIDGE_VALIDATION_REQUIRED
+    )
+
+    different_source_source, different_source_events, _ = _dj_fixture(
+        actual_drop_height_m=0.30,
+        actual_drop_height_method=actual_method,
+        actual_drop_height_source=_ref(
+            "measurement-source",
+            "synthetic-drop-height-different-source",
+            "Different synthetic independent drop-height source",
+        ),
+        prefix="synthetic-dj-actual-different-source",
+    )
+    assert (
+        compare_drop_jump_metric_results(
+            same_a,
+            contact_result(different_source_source, different_source_events),
+            "compare actual drop exposure",
+        ).state
+        is ComparabilityState.BRIDGE_VALIDATION_REQUIRED
+    )
+
+    different_height_source, different_height_events, _ = _dj_fixture(
+        actual_drop_height_m=0.31,
+        actual_drop_height_method=actual_method,
+        actual_drop_height_source=actual_source,
+        prefix="synthetic-dj-actual-different-height",
+    )
+    assert (
+        compare_drop_jump_metric_results(
+            same_a,
+            contact_result(different_height_source, different_height_events),
+            "compare actual drop exposure",
+        ).state
+        is ComparabilityState.BRIDGE_VALIDATION_REQUIRED
+    )
+
+    unknown_a_source, unknown_a_events, _ = _dj_fixture(prefix="synthetic-dj-actual-unknown-a")
+    unknown_b_source, unknown_b_events, _ = _dj_fixture(prefix="synthetic-dj-actual-unknown-b")
+    unknown_a = contact_result(unknown_a_source, unknown_a_events)
+    unknown_b = contact_result(unknown_b_source, unknown_b_events)
+    assert (
+        compare_drop_jump_metric_results(unknown_a, unknown_b, "compare actual drop exposure").state
+        is ComparabilityState.INSUFFICIENT_INFORMATION
+    )
+    assert (
+        compare_drop_jump_metric_results(unknown_a, unknown_b).state
+        is ComparabilityState.COMPARABLE
     )
 
 
@@ -1911,7 +2028,7 @@ def test_mbt_instrumented_release_velocity_requires_qualified_event_evidence() -
         acquisition=acquisition,
     )
     raw_event = replace(event, source_evidence=None)
-    with pytest.raises(ValueError, match="source.evidence"):
+    with pytest.raises(ValueError, match=r"source_evidence"):
         build_mbt_release_velocity_evidence(
             observation_id=event.source_observation_id,
             result_id=InstanceIdentifier("result", "synthetic-mbt-release-raw"),
