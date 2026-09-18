@@ -16,8 +16,10 @@ from dynamislm.analysis.validation import (
     AnalysisValidationError,
     validate_analysis_capability_registry,
     validate_comparability_authority,
+    validate_context_prerequisites,
     validate_evidence_applicability,
     validate_exact_support,
+    validate_identity_dimensions,
     validate_level_of_analysis,
     validate_observation_hashes,
     validate_support_shape,
@@ -26,6 +28,8 @@ from dynamislm.comparability.res70_validation import build_res70_refusal
 from dynamislm.longitudinal.statistics.models import StatisticalOperationDisposition
 from dynamislm.longitudinal.statistics.registry import (
     RES69_OPERATION_REGISTRY,
+    RES69_RELIABILITY_ASSUMPTION_ASSESSMENT_OPERATION,
+    RES69_RELIABILITY_DESIGN_OPERATION,
     RES69_SCALE_REGISTRY,
     RES69_SCALE_SEMANTICS_AUTHORITY,
 )
@@ -124,7 +128,12 @@ def _statistical_authority_check(
     if request.scale_semantics is not None:
         hashes.append(canonical_hash(request.scale_semantics))
     required = {item.stable_id for item in capability.required_statistical_authority}
-    if any("reliability-design" in item for item in required):
+    if required.intersection(
+        {
+            RES69_RELIABILITY_DESIGN_OPERATION.stable_id,
+            RES69_RELIABILITY_ASSUMPTION_ASSESSMENT_OPERATION.stable_id,
+        }
+    ):
         if request.reliability_authority is None:
             raise AnalysisValidationError(
                 "source-bound reliability design authority is required",
@@ -186,6 +195,8 @@ def authorize_analysis(
         _operation_check(capability)
         support = validate_exact_support(request)
         identity_hashes = validate_observation_hashes(request, support)
+        validate_identity_dimensions(request, capability, support)
+        validate_context_prerequisites(request, capability, support)
         validate_level_of_analysis(request, capability, support)
         validate_support_shape(request, capability, support)
         comparability_hashes = validate_comparability_authority(request, capability, support)

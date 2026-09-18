@@ -19,6 +19,7 @@ from dynamislm.claims.models import (
 from dynamislm.claims.registry import (
     CANONICAL_CLAIM_POLICY_REGISTRY,
     ClaimAxis,
+    ClaimLevel,
     ClaimPolicy,
     ClaimPolicyRegistry,
     is_canonical_claim_registry,
@@ -506,10 +507,11 @@ def _evaluate_axis(
     tuple[str, ...],
     str | None,
 ]:
-    requested = (
+    requested = cast(
+        ClaimLevel,
         intent.measurement_level
         if axis is ClaimAxis.MEASUREMENT_CHANGE
-        else intent.relationship_level
+        else intent.relationship_level,
     )
     if requested is None:
         return (), (), (), (), None
@@ -519,27 +521,46 @@ def _evaluate_axis(
     missing: list[str] = []
     first: str | None = None
     lower_failure: tuple[str | None, tuple[str, ...], tuple[str, ...]] | None = None
-    for level in levels:
-        policy = registry.resolve(axis, level)
+    for index, level in enumerate(levels):
+        current_level = cast(ClaimLevel, level)
+        policy = registry.resolve(axis, current_level)
         if policy is None:
-            blocked.append(level.value)
+            blocked.append(current_level.value)
             reasons.append("RES70_REGISTRY_INTEGRITY_FAILURE")
             first = first or "canonical claim policy"
             break
+        if policy.required_lower_level is not None and policy.required_lower_level not in allowed:
+            failure = lower_failure or (
+                "registered lower-level claim authority",
+                ("RES70_UNSUPPORTED_CLAIM_ESCALATION",),
+                ("required lower-level claim",),
+            )
+            requested_policy = registry.resolve(axis, requested)
+            if requested_policy is not None and requested is not current_level:
+                _, _, requested_reasons, _ = _policy_result(intent, requested_policy)
+                reasons.extend(requested_reasons)
+            blocked.extend(item.value for item in levels[index:])
+            reasons.extend(failure[1])
+            reasons.append("RES70_UNSUPPORTED_CLAIM_ESCALATION")
+            missing.extend(failure[2])
+            first = first or failure[0]
+            break
         ok, missing_item, reason_codes, missing_items = _policy_result(intent, policy)
         if ok:
-            allowed.append(level)
-            if level is requested:
+            allowed.append(current_level)
+            if current_level is requested:
                 break
         else:
-            if level is not requested:
-                blocked.append(level.value)
-                lower_failure = (missing_item, reason_codes, missing_items)
-                continue
-            blocked.append(level.value)
-            if lower_failure is not None and not reason_codes:
-                missing_item, reason_codes, missing_items = lower_failure
+            blocked.append(current_level.value)
+            blocked.extend(item.value for item in levels[index + 1 :])
+            lower_failure = (missing_item, reason_codes, missing_items)
             reasons.extend(reason_codes)
+            if current_level is not requested:
+                requested_policy = registry.resolve(axis, requested)
+                if requested_policy is not None:
+                    _, _, requested_reasons, _ = _policy_result(intent, requested_policy)
+                    reasons.extend(requested_reasons)
+                reasons.append("RES70_UNSUPPORTED_CLAIM_ESCALATION")
             missing.extend(missing_items)
             first = first or missing_item
             break

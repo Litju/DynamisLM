@@ -25,12 +25,22 @@ from dynamislm.evidence.res70 import (
     ApplicabilityAxis,
     validate_claim_evidence_authority,
 )
+from dynamislm.longitudinal.statistics.agreement import calculate_bland_altman_summary
+from dynamislm.longitudinal.statistics.descriptive import calculate_reference_window_deviation
 from dynamislm.longitudinal.statistics.models import StatisticalSupport
+from dynamislm.longitudinal.statistics.registry import (
+    RES69_METHOD_COMPARISON_DESIGN_OPERATION,
+    RES69_RELIABILITY_ASSUMPTION_ASSESSMENT_OPERATION,
+    RES69_RELIABILITY_DESIGN_OPERATION,
+    RES69_SCALE_SEMANTICS_AUTHORITY,
+)
+from dynamislm.longitudinal.statistics.reliability import calculate_two_replicate_random_error
 from dynamislm.longitudinal.statistics.support import (
     StatisticalConstraintError,
     validate_statistical_support,
 )
 from dynamislm.measurement.result import ScalarValue
+from dynamislm.refusal.models import RefusalResult
 from dynamislm.serialization import canonical_hash
 
 
@@ -41,6 +51,60 @@ class AnalysisValidationError(ValueError):
         super().__init__(message)
         self.code = code
         self.missing_information = missing_information
+
+
+_SUPPORTED_IDENTITY_DIMENSIONS = {
+    "CONSTRUCT",
+    "TEST_FAMILY",
+    "MEASURAND",
+    "METRIC_DEFINITION",
+    "PROTOCOL",
+    "EVENT_DEFINITION",
+    "PHASE_DEFINITION",
+    "UNIT",
+    "NORMALIZATION",
+    "ESTIMATOR",
+    "REGISTERED_PROCESSING_OPERATION",
+    "PROCESSING_PARAMETERS",
+    "FILTERING_SMOOTHING_RESAMPLING",
+    "SAMPLING_AND_TIMEBASE",
+    "CALIBRATION_REFERENCE",
+    "DEVICE_MEASURING_SYSTEM",
+    "PROVIDER",
+    "SOFTWARE_ALGORITHM_VERSION",
+    "HARDWARE_FIRMWARE_VERSION",
+    "SIGN_CONVENTION_AND_REFERENCE_FRAME",
+    "THRESHOLD_IDENTITY",
+    "TRIAL_SELECTION_POLICY",
+    "AGGREGATION_POLICY",
+    "SESSION_SEGMENTATION",
+    "VALUE_ORIGIN",
+}
+_SUPPORTED_CONTEXT_PREREQUISITES = {
+    "FOOTBALL_WORLD_CONTEXT",
+    "MATCH_TRAINING_TESTING_EXPOSURE",
+}
+_SUPPORTED_SUPPORT_SHAPES = {
+    "exactly-two-scalar-entries",
+    "nonzero-denominator",
+    "strictly-positive-values",
+    "one-current-entry",
+    "at-least-two-reference-entries",
+    "positive-reference-sd",
+    "repeated-observations",
+    "explicit-clustering",
+    "two-replicate-pairs",
+    "one-pair-per-independent-subject",
+    "distinct-test-identities",
+    "temporal-or-lag-policy",
+    "explicit-random-effects",
+}
+_SUPPORTED_STATISTICAL_AUTHORITY = {
+    RES69_SCALE_SEMANTICS_AUTHORITY.stable_id,
+    RES69_RELIABILITY_DESIGN_OPERATION.stable_id,
+    RES69_RELIABILITY_ASSUMPTION_ASSESSMENT_OPERATION.stable_id,
+    RES69_METHOD_COMPARISON_DESIGN_OPERATION.stable_id,
+}
 
 
 def validate_analysis_capability_registry(registry: AnalysisCapabilityRegistry) -> None:
@@ -67,6 +131,40 @@ def validate_analysis_capability_registry(registry: AnalysisCapabilityRegistry) 
             "analysis capability registry hash does not match entries",
             "RES70_REGISTRY_INTEGRITY_FAILURE",
         )
+    for capability in registry.entries:
+        if capability.disposition.value != "IMPLEMENTED":
+            continue
+        unknown = (
+            set(capability.required_identity_dimensions) - _SUPPORTED_IDENTITY_DIMENSIONS
+        ) | (set(capability.required_context) - _SUPPORTED_CONTEXT_PREREQUISITES)
+        unknown |= set(capability.required_support_shape) - _SUPPORTED_SUPPORT_SHAPES
+        unknown |= {
+            item.stable_id for item in capability.required_statistical_authority
+        } - _SUPPORTED_STATISTICAL_AUTHORITY
+        if unknown:
+            raise AnalysisValidationError(
+                "implemented capability declares an unknown prerequisite token",
+                "RES70_REGISTRY_INTEGRITY_FAILURE",
+                tuple(sorted(unknown)),
+            )
+        if capability.output_claim_floor is not None and capability.output_claim_floor not in {
+            "OBSERVED_VALUE",
+            "NUMERICAL_CHANGE",
+            "COMPARABLE_CHANGE",
+            "CHANGE_RELATIVE_TO_MEASUREMENT_ERROR",
+            "PRACTICAL_OR_DECISION_MEANINGFULNESS",
+            "OBSERVATION",
+            "DESCRIPTIVE_CHANGE",
+            "ASSOCIATION",
+            "TEMPORAL_ASSOCIATION",
+            "MECHANISTIC_HYPOTHESIS",
+            "CAUSAL_EVIDENCE",
+        }:
+            raise AnalysisValidationError(
+                "implemented capability declares an unknown output claim floor",
+                "RES70_REGISTRY_INTEGRITY_FAILURE",
+                (capability.output_claim_floor,),
+            )
 
 
 def validate_exact_support(request: AnalysisAuthorizationRequest) -> StatisticalSupport:
@@ -122,6 +220,99 @@ def validate_observation_hashes(
                     "RES70_REGISTRY_INTEGRITY_FAILURE",
                 )
     return expected
+
+
+def validate_identity_dimensions(
+    request: AnalysisAuthorizationRequest,
+    capability: AnalysisCapability,
+    support: StatisticalSupport,
+) -> None:
+    """Verify every declared identity dimension exists on exact support."""
+
+    del request
+    unknown = set(capability.required_identity_dimensions) - _SUPPORTED_IDENTITY_DIMENSIONS
+    if unknown:
+        raise AnalysisValidationError(
+            "unknown identity prerequisite token",
+            "RES70_REGISTRY_INTEGRITY_FAILURE",
+            tuple(sorted(unknown)),
+        )
+    for dimension in capability.required_identity_dimensions:
+        for entry in support.included_entries:
+            identity = entry.observation.identity
+            semantic = identity.semantic
+            processing = identity.processing
+            result = entry.observation.result
+            values: dict[str, object] = {
+                "CONSTRUCT": semantic.construct,
+                "TEST_FAMILY": semantic.test_family,
+                "MEASURAND": semantic.measurand,
+                "METRIC_DEFINITION": semantic.metric_definition,
+                "PROTOCOL": semantic.protocol,
+                "EVENT_DEFINITION": processing.event_definitions,
+                "PHASE_DEFINITION": processing.phase_definitions,
+                "UNIT": result.unit or processing.unit,
+                "NORMALIZATION": processing.normalization,
+                "ESTIMATOR": processing.estimator,
+                "REGISTERED_PROCESSING_OPERATION": processing.registered_operation,
+                "PROCESSING_PARAMETERS": processing.method_parameters,
+                "FILTERING_SMOOTHING_RESAMPLING": processing.filtering,
+                "SAMPLING_AND_TIMEBASE": identity.acquisition.sampling,
+                "CALIBRATION_REFERENCE": identity.acquisition.calibration_reference,
+                "DEVICE_MEASURING_SYSTEM": identity.acquisition.device,
+                "PROVIDER": tuple(
+                    item for item in processing.method_parameters if item.key == "provider"
+                ),
+                "SOFTWARE_ALGORITHM_VERSION": identity.version.software_version,
+                "HARDWARE_FIRMWARE_VERSION": identity.version.hardware_firmware,
+                "SIGN_CONVENTION_AND_REFERENCE_FRAME": processing.sign_convention,
+                "THRESHOLD_IDENTITY": tuple(
+                    item for item in processing.method_parameters if "threshold" in item.key.lower()
+                ),
+                "TRIAL_SELECTION_POLICY": processing.trial_selection,
+                "AGGREGATION_POLICY": processing.aggregation,
+                "SESSION_SEGMENTATION": tuple(
+                    item
+                    for item in processing.method_parameters
+                    if item.key == "session_segmentation"
+                ),
+                "VALUE_ORIGIN": result.classification.value_origin,
+            }
+            if values[dimension] is None or values[dimension] == ():
+                raise AnalysisValidationError(
+                    "declared identity dimension is unresolved",
+                    "RES70_UNRESOLVED_IDENTITY",
+                    (dimension,),
+                )
+
+
+def validate_context_prerequisites(
+    request: AnalysisAuthorizationRequest,
+    capability: AnalysisCapability,
+    support: StatisticalSupport,
+) -> None:
+    unknown = set(capability.required_context) - _SUPPORTED_CONTEXT_PREREQUISITES
+    if unknown:
+        raise AnalysisValidationError(
+            "unknown context prerequisite token",
+            "RES70_REGISTRY_INTEGRITY_FAILURE",
+            tuple(sorted(unknown)),
+        )
+    for context_token in capability.required_context:
+        if not request.context_references:
+            raise AnalysisValidationError(
+                "declared context prerequisite is missing",
+                "RES70_INCOMPATIBLE_CONTEXT",
+                (context_token,),
+            )
+        if context_token == "MATCH_TRAINING_TESTING_EXPOSURE" and any(
+            entry.football_context.exposure is None for entry in support.included_entries
+        ):
+            raise AnalysisValidationError(
+                "match/training/testing exposure context is unresolved",
+                "RES70_INCOMPATIBLE_CONTEXT",
+                (context_token,),
+            )
 
 
 def _scalar_entries(support: StatisticalSupport) -> tuple[object, ...]:
@@ -199,6 +390,13 @@ def validate_support_shape(
 ) -> None:
     entries = support.entries
     scalar_count = len(_scalar_entries(support))
+    unknown = set(capability.required_support_shape) - _SUPPORTED_SUPPORT_SHAPES
+    if unknown:
+        raise AnalysisValidationError(
+            "unknown support-shape prerequisite token",
+            "RES70_REGISTRY_INTEGRITY_FAILURE",
+            tuple(sorted(unknown)),
+        )
     for shape in capability.required_support_shape:
         if shape == "exactly-two-scalar-entries" and (len(entries) != 2 or scalar_count != 2):
             raise AnalysisValidationError(
@@ -262,6 +460,61 @@ def validate_support_shape(
                     "cross-test association requires distinct registered test identities",
                     "RES70_STATISTICAL_AUTHORITY_INSUFFICIENT",
                 )
+        if shape == "positive-reference-sd":
+            result = calculate_reference_window_deviation(support)
+            if isinstance(result, RefusalResult):
+                raise AnalysisValidationError(
+                    "RES-69 reference-window validator rejected the support",
+                    "RES70_STATISTICAL_AUTHORITY_INSUFFICIENT",
+                    result.missing_information,
+                )
+        if shape == "two-replicate-pairs":
+            if request.reliability_authority is None:
+                raise AnalysisValidationError(
+                    "two-replicate support requires source-bound reliability authority",
+                    "RES70_STATISTICAL_AUTHORITY_INSUFFICIENT",
+                )
+            result = calculate_two_replicate_random_error(
+                support,
+                request.reliability_authority,
+            )
+            if isinstance(result, RefusalResult):
+                raise AnalysisValidationError(
+                    "RES-69 reliability validator rejected the support",
+                    "RES70_STATISTICAL_AUTHORITY_INSUFFICIENT",
+                    result.missing_information,
+                )
+        if shape == "one-pair-per-independent-subject":
+            if request.method_comparison_authority is None:
+                raise AnalysisValidationError(
+                    "one-pair support requires source-bound method-comparison authority",
+                    "RES70_STATISTICAL_AUTHORITY_INSUFFICIENT",
+                )
+            result = calculate_bland_altman_summary(
+                support,
+                request.method_comparison_authority,
+            )
+            if isinstance(result, RefusalResult):
+                raise AnalysisValidationError(
+                    "RES-69 method-comparison validator rejected the support",
+                    "RES70_STATISTICAL_AUTHORITY_INSUFFICIENT",
+                    result.missing_information,
+                )
+        if (
+            shape == "temporal-or-lag-policy"
+            and request.requested_level.temporal_order_policy is None
+        ):
+            raise AnalysisValidationError(
+                "temporal or lag policy is required",
+                "RES70_WRONG_LEVEL_OF_ANALYSIS",
+            )
+        if shape == "explicit-random-effects" and not any(
+            item.key in {"random_effects", "fixed_effects"} for item in request.requested_parameters
+        ):
+            raise AnalysisValidationError(
+                "explicit random-effects specification is required",
+                "RES70_WRONG_LEVEL_OF_ANALYSIS",
+            )
 
 
 def validate_comparability_authority(
@@ -383,8 +636,10 @@ __all__ = [
     "AnalysisValidationError",
     "validate_analysis_capability_registry",
     "validate_comparability_authority",
+    "validate_context_prerequisites",
     "validate_evidence_applicability",
     "validate_exact_support",
+    "validate_identity_dimensions",
     "validate_level_of_analysis",
     "validate_observation_hashes",
     "validate_support_shape",
