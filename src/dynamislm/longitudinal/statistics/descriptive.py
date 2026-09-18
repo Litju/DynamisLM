@@ -292,7 +292,7 @@ def calculate_relative_change(
     del ratio_scale
     claim = "calculate arithmetic relative and percent longitudinal change"
     try:
-        baseline, followup, unit, authorities = _pair_entries(
+        baseline, followup, _unit, authorities = _pair_entries(
             support,
             baseline_entry=baseline_entry,
             followup_entry=followup_entry,
