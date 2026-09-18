@@ -21,6 +21,7 @@ from dynamislm.comparability.res70_models import (
     BridgeExecutionStatus,
     BridgeMode,
     BridgeRegistration,
+    ClaimContext,
     ComparabilityDimension,
     CrossSourceComparabilityDecision,
     CrossSourceComparabilityRequest,
@@ -45,6 +46,13 @@ from dynamislm.comparability.res70_validation import (
     validate_bridge_registry,
     validate_cross_source_request,
 )
+from dynamislm.football.models import (
+    FootballWorldContext,
+    MatchSession,
+    TestingSession,
+    TrainingSession,
+)
+from dynamislm.football.validation import validate_football_world_context
 from dynamislm.measurement.identity import (
     InstanceIdentifier,
     MetadataEntry,
@@ -80,10 +88,85 @@ def _metadata_text(value: object) -> str | None:
     return canonical_hash(value)
 
 
+def _football_context_signature(context: FootballWorldContext) -> str:
+    validate_football_world_context(context)
+    session = context.session
+    session_kind = type(session).__name__
+    session_details: tuple[tuple[str, object], ...] = ()
+    if isinstance(session, MatchSession):
+        session_details = (
+            ("competition_kind", session.competition_context.competition_kind.value),
+            ("venue_role", session.venue_role.value),
+        )
+    elif isinstance(session, TrainingSession):
+        session_details = (
+            ("training_type", session.training_type.stable_id if session.training_type else None),
+        )
+    elif isinstance(session, TestingSession):
+        session_details = (
+            ("test_type", session.test_type.stable_id if session.test_type else None),
+        )
+    exposure = context.exposure
+    exposure_signature = (
+        (
+            type(exposure).__name__,
+            exposure.participation_state.value,
+            exposure.observed_duration_seconds,
+        )
+        if exposure is not None
+        else None
+    )
+    return canonical_hash(
+        {
+            "session_kind": session_kind,
+            "session_details": session_details,
+            "exposure": exposure_signature,
+            "microcycle_present": context.microcycle_context is not None,
+        }
+    )
+
+
+def _context_candidates(
+    observation: ScientificMeasurementObservation,
+    football_contexts: Mapping[object, object] | Sequence[object] | None,
+) -> tuple[FootballWorldContext, ...]:
+    if football_contexts is None:
+        return ()
+    values = (
+        tuple(football_contexts.values())
+        if isinstance(football_contexts, Mapping)
+        else tuple(football_contexts)
+    )
+    candidates: list[FootballWorldContext] = []
+    for value in values:
+        if not isinstance(value, FootballWorldContext):
+            raise ComparabilityAuthorityError(
+                "football context resolver must contain typed FootballWorldContext values"
+            )
+        if value.observation_context_id == observation.context.context_id or (
+            value.athlete.athlete_id == observation.context.athlete_id
+            and value.session.session_id == observation.context.session_id
+        ):
+            if value not in candidates:
+                candidates.append(value)
+    return tuple(candidates)
+
+
+def _context_for_observation(
+    observation: ScientificMeasurementObservation,
+    football_contexts: Mapping[object, object] | Sequence[object] | None,
+) -> FootballWorldContext | None:
+    candidates = _context_candidates(observation, football_contexts)
+    if len(candidates) != 1:
+        return None
+    return candidates[0]
+
+
 def _dimension_values(
     observation: ScientificMeasurementObservation,
     *,
-    claim_context_present: bool,
+    claim_context: ClaimContext | None,
+    football_context: FootballWorldContext | None,
 ) -> dict[ComparabilityDimension, str | None]:
     identity = observation.identity
     semantic = identity.semantic
@@ -93,6 +176,14 @@ def _dimension_values(
     context = observation.context
     result = observation.result
     parameters = {item.key: item.value for item in processing.method_parameters}
+    requested_world_context = (
+        claim_context.football_world_context if claim_context is not None else None
+    )
+    exposure_value = (
+        _football_context_signature(football_context)
+        if football_context is not None and requested_world_context is not None
+        else None
+    )
     return {
         ComparabilityDimension.CONSTRUCT: semantic.construct.stable_id,
         ComparabilityDimension.TEST_FAMILY: semantic.test_family.stable_id,
@@ -151,16 +242,18 @@ def _dimension_values(
         ComparabilityDimension.ACQUISITION_CONTEXT: _canonical_value(
             (context.environment, context.context_metadata)
         ),
-        ComparabilityDimension.EXPOSURE_CONTEXT_MATCH_OR_TRAINING: (
-            context.population_context if claim_context_present else None
-        ),
+        ComparabilityDimension.EXPOSURE_CONTEXT_MATCH_OR_TRAINING: (exposure_value),
         ComparabilityDimension.VALUE_ORIGIN: result.classification.value_origin.value,
         ComparabilityDimension.UNCERTAINTY_ERROR_MODEL: _canonical_value(result.uncertainty),
         ComparabilityDimension.POPULATION_APPLICABILITY: context.population_context,
         ComparabilityDimension.EVIDENCE_APPLICABILITY: _canonical_value(
             observation.provenance.evidence_references
         ),
-        ComparabilityDimension.FOOTBALL_WORLD_CONTEXT: None,
+        ComparabilityDimension.FOOTBALL_WORLD_CONTEXT: (
+            _football_context_signature(football_context)
+            if football_context is not None and requested_world_context is not None
+            else None
+        ),
     }
 
 
@@ -216,10 +309,26 @@ def _findings(
     left: ScientificMeasurementObservation,
     right: ScientificMeasurementObservation,
     *,
-    claim_context_present: bool,
+    claim_context: ClaimContext | None,
+    football_contexts: Mapping[object, object] | Sequence[object] | None,
 ) -> tuple[DimensionFinding, ...]:
-    left_values = _dimension_values(left, claim_context_present=claim_context_present)
-    right_values = _dimension_values(right, claim_context_present=claim_context_present)
+    left_context = _context_for_observation(left, football_contexts)
+    right_context = _context_for_observation(right, football_contexts)
+    left_values = _dimension_values(
+        left,
+        claim_context=claim_context,
+        football_context=left_context,
+    )
+    right_values = _dimension_values(
+        right,
+        claim_context=claim_context,
+        football_context=right_context,
+    )
+    requested_context_value = (
+        _football_context_signature(claim_context.football_world_context)
+        if claim_context is not None and claim_context.football_world_context is not None
+        else None
+    )
     findings: list[DimensionFinding] = []
     for dimension in ComparabilityDimension:
         left_value = left_values[dimension]
@@ -230,10 +339,32 @@ def _findings(
                 ComparabilityDimension.FOOTBALL_WORLD_CONTEXT,
                 ComparabilityDimension.EXPOSURE_CONTEXT_MATCH_OR_TRAINING,
             }
-            and not claim_context_present
+            and claim_context is None
         ):
             status = DimensionFindingStatus.NOT_APPLICABLE
             reason_codes: tuple[str, ...] = ()
+        elif (
+            dimension
+            in {
+                ComparabilityDimension.FOOTBALL_WORLD_CONTEXT,
+                ComparabilityDimension.EXPOSURE_CONTEXT_MATCH_OR_TRAINING,
+            }
+            and requested_context_value is not None
+            and (left_value is None or right_value is None)
+        ):
+            status = DimensionFindingStatus.UNKNOWN
+            reason_codes = ("MISSING_TYPED_CONTEXT",)
+        elif (
+            dimension
+            in {
+                ComparabilityDimension.FOOTBALL_WORLD_CONTEXT,
+                ComparabilityDimension.EXPOSURE_CONTEXT_MATCH_OR_TRAINING,
+            }
+            and requested_context_value is not None
+            and (left_value != requested_context_value or right_value != requested_context_value)
+        ):
+            status = DimensionFindingStatus.MISMATCH
+            reason_codes = (_reason_for_dimension(dimension),)
         elif (
             left_value is None
             and right_value is None
@@ -361,7 +492,8 @@ def assess_cross_source_comparability(
         findings = _findings(
             left,
             right,
-            claim_context_present=request.claim_context is not None,
+            claim_context=request.claim_context,
+            football_contexts=football_contexts,
         )
         leaf = family_result
         return CrossSourceComparabilityDecision.create(
@@ -446,7 +578,8 @@ def assess_cross_source_comparability(
     findings = _findings(
         effective_left,
         effective_right,
-        claim_context_present=request.claim_context is not None,
+        claim_context=request.claim_context,
+        football_contexts=football_contexts,
     )
     unknown = tuple(
         finding for finding in findings if finding.status is DimensionFindingStatus.UNKNOWN

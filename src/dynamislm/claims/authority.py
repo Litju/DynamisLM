@@ -118,6 +118,18 @@ def _exact_upstream_observations(
     return intent.observations
 
 
+def _exact_upstream_contexts(intent: ClaimIntent) -> tuple[object, ...]:
+    if intent.analysis_authorization_request is not None:
+        support = intent.analysis_authorization_request.support
+        if support is not None:
+            return tuple(entry.football_context for entry in support.included_entries)
+    if intent.statistical_result is not None and intent.statistical_result.support is not None:
+        return tuple(
+            entry.football_context for entry in intent.statistical_result.support.included_entries
+        )
+    return ()
+
+
 def _validate_upstream_authority(intent: ClaimIntent) -> None:
     authorization = intent.analysis_authorization
     authorization_request = intent.analysis_authorization_request
@@ -164,6 +176,7 @@ def _validate_upstream_authority(intent: ClaimIntent) -> None:
                 _exact_upstream_observations(intent),
                 bridge_requests=bridge_requests,
                 bridge_executions=bridge_executions,
+                football_contexts=_exact_upstream_contexts(intent),
             )
         except (RES70ValidationError, ValueError) as exc:
             raise ClaimUpstreamValidationError(

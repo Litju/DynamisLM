@@ -16,6 +16,8 @@ from dynamislm.comparability.models import (
     ComparabilityState,
     TransformationRequest,
 )
+from dynamislm.football.models import FootballWorldContext
+from dynamislm.football.validation import validate_football_world_context
 from dynamislm.measurement.identity import (
     InstanceIdentifier,
     MeasurementIdentity,
@@ -300,11 +302,14 @@ class ClaimContext:
     context_reference: RegistryReference
     context_kind: str
     attributes: tuple[MetadataEntry, ...] = ()
+    football_world_context: FootballWorldContext | None = None
 
     def __post_init__(self) -> None:
         _require_instance(self.context_reference, RegistryReference, "context_reference")
         _require_text(self.context_kind, "context_kind")
         _require_tuple_items(self.attributes, MetadataEntry, "attributes")
+        if self.football_world_context is not None:
+            validate_football_world_context(self.football_world_context)
 
 
 @register_serializable_type

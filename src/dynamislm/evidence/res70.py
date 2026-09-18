@@ -4,12 +4,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import StrEnum
+from typing import TYPE_CHECKING
 
 from dynamislm.evidence.models import ApplicabilityDecision
-from dynamislm.football.models import FootballWorldContext
-from dynamislm.football.validation import validate_football_world_context
-from dynamislm.longitudinal.statistics.models import StatisticalSupport
-from dynamislm.longitudinal.statistics.support import validate_statistical_support
 from dynamislm.measurement.identity import (
     RegistryReference,
     _require_enum,
@@ -18,19 +15,16 @@ from dynamislm.measurement.identity import (
     _require_tuple_items,
     require_tuple,
 )
-from dynamislm.population.models import (
-    CanonicalPopulationDecision,
-    CanonicalPopulationStatus,
-    CanonicalSourceDecision,
-    CanonicalSourceStatus,
-    EvidenceClass,
-    V2EvidenceApplicability,
-)
-from dynamislm.population.qualification import (
-    qualify_canonical_population,
-    qualify_canonical_source,
-)
 from dynamislm.serialization import canonical_hash, register_serializable_type
+
+if TYPE_CHECKING:
+    from dynamislm.football.models import FootballWorldContext
+    from dynamislm.longitudinal.statistics.models import StatisticalSupport
+    from dynamislm.population.models import (
+        CanonicalPopulationDecision,
+        CanonicalSourceDecision,
+        V2EvidenceApplicability,
+    )
 
 
 def _require_string_tuple(value: object, field_name: str) -> None:
@@ -61,6 +55,14 @@ class ApplicabilityAuthorityProvenance:
     football_contexts: tuple[FootballWorldContext, ...] = ()
 
     def __post_init__(self) -> None:
+        from dynamislm.football.models import FootballWorldContext
+        from dynamislm.longitudinal.statistics.models import StatisticalSupport
+        from dynamislm.population.models import (
+            CanonicalPopulationDecision,
+            CanonicalSourceDecision,
+            V2EvidenceApplicability,
+        )
+
         _require_tuple_items(self.source_decisions, CanonicalSourceDecision, "source_decisions")
         _require_tuple_items(
             self.population_decisions,
@@ -212,6 +214,9 @@ def validate_claim_evidence_applicability(value: ClaimEvidenceApplicability) -> 
 def _validate_source_authority(
     decisions: tuple[CanonicalSourceDecision, ...],
 ) -> None:
+    from dynamislm.population.models import CanonicalSourceStatus
+    from dynamislm.population.qualification import qualify_canonical_source
+
     if not decisions:
         raise ValueError("affirmative applicability requires canonical source authority")
     for decision in decisions:
@@ -224,6 +229,9 @@ def _validate_source_authority(
 def _validate_population_authority(
     decisions: tuple[CanonicalPopulationDecision, ...],
 ) -> None:
+    from dynamislm.population.models import CanonicalPopulationStatus
+    from dynamislm.population.qualification import qualify_canonical_population
+
     if not decisions:
         raise ValueError("affirmative applicability requires canonical population authority")
     for decision in decisions:
@@ -238,6 +246,8 @@ def _validate_population_authority(
 def _validate_evidence_authority(
     provenance: ApplicabilityAuthorityProvenance,
 ) -> None:
+    from dynamislm.population.models import EvidenceClass
+
     if not provenance.evidence_applicabilities:
         raise ValueError("affirmative method applicability requires canonical evidence authority")
     if not provenance.source_decisions:
@@ -258,6 +268,8 @@ def _validate_evidence_authority(
 def _validate_context_authority(
     provenance: ApplicabilityAuthorityProvenance,
 ) -> None:
+    from dynamislm.football.validation import validate_football_world_context
+
     if not provenance.football_contexts:
         raise ValueError("contextual applicability requires typed football-world contexts")
     for context in provenance.football_contexts:
@@ -267,6 +279,8 @@ def _validate_context_authority(
 def _validate_statistical_authority(
     provenance: ApplicabilityAuthorityProvenance,
 ) -> None:
+    from dynamislm.longitudinal.statistics.support import validate_statistical_support
+
     if provenance.statistical_support is None:
         raise ValueError("statistical applicability requires exact statistical support")
     validate_statistical_support(provenance.statistical_support)

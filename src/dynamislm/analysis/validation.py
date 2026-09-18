@@ -532,6 +532,9 @@ def validate_comparability_authority(
                 tuple(entry.observation for entry in support.included_entries),
                 bridge_requests=request.bridge_requests,
                 bridge_executions=request.bridge_executions,
+                football_contexts=tuple(
+                    entry.football_context for entry in support.included_entries
+                ),
             )
         except RES70ValidationError as exc:
             raise AnalysisValidationError(
