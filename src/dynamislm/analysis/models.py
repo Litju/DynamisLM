@@ -8,7 +8,13 @@ from enum import StrEnum
 from dynamislm.comparability.models import ComparabilityState
 from dynamislm.comparability.res70_models import CrossSourceComparabilityDecision
 from dynamislm.evidence.res70 import ClaimEvidenceApplicability
-from dynamislm.longitudinal.statistics.models import StatisticalSupport
+from dynamislm.longitudinal.statistics.models import (
+    MeasurementScaleSemantics,
+    MethodComparisonDesignAuthority,
+    ReliabilityAssumptionAssessment,
+    ReliabilityDesignAuthority,
+    StatisticalSupport,
+)
 from dynamislm.measurement.identity import (
     InstanceIdentifier,
     MetadataEntry,
@@ -252,6 +258,10 @@ class AnalysisAuthorizationRequest:
     evidence_applicability: ClaimEvidenceApplicability | None
     context_references: tuple[RegistryReference, ...]
     requested_parameters: tuple[MetadataEntry, ...] = ()
+    reliability_authority: ReliabilityDesignAuthority | None = None
+    reliability_assessment: ReliabilityAssumptionAssessment | None = None
+    method_comparison_authority: MethodComparisonDesignAuthority | None = None
+    scale_semantics: MeasurementScaleSemantics | None = None
 
     def __post_init__(self) -> None:
         _require_instance(self.request_id, InstanceIdentifier, "request_id")
@@ -260,8 +270,9 @@ class AnalysisAuthorizationRequest:
         _require_enum(self.analysis_class, AnalysisClass, "analysis_class")
         _require_optional_instance(self.support, StatisticalSupport, "support")
         _require_optional_instance(self.support_reference, RegistryReference, "support_reference")
-        if self.support is None and self.support_reference is None:
-            raise ValueError("analysis authorization requires exact support or support_reference")
+        # An empty support slot is a valid request shape for a fail-closed
+        # refusal: the authority, not dataclass construction, reports the
+        # missing prerequisite to the caller/LM.
         _require_tuple_items(self.observations, ScientificMeasurementObservation, "observations")
         _require_string_tuple(self.identity_hashes, "identity_hashes")
         for item in self.identity_hashes:
@@ -279,6 +290,26 @@ class AnalysisAuthorizationRequest:
         )
         _require_tuple_items(self.context_references, RegistryReference, "context_references")
         _require_tuple_items(self.requested_parameters, MetadataEntry, "requested_parameters")
+        _require_optional_instance(
+            self.reliability_authority,
+            ReliabilityDesignAuthority,
+            "reliability_authority",
+        )
+        _require_optional_instance(
+            self.reliability_assessment,
+            ReliabilityAssumptionAssessment,
+            "reliability_assessment",
+        )
+        _require_optional_instance(
+            self.method_comparison_authority,
+            MethodComparisonDesignAuthority,
+            "method_comparison_authority",
+        )
+        _require_optional_instance(
+            self.scale_semantics,
+            MeasurementScaleSemantics,
+            "scale_semantics",
+        )
 
     @property
     def request_hash(self) -> str:
@@ -307,6 +338,7 @@ class AnalysisAuthorization:
     support_hashes: tuple[str, ...]
     identity_hashes: tuple[str, ...]
     comparability_hashes: tuple[str, ...]
+    statistical_authority_hashes: tuple[str, ...]
     resolved_level: AnalysisLevelIdentity
     registry_version: str
     software_version: str
@@ -337,6 +369,7 @@ class AnalysisAuthorization:
             ("support_hashes", self.support_hashes),
             ("identity_hashes", self.identity_hashes),
             ("comparability_hashes", self.comparability_hashes),
+            ("statistical_authority_hashes", self.statistical_authority_hashes),
         ):
             require_tuple(values, field_name)
             for item in values:
@@ -367,6 +400,7 @@ class AnalysisAuthorization:
                 "support_hashes": self.support_hashes,
                 "identity_hashes": self.identity_hashes,
                 "comparability_hashes": self.comparability_hashes,
+                "statistical_authority_hashes": self.statistical_authority_hashes,
                 "resolved_level": self.resolved_level,
                 "registry_version": self.registry_version,
                 "software_version": self.software_version,
@@ -385,6 +419,75 @@ class AnalysisAuthorization:
         )
         if self.authorization_id != expected_id:
             raise ValueError("authorization_id does not match immutable authorization content")
+
+    @classmethod
+    def create(
+        cls,
+        *,
+        status: AnalysisAuthorizationStatus,
+        request_id: InstanceIdentifier,
+        analysis_class: AnalysisClass,
+        capability_reference: RegistryReference,
+        capability_hash: str,
+        operation_reference: RegistryReference | None,
+        estimator_reference: RegistryReference | None,
+        support_hashes: tuple[str, ...],
+        identity_hashes: tuple[str, ...],
+        comparability_hashes: tuple[str, ...],
+        statistical_authority_hashes: tuple[str, ...],
+        resolved_level: AnalysisLevelIdentity,
+        registry_version: str,
+        software_version: str,
+        reason_codes: tuple[str, ...],
+        missing_information: tuple[str, ...],
+        safe_descriptions: tuple[str, ...],
+        refusal_result: RefusalResult | None = None,
+    ) -> AnalysisAuthorization:
+        content = {
+            "status": status,
+            "request_id": request_id,
+            "analysis_class": analysis_class,
+            "capability_reference": capability_reference,
+            "capability_hash": capability_hash,
+            "operation_reference": operation_reference,
+            "estimator_reference": estimator_reference,
+            "support_hashes": support_hashes,
+            "identity_hashes": identity_hashes,
+            "comparability_hashes": comparability_hashes,
+            "statistical_authority_hashes": statistical_authority_hashes,
+            "resolved_level": resolved_level,
+            "registry_version": registry_version,
+            "software_version": software_version,
+            "reason_codes": reason_codes,
+            "missing_information": missing_information,
+            "safe_descriptions": safe_descriptions,
+            "refusal_result": refusal_result,
+        }
+        authorization_hash = canonical_hash(content)
+        return cls(
+            authorization_id=InstanceIdentifier(
+                "analysis-authorization", authorization_hash.removeprefix(_SHA256_PREFIX)
+            ),
+            status=status,
+            request_id=request_id,
+            analysis_class=analysis_class,
+            capability_reference=capability_reference,
+            capability_hash=capability_hash,
+            operation_reference=operation_reference,
+            estimator_reference=estimator_reference,
+            support_hashes=support_hashes,
+            identity_hashes=identity_hashes,
+            comparability_hashes=comparability_hashes,
+            statistical_authority_hashes=statistical_authority_hashes,
+            resolved_level=resolved_level,
+            registry_version=registry_version,
+            software_version=software_version,
+            reason_codes=reason_codes,
+            missing_information=missing_information,
+            safe_descriptions=safe_descriptions,
+            refusal_result=refusal_result,
+            authorization_hash=authorization_hash,
+        )
 
     @property
     def canonical_authorization_hash(self) -> str:
