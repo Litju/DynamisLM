@@ -1124,3 +1124,55 @@ RES34_TO_RES69_AUTHORITY_CHANGED=NO
 The next authorized action is a separate implementation mission that realizes
 this record and adds adversarial tests. RES-70-DR-001 itself does not authorize
 production code, tests, bridges, deferred statistics, or model work.
+
+## Implementation evidence — RES-70-IMPLEMENTATION-001
+
+This section records factual implementation evidence for the separately
+authorized implementation mission. It does not alter the frozen scientific
+design or authorize any deferred operation.
+
+```text
+IMPLEMENTATION_STATUS=COMPLETE_PENDING_REVIEW
+IMPLEMENTATION_MISSION=RES-70-IMPLEMENTATION-001
+IMPLEMENTATION_ENTRY_HEAD=5e01e409234b5fab242ff9937a76efbb7020c255
+SERIALIZATION_VERSION=3
+RES34_TO_RES69_AUTHORITY_CHANGED=NO
+RES71_PLUS_IMPLEMENTED=NO
+DEPENDENCY_EXPANSION=NO
+```
+
+Implemented authority surfaces:
+
+- exact-hash observation references and pairwise cross-source comparability;
+- material-dimension findings with explicit six-state outcomes and no
+  transitive closure;
+- canonical bridge declarations, deterministic execution, append-only output
+  observations, and provenance-bound transformation results;
+- RES-69-consuming analysis capability registry and prerequisite gate;
+- two-axis measurement/change and relationship/causal claim authority with
+  prediction kept separate;
+- independent method, source, population, contextual, and statistical
+  applicability assessments;
+- explicit level-of-analysis, repeated-unit, and pseudo-replication gates;
+- RES-70 refusal codes, V3 contracts, hashes, and adversarial tests.
+
+Deferred or refused by implementation, as required by this record:
+
+- deferred RES-69 repeated-measures and mixed-effects operations;
+- generic practical thresholds, readiness/fatigue/injury interpretation, and
+  causal estimation;
+- LM runtime/tool calling, model training, GPU work, and RES-71 work;
+- family-specific production bridges without their owning scientific evidence.
+
+Atomic implementation commits:
+
+```text
+e7223dc feat(res70): add cross-source authority contracts
+6975e40 feat(res70): implement comparability and bridge authority
+f9f30dd feat(res70): implement analysis capability validation
+fd16a89 feat(res70): implement claim authority adjudication
+c6e8c07 test(res70): qualify cross-source authority adversarially
+978d259 fix(res70): remove redundant authority scaffolding
+```
+
+The final implementation receipt is `docs/decisions/RES70-RECEIPT.json`.
