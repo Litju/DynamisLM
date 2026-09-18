@@ -97,6 +97,7 @@ from dynamislm.comparability import (
     validate_bridge_registration,
     validate_bridge_registry,
     validate_cross_source_decision,
+    validate_cross_source_decision_set,
     validate_cross_source_request,
     validate_pairwise_decisions,
 )
@@ -844,6 +845,7 @@ __all__ = [
     "validate_bridge_registry",
     "validate_bridge_registration",
     "validate_cross_source_decision",
+    "validate_cross_source_decision_set",
     "validate_cross_source_request",
     "validate_pairwise_decisions",
     "validate_analysis_authorization",

@@ -412,6 +412,7 @@ class CrossSourceComparabilityDecision:
     reason_codes: tuple[str, ...] = ()
     missing_information: tuple[str, ...] = ()
     leaf_result: ComparabilityResult | None = None
+    bridge_execution_hash: str | None = None
     decision_hash: str | None = None
 
     def __post_init__(self) -> None:
@@ -447,6 +448,8 @@ class CrossSourceComparabilityDecision:
         _require_string_tuple(self.reason_codes, "reason_codes")
         _require_string_tuple(self.missing_information, "missing_information")
         _require_optional_instance(self.leaf_result, ComparabilityResult, "leaf_result")
+        if self.bridge_execution_hash is not None:
+            _require_hash(self.bridge_execution_hash, "bridge_execution_hash")
         if self.state is ComparabilityState.COMPARABLE_WITH_CONDITIONS and not self.conditions:
             raise ValueError("conditional comparability must retain explicit conditions")
         if self.state is ComparabilityState.REQUIRES_TRANSFORMATION and not (
@@ -483,6 +486,7 @@ class CrossSourceComparabilityDecision:
                 "reason_codes": self.reason_codes,
                 "missing_information": self.missing_information,
                 "leaf_result": self.leaf_result,
+                "bridge_execution_hash": self.bridge_execution_hash,
             }
         )
 
@@ -519,6 +523,7 @@ class CrossSourceComparabilityDecision:
         reason_codes: tuple[str, ...] = (),
         missing_information: tuple[str, ...] = (),
         leaf_result: ComparabilityResult | None = None,
+        bridge_execution_hash: str | None = None,
     ) -> CrossSourceComparabilityDecision:
         """Construct a decision while deriving its immutable ID and hash."""
 
@@ -538,6 +543,7 @@ class CrossSourceComparabilityDecision:
             "reason_codes": reason_codes,
             "missing_information": missing_information,
             "leaf_result": leaf_result,
+            "bridge_execution_hash": bridge_execution_hash,
         }
         decision_hash = canonical_hash(content)
         return cls(
@@ -560,6 +566,7 @@ class CrossSourceComparabilityDecision:
             reason_codes=reason_codes,
             missing_information=missing_information,
             leaf_result=leaf_result,
+            bridge_execution_hash=bridge_execution_hash,
             decision_hash=decision_hash,
         )
 
@@ -727,6 +734,8 @@ class BridgeExecutionResult:
     uncertainty_model: RegistryReference | None
     lossiness_description: str | None
     execution_hash: str | None = None
+    method_version: RegistryReference | None = None
+    provenance_rule: RegistryReference | None = None
 
     def __post_init__(self) -> None:
         _require_instance(self.execution_id, InstanceIdentifier, "execution_id")
@@ -751,12 +760,16 @@ class BridgeExecutionResult:
         _require_optional_instance(self.uncertainty_model, RegistryReference, "uncertainty_model")
         if self.lossiness_description is not None:
             _require_text(self.lossiness_description, "lossiness_description")
+        _require_optional_instance(self.method_version, RegistryReference, "method_version")
+        _require_optional_instance(self.provenance_rule, RegistryReference, "provenance_rule")
         if self.status is BridgeExecutionStatus.EXECUTED:
             if (
                 self.transformed_observation is None
                 or self.processing_run is None
                 or self.provenance is None
                 or self.output_observation_hash is None
+                or self.method_version is None
+                or self.provenance_rule is None
             ):
                 raise ValueError("executed bridge result must contain transformed provenance")
             if canonical_hash(self.transformed_observation) != self.output_observation_hash:
@@ -775,6 +788,8 @@ class BridgeExecutionResult:
                 "output_observation_hash": self.output_observation_hash,
                 "uncertainty_model": self.uncertainty_model,
                 "lossiness_description": self.lossiness_description,
+                "method_version": self.method_version,
+                "provenance_rule": self.provenance_rule,
                 "status": self.status,
             }
         )

@@ -331,6 +331,8 @@ def assess_cross_source_comparability(
     bridge_registry: BridgeRegistry | None = None,
     rule_registry: ComparabilityRuleRegistry = RES70_COMPARABILITY_RULE_REGISTRY,
     bridge_execution: BridgeExecutionResult | None = None,
+    bridge_request: BridgeApplicationRequest | None = None,
+    football_contexts: Mapping[object, object] | Sequence[object] | None = None,
     family_result: ComparabilityResult | None = None,
 ) -> CrossSourceComparabilityDecision:
     """Adjudicate one pair without label matching or transitive closure."""
@@ -381,6 +383,7 @@ def assess_cross_source_comparability(
             reason_codes=reasons,
             missing_information=missing,
             leaf_result=leaf,
+            bridge_execution_hash=None,
         )
 
     effective_left = left
@@ -397,14 +400,32 @@ def assess_cross_source_comparability(
             )
         try:
             if bridge_execution.source_observation == request.left_observation:
-                validate_bridge_execution(bridge_execution, None, left)
+                validate_bridge_execution(
+                    bridge_execution,
+                    bridge_request.request_hash
+                    if bridge_request is not None
+                    else bridge_execution.request_hash,
+                    left,
+                    bridge_registry=bridge_registry,
+                    bridge_request=bridge_request,
+                    target_identity=right.identity,
+                )
                 if bridge_execution.transformed_observation is None:
                     raise ComparabilityAuthorityError(
                         "executed bridge has no transformed observation"
                     )
                 effective_left = bridge_execution.transformed_observation
             elif bridge_execution.source_observation == request.right_observation:
-                validate_bridge_execution(bridge_execution, None, right)
+                validate_bridge_execution(
+                    bridge_execution,
+                    bridge_request.request_hash
+                    if bridge_request is not None
+                    else bridge_execution.request_hash,
+                    right,
+                    bridge_registry=bridge_registry,
+                    bridge_request=bridge_request,
+                    target_identity=left.identity,
+                )
                 if bridge_execution.transformed_observation is None:
                     raise ComparabilityAuthorityError(
                         "executed bridge has no transformed observation"
@@ -541,6 +562,11 @@ def assess_cross_source_comparability(
         reason_codes=reasons,
         missing_information=missing,
         leaf_result=leaf,
+        bridge_execution_hash=(
+            bridge_execution.canonical_execution_hash
+            if bridge_applied and bridge_execution is not None
+            else None
+        ),
     )
 
 
@@ -694,6 +720,8 @@ def execute_registered_bridge(
             "output_observation_hash": None,
             "uncertainty_model": bridge.uncertainty_model,
             "lossiness_description": bridge.lossiness_description,
+            "method_version": bridge.method_version,
+            "provenance_rule": bridge.provenance_rule,
             "status": BridgeExecutionStatus.DECLARATIVE_APPLIED,
         }
         execution_hash = canonical_hash(execution_content)
@@ -713,6 +741,8 @@ def execute_registered_bridge(
             uncertainty_model=bridge.uncertainty_model,
             lossiness_description=bridge.lossiness_description,
             execution_hash=execution_hash,
+            method_version=bridge.method_version,
+            provenance_rule=bridge.provenance_rule,
         )
         return result
     if request.target_identity is None:
@@ -826,6 +856,8 @@ def execute_registered_bridge(
         "output_observation_hash": canonical_hash(transformed),
         "uncertainty_model": bridge.uncertainty_model,
         "lossiness_description": bridge.lossiness_description,
+        "method_version": bridge.method_version,
+        "provenance_rule": bridge.provenance_rule,
         "status": BridgeExecutionStatus.EXECUTED,
     }
     execution_hash = canonical_hash(execution_content)
@@ -843,7 +875,27 @@ def execute_registered_bridge(
         uncertainty_model=bridge.uncertainty_model,
         lossiness_description=bridge.lossiness_description,
         execution_hash=execution_hash,
+        method_version=bridge.method_version,
+        provenance_rule=bridge.provenance_rule,
     )
+    try:
+        validate_bridge_execution(
+            result,
+            request.request_hash,
+            source_observation,
+            bridge_registry=bridge_registry,
+            operation_registry=operation_registry,
+            bridge_request=request,
+            target_identity=request.target_identity,
+        )
+    except RES70ValidationError as exc:
+        return build_res70_refusal(
+            "registered numerical bridge execution",
+            "RES70_BRIDGE_EXECUTION_FAILED",
+            refusal_class=RefusalClass.COMPUTATION_NOT_REGISTERED,
+            missing_information=(str(exc),),
+            observation_ids=(observation_id,),
+        )
     return result
 
 

@@ -60,6 +60,7 @@ from dynamislm.comparability.res70_validation import (
     validate_bridge_registration,
     validate_bridge_registry,
     validate_cross_source_decision,
+    validate_cross_source_decision_set,
     validate_cross_source_request,
     validate_pairwise_decisions,
 )
@@ -112,6 +113,7 @@ __all__ = [
     "validate_bridge_registration",
     "validate_bridge_registry",
     "validate_cross_source_decision",
+    "validate_cross_source_decision_set",
     "validate_cross_source_request",
     "validate_pairwise_decisions",
 ]
