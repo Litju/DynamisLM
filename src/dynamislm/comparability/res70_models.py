@@ -500,6 +500,69 @@ class CrossSourceComparabilityDecision:
             )
         )
 
+    @classmethod
+    def create(
+        cls,
+        *,
+        request_hash: str,
+        state: ComparabilityState,
+        dimension_findings: tuple[DimensionFinding, ...],
+        conditions: tuple[str, ...],
+        transformations_required: tuple[TransformationRequest, ...],
+        bridge_application_reference: RegistryReference | None,
+        rule_reference: RegistryReference | None,
+        evidence_references: tuple[RegistryReference, ...],
+        registry_version: str,
+        registry_hash: str,
+        left_observation: ObservationAuthorityReference,
+        right_observation: ObservationAuthorityReference,
+        reason_codes: tuple[str, ...] = (),
+        missing_information: tuple[str, ...] = (),
+        leaf_result: ComparabilityResult | None = None,
+    ) -> CrossSourceComparabilityDecision:
+        """Construct a decision while deriving its immutable ID and hash."""
+
+        content = {
+            "request_hash": request_hash,
+            "state": state,
+            "dimension_findings": dimension_findings,
+            "conditions": conditions,
+            "transformations_required": transformations_required,
+            "bridge_application_reference": bridge_application_reference,
+            "rule_reference": rule_reference,
+            "evidence_references": evidence_references,
+            "registry_version": registry_version,
+            "registry_hash": registry_hash,
+            "left_observation": left_observation,
+            "right_observation": right_observation,
+            "reason_codes": reason_codes,
+            "missing_information": missing_information,
+            "leaf_result": leaf_result,
+        }
+        decision_hash = canonical_hash(content)
+        return cls(
+            decision_id=InstanceIdentifier(
+                "cross-source-comparability-decision",
+                decision_hash.removeprefix(_SHA256_PREFIX),
+            ),
+            request_hash=request_hash,
+            state=state,
+            dimension_findings=dimension_findings,
+            conditions=conditions,
+            transformations_required=transformations_required,
+            bridge_application_reference=bridge_application_reference,
+            rule_reference=rule_reference,
+            evidence_references=evidence_references,
+            registry_version=registry_version,
+            registry_hash=registry_hash,
+            left_observation=left_observation,
+            right_observation=right_observation,
+            reason_codes=reason_codes,
+            missing_information=missing_information,
+            leaf_result=leaf_result,
+            decision_hash=decision_hash,
+        )
+
 
 @register_serializable_type
 @dataclass(frozen=True, slots=True)
@@ -627,6 +690,7 @@ class BridgeApplicationRequest:
     bridge_reference: RegistryReference
     claim_intent: RegistryReference
     requested_parameters: tuple[MetadataEntry, ...] = ()
+    target_identity: MeasurementIdentity | None = None
 
     def __post_init__(self) -> None:
         _require_instance(self.request_id, InstanceIdentifier, "request_id")
@@ -638,6 +702,7 @@ class BridgeApplicationRequest:
         _require_instance(self.bridge_reference, RegistryReference, "bridge_reference")
         _require_instance(self.claim_intent, RegistryReference, "claim_intent")
         _require_tuple_items(self.requested_parameters, MetadataEntry, "requested_parameters")
+        _require_optional_instance(self.target_identity, MeasurementIdentity, "target_identity")
 
     @property
     def request_hash(self) -> str:
