@@ -679,6 +679,32 @@ def test_reliability_assumption_wrong_protocol_refuses() -> None:
         )
 
 
+def test_reliability_assumption_missing_protocol_refuses() -> None:
+    support, authority, entries, _records, _pairs = _reliability_fixture()
+    first = entries[:2]
+    second = entries[2:]
+    missing_protocol = _with_unit(
+        first[1],
+        semantic=replace(first[1].observation.identity.semantic, protocol=None),
+    )
+    mixed_first = (first[0], missing_protocol)
+    mixed_entries = (*mixed_first, *second)
+    mixed_records = (_record(mixed_first), _record(second))
+    mixed_support = build_statistical_support(
+        (_input(mixed_first), _input(second)),
+        mixed_entries,
+        source_records=mixed_records,
+        missingness_policy=MissingnessPolicy.NO_IMPUTATION_NO_ZERO_FILL,
+    )
+    source = replace(
+        authority.assumption_assessment.source_evidence,
+        support=mixed_support,
+        source_records=mixed_records,
+    )
+    with pytest.raises(ValueError, match="without a protocol"):
+        build_reliability_assumption_assessment(source)
+
+
 def test_reliability_assumption_tamper_refuses() -> None:
     _support_value, authority, _entries_value, _records, _pairs = _reliability_fixture()
     with pytest.raises(ValueError):

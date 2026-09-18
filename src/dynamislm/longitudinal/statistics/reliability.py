@@ -157,11 +157,15 @@ def _validate_reliability_assumption_source_evidence(
             "reliability assumption source records do not match support",
             RES69ReasonCode.SUPPORT_MISMATCH.value,
         )
-    target_protocols = {
-        entry.observation.identity.semantic.protocol.stable_id
-        for entry in support.included_entries
-        if entry.observation.identity.semantic.protocol is not None
-    }
+    target_protocols: set[str] = set()
+    for entry in support.included_entries:
+        protocol = entry.observation.identity.semantic.protocol
+        if protocol is None:
+            raise StatisticalConstraintError(
+                "reliability assumption support contains an entry without a protocol identity",
+                RES69ReasonCode.IDENTITY_UNRESOLVED.value,
+            )
+        target_protocols.add(protocol.stable_id)
     if (
         len(target_protocols) != 1
         or next(iter(target_protocols)) != evidence.protocol_reference.stable_id
