@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from dataclasses import replace
 
+import pytest
+
 import dynamislm.comparability.res70_registry as res70_registry
 from dynamislm import (
     BridgeApplicationRequest,
@@ -18,7 +20,9 @@ from dynamislm import (
     SemanticIdentityKey,
     UnitReference,
     assess_cross_source_comparability,
+    canonical_hash,
     execute_registered_bridge,
+    validate_bridge_execution,
 )
 from dynamislm.comparability import (
     RES70_AFFINE_BRIDGE_OPERATION,
@@ -26,6 +30,7 @@ from dynamislm.comparability import (
     BridgeExecutionResult,
     BridgeExecutionStatus,
     BridgeRegistry,
+    RES70ValidationError,
 )
 from dynamislm.measurement.observation import ScientificMeasurementObservation
 from dynamislm.measurement.taxonomy import ValueOrigin
@@ -177,3 +182,65 @@ def test_declared_bridge_without_execution_never_supports_transformed_values() -
     assert decision.state.value == "REQUIRES_TRANSFORMATION"
     assert "RES70_BRIDGE_NOT_EXECUTED" in decision.reason_codes
     assert decision.transformations_required
+
+
+def test_forged_bridge_execution_hash_and_registration_are_rejected() -> None:
+    source, target, bridge, registry, claim = _bridge_fixture()
+    original_registry = res70_registry.CANONICAL_BRIDGE_REGISTRY
+    res70_registry.CANONICAL_BRIDGE_REGISTRY = registry
+    try:
+        request = BridgeApplicationRequest(
+            request_id=InstanceIdentifier("bridge-request", "res70-forged-execution"),
+            source_observation=ObservationAuthorityReference.from_observation(source),
+            bridge_reference=bridge.bridge_reference,
+            claim_intent=claim,
+            target_identity=target.identity,
+        )
+        execution = execute_registered_bridge(request, source)
+        assert isinstance(execution, BridgeExecutionResult)
+        forged_content = {
+            "request_hash": execution.request_hash,
+            "bridge_reference": execution.bridge_reference,
+            "bridge_hash": "sha256:" + "0" * 64,
+            "source_observation": execution.source_observation,
+            "transformed_observation": execution.transformed_observation,
+            "processing_run": execution.processing_run,
+            "provenance": execution.provenance,
+            "output_observation_hash": execution.output_observation_hash,
+            "uncertainty_model": execution.uncertainty_model,
+            "lossiness_description": execution.lossiness_description,
+            "method_version": execution.method_version,
+            "provenance_rule": execution.provenance_rule,
+            "status": execution.status,
+        }
+        forged_hash = canonical_hash(forged_content)
+        forged = BridgeExecutionResult(
+            execution_id=InstanceIdentifier(
+                "bridge-execution", forged_hash.removeprefix("sha256:")
+            ),
+            status=execution.status,
+            request_hash=execution.request_hash,
+            bridge_reference=execution.bridge_reference,
+            bridge_hash="sha256:" + "0" * 64,
+            source_observation=execution.source_observation,
+            transformed_observation=execution.transformed_observation,
+            processing_run=execution.processing_run,
+            provenance=execution.provenance,
+            output_observation_hash=execution.output_observation_hash,
+            uncertainty_model=execution.uncertainty_model,
+            lossiness_description=execution.lossiness_description,
+            method_version=execution.method_version,
+            provenance_rule=execution.provenance_rule,
+            execution_hash=forged_hash,
+        )
+        with pytest.raises(RES70ValidationError, match="canonical registration"):
+            validate_bridge_execution(
+                forged,
+                request.request_hash,
+                source,
+                bridge_registry=registry,
+                bridge_request=request,
+                target_identity=target.identity,
+            )
+    finally:
+        res70_registry.CANONICAL_BRIDGE_REGISTRY = original_registry

@@ -7,6 +7,7 @@ import pytest
 import dynamislm.comparability.res70_registry as res70_registry
 from dynamislm import (
     BridgeAuthorityOrigin,
+    ClaimContext,
     ComparabilityDimension,
     CrossSourceComparabilityRequest,
     InstanceIdentifier,
@@ -15,6 +16,7 @@ from dynamislm import (
     ScientificIdentifier,
     UnitReference,
     assess_cross_source_comparability,
+    build_longitudinal_observation_entry,
     validate_cross_source_decision,
 )
 from dynamislm.comparability import (
@@ -22,8 +24,11 @@ from dynamislm.comparability import (
     RES70ComparabilityAuthorityError,
     validate_pairwise_decisions,
 )
+from dynamislm.football.models import ParticipationState
+from dynamislm.longitudinal.models import LongitudinalObservationEntry
 from dynamislm.measurement.observation import ScientificMeasurementObservation
 from test_kernel import _derived_observation
+from test_longitudinal import _entry
 
 
 def _reference(object_type: str, key: str, label: str) -> RegistryReference:
@@ -36,6 +41,38 @@ def _claim() -> RegistryReference:
 
 def _unit() -> UnitReference:
     return UnitReference(ScientificIdentifier("dynamislm", "unit", "meter", "1.0.0"), "m")
+
+
+def _complete_context_entry(
+    key: str,
+    *,
+    kind: str = "training",
+) -> LongitudinalObservationEntry:
+    entry = _entry(
+        key,
+        kind=kind,
+        exposure_state=(
+            ParticipationState.STARTER if kind == "match" else ParticipationState.PRESENT
+        ),
+    )
+    identity = replace(
+        entry.observation.identity,
+        processing=replace(
+            entry.observation.identity.processing,
+            estimator=_reference("estimator", "context-estimator", "Context estimator"),
+            unit=_unit(),
+        ),
+    )
+    observation = replace(
+        entry.observation,
+        identity=identity,
+        result=replace(entry.observation.result, unit=_unit()),
+    )
+    return build_longitudinal_observation_entry(
+        observation,
+        entry.football_context,
+        entry.source_qualification_bindings,
+    )
 
 
 def _observation_pair() -> tuple[
@@ -143,3 +180,67 @@ def test_caller_supplied_synthetic_registry_cannot_authorize_comparability() -> 
     assert bridge_key.stable_id not in {
         item.bridge_reference.stable_id for item in synthetic_registry.entries
     }
+
+
+def test_typed_claim_context_is_content_adjudicated_for_positive_training_pair() -> None:
+    left = _complete_context_entry("res70-context-left")
+    right = _complete_context_entry("res70-context-right")
+    claim_context = ClaimContext(
+        context_reference=_reference("context", "training-world", "ignored label"),
+        context_kind="label-only-kind",
+        football_world_context=left.football_context,
+    )
+    request = CrossSourceComparabilityRequest(
+        request_id=InstanceIdentifier("cross-source-comparability-request", "context-positive"),
+        left_observation=ObservationAuthorityReference.from_observation(left.observation),
+        right_observation=ObservationAuthorityReference.from_observation(right.observation),
+        claim_intent=_claim(),
+        claim_context=claim_context,
+    )
+
+    decision = assess_cross_source_comparability(
+        request,
+        (left.observation, right.observation),
+        football_contexts=(left.football_context, right.football_context),
+    )
+
+    assert decision.state is ComparabilityState.COMPARABLE
+    context_findings = {
+        item.dimension: item.status
+        for item in decision.dimension_findings
+        if item.dimension
+        in {
+            ComparabilityDimension.FOOTBALL_WORLD_CONTEXT,
+            ComparabilityDimension.EXPOSURE_CONTEXT_MATCH_OR_TRAINING,
+        }
+    }
+    assert all(status.value == "MATCH" for status in context_findings.values())
+
+
+def test_typed_claim_context_mismatch_blocks_match_training_comparison() -> None:
+    training = _complete_context_entry("res70-context-training")
+    match = _complete_context_entry("res70-context-match", kind="match")
+    claim_context = ClaimContext(
+        context_reference=_reference("context", "training-world", "training"),
+        context_kind="not-authoritative-label",
+        football_world_context=training.football_context,
+    )
+    request = CrossSourceComparabilityRequest(
+        request_id=InstanceIdentifier("cross-source-comparability-request", "context-mismatch"),
+        left_observation=ObservationAuthorityReference.from_observation(training.observation),
+        right_observation=ObservationAuthorityReference.from_observation(match.observation),
+        claim_intent=_claim(),
+        claim_context=claim_context,
+    )
+
+    decision = assess_cross_source_comparability(
+        request,
+        (training.observation, match.observation),
+        football_contexts=(training.football_context, match.football_context),
+    )
+
+    assert decision.state in {
+        ComparabilityState.BRIDGE_VALIDATION_REQUIRED,
+        ComparabilityState.NOT_COMPARABLE,
+    }
+    assert "EXPOSURE_CONTEXT_MISMATCH" in decision.reason_codes
