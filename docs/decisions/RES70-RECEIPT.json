@@ -71,8 +71,9 @@
     "tracked_mutation": "NONE",
     "git_diff_check": "PASS"
   },
-  "pr": "PENDING",
+  "pr": 33,
   "linear_status": "IN_PROGRESS",
-  "review_state": "PENDING",
+  "hosted_ci": "IN_PROGRESS",
+  "review_state": "OPEN_PENDING_HOSTED_CI_AND_SCIENTIFIC_REVIEW",
   "next_authorized_action": "RES-70-REVIEW-001"
 }
