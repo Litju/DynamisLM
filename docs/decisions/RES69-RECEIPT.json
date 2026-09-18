@@ -1,11 +1,19 @@
 {
-  "mission": "RES-69-REVIEW-FIX-001",
+  "mission": "RES-69-REVIEW-FIX-002",
   "project": "DynamisLM",
   "linear_issue": "RES-69",
   "base_main": "e17c415dbf1e181a9dc5dc02b7f16d69d71d18b0",
-  "entry_head": "d4f2317e49ec66a12f9c22d98b822012ff351ce8",
+  "entry_head": "757593d84e3ad1ff39b0d8db1eea3e647904900e",
   "branch": "work/res-69-longitudinal-reliability-uncertainty",
   "design_status": "FROZEN",
+  "reliability_assumption_authority": {
+    "caller_assumption_claims_authoritative": false,
+    "canonical_registry": "RES69_RELIABILITY_ASSUMPTION_DECLARATION_REGISTRY",
+    "caller_minted_registry_authority": false,
+    "synthetic_declaration_public_authority": false,
+    "production_declarations": 0,
+    "no_production_declaration_fails_closed": true
+  },
   "implemented_surface": [
     "RES-62-backed StatisticalSupport and StatisticalAnalysisRun",
     "MeasurementScaleSemanticKeyV1 and fail-closed scale registry",
@@ -13,10 +21,14 @@
     "absolute, relative, percent, log-ratio, and window descriptives",
     "reference-window deviation, timestamp OLS, and descriptive within-athlete SD",
     "source-bound reliability assumption assessment and two-replicate random-error estimator",
+    "registered reliability-assumption declaration contract with canonical production resolution",
+    "caller assumption claims, caller registries, and synthetic declarations blocked from production authority",
+    "duplicate exact analysis-input IDs rejected without silent deduplication",
     "raw relative error with derived pooled 2N grand mean",
     "log-multiplicative typical error and factor interval",
     "stable method-key method-comparison authority and narrow Bland-Altman summary",
     "synthetic scale authority blocked from public production results",
+    "production reliability-assumption declaration count is zero; public claims fail closed",
     "V3 serialization and tamper validation for new public contracts"
   ],
   "deferred_surface": [
@@ -61,7 +73,7 @@
     "mypy": "PASS",
     "repository_policy": "PASS",
     "pytest": "PASS",
-    "test_count": 782,
+    "test_count": 797,
     "tracked_mutation": "NONE"
   },
   "serialization_version": 3,
@@ -81,14 +93,14 @@
   "codebase_memory_audit": {
     "used": true,
     "indexed_root": "/home/litju/projects/DynamisLM",
-    "initial_map": "RES-62 longitudinal models, lineage, registry, validation, generic measurement identity/result, comparability authority, refusal taxonomy, provenance, population/source qualification, ingestion, V3 serialization, exports, tests, and policy were mapped before editing.",
+    "initial_map": "RES-62 longitudinal models, lineage, registry, validation, generic measurement identity/result, comparability authority, refusal taxonomy, provenance, population/source qualification, ingestion, V3 serialization, exports, tests, and policy were mapped before editing; downstream callers of the reliability source/assessment/design builders were traced before the signature repair.",
     "changed_symbol_audit": "PASS",
     "unexpected_downstream_impact": "NONE"
   },
   "pr_state": {
     "created": false,
-    "number": null,
-    "head": null,
+    "number": 32,
+    "head": "PENDING_EXACT_REPAIR_HEAD",
     "hosted_ci": "PENDING_EXACT_REPAIR_HEAD",
     "review_findings": "PENDING_EXACT_REPAIR_HEAD",
     "linear_status": "IN_REVIEW"

@@ -59,6 +59,13 @@ current production scale registry has zero keys. They therefore refuse for
 real production data until an owning scientific registry supplies an
 authorized production entry.
 
+The reliability operations have an additional authority gate. A numerical
+implementation does not itself establish that a repeated protocol measures a
+stable underlying quantity, which error scale is scientifically applicable, or
+how a systematic trial effect should be assessed. Public production
+reliability claims therefore require a registered reliability-assumption
+declaration in addition to exact source support.
+
 Every numerical output is a `StatisticalEstimate` with its own typed unit.
 The `StatisticalResult` contains the immutable support snapshot and an
 immutable `StatisticalAnalysisRun` with RES-62 processing runs and provenance
@@ -207,16 +214,40 @@ or synthetic entry can never authorize a `StatisticalResult`.
 
 ## Reliability-design authority
 
-`ReliabilityAssumptionSourceEvidence` carries explicit stable-quantity,
-systematic-trial-effect, and error-scale claims. The registered
-`ReliabilityAssumptionAssessment` normalizer binds those claims to the exact
-support ID/hash, source records, source artifacts/provenance, protocol,
-evidence references, producing method, registry version, immutable source
-evidence hash, and authority token. `ReliabilityDesignEvidence` accepts only
-that assessment; free enum fields cannot mint design authority. Only the
-validated design normalizer produces a `ReliabilityDesignAuthority` with
-`AuthorityStatus.SOURCE_BOUND`; direct construction or an unverified
-assessment is refused by public calculations.
+`ReliabilityAssumptionDeclarationV1` is the scientific declaration owned by a
+registered study/protocol authority. It binds the declaration reference,
+study and protocol identities, stable-underlying-quantity status, systematic
+trial-effect assessment/policy, exact error-scale identity, evidence
+references, producing authority, registry version, production or synthetic
+origin, and an immutable declaration hash. The canonical
+`RES69_RELIABILITY_ASSUMPTION_DECLARATION_REGISTRY` is the only production
+resolution path.
+
+`ReliabilityAssumptionSourceEvidence` carries exact support/source bindings
+and a declaration reference/hash; it no longer carries free scientific
+assumption claims. The registered `ReliabilityAssumptionAssessment` derives
+stable-quantity status, systematic-trial-effect assessment, and error scale
+from the resolved declaration, then binds them to the exact support ID/hash,
+analysis-input IDs/hashes, source records, source artifacts/provenance,
+protocol, evidence references, producing method, registry version, source
+evidence hash, declaration hash, and authority token. Caller-supplied
+assumption claims and caller-supplied declaration registries cannot mint
+authority. Synthetic declarations are test-only and cannot authorize a
+public `StatisticalResult`.
+
+The current audit finds no RES-34..68 or RES-62 authority that establishes a
+complete production reliability-assumption declaration:
+`PRODUCTION_RELIABILITY_ASSUMPTION_DECLARATIONS=0`. Consequently, public
+reliability claims that require an assumption declaration fail closed until
+an owning scientific study/protocol authority provides one. Pure internal
+arithmetic helpers remain available for gold-equation tests and do not grant
+production claim authority.
+
+`ReliabilityDesignEvidence` accepts only a source-bound assessment; free enum
+fields cannot mint design authority. Only the validated design normalizer
+produces a `ReliabilityDesignAuthority` with `AuthorityStatus.SOURCE_BOUND`;
+direct construction or an unverified/synthetic assessment is refused by
+public calculations.
 
 The normalized authority binds the study/design identity, exact athletes,
 ordered replicate references, RES-62 entry and observation IDs/hashes, source

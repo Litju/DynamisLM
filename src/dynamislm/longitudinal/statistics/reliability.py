@@ -13,6 +13,8 @@ from dynamislm.longitudinal.statistics.models import (
     AuthorityStatus,
     MissingnessPolicy,
     ReliabilityAssumptionAssessment,
+    ReliabilityAssumptionDeclarationOrigin,
+    ReliabilityAssumptionDeclarationV1,
     ReliabilityAssumptionSourceEvidence,
     ReliabilityDesignAuthority,
     ReliabilityDesignEvidence,
@@ -47,6 +49,7 @@ from dynamislm.longitudinal.statistics.registry import (
     RES69_RAW_RELATIVE_ERROR_PERCENT_ESTIMAND,
     RES69_REGISTRY_VERSION,
     RES69_RELIABILITY_ASSUMPTION_ASSESSMENT_OPERATION,
+    RES69_RELIABILITY_ASSUMPTION_DECLARATION_REGISTRY,
     RES69_RELIABILITY_DESIGN_OPERATION,
     RES69_REPLICATE_ORDERING,
     RES69_SCALE_REGISTRY,
@@ -59,6 +62,7 @@ from dynamislm.longitudinal.statistics.registry import (
     TWO_REPLICATE_POOLED_RAW_GRAND_MEAN_V1,
     TWO_REPLICATE_WITHIN_SUBJECT_RANDOM_ERROR_SD_V1,
     MeasurementScaleRegistry,
+    ReliabilityAssumptionDeclarationRegistry,
 )
 from dynamislm.longitudinal.statistics.support import (
     StatisticalConstraintError,
@@ -99,30 +103,101 @@ def _source_evidence_references(
     return authority.evidence_references
 
 
+def _resolve_production_reliability_assumption_declaration(
+    declaration_reference: RegistryReference,
+    *,
+    registry: ReliabilityAssumptionDeclarationRegistry = (
+        RES69_RELIABILITY_ASSUMPTION_DECLARATION_REGISTRY
+    ),
+) -> ReliabilityAssumptionDeclarationV1:
+    if registry is not RES69_RELIABILITY_ASSUMPTION_DECLARATION_REGISTRY:
+        raise StatisticalConstraintError(
+            "public reliability assumption authority must resolve from the canonical "
+            "production declaration registry",
+            RES69ReasonCode.RELIABILITY_AUTHORITY_REQUIRED.value,
+            missing_information=("canonical RES-69 production reliability declaration",),
+        )
+    try:
+        declaration = registry.resolve(declaration_reference)
+    except ValueError as exc:
+        raise StatisticalConstraintError(
+            "reliability declaration registry contains conflicting authority",
+            RES69ReasonCode.REGISTRY_INTEGRITY_FAILURE.value,
+        ) from exc
+    if declaration is None:
+        raise StatisticalConstraintError(
+            "reliability assumption declaration is not registered in production authority",
+            RES69ReasonCode.RELIABILITY_AUTHORITY_REQUIRED.value,
+            missing_information=("registered production reliability assumption declaration",),
+        )
+    if declaration.authority_origin is not ReliabilityAssumptionDeclarationOrigin.PRODUCTION:
+        raise StatisticalConstraintError(
+            "synthetic reliability assumption declarations cannot authorize production claims",
+            RES69ReasonCode.RELIABILITY_AUTHORITY_REQUIRED.value,
+            missing_information=("production reliability assumption declaration",),
+        )
+    if declaration.registry_version != RES69_REGISTRY_VERSION:
+        raise StatisticalConstraintError(
+            "reliability assumption declaration registry version is not the "
+            "registered RES-69 version",
+            RES69ReasonCode.RELIABILITY_AUTHORITY_REQUIRED.value,
+        )
+    return declaration
+
+
 def build_reliability_assumption_source_evidence(
     *,
     support: StatisticalSupport,
     source_records: tuple[LongitudinalAthletePerformanceRecord, ...],
     study_identity: RegistryReference,
     protocol_reference: RegistryReference,
+    declaration_reference: RegistryReference,
     evidence_references: tuple[EvidenceReference, ...],
-    stable_underlying_quantity: StableUnderlyingQuantityStatus,
-    systematic_trial_effect: SystematicTrialEffectAssessment,
-    error_scale: ReliabilityErrorScale,
     producing_method: RegistryReference,
     registry_version: str = RES69_REGISTRY_VERSION,
+    registry: ReliabilityAssumptionDeclarationRegistry = (
+        RES69_RELIABILITY_ASSUMPTION_DECLARATION_REGISTRY
+    ),
 ) -> ReliabilityAssumptionSourceEvidence:
-    """Capture source/protocol claims before registered assessment normalization."""
+    """Bind exact source evidence to a registered production declaration."""
 
+    declaration = _resolve_production_reliability_assumption_declaration(
+        declaration_reference,
+        registry=registry,
+    )
+    if declaration.study_identity != study_identity:
+        raise StatisticalConstraintError(
+            "reliability declaration study identity does not match source evidence",
+            RES69ReasonCode.SUPPORT_MISMATCH.value,
+        )
+    if declaration.protocol_reference != protocol_reference:
+        raise StatisticalConstraintError(
+            "reliability declaration protocol identity does not match source evidence",
+            RES69ReasonCode.IDENTITY_UNRESOLVED.value,
+        )
+    if declaration.evidence_references != evidence_references:
+        raise StatisticalConstraintError(
+            "reliability declaration evidence references do not match source evidence",
+            RES69ReasonCode.SUPPORT_MISMATCH.value,
+        )
+    if declaration.producing_method != producing_method:
+        raise StatisticalConstraintError(
+            "reliability declaration producing method does not match source evidence",
+            RES69ReasonCode.RELIABILITY_AUTHORITY_REQUIRED.value,
+        )
+    if declaration.registry_version != registry_version:
+        raise StatisticalConstraintError(
+            "reliability declaration registry version does not match source evidence",
+            RES69ReasonCode.RELIABILITY_AUTHORITY_REQUIRED.value,
+        )
     return ReliabilityAssumptionSourceEvidence(
         support=support,
         source_records=source_records,
         study_identity=study_identity,
         protocol_reference=protocol_reference,
+        declaration_reference=declaration.declaration_reference,
+        declaration_hash=declaration.canonical_declaration_hash,
         evidence_references=evidence_references,
-        stable_underlying_quantity=stable_underlying_quantity,
-        systematic_trial_effect=systematic_trial_effect,
-        error_scale=error_scale,
         producing_method=producing_method,
         registry_version=registry_version,
     )
@@ -130,12 +205,45 @@ def build_reliability_assumption_source_evidence(
 
 def _validate_reliability_assumption_source_evidence(
     evidence: ReliabilityAssumptionSourceEvidence,
-) -> None:
+) -> ReliabilityAssumptionDeclarationV1:
     support = evidence.support
     validate_statistical_support(support)
     if evidence.producing_method != RES69_RELIABILITY_ASSUMPTION_ASSESSMENT_OPERATION:
         raise StatisticalConstraintError(
             "reliability assumptions must use the registered assessment operation",
+            RES69ReasonCode.RELIABILITY_AUTHORITY_REQUIRED.value,
+        )
+    declaration = _resolve_production_reliability_assumption_declaration(
+        evidence.declaration_reference
+    )
+    if evidence.declaration_hash != declaration.canonical_declaration_hash:
+        raise StatisticalConstraintError(
+            "reliability source evidence declaration hash is invalid",
+            RES69ReasonCode.RELIABILITY_AUTHORITY_REQUIRED.value,
+        )
+    if evidence.study_identity != declaration.study_identity:
+        raise StatisticalConstraintError(
+            "reliability declaration study identity does not match source evidence",
+            RES69ReasonCode.SUPPORT_MISMATCH.value,
+        )
+    if evidence.protocol_reference != declaration.protocol_reference:
+        raise StatisticalConstraintError(
+            "reliability declaration protocol identity does not match source evidence",
+            RES69ReasonCode.IDENTITY_UNRESOLVED.value,
+        )
+    if evidence.evidence_references != declaration.evidence_references:
+        raise StatisticalConstraintError(
+            "reliability declaration evidence references do not match source evidence",
+            RES69ReasonCode.SUPPORT_MISMATCH.value,
+        )
+    if evidence.producing_method != declaration.producing_method:
+        raise StatisticalConstraintError(
+            "reliability declaration producing method does not match source evidence",
+            RES69ReasonCode.RELIABILITY_AUTHORITY_REQUIRED.value,
+        )
+    if evidence.registry_version != declaration.registry_version:
+        raise StatisticalConstraintError(
+            "reliability declaration registry version does not match source evidence",
             RES69ReasonCode.RELIABILITY_AUTHORITY_REQUIRED.value,
         )
     if evidence.registry_version != RES69_REGISTRY_VERSION:
@@ -174,21 +282,13 @@ def _validate_reliability_assumption_source_evidence(
             "reliability assumption protocol does not match exact support",
             RES69ReasonCode.IDENTITY_UNRESOLVED.value,
         )
-    if not evidence.systematic_trial_effect.evidence_references:
-        raise StatisticalConstraintError(
-            "systematic trial-effect claim requires source evidence",
-            RES69ReasonCode.RELIABILITY_AUTHORITY_REQUIRED.value,
-        )
+    return declaration
 
 
-def build_reliability_assumption_assessment(
+def _build_reliability_assumption_assessment_from_declaration(
     evidence: ReliabilityAssumptionSourceEvidence,
+    declaration: ReliabilityAssumptionDeclarationV1,
 ) -> ReliabilityAssumptionAssessment:
-    """Normalize exact source/protocol evidence into source-bound authority."""
-
-    if not isinstance(evidence, ReliabilityAssumptionSourceEvidence):
-        raise ValueError("evidence must be a ReliabilityAssumptionSourceEvidence")
-    _validate_reliability_assumption_source_evidence(evidence)
     support = evidence.support
     assessment = ReliabilityAssumptionAssessment(
         support_id=support.canonical_support_id,
@@ -208,15 +308,102 @@ def build_reliability_assumption_assessment(
         source_provenance=support.source_provenance,
         study_identity=evidence.study_identity,
         protocol_reference=evidence.protocol_reference,
+        declaration_reference=evidence.declaration_reference,
+        declaration_hash=evidence.declaration_hash,
         evidence_references=evidence.evidence_references,
-        stable_underlying_quantity=evidence.stable_underlying_quantity,
-        systematic_trial_effect=evidence.systematic_trial_effect,
-        error_scale=evidence.error_scale,
+        stable_underlying_quantity=declaration.stable_underlying_quantity,
+        systematic_trial_effect=declaration.systematic_trial_effect,
+        error_scale=declaration.error_scale,
         producing_method=evidence.producing_method,
         registry_version=evidence.registry_version,
         source_evidence=evidence,
         source_evidence_hash=canonical_hash(evidence),
         authority_status=AuthorityStatus.UNVERIFIED,
+    )
+    return assessment
+
+
+def build_reliability_assumption_assessment(
+    evidence: ReliabilityAssumptionSourceEvidence,
+) -> ReliabilityAssumptionAssessment:
+    """Normalize exact source evidence through canonical production authority."""
+
+    if not isinstance(evidence, ReliabilityAssumptionSourceEvidence):
+        raise ValueError("evidence must be a ReliabilityAssumptionSourceEvidence")
+    declaration = _validate_reliability_assumption_source_evidence(evidence)
+    assessment = _build_reliability_assumption_assessment_from_declaration(
+        evidence,
+        declaration,
+    )
+    return replace(
+        assessment,
+        authority_status=AuthorityStatus.SOURCE_BOUND,
+        authority_token=canonical_hash(
+            {
+                "authority_hash": assessment.canonical_authority_hash,
+                "purpose": "RES69_SOURCE_BOUND_AUTHORITY_V1",
+            }
+        ),
+    )
+
+
+def _build_synthetic_reliability_assumption_assessment(
+    *,
+    support: StatisticalSupport,
+    source_records: tuple[LongitudinalAthletePerformanceRecord, ...],
+    study_identity: RegistryReference,
+    protocol_reference: RegistryReference,
+    evidence_references: tuple[EvidenceReference, ...],
+    stable_underlying_quantity: StableUnderlyingQuantityStatus,
+    systematic_trial_effect: SystematicTrialEffectAssessment,
+    error_scale: ReliabilityErrorScale,
+    producing_method: RegistryReference,
+    registry_version: str = RES69_REGISTRY_VERSION,
+) -> ReliabilityAssumptionAssessment:
+    """Private synthetic declaration path for arithmetic/unit tests only."""
+
+    declaration_reference = RegistryReference(
+        ScientificIdentifier(
+            "synthetic-res69",
+            "reliability-assumption-declaration",
+            canonical_hash(
+                {
+                    "support_hash": support.canonical_support_hash,
+                    "study_identity": study_identity,
+                    "protocol_reference": protocol_reference,
+                    "error_scale": error_scale,
+                }
+            ).removeprefix("sha256:"),
+            registry_version,
+        ),
+        "Synthetic RES-69 reliability assumption declaration",
+    )
+    declaration = ReliabilityAssumptionDeclarationV1(
+        declaration_reference=declaration_reference,
+        study_identity=study_identity,
+        protocol_reference=protocol_reference,
+        stable_underlying_quantity=stable_underlying_quantity,
+        systematic_trial_effect=systematic_trial_effect,
+        error_scale=error_scale,
+        evidence_references=evidence_references,
+        producing_method=producing_method,
+        registry_version=registry_version,
+        authority_origin=ReliabilityAssumptionDeclarationOrigin.SYNTHETIC_TEST,
+    )
+    evidence = ReliabilityAssumptionSourceEvidence(
+        support=support,
+        source_records=source_records,
+        study_identity=study_identity,
+        protocol_reference=protocol_reference,
+        declaration_reference=declaration.declaration_reference,
+        declaration_hash=declaration.canonical_declaration_hash,
+        evidence_references=evidence_references,
+        producing_method=producing_method,
+        registry_version=registry_version,
+    )
+    assessment = _build_reliability_assumption_assessment_from_declaration(
+        evidence,
+        declaration,
     )
     return replace(
         assessment,
@@ -306,6 +493,23 @@ def _validate_reliability_evidence(evidence: ReliabilityDesignEvidence) -> None:
     if not assessment.is_source_bound:
         raise StatisticalConstraintError(
             "source-bound ReliabilityAssumptionAssessment is required",
+            RES69ReasonCode.RELIABILITY_AUTHORITY_REQUIRED.value,
+        )
+    declaration = _validate_reliability_assumption_source_evidence(assessment.source_evidence)
+    if (
+        assessment.declaration_reference != declaration.declaration_reference
+        or assessment.declaration_hash != declaration.canonical_declaration_hash
+        or assessment.study_identity != declaration.study_identity
+        or assessment.protocol_reference != declaration.protocol_reference
+        or assessment.evidence_references != declaration.evidence_references
+        or assessment.stable_underlying_quantity != declaration.stable_underlying_quantity
+        or assessment.systematic_trial_effect != declaration.systematic_trial_effect
+        or assessment.error_scale != declaration.error_scale
+        or assessment.producing_method != declaration.producing_method
+        or assessment.registry_version != declaration.registry_version
+    ):
+        raise StatisticalConstraintError(
+            "reliability assumption assessment does not match registered declaration",
             RES69ReasonCode.RELIABILITY_AUTHORITY_REQUIRED.value,
         )
     if (
@@ -467,14 +671,11 @@ def _validate_reliability_evidence(evidence: ReliabilityDesignEvidence) -> None:
             )
 
 
-def build_reliability_design_authority(
+def _build_reliability_design_authority_from_evidence(
     evidence: ReliabilityDesignEvidence,
 ) -> ReliabilityDesignAuthority:
-    """Normalize source/protocol evidence into a source-bound authority object."""
+    """Internal normalizer used after production or test-only validation."""
 
-    if not isinstance(evidence, ReliabilityDesignEvidence):
-        raise ValueError("evidence must be a ReliabilityDesignEvidence")
-    _validate_reliability_evidence(evidence)
     support = evidence.support
     source_records = tuple(
         sorted(
@@ -531,6 +732,17 @@ def build_reliability_design_authority(
             }
         ),
     )
+
+
+def build_reliability_design_authority(
+    evidence: ReliabilityDesignEvidence,
+) -> ReliabilityDesignAuthority:
+    """Normalize source/protocol evidence into canonical production authority."""
+
+    if not isinstance(evidence, ReliabilityDesignEvidence):
+        raise ValueError("evidence must be a ReliabilityDesignEvidence")
+    _validate_reliability_evidence(evidence)
+    return _build_reliability_design_authority_from_evidence(evidence)
 
 
 def _validated_pairs(
@@ -642,6 +854,22 @@ def _sample_sd(values: tuple[float, ...]) -> float:
     return math.sqrt(math.fsum((value - mean) ** 2 for value in values) / (len(values) - 1))
 
 
+def _two_replicate_random_error_values(
+    first_values: tuple[float, ...],
+    second_values: tuple[float, ...],
+) -> tuple[float, float, float]:
+    """Pure two-replicate arithmetic; authority is validated by callers."""
+
+    if len(first_values) != len(second_values) or len(first_values) < 2:
+        raise ValueError("two-replicate random error requires at least two paired values")
+    differences = tuple(
+        second - first for first, second in zip(first_values, second_values, strict=True)
+    )
+    mean_shift = math.fsum(differences) / len(differences)
+    sd_difference = _sample_sd(differences)
+    return mean_shift, sd_difference, sd_difference / math.sqrt(2.0)
+
+
 def _raw_relative_error_values(
     first_values: tuple[float, ...],
     second_values: tuple[float, ...],
@@ -722,10 +950,10 @@ def calculate_two_replicate_random_error(
                 RES69ReasonCode.ANALYSIS_DESIGN_MISMATCH.value,
             )
         pairs = _validated_pairs(support, authority)
-        differences = tuple(item[4] - item[3] for item in pairs)
-        mean_shift = math.fsum(differences) / len(differences)
-        sd_difference = _sample_sd(differences)
-        random_error_sd = sd_difference / math.sqrt(2.0)
+        mean_shift, sd_difference, random_error_sd = _two_replicate_random_error_values(
+            tuple(item[3] for item in pairs),
+            tuple(item[4] for item in pairs),
+        )
         parameters = _parameters(
             ("pair_count", len(pairs)),
             ("support_hash", support.canonical_support_hash),

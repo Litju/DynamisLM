@@ -13,6 +13,8 @@ from dataclasses import dataclass
 from dynamislm.longitudinal.statistics.models import (
     MeasurementScaleSemanticKeyV1,
     MeasurementScaleSemantics,
+    ReliabilityAssumptionDeclarationOrigin,
+    ReliabilityAssumptionDeclarationV1,
     ScaleAuthorityOrigin,
     StatisticalOperationDisposition,
 )
@@ -316,6 +318,50 @@ class MeasurementScaleRegistry:
         return MeasurementScaleRegistry((*self.entries, entry), self.registry_version)
 
 
+@register_serializable_type
+@dataclass(frozen=True, slots=True)
+class ReliabilityAssumptionDeclarationRegistry:
+    """Immutable registry of study/protocol-owned reliability declarations."""
+
+    entries: tuple[ReliabilityAssumptionDeclarationV1, ...] = ()
+    registry_version: str = RES69_REGISTRY_VERSION
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.entries, tuple):
+            raise ValueError("reliability declaration registry entries must be an immutable tuple")
+        if any(not isinstance(item, ReliabilityAssumptionDeclarationV1) for item in self.entries):
+            raise ValueError(
+                "reliability declaration registry entries must contain typed declarations"
+            )
+        references = [item.declaration_reference.stable_id for item in self.entries]
+        if len(set(references)) != len(references):
+            raise ValueError(
+                "RES69_REGISTRY_INTEGRITY_FAILURE: reliability declaration registry "
+                "cannot contain duplicate references"
+            )
+        if not isinstance(self.registry_version, str) or not self.registry_version.strip():
+            raise ValueError("registry_version must not be empty")
+        if any(item.registry_version != self.registry_version for item in self.entries):
+            raise ValueError("reliability declaration registry and declaration versions must match")
+
+    def resolve(
+        self,
+        reference: RegistryReference,
+    ) -> ReliabilityAssumptionDeclarationV1 | None:
+        if not isinstance(reference, RegistryReference):
+            raise ValueError("reliability declaration lookup requires a RegistryReference")
+        matches = tuple(
+            item
+            for item in self.entries
+            if item.declaration_reference.stable_id == reference.stable_id
+        )
+        if len(matches) > 1:
+            raise ValueError(
+                "RES69_REGISTRY_INTEGRITY_FAILURE: conflicting reliability declaration authority"
+            )
+        return matches[0] if matches else None
+
+
 # No family-specific scale authority is imported into the generic package.
 # RES-69 accepts exact production entries only after the owning scientific
 # registry supplies them; synthetic test entries are explicit and local.
@@ -331,6 +377,16 @@ WHY_EACH_REGISTERED_KEY_IS_AUTHORIZED: tuple[str, ...] = ()
 SCALE_REGISTRY_AUDIT = tuple(
     ScaleRegistryAuditEntry(None, item, "UNREGISTERED", "No frozen RES-69 scale authority entry.")
     for item in UNREGISTERED_SCALE_KEYS
+)
+
+# No current RES-34..68 or RES-62 authority explicitly establishes a complete
+# reliability-assumption declaration for a production study/protocol.  Keep
+# the canonical production registry empty until an owning authority supplies
+# one; synthetic declarations remain test-only and are never added here.
+RES69_RELIABILITY_ASSUMPTION_DECLARATION_REGISTRY = ReliabilityAssumptionDeclarationRegistry()
+PRODUCTION_RELIABILITY_ASSUMPTION_DECLARATIONS = sum(
+    item.authority_origin is ReliabilityAssumptionDeclarationOrigin.PRODUCTION
+    for item in RES69_RELIABILITY_ASSUMPTION_DECLARATION_REGISTRY.entries
 )
 
 
@@ -563,6 +619,7 @@ __all__ = [
     "LOG_BA",
     "MDC_SDC",
     "MIXED_EFFECTS",
+    "PRODUCTION_RELIABILITY_ASSUMPTION_DECLARATIONS",
     "READINESS_FATIGUE_INJURY_INTERPRETATION",
     "REGISTERED_SCALE_KEYS",
     "REPEATED_MEASURES_BA",
@@ -616,6 +673,7 @@ __all__ = [
     "RES69_RELATIVE_CHANGE_ESTIMATOR",
     "RES69_RELATIVE_CHANGE_OPERATION",
     "RES69_RELIABILITY_ASSUMPTION_ASSESSMENT_OPERATION",
+    "RES69_RELIABILITY_ASSUMPTION_DECLARATION_REGISTRY",
     "RES69_RELIABILITY_DESIGN_OPERATION",
     "RES69_REPLICATE_ORDERING",
     "RES69_SAMPLE_SD_ESTIMAND",
@@ -644,6 +702,7 @@ __all__ = [
     "WHY_EACH_REGISTERED_KEY_IS_AUTHORIZED",
     "MeasurementScaleRegistry",
     "RegisteredStatisticalOperation",
+    "ReliabilityAssumptionDeclarationRegistry",
     "ScaleRegistryAuditEntry",
     "StatisticalOperationRegistry",
     "audit_scale_registry",

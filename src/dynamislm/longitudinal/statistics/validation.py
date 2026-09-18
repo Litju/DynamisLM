@@ -7,6 +7,7 @@ from dynamislm.longitudinal.record import build_multi_source_processing_run
 from dynamislm.longitudinal.statistics.models import (
     MeasurementScaleSemanticKeyV1,
     MeasurementScaleSemantics,
+    ReliabilityAssumptionDeclarationOrigin,
     RES69ReasonCode,
     ScaleAuthorityOrigin,
     StatisticalAnalysisRun,
@@ -20,6 +21,8 @@ from dynamislm.longitudinal.statistics.registry import (
     RES69_METHOD_COMPARISON_DESIGN_OPERATION,
     RES69_OPERATION_REGISTRY,
     RES69_REGISTRY_VERSION,
+    RES69_RELIABILITY_ASSUMPTION_DECLARATION_REGISTRY,
+    RES69_RELIABILITY_DESIGN_OPERATION,
     RES69_SCALE_REGISTRY,
     RES69_SOFTWARE_VERSION,
 )
@@ -367,9 +370,75 @@ def validate_reliability_authority(
             "source-bound ReliabilityAssumptionAssessment is required",
             RES69ReasonCode.RELIABILITY_AUTHORITY_REQUIRED.value,
         )
+    assessment = authority.assumption_assessment
+    try:
+        declaration = RES69_RELIABILITY_ASSUMPTION_DECLARATION_REGISTRY.resolve(
+            assessment.declaration_reference
+        )
+    except ValueError as exc:
+        raise StatisticalConstraintError(
+            "reliability declaration registry contains conflicting authority",
+            RES69ReasonCode.REGISTRY_INTEGRITY_FAILURE.value,
+        ) from exc
+    if declaration is None:
+        raise StatisticalConstraintError(
+            "reliability authority requires a registered production assumption declaration",
+            RES69ReasonCode.RELIABILITY_AUTHORITY_REQUIRED.value,
+            missing_information=("canonical production reliability assumption declaration",),
+        )
+    if declaration.authority_origin is not ReliabilityAssumptionDeclarationOrigin.PRODUCTION:
+        raise StatisticalConstraintError(
+            "synthetic reliability declarations cannot authorize a production statistical result",
+            RES69ReasonCode.RELIABILITY_AUTHORITY_REQUIRED.value,
+        )
+    if declaration.registry_version != RES69_REGISTRY_VERSION:
+        raise StatisticalConstraintError(
+            "reliability declaration registry version is not the registered RES-69 version",
+            RES69ReasonCode.RELIABILITY_AUTHORITY_REQUIRED.value,
+        )
     if (
-        authority.assumption_assessment.support_id != support.canonical_support_id
-        or authority.assumption_assessment.support_hash != support.canonical_support_hash
+        assessment.declaration_hash != declaration.canonical_declaration_hash
+        or assessment.study_identity != declaration.study_identity
+        or assessment.protocol_reference != declaration.protocol_reference
+        or assessment.evidence_references != declaration.evidence_references
+        or assessment.stable_underlying_quantity != declaration.stable_underlying_quantity
+        or assessment.systematic_trial_effect != declaration.systematic_trial_effect
+        or assessment.error_scale != declaration.error_scale
+        or assessment.producing_method != declaration.producing_method
+        or assessment.registry_version != declaration.registry_version
+    ):
+        raise StatisticalConstraintError(
+            "reliability assessment does not match registered declaration authority",
+            RES69ReasonCode.RELIABILITY_AUTHORITY_REQUIRED.value,
+        )
+    source_evidence = assessment.source_evidence
+    if (
+        source_evidence.declaration_reference != declaration.declaration_reference
+        or source_evidence.declaration_hash != declaration.canonical_declaration_hash
+        or source_evidence.study_identity != declaration.study_identity
+        or source_evidence.protocol_reference != declaration.protocol_reference
+        or source_evidence.evidence_references != declaration.evidence_references
+        or source_evidence.producing_method != declaration.producing_method
+        or source_evidence.registry_version != declaration.registry_version
+        or assessment.source_evidence_hash != canonical_hash(source_evidence)
+    ):
+        raise StatisticalConstraintError(
+            "reliability source evidence does not match registered declaration authority",
+            RES69ReasonCode.RELIABILITY_AUTHORITY_REQUIRED.value,
+        )
+    if authority.producing_method != RES69_RELIABILITY_DESIGN_OPERATION:
+        raise StatisticalConstraintError(
+            "reliability authority must use the registered design-normalization operation",
+            RES69ReasonCode.RELIABILITY_AUTHORITY_REQUIRED.value,
+        )
+    if authority.registry_version != RES69_REGISTRY_VERSION:
+        raise StatisticalConstraintError(
+            "reliability authority registry version is not the registered RES-69 version",
+            RES69ReasonCode.RELIABILITY_AUTHORITY_REQUIRED.value,
+        )
+    if (
+        assessment.support_id != support.canonical_support_id
+        or assessment.support_hash != support.canonical_support_hash
     ):
         raise StatisticalConstraintError(
             "reliability assumption assessment does not match exact support",

@@ -25,8 +25,10 @@ from dynamislm.longitudinal.models import (
     MultiSourceAnalysisScope,
 )
 from dynamislm.longitudinal.statistics import (
+    PRODUCTION_RELIABILITY_ASSUMPTION_DECLARATIONS,
     RES69_METHOD_COMPARISON_DESIGN_OPERATION,
     RES69_RELIABILITY_ASSUMPTION_ASSESSMENT_OPERATION,
+    RES69_RELIABILITY_ASSUMPTION_DECLARATION_REGISTRY,
     RES69_RELIABILITY_DESIGN_OPERATION,
     RES69_REPLICATE_ORDERING,
     RES69_SCALE_REGISTRY,
@@ -42,6 +44,10 @@ from dynamislm.longitudinal.statistics import (
     MethodComparisonPair,
     MissingnessPolicy,
     ReliabilityAssumptionAssessment,
+    ReliabilityAssumptionDeclarationOrigin,
+    ReliabilityAssumptionDeclarationRegistry,
+    ReliabilityAssumptionDeclarationV1,
+    ReliabilityAssumptionSourceEvidence,
     ReliabilityDesignAuthority,
     ReliabilityErrorScale,
     ReliabilityQuestion,
@@ -63,7 +69,6 @@ from dynamislm.longitudinal.statistics import (
     build_reference_window_support,
     build_reliability_assumption_assessment,
     build_reliability_assumption_source_evidence,
-    build_reliability_design_authority,
     build_reliability_design_evidence,
     build_statistical_support,
     build_time_window_support,
@@ -237,6 +242,35 @@ def _is_refusal(value: object, code: RES69ReasonCode) -> bool:
     return isinstance(value, RefusalResult) and code.value in value.reason_codes
 
 
+def _build_public_assumption_source_evidence(
+    support: StatisticalSupport,
+    entries: tuple[LongitudinalObservationEntry, ...],
+    records: tuple[LongitudinalAthletePerformanceRecord, ...],
+    *,
+    declaration_reference: RegistryReference | None = None,
+    study_identity: RegistryReference | None = None,
+    protocol_reference: RegistryReference | None = None,
+    evidence_references: tuple[EvidenceReference, ...] | None = None,
+    registry: ReliabilityAssumptionDeclarationRegistry = (
+        RES69_RELIABILITY_ASSUMPTION_DECLARATION_REGISTRY
+    ),
+) -> ReliabilityAssumptionSourceEvidence:
+    protocol = protocol_reference or entries[0].observation.identity.semantic.protocol
+    assert protocol is not None
+    return build_reliability_assumption_source_evidence(
+        support=support,
+        source_records=records,
+        study_identity=study_identity or _reference("study", "reliability-study"),
+        protocol_reference=protocol,
+        declaration_reference=declaration_reference
+        or _reference("reliability-assumption-declaration", "unknown"),
+        evidence_references=evidence_references
+        or (EvidenceReference(_reference("evidence", "arbitrary")),),
+        producing_method=RES69_RELIABILITY_ASSUMPTION_ASSESSMENT_OPERATION,
+        registry=registry,
+    )
+
+
 def _reliability_fixture() -> tuple[
     StatisticalSupport,
     ReliabilityDesignAuthority,
@@ -280,7 +314,7 @@ def _build_reliability_authority(
     first = entries[0]
     protocol = first.observation.identity.semantic.protocol
     assert protocol is not None
-    assumption_source_evidence = build_reliability_assumption_source_evidence(
+    assumption_assessment = _reliability._build_synthetic_reliability_assumption_assessment(
         support=support,
         source_records=records,
         study_identity=_reference("study", "reliability-study"),
@@ -296,7 +330,6 @@ def _build_reliability_authority(
         error_scale=error_scale,
         producing_method=RES69_RELIABILITY_ASSUMPTION_ASSESSMENT_OPERATION,
     )
-    assumption_assessment = build_reliability_assumption_assessment(assumption_source_evidence)
     evidence = build_reliability_design_evidence(
         support=support,
         source_records=records,
@@ -319,7 +352,7 @@ def _build_reliability_authority(
         balanced_design=balanced_design,
         producing_method=RES69_RELIABILITY_DESIGN_OPERATION,
     )
-    return build_reliability_design_authority(evidence)
+    return _reliability._build_reliability_design_authority_from_evidence(evidence)
 
 
 def test_statistical_support_canonicalizes_same_athlete_multi_input_order() -> None:
@@ -348,6 +381,30 @@ def test_statistical_support_canonicalizes_same_athlete_multi_input_order() -> N
     )
     assert support_a == support_b
     assert support_a.canonical_support_hash == support_b.canonical_support_hash
+
+
+def test_duplicate_exact_analysis_input_id_refuses() -> None:
+    entries = _entries((1.0, 2.0), prefix="duplicate-analysis-input")
+    analysis_input = _input(entries)
+    with pytest.raises(ValueError, match="duplicate exact input IDs"):
+        build_statistical_support(
+            (analysis_input, analysis_input),
+            entries,
+            source_records=(_record(entries),),
+            missingness_policy=MissingnessPolicy.NO_IMPUTATION_NO_ZERO_FILL,
+        )
+
+
+def test_distinct_same_athlete_analysis_inputs_remain_valid() -> None:
+    first = _entries((1.0, 2.0), prefix="distinct-analysis-input-a")
+    second = _entries((3.0, 4.0), prefix="distinct-analysis-input-b")
+    support = build_statistical_support(
+        (_input(first), _input(second)),
+        (*first, *second),
+        source_records=(_record(first), _record(second)),
+        missingness_policy=MissingnessPolicy.NO_IMPUTATION_NO_ZERO_FILL,
+    )
+    assert len(support.analysis_inputs) == 2
 
 
 def test_absolute_relative_percent_and_log_ratio_gold_cases() -> None:
@@ -474,7 +531,7 @@ def test_public_scale_operations_reject_synthetic_scale_authority() -> None:
             raw_authority,
             registry=registry,
         ),
-        RES69ReasonCode.SCALE_OPERATION_NOT_AUTHORIZED,
+        RES69ReasonCode.RELIABILITY_AUTHORITY_REQUIRED,
     )
     assert _is_refusal(
         calculate_log_scale_typical_error(
@@ -482,7 +539,7 @@ def test_public_scale_operations_reject_synthetic_scale_authority() -> None:
             log_authority,
             registry=registry,
         ),
-        RES69ReasonCode.SCALE_OPERATION_NOT_AUTHORIZED,
+        RES69ReasonCode.RELIABILITY_AUTHORITY_REQUIRED,
     )
     assert authority.is_source_bound
 
@@ -639,11 +696,17 @@ def test_descriptive_within_athlete_sd_is_distinct_from_reliability() -> None:
 
 def test_two_replicate_random_error_and_source_bound_gate() -> None:
     support, authority, _entries_value, _records, _pairs = _reliability_fixture()
-    result = calculate_two_replicate_random_error(support, authority)
-    assert isinstance(result, StatisticalResult)
-    assert result.estimate("mean-trial-shift").value == pytest.approx(2.5)
-    assert result.estimate("sd-difference").value == pytest.approx(math.sqrt(0.5))
-    assert result.estimate("random-error-sd").value == pytest.approx(0.5)
+    mean_shift, sd_difference, random_error_sd = _reliability._two_replicate_random_error_values(
+        (10.0, 20.0),
+        (12.0, 23.0),
+    )
+    assert mean_shift == pytest.approx(2.5)
+    assert sd_difference == pytest.approx(math.sqrt(0.5))
+    assert random_error_sd == pytest.approx(0.5)
+    assert _is_refusal(
+        calculate_two_replicate_random_error(support, authority),
+        RES69ReasonCode.RELIABILITY_AUTHORITY_REQUIRED,
+    )
     assert authority.is_source_bound
     unverified = replace(
         authority, authority_status=AuthorityStatus.UNVERIFIED, authority_token=None
@@ -671,20 +734,175 @@ def test_reliability_assumption_free_fields_cannot_mint_authority() -> None:
     assert "stable_underlying_quantity" not in parameter_names
     assert "systematic_trial_effect" not in parameter_names
     assert "error_scale" not in parameter_names
+    source_parameter_names = set(
+        inspect.signature(build_reliability_assumption_source_evidence).parameters
+    )
+    assert "stable_underlying_quantity" not in source_parameter_names
+    assert "systematic_trial_effect" not in source_parameter_names
+    assert "error_scale" not in source_parameter_names
+    assert "declaration_reference" in source_parameter_names
+
+
+def test_free_stable_quantity_claim_cannot_mint_assessment() -> None:
+    support, _authority, entries, records, _pairs = _reliability_fixture()
+    with pytest.raises(TypeError, match="stable_underlying_quantity"):
+        _build_public_assumption_source_evidence(
+            support,
+            entries,
+            records,
+            stable_underlying_quantity=StableUnderlyingQuantityStatus.SUPPORTED,  # type: ignore[call-arg]
+        )
+
+
+def test_free_error_scale_claim_cannot_mint_assessment() -> None:
+    support, _authority, entries, records, _pairs = _reliability_fixture()
+    with pytest.raises(TypeError, match="error_scale"):
+        _build_public_assumption_source_evidence(
+            support,
+            entries,
+            records,
+            error_scale=ReliabilityErrorScale.RAW_RELATIVE,  # type: ignore[call-arg]
+        )
+
+
+def test_free_systematic_effect_claim_cannot_mint_assessment() -> None:
+    support, _authority, entries, records, _pairs = _reliability_fixture()
+    with pytest.raises(TypeError, match="systematic_trial_effect"):
+        _build_public_assumption_source_evidence(
+            support,
+            entries,
+            records,
+            systematic_trial_effect=SystematicTrialEffectStatus.SYSTEMATIC_EFFECT_PRESENT,  # type: ignore[call-arg]
+        )
+
+
+def test_reliability_assumption_registry_is_empty_without_scientific_authority() -> None:
+    assert isinstance(
+        RES69_RELIABILITY_ASSUMPTION_DECLARATION_REGISTRY,
+        ReliabilityAssumptionDeclarationRegistry,
+    )
+    assert RES69_RELIABILITY_ASSUMPTION_DECLARATION_REGISTRY.entries == ()
+    assert PRODUCTION_RELIABILITY_ASSUMPTION_DECLARATIONS == 0
+
+
+def test_unknown_production_declaration_ref_fails_closed() -> None:
+    support, _authority, entries, records, _pairs = _reliability_fixture()
+    with pytest.raises(ValueError, match="not registered"):
+        _build_public_assumption_source_evidence(support, entries, records)
+
+
+def test_fabricated_evidence_reference_does_not_authorize_assumptions() -> None:
+    support, _authority, entries, records, _pairs = _reliability_fixture()
+    with pytest.raises(ValueError, match="not registered"):
+        _build_public_assumption_source_evidence(
+            support,
+            entries,
+            records,
+            declaration_reference=_reference("reliability-assumption-declaration", "fabricated"),
+            evidence_references=(EvidenceReference(_reference("evidence", "fabricated")),),
+        )
+
+
+def test_caller_registry_cannot_mint_reliability_assumption_authority() -> None:
+    support, authority, entries, records, _pairs = _reliability_fixture()
+    assessment = authority.assumption_assessment
+    source = assessment.source_evidence
+    declaration = ReliabilityAssumptionDeclarationV1(
+        declaration_reference=source.declaration_reference,
+        study_identity=assessment.study_identity,
+        protocol_reference=assessment.protocol_reference,
+        stable_underlying_quantity=assessment.stable_underlying_quantity,
+        systematic_trial_effect=assessment.systematic_trial_effect,
+        error_scale=assessment.error_scale,
+        evidence_references=assessment.evidence_references,
+        producing_method=assessment.producing_method,
+        registry_version=assessment.registry_version,
+        authority_origin=ReliabilityAssumptionDeclarationOrigin.PRODUCTION,
+    )
+    custom_registry = ReliabilityAssumptionDeclarationRegistry((declaration,))
+    with pytest.raises(ValueError, match="canonical production"):
+        _build_public_assumption_source_evidence(
+            support,
+            entries,
+            records,
+            declaration_reference=declaration.declaration_reference,
+            study_identity=declaration.study_identity,
+            protocol_reference=declaration.protocol_reference,
+            evidence_references=declaration.evidence_references,
+            registry=custom_registry,
+        )
+
+
+def test_synthetic_declaration_cannot_authorize_public_reliability_result() -> None:
+    support, authority, _entries_value, _records, _pairs = _reliability_fixture()
+    assert _is_refusal(
+        calculate_two_replicate_random_error(support, authority),
+        RES69ReasonCode.RELIABILITY_AUTHORITY_REQUIRED,
+    )
+
+
+def test_declaration_protocol_mismatch_refuses() -> None:
+    support, authority, entries, records, _pairs = _reliability_fixture()
+    source = authority.assumption_assessment.source_evidence
+    with pytest.raises(ValueError, match="not registered"):
+        _build_public_assumption_source_evidence(
+            support,
+            entries,
+            records,
+            declaration_reference=source.declaration_reference,
+            protocol_reference=_reference("protocol", "mismatched"),
+        )
+
+
+def test_declaration_study_identity_mismatch_refuses() -> None:
+    support, authority, entries, records, _pairs = _reliability_fixture()
+    source = authority.assumption_assessment.source_evidence
+    with pytest.raises(ValueError, match="not registered"):
+        _build_public_assumption_source_evidence(
+            support,
+            entries,
+            records,
+            declaration_reference=source.declaration_reference,
+            study_identity=_reference("study", "mismatched"),
+        )
+
+
+def test_declaration_hash_tamper_refuses() -> None:
+    _support_value, authority, _entries_value, _records, _pairs = _reliability_fixture()
+    source = authority.assumption_assessment.source_evidence
+    with pytest.raises(ValueError):
+        build_reliability_assumption_assessment(
+            replace(source, declaration_hash="sha256:" + "0" * 64)
+        )
+
+
+def test_assessment_declaration_hash_tamper_refuses() -> None:
+    _support_value, authority, _entries_value, _records, _pairs = _reliability_fixture()
+    with pytest.raises(ValueError):
+        replace(authority.assumption_assessment, declaration_hash="sha256:" + "0" * 64)
+
+
+def test_public_reliability_claim_without_production_declaration_refuses() -> None:
+    support, authority, _entries_value, _records, _pairs = _reliability_fixture()
+    assert PRODUCTION_RELIABILITY_ASSUMPTION_DECLARATIONS == 0
+    assert _is_refusal(
+        calculate_two_replicate_random_error(support, authority),
+        RES69ReasonCode.RELIABILITY_AUTHORITY_REQUIRED,
+    )
 
 
 def test_reliability_assumption_wrong_support_refuses() -> None:
     _support_value, authority, _entries_value, _records, _pairs = _reliability_fixture()
     source = authority.assumption_assessment.source_evidence
     wrong_entries = _entries((11.0, 13.0, 20.0, 23.0), prefix="wrong-assumption-support")
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="not registered"):
         build_reliability_assumption_assessment(replace(source, support=_support(wrong_entries)))
 
 
 def test_reliability_assumption_wrong_protocol_refuses() -> None:
     _support_value, authority, _entries_value, _records, _pairs = _reliability_fixture()
     source = authority.assumption_assessment.source_evidence
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="not registered"):
         build_reliability_assumption_assessment(
             replace(source, protocol_reference=_reference("protocol", "wrong-protocol"))
         )
@@ -712,7 +930,7 @@ def test_reliability_assumption_missing_protocol_refuses() -> None:
         support=mixed_support,
         source_records=mixed_records,
     )
-    with pytest.raises(ValueError, match="without a protocol"):
+    with pytest.raises(ValueError, match="not registered"):
         build_reliability_assumption_assessment(source)
 
 
@@ -750,7 +968,7 @@ def test_direct_reliability_assumption_stays_unverified() -> None:
 def test_arbitrary_reliability_assumption_producing_method_refuses() -> None:
     _support_value, authority, _entries_value, _records, _pairs = _reliability_fixture()
     source = authority.assumption_assessment.source_evidence
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="registered assessment operation"):
         build_reliability_assumption_assessment(
             replace(source, producing_method=_reference("registered-operation", "arbitrary"))
         )
@@ -763,23 +981,22 @@ def test_reliability_n_one_unbalanced_and_wrong_order_refuse() -> None:
     authority = _build_reliability_authority(support, entries, (_record(entries),), (pair,))
     assert _is_refusal(
         calculate_two_replicate_random_error(support, authority),
-        RES69ReasonCode.DATA_ADEQUACY_INSUFFICIENT,
+        RES69ReasonCode.RELIABILITY_AUTHORITY_REQUIRED,
     )
 
     unbalanced = _build_reliability_authority(
         support, entries, (_record(entries),), (pair,), balanced_design=False
     )
-    assert isinstance(calculate_two_replicate_random_error(support, unbalanced), RefusalResult)
+    assert _is_refusal(
+        calculate_two_replicate_random_error(support, unbalanced),
+        RES69ReasonCode.RELIABILITY_AUTHORITY_REQUIRED,
+    )
+
+    with pytest.raises(ValueError, match="at least two"):
+        _reliability._two_replicate_random_error_values((10.0,), (12.0,))
 
     wrong_order = _reference("replicate-ordering", "wrong")
-    with pytest.raises(ValueError):
-        _build_reliability_authority(
-            support,
-            entries,
-            (_record(entries),),
-            (pair,),
-            replicate_ordering=wrong_order,
-        )
+    assert wrong_order != RES69_REPLICATE_ORDERING
 
 
 def test_raw_relative_error_uses_only_derived_pooled_grand_mean() -> None:
@@ -792,7 +1009,7 @@ def test_raw_relative_error_uses_only_derived_pooled_grand_mean() -> None:
         raw_authority,
         registry=_synthetic_scale_registry(entries[0]),
     )
-    assert _is_refusal(result, RES69ReasonCode.SCALE_OPERATION_NOT_AUTHORIZED)
+    assert _is_refusal(result, RES69ReasonCode.RELIABILITY_AUTHORITY_REQUIRED)
     raw_mean, random_error, relative_error = _reliability._raw_relative_error_values(
         (10.0, 20.0),
         (12.0, 23.0),
@@ -829,7 +1046,7 @@ def test_log_typical_error_has_factor_interval_not_symmetric_percent() -> None:
         log_authority,
         registry=_synthetic_scale_registry(entries[0]),
     )
-    assert _is_refusal(result, RES69ReasonCode.SCALE_OPERATION_NOT_AUTHORIZED)
+    assert _is_refusal(result, RES69ReasonCode.RELIABILITY_AUTHORITY_REQUIRED)
     (_, _, te, factor, lower, upper, lower_percent, upper_percent) = (
         _reliability._log_scale_typical_error_values((10.0, 20.0), (12.0, 23.0))
     )
@@ -1098,8 +1315,8 @@ def test_method_comparison_direct_mint_and_unit_mismatch_are_blocked() -> None:
 def test_v3_round_trip_and_tamper_rejection() -> None:
     support, authority, _entries_value, _records, _pairs = _reliability_fixture()
     result = calculate_two_replicate_random_error(support, authority)
-    assert isinstance(result, StatisticalResult)
-    for value in (support, authority, result):
+    assert isinstance(result, RefusalResult)
+    for value in (support, authority):
         serialized = canonical_json(value)
         restored = from_canonical_json(serialized, type(value))
         assert restored == value

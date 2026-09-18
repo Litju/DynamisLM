@@ -171,6 +171,11 @@ class ScaleAuthorityOrigin(StrEnum):
     SYNTHETIC_TEST = "SYNTHETIC_TEST"
 
 
+class ReliabilityAssumptionDeclarationOrigin(StrEnum):
+    PRODUCTION = "PRODUCTION"
+    SYNTHETIC_TEST = "SYNTHETIC_TEST"
+
+
 class ReliabilityQuestion(StrEnum):
     REPEATABILITY = "REPEATABILITY"
     REPRODUCIBILITY = "REPRODUCIBILITY"
@@ -646,6 +651,9 @@ class StatisticalSupport:
                 key=lambda item: (item.athlete.athlete_id.qualified, item.input_id.qualified),
             )
         )
+        input_ids = tuple(item.input_id.qualified for item in expected_inputs)
+        if len(input_ids) != len(set(input_ids)):
+            raise ValueError("analysis_inputs must not contain duplicate exact input IDs")
         if self.analysis_inputs != expected_inputs:
             raise ValueError("analysis_inputs must use canonical athlete/input ordering")
         require_tuple(self.included_entries, "included_entries")
@@ -1090,23 +1098,103 @@ class SystematicTrialEffectAssessment:
         _require_text(self.description, "description")
 
 
+def _reliability_assumption_declaration_hash(
+    declaration: ReliabilityAssumptionDeclarationV1,
+) -> str:
+    return canonical_hash(
+        {
+            "declaration_reference": declaration.declaration_reference,
+            "study_identity": declaration.study_identity,
+            "protocol_reference": declaration.protocol_reference,
+            "stable_underlying_quantity": declaration.stable_underlying_quantity,
+            "systematic_trial_effect": declaration.systematic_trial_effect,
+            "error_scale": declaration.error_scale,
+            "evidence_references": declaration.evidence_references,
+            "producing_method": declaration.producing_method,
+            "registry_version": declaration.registry_version,
+            "authority_origin": declaration.authority_origin,
+        }
+    )
+
+
+@register_serializable_type
+@dataclass(frozen=True, slots=True)
+class ReliabilityAssumptionDeclarationV1:
+    """Immutable scientific authority declared by an owning study/protocol registry."""
+
+    declaration_reference: RegistryReference
+    study_identity: RegistryReference
+    protocol_reference: RegistryReference
+    stable_underlying_quantity: StableUnderlyingQuantityStatus
+    systematic_trial_effect: SystematicTrialEffectAssessment
+    error_scale: ReliabilityErrorScale
+    evidence_references: tuple[EvidenceReference, ...]
+    producing_method: RegistryReference
+    registry_version: str
+    authority_origin: ReliabilityAssumptionDeclarationOrigin
+    declaration_hash: str | None = None
+
+    def __post_init__(self) -> None:
+        for field_name in (
+            "declaration_reference",
+            "study_identity",
+            "protocol_reference",
+            "producing_method",
+        ):
+            _require_instance(getattr(self, field_name), RegistryReference, field_name)
+        if (
+            self.declaration_reference.identifier.object_type
+            != "reliability-assumption-declaration"
+        ):
+            raise ValueError(
+                "declaration_reference must identify a reliability-assumption-declaration"
+            )
+        _require_enum(
+            self.stable_underlying_quantity,
+            StableUnderlyingQuantityStatus,
+            "stable_underlying_quantity",
+        )
+        _require_instance(
+            self.systematic_trial_effect,
+            SystematicTrialEffectAssessment,
+            "systematic_trial_effect",
+        )
+        _require_enum(self.error_scale, ReliabilityErrorScale, "error_scale")
+        _require_tuple_items(self.evidence_references, EvidenceReference, "evidence_references")
+        if not self.evidence_references:
+            raise ValueError("reliability assumption declaration requires evidence references")
+        _require_text(self.registry_version, "registry_version")
+        _require_enum(
+            self.authority_origin,
+            ReliabilityAssumptionDeclarationOrigin,
+            "authority_origin",
+        )
+        if self.declaration_hash is not None:
+            _require_hash(self.declaration_hash, "declaration_hash")
+        expected_hash = _reliability_assumption_declaration_hash(self)
+        if self.declaration_hash is None:
+            object.__setattr__(self, "declaration_hash", expected_hash)
+        elif self.declaration_hash != expected_hash:
+            raise ValueError("reliability assumption declaration hash is invalid")
+
+    @property
+    def canonical_declaration_hash(self) -> str:
+        assert self.declaration_hash is not None
+        return self.declaration_hash
+
+
 @register_serializable_type
 @dataclass(frozen=True, slots=True)
 class ReliabilityAssumptionSourceEvidence:
-    """Typed source/protocol claims for reliability assumptions.
-
-    The claims in this object are evidence inputs, not scientific authority.
-    Only the registered normalizer may promote them to an assessment.
-    """
+    """Exact source/protocol bindings for a registered reliability declaration."""
 
     support: StatisticalSupport
     source_records: tuple[LongitudinalAthletePerformanceRecord, ...]
     study_identity: RegistryReference
     protocol_reference: RegistryReference
+    declaration_reference: RegistryReference
+    declaration_hash: str
     evidence_references: tuple[EvidenceReference, ...]
-    stable_underlying_quantity: StableUnderlyingQuantityStatus
-    systematic_trial_effect: SystematicTrialEffectAssessment
-    error_scale: ReliabilityErrorScale
     producing_method: RegistryReference
     registry_version: str
 
@@ -1119,22 +1207,18 @@ class ReliabilityAssumptionSourceEvidence:
             raise ValueError("reliability assumption evidence requires source records")
         _require_instance(self.study_identity, RegistryReference, "study_identity")
         _require_instance(self.protocol_reference, RegistryReference, "protocol_reference")
+        _require_instance(self.declaration_reference, RegistryReference, "declaration_reference")
+        if (
+            self.declaration_reference.identifier.object_type
+            != "reliability-assumption-declaration"
+        ):
+            raise ValueError(
+                "declaration_reference must identify a reliability-assumption-declaration"
+            )
+        _require_hash(self.declaration_hash, "declaration_hash")
         _require_tuple_items(self.evidence_references, EvidenceReference, "evidence_references")
         if not self.evidence_references:
             raise ValueError("reliability assumption evidence requires evidence references")
-        _require_enum(
-            self.stable_underlying_quantity,
-            StableUnderlyingQuantityStatus,
-            "stable_underlying_quantity",
-        )
-        _require_instance(
-            self.systematic_trial_effect,
-            SystematicTrialEffectAssessment,
-            "systematic_trial_effect",
-        )
-        if not self.systematic_trial_effect.evidence_references:
-            raise ValueError("systematic trial-effect assessment requires evidence references")
-        _require_enum(self.error_scale, ReliabilityErrorScale, "error_scale")
         _require_instance(self.producing_method, RegistryReference, "producing_method")
         _require_text(self.registry_version, "registry_version")
 
@@ -1153,6 +1237,8 @@ class ReliabilityAssumptionAssessment:
     source_provenance: tuple[StatisticalProvenanceReference, ...]
     study_identity: RegistryReference
     protocol_reference: RegistryReference
+    declaration_reference: RegistryReference
+    declaration_hash: str
     evidence_references: tuple[EvidenceReference, ...]
     stable_underlying_quantity: StableUnderlyingQuantityStatus
     systematic_trial_effect: SystematicTrialEffectAssessment
@@ -1187,6 +1273,15 @@ class ReliabilityAssumptionAssessment:
         )
         _require_instance(self.study_identity, RegistryReference, "study_identity")
         _require_instance(self.protocol_reference, RegistryReference, "protocol_reference")
+        _require_instance(self.declaration_reference, RegistryReference, "declaration_reference")
+        if (
+            self.declaration_reference.identifier.object_type
+            != "reliability-assumption-declaration"
+        ):
+            raise ValueError(
+                "declaration_reference must identify a reliability-assumption-declaration"
+            )
+        _require_hash(self.declaration_hash, "declaration_hash")
         _require_tuple_items(self.evidence_references, EvidenceReference, "evidence_references")
         _require_enum(
             self.stable_underlying_quantity,
@@ -1236,10 +1331,9 @@ class ReliabilityAssumptionAssessment:
         for field_name in (
             "study_identity",
             "protocol_reference",
+            "declaration_reference",
+            "declaration_hash",
             "evidence_references",
-            "stable_underlying_quantity",
-            "systematic_trial_effect",
-            "error_scale",
             "producing_method",
             "registry_version",
         ):
@@ -2117,6 +2211,8 @@ __all__ = [
     "MissingnessPolicy",
     "RES69ReasonCode",
     "ReliabilityAssumptionAssessment",
+    "ReliabilityAssumptionDeclarationOrigin",
+    "ReliabilityAssumptionDeclarationV1",
     "ReliabilityAssumptionSourceEvidence",
     "ReliabilityDesignAuthority",
     "ReliabilityDesignEvidence",
