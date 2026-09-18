@@ -167,7 +167,8 @@ def validate_level_of_analysis(
         counts = Counter(athlete_ids)
         if any(count > 1 for count in counts.values()) and not level.clustering_keys:
             raise AnalysisValidationError(
-                "repeated rows cannot be treated as independent between-athlete subjects",
+                "pseudoreplication risk: repeated rows cannot be treated as independent "
+                "between-athlete subjects",
                 "RES70_PSEUDOREPLICATION_RISK",
                 ("one independent unit per athlete or a registered clustering model",),
             )
