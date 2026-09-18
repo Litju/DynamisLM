@@ -94,21 +94,29 @@ def _validated_entries(
             f"at least {minimum} included observations are required",
             "RES69_DATA_ADEQUACY_INSUFFICIENT",
         )
+    unit = _validated_common_unit(entries)
+    authorities = validate_comparable_entries(support, entries)
+    return entries, unit, authorities
+
+
+def _validated_common_unit(
+    entries: tuple[LongitudinalObservationEntry, ...],
+) -> UnitReference:
     try:
-        unit = exact_common_unit(entries)
+        units = tuple(scalar_value(entry)[1] for entry in entries)
     except ValueError as exc:
-        if "unit" not in str(exc).lower():
-            raise StatisticalConstraintError(
-                "source result is not a finite scalar with an exact unit",
-                "RES69_DATA_ADEQUACY_INSUFFICIENT",
-            ) from exc
+        raise StatisticalConstraintError(
+            "source result is not a finite scalar with an exact unit",
+            "RES69_DATA_ADEQUACY_INSUFFICIENT",
+        ) from exc
+    unit = units[0]
+    if any(item != unit for item in units[1:]):
         raise StatisticalConstraintError(
             "direct statistical arithmetic requires one exact common UnitReference",
             "RES69_UNIT_MISMATCH",
             missing_information=("registered deterministic unit conversion",),
-        ) from exc
-    authorities = validate_comparable_entries(support, entries)
-    return entries, unit, authorities
+        )
+    return unit
 
 
 def _pair_entries(
@@ -139,14 +147,7 @@ def _pair_entries(
                 "RES69_SUPPORT_MISMATCH",
             )
         entries = (baseline_entry, followup_entry)
-        try:
-            unit = exact_common_unit(entries)
-        except ValueError as exc:
-            raise StatisticalConstraintError(
-                "direct statistical arithmetic requires one exact common UnitReference",
-                "RES69_UNIT_MISMATCH",
-                missing_information=("registered deterministic unit conversion",),
-            ) from exc
+        unit = _validated_common_unit(entries)
         authorities = validate_comparable_entries(support, entries)
     if len(entries) != 2:
         raise StatisticalConstraintError(

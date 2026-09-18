@@ -373,6 +373,17 @@ def test_exact_unit_and_identity_rules_fail_closed() -> None:
     result = calculate_absolute_change(_support((entries[0], changed)))
     assert _is_refusal(result, RES69ReasonCode.UNIT_MISMATCH)
 
+    missing_unit = build_longitudinal_observation_entry(
+        replace(
+            entries[1].observation,
+            result=replace(entries[1].observation.result, unit=None),
+        ),
+        entries[1].football_context,
+        entries[1].source_qualification_bindings,
+    )
+    result = calculate_window_descriptives(_support((entries[0], missing_unit)))
+    assert _is_refusal(result, RES69ReasonCode.DATA_ADEQUACY_INSUFFICIENT)
+
     semantic = replace(
         entries[1].observation.identity.semantic,
         metric_definition=_reference("metric", "different-metric"),
@@ -772,7 +783,7 @@ def test_reliability_n_one_unbalanced_and_wrong_order_refuse() -> None:
 
 
 def test_raw_relative_error_uses_only_derived_pooled_grand_mean() -> None:
-    support, authority, entries, records, pairs = _reliability_fixture()
+    support, _authority, entries, records, pairs = _reliability_fixture()
     raw_authority = _build_reliability_authority(
         support, entries, records, pairs, error_scale=ReliabilityErrorScale.RAW_RELATIVE
     )
@@ -809,7 +820,7 @@ def test_raw_relative_error_uses_only_derived_pooled_grand_mean() -> None:
 
 
 def test_log_typical_error_has_factor_interval_not_symmetric_percent() -> None:
-    support, authority, entries, records, pairs = _reliability_fixture()
+    support, _authority, entries, records, pairs = _reliability_fixture()
     log_authority = _build_reliability_authority(
         support, entries, records, pairs, error_scale=ReliabilityErrorScale.LOG_MULTIPLICATIVE
     )
@@ -1056,7 +1067,7 @@ def test_direct_method_comparison_authority_stays_unverified() -> None:
 
 
 def test_method_comparison_direct_mint_and_unit_mismatch_are_blocked() -> None:
-    support, authority, entries, records = _method_comparison_fixture()
+    support, authority, _entries_value, records = _method_comparison_fixture()
     unverified = replace(
         authority, authority_status=AuthorityStatus.UNVERIFIED, authority_token=None
     )
