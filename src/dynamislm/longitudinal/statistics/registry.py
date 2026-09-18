@@ -91,6 +91,11 @@ RES69_TWO_REPLICATE_RANDOM_ERROR_OPERATION = _reference(
 RES69_RELIABILITY_DESIGN_OPERATION = _reference(
     "registered-operation", "reliability-design-authority-v1", "RES-69 reliability design authority"
 )
+RES69_RELIABILITY_ASSUMPTION_ASSESSMENT_OPERATION = _reference(
+    "registered-operation",
+    "reliability-assumption-assessment-v1",
+    "RES-69 reliability assumption assessment",
+)
 RES69_RAW_RELATIVE_ERROR_OPERATION = _reference(
     "registered-operation",
     "two-replicate-pooled-raw-relative-error-v1",
@@ -407,6 +412,12 @@ RES69_OPERATION_REGISTRY = StatisticalOperationRegistry(
             "source/protocol-bound reliability design normalization",
         ),
         RegisteredStatisticalOperation(
+            RES69_RELIABILITY_ASSUMPTION_ASSESSMENT_OPERATION,
+            StatisticalOperationDisposition.IMPLEMENTED,
+            None,
+            "source/protocol-bound reliability assumption normalization",
+        ),
+        RegisteredStatisticalOperation(
             RES69_RAW_RELATIVE_ERROR_OPERATION,
             StatisticalOperationDisposition.IMPLEMENTED,
             TWO_REPLICATE_POOLED_RAW_GRAND_MEAN_V1,
@@ -527,8 +538,13 @@ def scale_semantics_for_identity(
 
     if not isinstance(identity, MeasurementIdentity):
         raise ValueError("identity must be a MeasurementIdentity")
+    if registry is not RES69_SCALE_REGISTRY:
+        raise ValueError("scale authority must resolve from the canonical production registry")
     key = MeasurementScaleSemanticKeyV1.from_measurement_identity(identity, unit)
-    return registry.resolve(key)
+    semantics = registry.resolve(key)
+    if semantics is not None and semantics.authority_origin is not ScaleAuthorityOrigin.PRODUCTION:
+        raise ValueError("synthetic scale authority cannot authorize production calculations")
+    return semantics
 
 
 def audit_scale_registry() -> tuple[ScaleRegistryAuditEntry, ...]:
@@ -599,6 +615,7 @@ __all__ = [
     "RES69_RELATIVE_CHANGE_ESTIMAND",
     "RES69_RELATIVE_CHANGE_ESTIMATOR",
     "RES69_RELATIVE_CHANGE_OPERATION",
+    "RES69_RELIABILITY_ASSUMPTION_ASSESSMENT_OPERATION",
     "RES69_RELIABILITY_DESIGN_OPERATION",
     "RES69_REPLICATE_ORDERING",
     "RES69_SAMPLE_SD_ESTIMAND",

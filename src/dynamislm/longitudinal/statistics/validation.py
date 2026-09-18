@@ -8,6 +8,7 @@ from dynamislm.longitudinal.statistics.models import (
     MeasurementScaleSemanticKeyV1,
     MeasurementScaleSemantics,
     RES69ReasonCode,
+    ScaleAuthorityOrigin,
     StatisticalAnalysisRun,
     StatisticalEstimate,
     StatisticalNonComputable,
@@ -16,8 +17,10 @@ from dynamislm.longitudinal.statistics.models import (
     StatisticalUnitReference,
 )
 from dynamislm.longitudinal.statistics.registry import (
+    RES69_METHOD_COMPARISON_DESIGN_OPERATION,
     RES69_OPERATION_REGISTRY,
     RES69_REGISTRY_VERSION,
+    RES69_SCALE_REGISTRY,
     RES69_SOFTWARE_VERSION,
 )
 from dynamislm.longitudinal.statistics.support import (
@@ -307,6 +310,12 @@ def resolve_scale_semantics(
             "scale authority must be supplied through the typed RES-69 registry",
             RES69ReasonCode.SCALE_SEMANTICS_UNREGISTERED.value,
         )
+    if registry is not RES69_SCALE_REGISTRY:
+        raise StatisticalConstraintError(
+            "public scale authority must resolve from the canonical production registry",
+            RES69ReasonCode.SCALE_OPERATION_NOT_AUTHORIZED.value,
+            missing_information=("canonical RES-69 production scale registry",),
+        )
     unit = exact_common_unit(support.included_entries)
     identity = support.included_entries[0].observation.identity
     key = MeasurementScaleSemanticKeyV1.from_measurement_identity(identity, unit)
@@ -324,6 +333,12 @@ def resolve_scale_semantics(
             missing_information=(
                 "registered MeasurementScaleSemantics for the exact semantic key",
             ),
+        )
+    if semantics.authority_origin is not ScaleAuthorityOrigin.PRODUCTION:
+        raise StatisticalConstraintError(
+            "synthetic scale authority cannot authorize a production statistical result",
+            RES69ReasonCode.SCALE_OPERATION_NOT_AUTHORIZED.value,
+            missing_information=("production scale authority for the exact semantic key",),
         )
     return semantics, key, unit
 
@@ -347,6 +362,19 @@ def validate_reliability_authority(
             "reliability authority does not match the exact statistical support",
             RES69ReasonCode.SUPPORT_MISMATCH.value,
         )
+    if not authority.assumption_assessment.is_source_bound:
+        raise StatisticalConstraintError(
+            "source-bound ReliabilityAssumptionAssessment is required",
+            RES69ReasonCode.RELIABILITY_AUTHORITY_REQUIRED.value,
+        )
+    if (
+        authority.assumption_assessment.support_id != support.canonical_support_id
+        or authority.assumption_assessment.support_hash != support.canonical_support_hash
+    ):
+        raise StatisticalConstraintError(
+            "reliability assumption assessment does not match exact support",
+            RES69ReasonCode.SUPPORT_MISMATCH.value,
+        )
 
 
 def validate_method_comparison_authority(
@@ -367,6 +395,11 @@ def validate_method_comparison_authority(
         raise StatisticalConstraintError(
             "method-comparison authority does not match the exact statistical support",
             RES69ReasonCode.SUPPORT_MISMATCH.value,
+        )
+    if authority.producing_method != RES69_METHOD_COMPARISON_DESIGN_OPERATION:
+        raise StatisticalConstraintError(
+            "method-comparison authority must use the registered design-normalization operation",
+            RES69ReasonCode.METHOD_COMPARISON_AUTHORITY_REQUIRED.value,
         )
 
 

@@ -10,6 +10,9 @@ it is not a new scale authority for any of them.
 
 No family-specific scale entry is imported into the generic RES-69 package.
 There is consequently no production scale authorization rationale in V1.
+`PRODUCTION_SCALE_KEYS=0`, and every public scale-dependent calculation fails
+closed for production observations. A caller-supplied registry is not a
+production authority.
 
 ## Unregistered public scalar metric keys
 
@@ -116,3 +119,8 @@ The generic Python audit reports the same decision by category through
 `UNREGISTERED_SCALE_KEYS` and `SCALE_REGISTRY_AUDIT`; this Markdown report
 keeps the family-specific stable IDs outside the generic public package, whose
 repository policy prohibits test-family coupling.
+
+Synthetic `MeasurementScaleSemantics` entries remain available only as
+explicit test fixtures. `SYNTHETIC_TEST` authority is rejected by public
+relative change, log-ratio, raw-relative-error, and log-error calculators;
+synthetic entries never authorize a production `StatisticalResult`.

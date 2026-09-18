@@ -31,9 +31,13 @@ from dynamislm.measurement.identity import (
     MeasurementIdentity,
     MetadataEntry,
     NormalizationSpec,
+    ProcessingIdentity,
     RegistryReference,
+    SamplingCharacteristics,
     ScientificIdentifier,
+    SemanticIdentity,
     UnitReference,
+    VersionIdentity,
     _require_enum,
     _require_instance,
     _require_optional_instance,
@@ -1088,6 +1092,193 @@ class SystematicTrialEffectAssessment:
 
 @register_serializable_type
 @dataclass(frozen=True, slots=True)
+class ReliabilityAssumptionSourceEvidence:
+    """Typed source/protocol claims for reliability assumptions.
+
+    The claims in this object are evidence inputs, not scientific authority.
+    Only the registered normalizer may promote them to an assessment.
+    """
+
+    support: StatisticalSupport
+    source_records: tuple[LongitudinalAthletePerformanceRecord, ...]
+    study_identity: RegistryReference
+    protocol_reference: RegistryReference
+    evidence_references: tuple[EvidenceReference, ...]
+    stable_underlying_quantity: StableUnderlyingQuantityStatus
+    systematic_trial_effect: SystematicTrialEffectAssessment
+    error_scale: ReliabilityErrorScale
+    producing_method: RegistryReference
+    registry_version: str
+
+    def __post_init__(self) -> None:
+        _require_instance(self.support, StatisticalSupport, "support")
+        _require_tuple_items(
+            self.source_records, LongitudinalAthletePerformanceRecord, "source_records"
+        )
+        if not self.source_records:
+            raise ValueError("reliability assumption evidence requires source records")
+        _require_instance(self.study_identity, RegistryReference, "study_identity")
+        _require_instance(self.protocol_reference, RegistryReference, "protocol_reference")
+        _require_tuple_items(self.evidence_references, EvidenceReference, "evidence_references")
+        if not self.evidence_references:
+            raise ValueError("reliability assumption evidence requires evidence references")
+        _require_enum(
+            self.stable_underlying_quantity,
+            StableUnderlyingQuantityStatus,
+            "stable_underlying_quantity",
+        )
+        _require_instance(
+            self.systematic_trial_effect,
+            SystematicTrialEffectAssessment,
+            "systematic_trial_effect",
+        )
+        if not self.systematic_trial_effect.evidence_references:
+            raise ValueError("systematic trial-effect assessment requires evidence references")
+        _require_enum(self.error_scale, ReliabilityErrorScale, "error_scale")
+        _require_instance(self.producing_method, RegistryReference, "producing_method")
+        _require_text(self.registry_version, "registry_version")
+
+
+@register_serializable_type
+@dataclass(frozen=True, slots=True)
+class ReliabilityAssumptionAssessment:
+    """Normalized source-bound authority for reliability assumptions."""
+
+    support_id: InstanceIdentifier
+    support_hash: str
+    analysis_input_ids: tuple[InstanceIdentifier, ...]
+    analysis_input_hashes: tuple[str, ...]
+    source_records: tuple[StatisticalSourceRecordReference, ...]
+    source_artifacts: tuple[StatisticalSourceArtifactReference, ...]
+    source_provenance: tuple[StatisticalProvenanceReference, ...]
+    study_identity: RegistryReference
+    protocol_reference: RegistryReference
+    evidence_references: tuple[EvidenceReference, ...]
+    stable_underlying_quantity: StableUnderlyingQuantityStatus
+    systematic_trial_effect: SystematicTrialEffectAssessment
+    error_scale: ReliabilityErrorScale
+    producing_method: RegistryReference
+    registry_version: str
+    source_evidence: ReliabilityAssumptionSourceEvidence
+    source_evidence_hash: str
+    authority_status: AuthorityStatus = AuthorityStatus.UNVERIFIED
+    authority_hash: str | None = None
+    authority_token: str | None = None
+
+    def __post_init__(self) -> None:
+        _require_identifier(self.support_id, "statistical-support", "support_id")
+        _require_hash(self.support_hash, "support_hash")
+        require_tuple(self.analysis_input_ids, "analysis_input_ids")
+        require_tuple(self.analysis_input_hashes, "analysis_input_hashes")
+        if len(self.analysis_input_ids) != len(self.analysis_input_hashes):
+            raise ValueError("analysis input IDs and hashes must have equal length")
+        for item in self.analysis_input_ids:
+            _require_identifier(item, "multi-source-analysis-input", "analysis_input_ids item")
+        for input_hash in self.analysis_input_hashes:
+            _require_hash(input_hash, "analysis_input_hashes item")
+        _require_tuple_items(
+            self.source_records, StatisticalSourceRecordReference, "source_records"
+        )
+        _require_tuple_items(
+            self.source_artifacts, StatisticalSourceArtifactReference, "source_artifacts"
+        )
+        _require_tuple_items(
+            self.source_provenance, StatisticalProvenanceReference, "source_provenance"
+        )
+        _require_instance(self.study_identity, RegistryReference, "study_identity")
+        _require_instance(self.protocol_reference, RegistryReference, "protocol_reference")
+        _require_tuple_items(self.evidence_references, EvidenceReference, "evidence_references")
+        _require_enum(
+            self.stable_underlying_quantity,
+            StableUnderlyingQuantityStatus,
+            "stable_underlying_quantity",
+        )
+        _require_instance(
+            self.systematic_trial_effect,
+            SystematicTrialEffectAssessment,
+            "systematic_trial_effect",
+        )
+        _require_enum(self.error_scale, ReliabilityErrorScale, "error_scale")
+        _require_instance(self.producing_method, RegistryReference, "producing_method")
+        _require_text(self.registry_version, "registry_version")
+        _require_instance(
+            self.source_evidence,
+            ReliabilityAssumptionSourceEvidence,
+            "source_evidence",
+        )
+        _require_hash(self.source_evidence_hash, "source_evidence_hash")
+        _require_enum(self.authority_status, AuthorityStatus, "authority_status")
+
+        source_support = self.source_evidence.support
+        if self.support_id != source_support.canonical_support_id:
+            raise ValueError("assumption assessment support ID does not match source evidence")
+        if self.support_hash != source_support.canonical_support_hash:
+            raise ValueError("assumption assessment support hash does not match source evidence")
+        if self.analysis_input_ids != source_support.input_ids:
+            raise ValueError("assumption assessment input IDs do not match source evidence")
+        if self.analysis_input_hashes != source_support.input_hashes:
+            raise ValueError("assumption assessment input hashes do not match source evidence")
+        expected_records = tuple(
+            sorted(
+                (
+                    StatisticalSourceRecordReference.from_record(record)
+                    for record in self.source_evidence.source_records
+                ),
+                key=lambda item: item.record_id.qualified,
+            )
+        )
+        if self.source_records != expected_records:
+            raise ValueError("assumption assessment records do not match source evidence")
+        if self.source_artifacts != source_support.source_artifacts:
+            raise ValueError("assumption assessment artifacts do not match source evidence")
+        if self.source_provenance != source_support.source_provenance:
+            raise ValueError("assumption assessment provenance does not match source evidence")
+        for field_name in (
+            "study_identity",
+            "protocol_reference",
+            "evidence_references",
+            "stable_underlying_quantity",
+            "systematic_trial_effect",
+            "error_scale",
+            "producing_method",
+            "registry_version",
+        ):
+            if getattr(self, field_name) != getattr(self.source_evidence, field_name):
+                raise ValueError(
+                    f"assumption assessment {field_name} does not match source evidence"
+                )
+        if self.source_evidence_hash != canonical_hash(self.source_evidence):
+            raise ValueError("assumption assessment source evidence hash is invalid")
+        expected_hash = _authority_hash(self)
+        if self.authority_hash is None:
+            object.__setattr__(self, "authority_hash", expected_hash)
+        elif self.authority_hash != expected_hash:
+            raise ValueError(
+                "reliability assumption assessment hash does not match immutable content"
+            )
+        if self.authority_status is AuthorityStatus.SOURCE_BOUND:
+            if self.authority_token != _authority_token(expected_hash):
+                raise ValueError("source-bound reliability assumption assessment proof is invalid")
+        elif self.authority_token is not None:
+            raise ValueError(
+                "unverified reliability assumption assessment must not carry an authority token"
+            )
+
+    @property
+    def is_source_bound(self) -> bool:
+        return (
+            self.authority_status is AuthorityStatus.SOURCE_BOUND
+            and self.authority_token == _authority_token(self.canonical_authority_hash)
+        )
+
+    @property
+    def canonical_authority_hash(self) -> str:
+        assert self.authority_hash is not None
+        return self.authority_hash
+
+
+@register_serializable_type
+@dataclass(frozen=True, slots=True)
 class ReliabilityDesignEvidence:
     """Source/protocol evidence from which reliability authority is normalized."""
 
@@ -1108,9 +1299,7 @@ class ReliabilityDesignEvidence:
     rater_identity: RegistryReference | None
     evidence_references: tuple[EvidenceReference, ...]
     repeatability_question: ReliabilityQuestion
-    stable_underlying_quantity: StableUnderlyingQuantityStatus
-    systematic_trial_effect: SystematicTrialEffectAssessment
-    error_scale: ReliabilityErrorScale
+    assumption_assessment: ReliabilityAssumptionAssessment
     missingness_policy: MissingnessPolicy
     balanced_design: bool
     producing_method: RegistryReference
@@ -1124,6 +1313,11 @@ class ReliabilityDesignEvidence:
         )
         if not self.source_records:
             raise ValueError("reliability design evidence requires source records")
+        _require_instance(
+            self.assumption_assessment,
+            ReliabilityAssumptionAssessment,
+            "assumption_assessment",
+        )
         _require_instance(self.study_identity, RegistryReference, "study_identity")
         require_tuple(self.replicate_pairs, "replicate_pairs")
         if any(not isinstance(item, ReliabilityReplicatePair) for item in self.replicate_pairs):
@@ -1159,21 +1353,22 @@ class ReliabilityDesignEvidence:
         if not self.evidence_references:
             raise ValueError("reliability design evidence requires evidence references")
         _require_enum(self.repeatability_question, ReliabilityQuestion, "repeatability_question")
-        _require_enum(
-            self.stable_underlying_quantity,
-            StableUnderlyingQuantityStatus,
-            "stable_underlying_quantity",
-        )
-        _require_instance(
-            self.systematic_trial_effect,
-            SystematicTrialEffectAssessment,
-            "systematic_trial_effect",
-        )
-        _require_enum(self.error_scale, ReliabilityErrorScale, "error_scale")
         _require_enum(self.missingness_policy, MissingnessPolicy, "missingness_policy")
         _require_bool(self.balanced_design, "balanced_design")
         _require_text(self.registry_version, "registry_version")
         _require_optional_instance(self.design_identity, RegistryReference, "design_identity")
+
+    @property
+    def stable_underlying_quantity(self) -> StableUnderlyingQuantityStatus:
+        return self.assumption_assessment.stable_underlying_quantity
+
+    @property
+    def systematic_trial_effect(self) -> SystematicTrialEffectAssessment:
+        return self.assumption_assessment.systematic_trial_effect
+
+    @property
+    def error_scale(self) -> ReliabilityErrorScale:
+        return self.assumption_assessment.error_scale
 
 
 def _authority_payload(value: object) -> dict[str, object]:
@@ -1222,9 +1417,7 @@ class ReliabilityDesignAuthority:
     rater_identity: RegistryReference | None
     evidence_references: tuple[EvidenceReference, ...]
     repeatability_question: ReliabilityQuestion
-    stable_underlying_quantity: StableUnderlyingQuantityStatus
-    systematic_trial_effect: SystematicTrialEffectAssessment
-    error_scale: ReliabilityErrorScale
+    assumption_assessment: ReliabilityAssumptionAssessment
     missingness_policy: MissingnessPolicy
     balanced_design: bool
     producing_method: RegistryReference
@@ -1281,23 +1474,23 @@ class ReliabilityDesignAuthority:
         _require_optional_instance(self.rater_identity, RegistryReference, "rater_identity")
         _require_tuple_items(self.evidence_references, EvidenceReference, "evidence_references")
         _require_enum(self.repeatability_question, ReliabilityQuestion, "repeatability_question")
-        _require_enum(
-            self.stable_underlying_quantity,
-            StableUnderlyingQuantityStatus,
-            "stable_underlying_quantity",
-        )
         _require_instance(
-            self.systematic_trial_effect,
-            SystematicTrialEffectAssessment,
-            "systematic_trial_effect",
+            self.assumption_assessment,
+            ReliabilityAssumptionAssessment,
+            "assumption_assessment",
         )
-        _require_enum(self.error_scale, ReliabilityErrorScale, "error_scale")
         _require_enum(self.missingness_policy, MissingnessPolicy, "missingness_policy")
         _require_bool(self.balanced_design, "balanced_design")
         _require_text(self.registry_version, "registry_version")
         _require_hash(self.source_evidence_hash, "source_evidence_hash")
         _require_enum(self.authority_status, AuthorityStatus, "authority_status")
         _require_optional_instance(self.design_identity, RegistryReference, "design_identity")
+        if self.assumption_assessment.support_id != self.support_id:
+            raise ValueError("reliability authority assumption support ID does not match authority")
+        if self.assumption_assessment.support_hash != self.support_hash:
+            raise ValueError(
+                "reliability authority assumption support hash does not match authority"
+            )
         expected_hash = _authority_hash(self)
         if self.authority_hash is None:
             object.__setattr__(self, "authority_hash", expected_hash)
@@ -1327,11 +1520,92 @@ class ReliabilityDesignAuthority:
         return self.design_identity or self.study_identity
 
     @property
+    def stable_underlying_quantity(self) -> StableUnderlyingQuantityStatus:
+        return self.assumption_assessment.stable_underlying_quantity
+
+    @property
+    def systematic_trial_effect(self) -> SystematicTrialEffectAssessment:
+        return self.assumption_assessment.systematic_trial_effect
+
+    @property
+    def error_scale(self) -> ReliabilityErrorScale:
+        return self.assumption_assessment.error_scale
+
+    @property
     def athlete_ids(self) -> tuple[InstanceIdentifier, ...]:
         seen: dict[str, InstanceIdentifier] = {}
         for pair in self.replicate_pairs:
             seen.setdefault(pair.athlete_id.qualified, pair.athlete_id)
         return tuple(seen.values())
+
+
+@register_serializable_type
+@dataclass(frozen=True, slots=True)
+class MethodComparisonMethodKeyV1:
+    """Stable method semantics without observation-instance identity.
+
+    The key deliberately omits measurement, observation, result, artifact,
+    acquisition-instance, processing-run, athlete, session, and timestamp
+    identities.  It retains the identity dimensions that can materially
+    change the method used to produce a result.
+    """
+
+    semantic: SemanticIdentity
+    processing: ProcessingIdentity
+    version: VersionIdentity
+    unit: UnitReference
+    device_identity: RegistryReference | None
+    sensor_channel: str | None
+    sampling: SamplingCharacteristics | None
+    calibration_reference: RegistryReference | None
+    acquisition_hardware_firmware: RegistryReference | None
+
+    def __post_init__(self) -> None:
+        _require_instance(self.semantic, SemanticIdentity, "semantic")
+        _require_instance(self.processing, ProcessingIdentity, "processing")
+        _require_instance(self.version, VersionIdentity, "version")
+        _require_instance(self.unit, UnitReference, "unit")
+        _require_optional_instance(self.device_identity, RegistryReference, "device_identity")
+        _require_optional_instance(self.sampling, SamplingCharacteristics, "sampling")
+        _require_optional_instance(
+            self.calibration_reference,
+            RegistryReference,
+            "calibration_reference",
+        )
+        _require_optional_instance(
+            self.acquisition_hardware_firmware,
+            RegistryReference,
+            "acquisition_hardware_firmware",
+        )
+        if self.sensor_channel is not None:
+            _require_text(self.sensor_channel, "sensor_channel")
+
+    @classmethod
+    def from_measurement_identity(
+        cls,
+        identity: MeasurementIdentity,
+        unit: UnitReference,
+    ) -> MethodComparisonMethodKeyV1:
+        if not isinstance(identity, MeasurementIdentity):
+            raise ValueError("identity must be a MeasurementIdentity")
+        if not isinstance(unit, UnitReference):
+            raise ValueError("unit must be a UnitReference")
+        acquisition = identity.acquisition
+        return cls(
+            semantic=identity.semantic,
+            processing=identity.processing,
+            version=identity.version,
+            unit=unit,
+            device_identity=acquisition.device,
+            sensor_channel=acquisition.sensor_channel,
+            sampling=acquisition.sampling,
+            calibration_reference=acquisition.calibration_reference,
+            acquisition_hardware_firmware=acquisition.hardware_firmware,
+        )
+
+    @property
+    def stable_key(self) -> str:
+        return canonical_hash(self)
 
 
 @register_serializable_type
@@ -1343,8 +1617,8 @@ class MethodComparisonDesignEvidence:
     source_records: tuple[LongitudinalAthletePerformanceRecord, ...]
     design_identity: RegistryReference
     pairs: tuple[MethodComparisonPair, ...]
-    method_a_identity: ScientificIdentifier
-    method_b_identity: ScientificIdentifier
+    method_a_key: MethodComparisonMethodKeyV1
+    method_b_key: MethodComparisonMethodKeyV1
     target_construct: RegistryReference
     target_measurand: RegistryReference
     metric_a_definition: RegistryReference
@@ -1370,16 +1644,10 @@ class MethodComparisonDesignEvidence:
         _require_tuple_items(self.pairs, MethodComparisonPair, "pairs")
         if not self.pairs:
             raise ValueError("method comparison evidence requires exact subject pairs")
-        object.__setattr__(
-            self,
-            "method_a_identity",
-            _require_scientific_identifier(self.method_a_identity, "method_a_identity"),
-        )
-        object.__setattr__(
-            self,
-            "method_b_identity",
-            _require_scientific_identifier(self.method_b_identity, "method_b_identity"),
-        )
+        _require_instance(self.method_a_key, MethodComparisonMethodKeyV1, "method_a_key")
+        _require_instance(self.method_b_key, MethodComparisonMethodKeyV1, "method_b_key")
+        if self.method_a_key == self.method_b_key:
+            raise ValueError("method comparison requires distinct stable method keys")
         for field_name in (
             "target_construct",
             "target_measurand",
@@ -1414,8 +1682,8 @@ class MethodComparisonDesignAuthority:
     source_provenance: tuple[StatisticalProvenanceReference, ...]
     design_identity: RegistryReference
     pairs: tuple[MethodComparisonPair, ...]
-    method_a_identity: ScientificIdentifier
-    method_b_identity: ScientificIdentifier
+    method_a_key: MethodComparisonMethodKeyV1
+    method_b_key: MethodComparisonMethodKeyV1
     target_construct: RegistryReference
     target_measurand: RegistryReference
     metric_a_definition: RegistryReference
@@ -1456,16 +1724,10 @@ class MethodComparisonDesignAuthority:
         )
         _require_instance(self.design_identity, RegistryReference, "design_identity")
         _require_tuple_items(self.pairs, MethodComparisonPair, "pairs")
-        object.__setattr__(
-            self,
-            "method_a_identity",
-            _require_scientific_identifier(self.method_a_identity, "method_a_identity"),
-        )
-        object.__setattr__(
-            self,
-            "method_b_identity",
-            _require_scientific_identifier(self.method_b_identity, "method_b_identity"),
-        )
+        _require_instance(self.method_a_key, MethodComparisonMethodKeyV1, "method_a_key")
+        _require_instance(self.method_b_key, MethodComparisonMethodKeyV1, "method_b_key")
+        if self.method_a_key == self.method_b_key:
+            raise ValueError("method comparison requires distinct stable method keys")
         for field_name in (
             "target_construct",
             "target_measurand",
@@ -1850,9 +2112,12 @@ __all__ = [
     "MeasurementScaleSemantics",
     "MethodComparisonDesignAuthority",
     "MethodComparisonDesignEvidence",
+    "MethodComparisonMethodKeyV1",
     "MethodComparisonPair",
     "MissingnessPolicy",
     "RES69ReasonCode",
+    "ReliabilityAssumptionAssessment",
+    "ReliabilityAssumptionSourceEvidence",
     "ReliabilityDesignAuthority",
     "ReliabilityDesignEvidence",
     "ReliabilityErrorScale",

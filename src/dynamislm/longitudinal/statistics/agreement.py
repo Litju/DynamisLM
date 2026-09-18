@@ -13,6 +13,7 @@ from dynamislm.longitudinal.statistics.models import (
     AuthorityStatus,
     MethodComparisonDesignAuthority,
     MethodComparisonDesignEvidence,
+    MethodComparisonMethodKeyV1,
     MethodComparisonPair,
     RepeatedPairPolicy,
     RES69ReasonCode,
@@ -27,6 +28,7 @@ from dynamislm.longitudinal.statistics.registry import (
     RES69_BA_BIAS_ESTIMAND,
     RES69_BA_ESTIMATOR,
     RES69_BA_SD_DIFFERENCE_ESTIMAND,
+    RES69_METHOD_COMPARISON_DESIGN_OPERATION,
     RES69_METHOD_COMPARISON_OCCASION_POLICY,
     RES69_METHOD_COMPARISON_OPERATION,
     RES69_REGISTRY_VERSION,
@@ -46,7 +48,6 @@ from dynamislm.longitudinal.statistics.validation import (
 from dynamislm.measurement.identity import (
     MetadataEntry,
     RegistryReference,
-    ScientificIdentifier,
     UnitReference,
 )
 from dynamislm.provenance.models import EvidenceReference
@@ -64,8 +65,8 @@ def build_method_comparison_design_evidence(
     source_records: tuple[LongitudinalAthletePerformanceRecord, ...],
     design_identity: RegistryReference,
     pairs: tuple[MethodComparisonPair, ...],
-    method_a_identity: ScientificIdentifier,
-    method_b_identity: ScientificIdentifier,
+    method_a_key: MethodComparisonMethodKeyV1,
+    method_b_key: MethodComparisonMethodKeyV1,
     target_construct: RegistryReference,
     target_measurand: RegistryReference,
     metric_a_definition: RegistryReference,
@@ -87,8 +88,8 @@ def build_method_comparison_design_evidence(
         source_records=source_records,
         design_identity=design_identity,
         pairs=pairs,
-        method_a_identity=method_a_identity,
-        method_b_identity=method_b_identity,
+        method_a_key=method_a_key,
+        method_b_key=method_b_key,
         target_construct=target_construct,
         target_measurand=target_measurand,
         metric_a_definition=metric_a_definition,
@@ -122,10 +123,15 @@ def _validate_method_comparison_evidence(evidence: MethodComparisonDesignEvidenc
             "method-comparison source records do not match support",
             RES69ReasonCode.SUPPORT_MISMATCH.value,
         )
-    if evidence.method_a_identity == evidence.method_b_identity:
+    if evidence.producing_method != RES69_METHOD_COMPARISON_DESIGN_OPERATION:
         raise StatisticalConstraintError(
-            "method comparison requires distinct method identities",
-            RES69ReasonCode.ANALYSIS_DESIGN_MISMATCH.value,
+            "method comparison evidence must use the registered design-normalization operation",
+            RES69ReasonCode.METHOD_COMPARISON_AUTHORITY_REQUIRED.value,
+        )
+    if evidence.registry_version != RES69_REGISTRY_VERSION:
+        raise StatisticalConstraintError(
+            "method comparison registry version is not the registered RES-69 version",
+            RES69ReasonCode.METHOD_COMPARISON_AUTHORITY_REQUIRED.value,
         )
     if evidence.sign_convention != RES69_B_MINUS_A_SIGN_CONVENTION:
         raise StatisticalConstraintError(
@@ -171,12 +177,22 @@ def _validate_method_comparison_evidence(evidence: MethodComparisonDesignEvidenc
                 "method comparison pairing hashes do not match support",
                 RES69ReasonCode.SUPPORT_MISMATCH.value,
             )
+        method_a_unit = scalar_value(method_a)[1]
+        method_b_unit = scalar_value(method_b)[1]
+        actual_method_a_key = MethodComparisonMethodKeyV1.from_measurement_identity(
+            method_a.observation.identity,
+            method_a_unit,
+        )
+        actual_method_b_key = MethodComparisonMethodKeyV1.from_measurement_identity(
+            method_b.observation.identity,
+            method_b_unit,
+        )
         if (
-            method_a.observation.identity.identity_id != evidence.method_a_identity
-            or method_b.observation.identity.identity_id != evidence.method_b_identity
+            actual_method_a_key != evidence.method_a_key
+            or actual_method_b_key != evidence.method_b_key
         ):
             raise StatisticalConstraintError(
-                "method comparison authority does not match actual method identities",
+                "method comparison authority does not match stable method keys",
                 RES69ReasonCode.SUPPORT_MISMATCH.value,
             )
         if method_a.session_id != method_b.session_id:
@@ -214,8 +230,8 @@ def _validate_method_comparison_evidence(evidence: MethodComparisonDesignEvidenc
                 "method comparison metric identities do not match evidence",
                 RES69ReasonCode.SUPPORT_MISMATCH.value,
             )
-        unit_a = scalar_value(method_a)[1]
-        unit_b = scalar_value(method_b)[1]
+        unit_a = method_a_unit
+        unit_b = method_b_unit
         if unit_a != evidence.unit_a or unit_b != evidence.unit_b:
             raise StatisticalConstraintError(
                 "method comparison units do not match evidence",
@@ -263,8 +279,8 @@ def build_method_comparison_design_authority(
         source_provenance=support.source_provenance,
         design_identity=evidence.design_identity,
         pairs=tuple(sorted(evidence.pairs, key=lambda item: item.pair_id.qualified)),
-        method_a_identity=evidence.method_a_identity,
-        method_b_identity=evidence.method_b_identity,
+        method_a_key=evidence.method_a_key,
+        method_b_key=evidence.method_b_key,
         target_construct=evidence.target_construct,
         target_measurand=evidence.target_measurand,
         metric_a_definition=evidence.metric_a_definition,
@@ -359,12 +375,22 @@ def _validated_method_pairs(
                 "method-comparison source observation hash does not match support",
                 RES69ReasonCode.SUPPORT_MISMATCH.value,
             )
+        a_value, a_unit = scalar_value(method_a)
+        b_value, b_unit = scalar_value(method_b)
+        actual_method_a_key = MethodComparisonMethodKeyV1.from_measurement_identity(
+            method_a.observation.identity,
+            a_unit,
+        )
+        actual_method_b_key = MethodComparisonMethodKeyV1.from_measurement_identity(
+            method_b.observation.identity,
+            b_unit,
+        )
         if (
-            method_a.observation.identity.identity_id != authority.method_a_identity
-            or method_b.observation.identity.identity_id != authority.method_b_identity
+            actual_method_a_key != authority.method_a_key
+            or actual_method_b_key != authority.method_b_key
         ):
             raise StatisticalConstraintError(
-                "method-comparison method identity does not match pair support",
+                "method-comparison stable method key does not match pair support",
                 RES69ReasonCode.SUPPORT_MISMATCH.value,
             )
         if method_a.session_id != method_b.session_id:
@@ -377,8 +403,6 @@ def _validated_method_pairs(
                 "repeated pair flattening is not allowed",
                 RES69ReasonCode.ANALYSIS_DESIGN_MISMATCH.value,
             )
-        a_value, a_unit = scalar_value(method_a)
-        b_value, b_unit = scalar_value(method_b)
         if a_unit != authority.unit_a or b_unit != authority.unit_b or a_unit != b_unit:
             raise StatisticalConstraintError(
                 "method-comparison arithmetic requires exact common units",

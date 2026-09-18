@@ -1,20 +1,22 @@
 {
-  "mission": "RES-69-IMPLEMENTATION-001",
+  "mission": "RES-69-REVIEW-FIX-001",
   "project": "DynamisLM",
   "linear_issue": "RES-69",
   "base_main": "e17c415dbf1e181a9dc5dc02b7f16d69d71d18b0",
-  "entry_head": "e17c415dbf1e181a9dc5dc02b7f16d69d71d18b0",
+  "entry_head": "d4f2317e49ec66a12f9c22d98b822012ff351ce8",
   "branch": "work/res-69-longitudinal-reliability-uncertainty",
   "design_status": "FROZEN",
   "implemented_surface": [
     "RES-62-backed StatisticalSupport and StatisticalAnalysisRun",
     "MeasurementScaleSemanticKeyV1 and fail-closed scale registry",
+    "canonical multi-input ordering by athlete ID and input ID",
     "absolute, relative, percent, log-ratio, and window descriptives",
     "reference-window deviation, timestamp OLS, and descriptive within-athlete SD",
-    "source-bound two-replicate reliability authority and random-error estimator",
+    "source-bound reliability assumption assessment and two-replicate random-error estimator",
     "raw relative error with derived pooled 2N grand mean",
     "log-multiplicative typical error and factor interval",
-    "source-bound method-comparison authority and narrow Bland-Altman summary",
+    "stable method-key method-comparison authority and narrow Bland-Altman summary",
+    "synthetic scale authority blocked from public production results",
     "V3 serialization and tamper validation for new public contracts"
   ],
   "deferred_surface": [
@@ -37,9 +39,6 @@
     "docs/decisions/RES69-DR-001-longitudinal-reliability-uncertainty.md",
     "docs/decisions/RES69-RECEIPT.json",
     "docs/decisions/RES69-SCALE-REGISTRY-AUDIT.md",
-    "src/dynamislm/__init__.py",
-    "src/dynamislm/longitudinal/__init__.py",
-    "src/dynamislm/longitudinal/statistics/__init__.py",
     "src/dynamislm/longitudinal/statistics/agreement.py",
     "src/dynamislm/longitudinal/statistics/descriptive.py",
     "src/dynamislm/longitudinal/statistics/models.py",
@@ -59,7 +58,7 @@
     "mypy": "PASS",
     "repository_policy": "PASS",
     "pytest": "PASS",
-    "test_count": 767,
+    "test_count": 781,
     "tracked_mutation": "NONE"
   },
   "serialization_version": 3,
@@ -87,9 +86,9 @@
     "created": false,
     "number": null,
     "head": null,
-    "hosted_ci": "PENDING_NOT_STARTED",
-    "review_findings": null,
-    "linear_status": "IN_PROGRESS"
+    "hosted_ci": "PENDING_EXACT_REPAIR_HEAD",
+    "review_findings": "PENDING_EXACT_REPAIR_HEAD",
+    "linear_status": "IN_REVIEW"
   },
   "commit_state": {
     "commit_created": false,

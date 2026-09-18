@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime as datetime_module
+import inspect
 import json
 import math
 from dataclasses import replace
@@ -25,6 +26,7 @@ from dynamislm.longitudinal.models import (
 )
 from dynamislm.longitudinal.statistics import (
     RES69_METHOD_COMPARISON_DESIGN_OPERATION,
+    RES69_RELIABILITY_ASSUMPTION_ASSESSMENT_OPERATION,
     RES69_RELIABILITY_DESIGN_OPERATION,
     RES69_REPLICATE_ORDERING,
     RES69_SCALE_REGISTRY,
@@ -36,8 +38,10 @@ from dynamislm.longitudinal.statistics import (
     MeasurementScaleSemanticKeyV1,
     MeasurementScaleSemantics,
     MethodComparisonDesignAuthority,
+    MethodComparisonMethodKeyV1,
     MethodComparisonPair,
     MissingnessPolicy,
+    ReliabilityAssumptionAssessment,
     ReliabilityDesignAuthority,
     ReliabilityErrorScale,
     ReliabilityQuestion,
@@ -57,6 +61,8 @@ from dynamislm.longitudinal.statistics import (
     build_method_comparison_design_authority,
     build_method_comparison_design_evidence,
     build_reference_window_support,
+    build_reliability_assumption_assessment,
+    build_reliability_assumption_source_evidence,
     build_reliability_design_authority,
     build_reliability_design_evidence,
     build_statistical_support,
@@ -76,6 +82,8 @@ from dynamislm.longitudinal.statistics import (
     refuse_bland_altman_interpretation,
     request_classical_bland_altman_limits,
 )
+from dynamislm.longitudinal.statistics import descriptive as _descriptive
+from dynamislm.longitudinal.statistics import reliability as _reliability
 from dynamislm.measurement.cmj.registry import METER
 from dynamislm.measurement.identity import (
     InstanceIdentifier,
@@ -272,6 +280,23 @@ def _build_reliability_authority(
     first = entries[0]
     protocol = first.observation.identity.semantic.protocol
     assert protocol is not None
+    assumption_source_evidence = build_reliability_assumption_source_evidence(
+        support=support,
+        source_records=records,
+        study_identity=_reference("study", "reliability-study"),
+        protocol_reference=protocol,
+        evidence_references=(EvidenceReference(_reference("evidence", "reliability-assumptions")),),
+        stable_underlying_quantity=StableUnderlyingQuantityStatus.SUPPORTED,
+        systematic_trial_effect=SystematicTrialEffectAssessment(
+            SystematicTrialEffectStatus.SYSTEMATIC_EFFECT_PRESENT,
+            (EvidenceReference(_reference("evidence", "systematic-effect")),),
+            "The protocol assessed a systematic trial effect; the mean shift remains "
+            "separate from random error.",
+        ),
+        error_scale=error_scale,
+        producing_method=RES69_RELIABILITY_ASSUMPTION_ASSESSMENT_OPERATION,
+    )
+    assumption_assessment = build_reliability_assumption_assessment(assumption_source_evidence)
     evidence = build_reliability_design_evidence(
         support=support,
         source_records=records,
@@ -289,19 +314,40 @@ def _build_reliability_authority(
         protocol_reference=protocol,
         evidence_references=(EvidenceReference(_reference("evidence", "reliability-design")),),
         repeatability_question=ReliabilityQuestion.REPEATABILITY,
-        stable_underlying_quantity=StableUnderlyingQuantityStatus.SUPPORTED,
-        systematic_trial_effect=SystematicTrialEffectAssessment(
-            SystematicTrialEffectStatus.SYSTEMATIC_EFFECT_PRESENT,
-            (EvidenceReference(_reference("evidence", "systematic-effect")),),
-            "The protocol assessed a systematic trial effect; the mean shift remains "
-            "separate from random error.",
-        ),
-        error_scale=error_scale,
+        assumption_assessment=assumption_assessment,
         missingness_policy=MissingnessPolicy.NO_IMPUTATION_NO_ZERO_FILL,
         balanced_design=balanced_design,
         producing_method=RES69_RELIABILITY_DESIGN_OPERATION,
     )
     return build_reliability_design_authority(evidence)
+
+
+def test_statistical_support_canonicalizes_same_athlete_multi_input_order() -> None:
+    first = _entries((1.0, 2.0), prefix="same-athlete-input-a")
+    second = _entries((3.0, 4.0), prefix="same-athlete-input-b")
+    inputs = (_input(first), _input(second))
+    records = (_record(first), _record(second))
+    descending = tuple(sorted(inputs, key=lambda item: item.input_id.qualified, reverse=True))
+    support_a = build_statistical_support(
+        descending,
+        (*first, *second),
+        source_records=records,
+        missingness_policy=MissingnessPolicy.NO_IMPUTATION_NO_ZERO_FILL,
+    )
+    support_b = build_statistical_support(
+        tuple(reversed(descending)),
+        (*first, *second),
+        source_records=records,
+        missingness_policy=MissingnessPolicy.NO_IMPUTATION_NO_ZERO_FILL,
+    )
+    assert support_a.analysis_inputs == tuple(
+        sorted(
+            inputs,
+            key=lambda item: (item.athlete.athlete_id.qualified, item.input_id.qualified),
+        )
+    )
+    assert support_a == support_b
+    assert support_a.canonical_support_hash == support_b.canonical_support_hash
 
 
 def test_absolute_relative_percent_and_log_ratio_gold_cases() -> None:
@@ -314,12 +360,11 @@ def test_absolute_relative_percent_and_log_ratio_gold_cases() -> None:
 
     registry = _synthetic_scale_registry(entries[0])
     relative = calculate_relative_change(support, registry=registry)
-    assert isinstance(relative, StatisticalResult)
-    assert relative.estimate("relative-change").value == pytest.approx(0.2)
-    assert relative.estimate("percent-change").value == pytest.approx(20.0)
+    assert _is_refusal(relative, RES69ReasonCode.SCALE_OPERATION_NOT_AUTHORIZED)
+    assert _descriptive._relative_change_value(10.0, 12.0) == pytest.approx(0.2)
     log_ratio = calculate_log_ratio_change(support, registry=registry)
-    assert isinstance(log_ratio, StatisticalResult)
-    assert log_ratio.estimate("log-ratio").value == pytest.approx(math.log(1.2))
+    assert _is_refusal(log_ratio, RES69ReasonCode.SCALE_OPERATION_NOT_AUTHORIZED)
+    assert _descriptive._log_ratio_value(10.0, 12.0) == pytest.approx(math.log(1.2))
 
 
 def test_exact_unit_and_identity_rules_fail_closed() -> None:
@@ -358,7 +403,7 @@ def test_scale_registry_requires_registered_semantics_and_ignores_caller_flags()
     )
     semantics_registry = _synthetic_scale_registry(entries[0])
     result = calculate_relative_change(support, registry=semantics_registry, ratio_scale=True)
-    assert isinstance(result, StatisticalResult)
+    assert _is_refusal(result, RES69ReasonCode.SCALE_OPERATION_NOT_AUTHORIZED)
 
     interval = replace(
         semantics_registry.entries[-1],
@@ -381,6 +426,63 @@ def test_scale_registry_requires_registered_semantics_and_ignores_caller_flags()
     assert _is_refusal(
         calculate_relative_change(support, registry=interval_registry),
         RES69ReasonCode.SCALE_OPERATION_NOT_AUTHORIZED,
+    )
+
+
+def test_public_scale_operations_reject_synthetic_scale_authority() -> None:
+    entries = _entries((10.0, 12.0), prefix="synthetic-scale-public")
+    support = _support(entries)
+    registry = _synthetic_scale_registry(entries[0])
+    assert _is_refusal(
+        calculate_relative_change(support, registry=registry),
+        RES69ReasonCode.SCALE_OPERATION_NOT_AUTHORIZED,
+    )
+    assert _is_refusal(
+        calculate_log_ratio_change(support, registry=registry),
+        RES69ReasonCode.SCALE_OPERATION_NOT_AUTHORIZED,
+    )
+
+    reliability_support, authority, reliability_entries, records, pairs = _reliability_fixture()
+    raw_authority = _build_reliability_authority(
+        reliability_support,
+        reliability_entries,
+        records,
+        pairs,
+        error_scale=ReliabilityErrorScale.RAW_RELATIVE,
+    )
+    log_authority = _build_reliability_authority(
+        reliability_support,
+        reliability_entries,
+        records,
+        pairs,
+        error_scale=ReliabilityErrorScale.LOG_MULTIPLICATIVE,
+    )
+    assert _is_refusal(
+        calculate_raw_relative_error_percent(
+            reliability_support,
+            raw_authority,
+            registry=registry,
+        ),
+        RES69ReasonCode.SCALE_OPERATION_NOT_AUTHORIZED,
+    )
+    assert _is_refusal(
+        calculate_log_scale_typical_error(
+            reliability_support,
+            log_authority,
+            registry=registry,
+        ),
+        RES69ReasonCode.SCALE_OPERATION_NOT_AUTHORIZED,
+    )
+    assert authority.is_source_bound
+
+
+def test_public_scale_operations_fail_closed_without_production_entry() -> None:
+    entries = _entries((10.0, 12.0), prefix="empty-production-scale")
+    support = _support(entries)
+    assert not RES69_SCALE_REGISTRY.entries
+    assert _is_refusal(
+        calculate_relative_change(support),
+        RES69ReasonCode.SCALE_SEMANTICS_UNREGISTERED,
     )
 
 
@@ -541,6 +643,82 @@ def test_two_replicate_random_error_and_source_bound_gate() -> None:
     )
 
 
+def test_reliability_assumption_source_bound_contract() -> None:
+    support, authority, _entries_value, _records, _pairs = _reliability_fixture()
+    assessment = authority.assumption_assessment
+    assert isinstance(assessment, ReliabilityAssumptionAssessment)
+    assert assessment.is_source_bound
+    assert assessment.support_id == support.canonical_support_id
+    assert assessment.support_hash == support.canonical_support_hash
+    assert assessment.source_records == support.source_records
+    assert assessment.source_artifacts == support.source_artifacts
+    assert assessment.source_provenance == support.source_provenance
+
+
+def test_reliability_assumption_free_fields_cannot_mint_authority() -> None:
+    parameter_names = set(inspect.signature(build_reliability_design_evidence).parameters)
+    assert "stable_underlying_quantity" not in parameter_names
+    assert "systematic_trial_effect" not in parameter_names
+    assert "error_scale" not in parameter_names
+
+
+def test_reliability_assumption_wrong_support_refuses() -> None:
+    _support_value, authority, _entries_value, _records, _pairs = _reliability_fixture()
+    source = authority.assumption_assessment.source_evidence
+    wrong_entries = _entries((11.0, 13.0, 20.0, 23.0), prefix="wrong-assumption-support")
+    with pytest.raises(ValueError):
+        build_reliability_assumption_assessment(replace(source, support=_support(wrong_entries)))
+
+
+def test_reliability_assumption_wrong_protocol_refuses() -> None:
+    _support_value, authority, _entries_value, _records, _pairs = _reliability_fixture()
+    source = authority.assumption_assessment.source_evidence
+    with pytest.raises(ValueError):
+        build_reliability_assumption_assessment(
+            replace(source, protocol_reference=_reference("protocol", "wrong-protocol"))
+        )
+
+
+def test_reliability_assumption_tamper_refuses() -> None:
+    _support_value, authority, _entries_value, _records, _pairs = _reliability_fixture()
+    with pytest.raises(ValueError):
+        replace(
+            authority.assumption_assessment,
+            source_evidence_hash="sha256:" + "0" * 64,
+        )
+
+
+def test_direct_reliability_assumption_stays_unverified() -> None:
+    support, authority, _entries_value, _records, _pairs = _reliability_fixture()
+    unverified_assessment = replace(
+        authority.assumption_assessment,
+        authority_status=AuthorityStatus.UNVERIFIED,
+        authority_token=None,
+        authority_hash=None,
+    )
+    unverified_authority = replace(
+        authority,
+        assumption_assessment=unverified_assessment,
+        authority_status=AuthorityStatus.UNVERIFIED,
+        authority_token=None,
+        authority_hash=None,
+    )
+    assert not unverified_assessment.is_source_bound
+    assert _is_refusal(
+        calculate_two_replicate_random_error(support, unverified_authority),
+        RES69ReasonCode.RELIABILITY_AUTHORITY_REQUIRED,
+    )
+
+
+def test_arbitrary_reliability_assumption_producing_method_refuses() -> None:
+    _support_value, authority, _entries_value, _records, _pairs = _reliability_fixture()
+    source = authority.assumption_assessment.source_evidence
+    with pytest.raises(ValueError):
+        build_reliability_assumption_assessment(
+            replace(source, producing_method=_reference("registered-operation", "arbitrary"))
+        )
+
+
 def test_reliability_n_one_unbalanced_and_wrong_order_refuse() -> None:
     entries = _entries((10.0, 12.0), prefix="reliability-one")
     support = _support(entries)
@@ -577,9 +755,14 @@ def test_raw_relative_error_uses_only_derived_pooled_grand_mean() -> None:
         raw_authority,
         registry=_synthetic_scale_registry(entries[0]),
     )
-    assert isinstance(result, StatisticalResult)
-    assert result.estimate("raw-pooled-grand-mean").value == pytest.approx(16.25)
-    assert result.estimate("raw-relative-error-percent").value == pytest.approx(100.0 * 0.5 / 16.25)
+    assert _is_refusal(result, RES69ReasonCode.SCALE_OPERATION_NOT_AUTHORIZED)
+    raw_mean, random_error, relative_error = _reliability._raw_relative_error_values(
+        (10.0, 20.0),
+        (12.0, 23.0),
+    )
+    assert raw_mean == pytest.approx(16.25)
+    assert random_error == pytest.approx(0.5)
+    assert relative_error == pytest.approx(100.0 * 0.5 / 16.25)
     supplied = calculate_raw_relative_error_percent(
         support,
         raw_authority,
@@ -609,17 +792,16 @@ def test_log_typical_error_has_factor_interval_not_symmetric_percent() -> None:
         log_authority,
         registry=_synthetic_scale_registry(entries[0]),
     )
-    assert isinstance(result, StatisticalResult)
-    te = result.estimate("log-typical-error").value
-    lower = result.estimate("lower-factor").value
-    upper = result.estimate("upper-factor").value
+    assert _is_refusal(result, RES69ReasonCode.SCALE_OPERATION_NOT_AUTHORIZED)
+    (_, _, te, factor, lower, upper, lower_percent, upper_percent) = (
+        _reliability._log_scale_typical_error_values((10.0, 20.0), (12.0, 23.0))
+    )
+    assert factor == pytest.approx(math.exp(te))
     assert upper == pytest.approx(math.exp(te))
     assert lower == pytest.approx(1.0 / upper)
-    assert result.estimate("lower-percent").value == pytest.approx(100.0 * (1.0 - lower))
-    assert result.estimate("upper-percent").value == pytest.approx(100.0 * (upper - 1.0))
-    assert result.estimate("lower-percent").value != pytest.approx(
-        result.estimate("upper-percent").value
-    )
+    assert lower_percent == pytest.approx(100.0 * (1.0 - lower))
+    assert upper_percent == pytest.approx(100.0 * (upper - 1.0))
+    assert lower_percent != pytest.approx(upper_percent)
 
     negative = _entries((0.0, 1.0), prefix="log-negative")
     support_negative = _support(negative)
@@ -649,9 +831,6 @@ def _method_comparison_fixture() -> tuple[
     tuple[LongitudinalObservationEntry, ...],
     tuple[LongitudinalAthletePerformanceRecord, ...],
 ]:
-    common_a = ScientificIdentifier("synthetic-res69", "measurement-identity", "method-a", "1.0.0")
-    common_b = ScientificIdentifier("synthetic-res69", "measurement-identity", "method-b", "1.0.0")
-
     def pair_entries(
         prefix: str,
         athlete: AthleteIdentity,
@@ -672,7 +851,9 @@ def _method_comparison_fixture() -> tuple[
                 processing_method_key="method-a",
                 processing_key=f"{prefix}-a-processing",
             ),
-            identity_id=common_a,
+            identity_id=ScientificIdentifier(
+                "synthetic-res69", "measurement-identity", f"method-a:{prefix}", "1.0.0"
+            ),
         )
         method_b = _with_unit(
             _entry(
@@ -685,7 +866,9 @@ def _method_comparison_fixture() -> tuple[
                 processing_method_key="method-b",
                 processing_key=f"{prefix}-b-processing",
             ),
-            identity_id=common_b,
+            identity_id=ScientificIdentifier(
+                "synthetic-res69", "measurement-identity", f"method-b:{prefix}", "1.0.0"
+            ),
         )
         return method_a, method_b
 
@@ -708,13 +891,21 @@ def _method_comparison_fixture() -> tuple[
             second[0], second[1], occasion_id=_instance("occasion", "ba-b")
         ),
     )
+    method_a_key = MethodComparisonMethodKeyV1.from_measurement_identity(
+        first[0].observation.identity,
+        METER,
+    )
+    method_b_key = MethodComparisonMethodKeyV1.from_measurement_identity(
+        first[1].observation.identity,
+        METER,
+    )
     evidence = build_method_comparison_design_evidence(
         support=support,
         source_records=records,
         design_identity=_reference("study", "method-comparison"),
         pairs=pairs,
-        method_a_identity=common_a,
-        method_b_identity=common_b,
+        method_a_key=method_a_key,
+        method_b_key=method_b_key,
         target_construct=first[0].observation.identity.semantic.construct,
         target_measurand=first[0].observation.identity.semantic.measurand,
         metric_a_definition=first[0].observation.identity.semantic.metric_definition,
@@ -744,6 +935,100 @@ def test_bland_altman_summary_is_narrow_and_allows_method_difference() -> None:
     )
 
 
+def test_method_comparison_uses_stable_method_key_across_instance_ids() -> None:
+    support, authority, entries, _records = _method_comparison_fixture()
+    first_a, first_b, second_a, second_b = entries
+    assert (
+        len(
+            {
+                first_a.observation.identity.identity_id,
+                first_b.observation.identity.identity_id,
+                second_a.observation.identity.identity_id,
+                second_b.observation.identity.identity_id,
+            }
+        )
+        == 4
+    )
+    assert MethodComparisonMethodKeyV1.from_measurement_identity(
+        first_a.observation.identity,
+        METER,
+    ) == MethodComparisonMethodKeyV1.from_measurement_identity(
+        second_a.observation.identity,
+        METER,
+    )
+    assert MethodComparisonMethodKeyV1.from_measurement_identity(
+        first_b.observation.identity,
+        METER,
+    ) == MethodComparisonMethodKeyV1.from_measurement_identity(
+        second_b.observation.identity,
+        METER,
+    )
+    assert authority.method_a_key != authority.method_b_key
+    assert isinstance(calculate_bland_altman_summary(support, authority), StatisticalResult)
+
+
+def test_method_comparison_material_method_change_refuses() -> None:
+    support, authority, _entries_value, records = _method_comparison_fixture()
+    changed_key = replace(
+        authority.method_a_key,
+        device_identity=_reference("device", "materially-different-device"),
+    )
+    evidence = build_method_comparison_design_evidence(
+        support=support,
+        source_records=records,
+        design_identity=authority.design_identity,
+        pairs=authority.pairs,
+        method_a_key=changed_key,
+        method_b_key=authority.method_b_key,
+        target_construct=authority.target_construct,
+        target_measurand=authority.target_measurand,
+        metric_a_definition=authority.metric_a_definition,
+        metric_b_definition=authority.metric_b_definition,
+        unit_a=authority.unit_a,
+        unit_b=authority.unit_b,
+        evidence_references=authority.evidence_references,
+        producing_method=RES69_METHOD_COMPARISON_DESIGN_OPERATION,
+    )
+    with pytest.raises(ValueError):
+        build_method_comparison_design_authority(evidence)
+
+
+def test_method_comparison_arbitrary_producing_method_refuses() -> None:
+    support, authority, _entries_value, records = _method_comparison_fixture()
+    evidence = build_method_comparison_design_evidence(
+        support=support,
+        source_records=records,
+        design_identity=authority.design_identity,
+        pairs=authority.pairs,
+        method_a_key=authority.method_a_key,
+        method_b_key=authority.method_b_key,
+        target_construct=authority.target_construct,
+        target_measurand=authority.target_measurand,
+        metric_a_definition=authority.metric_a_definition,
+        metric_b_definition=authority.metric_b_definition,
+        unit_a=authority.unit_a,
+        unit_b=authority.unit_b,
+        evidence_references=authority.evidence_references,
+        producing_method=_reference("registered-operation", "arbitrary-method-comparison"),
+    )
+    with pytest.raises(ValueError):
+        build_method_comparison_design_authority(evidence)
+
+
+def test_direct_method_comparison_authority_stays_unverified() -> None:
+    support, authority, _entries_value, _records = _method_comparison_fixture()
+    unverified = replace(
+        authority,
+        authority_status=AuthorityStatus.UNVERIFIED,
+        authority_token=None,
+    )
+    assert not unverified.is_source_bound
+    assert _is_refusal(
+        calculate_bland_altman_summary(support, unverified),
+        RES69ReasonCode.METHOD_COMPARISON_AUTHORITY_REQUIRED,
+    )
+
+
 def test_method_comparison_direct_mint_and_unit_mismatch_are_blocked() -> None:
     support, authority, entries, records = _method_comparison_fixture()
     unverified = replace(
@@ -758,8 +1043,8 @@ def test_method_comparison_direct_mint_and_unit_mismatch_are_blocked() -> None:
         source_records=records,
         design_identity=_reference("study", "ba-bad-unit"),
         pairs=authority.pairs,
-        method_a_identity=authority.method_a_identity,
-        method_b_identity=authority.method_b_identity,
+        method_a_key=authority.method_a_key,
+        method_b_key=authority.method_b_key,
         target_construct=authority.target_construct,
         target_measurand=authority.target_measurand,
         metric_a_definition=authority.metric_a_definition,

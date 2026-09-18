@@ -5,7 +5,6 @@ from __future__ import annotations
 import datetime as datetime_module
 import math
 from collections.abc import Iterable
-from dataclasses import fields
 
 from dynamislm.comparability.models import (
     ComparabilityRequest,
@@ -18,6 +17,7 @@ from dynamislm.longitudinal.models import (
     MultiSourceAnalysisInput,
 )
 from dynamislm.longitudinal.statistics.models import (
+    MethodComparisonMethodKeyV1,
     MissingnessPolicy,
     StatisticalComparabilityEvidence,
     StatisticalSourceRecordReference,
@@ -68,7 +68,12 @@ def _normalise_inputs(
         raise ValueError("analysis_input must be a MultiSourceAnalysisInput or non-empty tuple")
     if any(not isinstance(item, MultiSourceAnalysisInput) for item in analysis_input):
         raise ValueError("analysis_input tuple must contain MultiSourceAnalysisInput values")
-    return tuple(sorted(analysis_input, key=lambda item: item.athlete.athlete_id.qualified))
+    return tuple(
+        sorted(
+            analysis_input,
+            key=lambda item: (item.athlete.athlete_id.qualified, item.input_id.qualified),
+        )
+    )
 
 
 def _record_references(
@@ -398,24 +403,10 @@ def measurement_target_signature(entry: LongitudinalObservationEntry) -> tuple[o
     )
 
 
-def _method_signature(entry: LongitudinalObservationEntry) -> tuple[object, ...]:
+def _method_signature(entry: LongitudinalObservationEntry) -> MethodComparisonMethodKeyV1:
     identity = entry.observation.identity
-    acquisition_values = tuple(
-        (field.name, getattr(identity.acquisition, field.name))
-        for field in fields(identity.acquisition)
-        if field.name
-        not in {
-            "raw_artifact",
-            "source_artifact_id",
-            "acquisition_instance_id",
-        }
-    )
-    return (
-        identity.semantic,
-        identity.processing,
-        identity.version,
-        acquisition_values,
-    )
+    _value, unit = scalar_value(entry)
+    return MethodComparisonMethodKeyV1.from_measurement_identity(identity, unit)
 
 
 def validate_comparable_entries(

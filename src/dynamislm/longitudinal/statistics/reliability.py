@@ -12,6 +12,8 @@ from dynamislm.longitudinal.models import (
 from dynamislm.longitudinal.statistics.models import (
     AuthorityStatus,
     MissingnessPolicy,
+    ReliabilityAssumptionAssessment,
+    ReliabilityAssumptionSourceEvidence,
     ReliabilityDesignAuthority,
     ReliabilityDesignEvidence,
     ReliabilityErrorScale,
@@ -44,6 +46,8 @@ from dynamislm.longitudinal.statistics.registry import (
     RES69_RAW_RELATIVE_ERROR_OPERATION,
     RES69_RAW_RELATIVE_ERROR_PERCENT_ESTIMAND,
     RES69_REGISTRY_VERSION,
+    RES69_RELIABILITY_ASSUMPTION_ASSESSMENT_OPERATION,
+    RES69_RELIABILITY_DESIGN_OPERATION,
     RES69_REPLICATE_ORDERING,
     RES69_SCALE_REGISTRY,
     RES69_SD_DIFFERENCE_ESTIMAND,
@@ -95,6 +99,133 @@ def _source_evidence_references(
     return authority.evidence_references
 
 
+def build_reliability_assumption_source_evidence(
+    *,
+    support: StatisticalSupport,
+    source_records: tuple[LongitudinalAthletePerformanceRecord, ...],
+    study_identity: RegistryReference,
+    protocol_reference: RegistryReference,
+    evidence_references: tuple[EvidenceReference, ...],
+    stable_underlying_quantity: StableUnderlyingQuantityStatus,
+    systematic_trial_effect: SystematicTrialEffectAssessment,
+    error_scale: ReliabilityErrorScale,
+    producing_method: RegistryReference,
+    registry_version: str = RES69_REGISTRY_VERSION,
+) -> ReliabilityAssumptionSourceEvidence:
+    """Capture source/protocol claims before registered assessment normalization."""
+
+    return ReliabilityAssumptionSourceEvidence(
+        support=support,
+        source_records=source_records,
+        study_identity=study_identity,
+        protocol_reference=protocol_reference,
+        evidence_references=evidence_references,
+        stable_underlying_quantity=stable_underlying_quantity,
+        systematic_trial_effect=systematic_trial_effect,
+        error_scale=error_scale,
+        producing_method=producing_method,
+        registry_version=registry_version,
+    )
+
+
+def _validate_reliability_assumption_source_evidence(
+    evidence: ReliabilityAssumptionSourceEvidence,
+) -> None:
+    support = evidence.support
+    validate_statistical_support(support)
+    if evidence.producing_method != RES69_RELIABILITY_ASSUMPTION_ASSESSMENT_OPERATION:
+        raise StatisticalConstraintError(
+            "reliability assumptions must use the registered assessment operation",
+            RES69ReasonCode.RELIABILITY_AUTHORITY_REQUIRED.value,
+        )
+    if evidence.registry_version != RES69_REGISTRY_VERSION:
+        raise StatisticalConstraintError(
+            "reliability assumption registry version is not the registered RES-69 version",
+            RES69ReasonCode.RELIABILITY_AUTHORITY_REQUIRED.value,
+        )
+    expected_records = tuple(
+        sorted(
+            (
+                StatisticalSourceRecordReference.from_record(record)
+                for record in evidence.source_records
+            ),
+            key=lambda item: item.record_id.qualified,
+        )
+    )
+    if expected_records != support.source_records:
+        raise StatisticalConstraintError(
+            "reliability assumption source records do not match support",
+            RES69ReasonCode.SUPPORT_MISMATCH.value,
+        )
+    target_protocols = {
+        entry.observation.identity.semantic.protocol.stable_id
+        for entry in support.included_entries
+        if entry.observation.identity.semantic.protocol is not None
+    }
+    if (
+        len(target_protocols) != 1
+        or next(iter(target_protocols)) != evidence.protocol_reference.stable_id
+    ):
+        raise StatisticalConstraintError(
+            "reliability assumption protocol does not match exact support",
+            RES69ReasonCode.IDENTITY_UNRESOLVED.value,
+        )
+    if not evidence.systematic_trial_effect.evidence_references:
+        raise StatisticalConstraintError(
+            "systematic trial-effect claim requires source evidence",
+            RES69ReasonCode.RELIABILITY_AUTHORITY_REQUIRED.value,
+        )
+
+
+def build_reliability_assumption_assessment(
+    evidence: ReliabilityAssumptionSourceEvidence,
+) -> ReliabilityAssumptionAssessment:
+    """Normalize exact source/protocol evidence into source-bound authority."""
+
+    if not isinstance(evidence, ReliabilityAssumptionSourceEvidence):
+        raise ValueError("evidence must be a ReliabilityAssumptionSourceEvidence")
+    _validate_reliability_assumption_source_evidence(evidence)
+    support = evidence.support
+    assessment = ReliabilityAssumptionAssessment(
+        support_id=support.canonical_support_id,
+        support_hash=support.canonical_support_hash,
+        analysis_input_ids=support.input_ids,
+        analysis_input_hashes=support.input_hashes,
+        source_records=tuple(
+            sorted(
+                (
+                    StatisticalSourceRecordReference.from_record(record)
+                    for record in evidence.source_records
+                ),
+                key=lambda item: item.record_id.qualified,
+            )
+        ),
+        source_artifacts=support.source_artifacts,
+        source_provenance=support.source_provenance,
+        study_identity=evidence.study_identity,
+        protocol_reference=evidence.protocol_reference,
+        evidence_references=evidence.evidence_references,
+        stable_underlying_quantity=evidence.stable_underlying_quantity,
+        systematic_trial_effect=evidence.systematic_trial_effect,
+        error_scale=evidence.error_scale,
+        producing_method=evidence.producing_method,
+        registry_version=evidence.registry_version,
+        source_evidence=evidence,
+        source_evidence_hash=canonical_hash(evidence),
+        authority_status=AuthorityStatus.UNVERIFIED,
+    )
+    return replace(
+        assessment,
+        authority_status=AuthorityStatus.SOURCE_BOUND,
+        authority_token=canonical_hash(
+            {
+                "authority_hash": assessment.canonical_authority_hash,
+                "purpose": "RES69_SOURCE_BOUND_AUTHORITY_V1",
+            }
+        ),
+    )
+
+
 def build_reliability_design_evidence(
     *,
     support: StatisticalSupport,
@@ -110,9 +241,7 @@ def build_reliability_design_evidence(
     protocol_reference: RegistryReference,
     evidence_references: tuple[EvidenceReference, ...],
     repeatability_question: ReliabilityQuestion,
-    stable_underlying_quantity: StableUnderlyingQuantityStatus,
-    systematic_trial_effect: SystematicTrialEffectAssessment,
-    error_scale: ReliabilityErrorScale,
+    assumption_assessment: ReliabilityAssumptionAssessment,
     missingness_policy: MissingnessPolicy,
     balanced_design: bool,
     producing_method: RegistryReference,
@@ -125,8 +254,8 @@ def build_reliability_design_evidence(
 ) -> ReliabilityDesignEvidence:
     """Create a typed evidence record; authority is minted only by its builder."""
 
-    if not isinstance(systematic_trial_effect, SystematicTrialEffectAssessment):
-        raise ValueError("systematic_trial_effect must be a SystematicTrialEffectAssessment")
+    if not isinstance(assumption_assessment, ReliabilityAssumptionAssessment):
+        raise ValueError("assumption_assessment must be a ReliabilityAssumptionAssessment")
     if not isinstance(missingness_policy, MissingnessPolicy):
         raise ValueError("missingness_policy must be a MissingnessPolicy")
     return ReliabilityDesignEvidence(
@@ -147,9 +276,7 @@ def build_reliability_design_evidence(
         rater_identity=rater_identity,
         evidence_references=evidence_references,
         repeatability_question=repeatability_question,
-        stable_underlying_quantity=stable_underlying_quantity,
-        systematic_trial_effect=systematic_trial_effect,
-        error_scale=error_scale,
+        assumption_assessment=assumption_assessment,
         missingness_policy=missingness_policy,
         balanced_design=balanced_design,
         producing_method=producing_method,
@@ -161,6 +288,41 @@ def build_reliability_design_evidence(
 def _validate_reliability_evidence(evidence: ReliabilityDesignEvidence) -> None:
     support = evidence.support
     validate_statistical_support(support)
+    if evidence.producing_method != RES69_RELIABILITY_DESIGN_OPERATION:
+        raise StatisticalConstraintError(
+            "reliability design evidence must use the registered design-normalization operation",
+            RES69ReasonCode.RELIABILITY_AUTHORITY_REQUIRED.value,
+        )
+    if evidence.registry_version != RES69_REGISTRY_VERSION:
+        raise StatisticalConstraintError(
+            "reliability design registry version is not the registered RES-69 version",
+            RES69ReasonCode.RELIABILITY_AUTHORITY_REQUIRED.value,
+        )
+    assessment = evidence.assumption_assessment
+    if not assessment.is_source_bound:
+        raise StatisticalConstraintError(
+            "source-bound ReliabilityAssumptionAssessment is required",
+            RES69ReasonCode.RELIABILITY_AUTHORITY_REQUIRED.value,
+        )
+    if (
+        assessment.support_id != support.canonical_support_id
+        or assessment.support_hash != support.canonical_support_hash
+    ):
+        raise StatisticalConstraintError(
+            "reliability assumption assessment does not match exact support",
+            RES69ReasonCode.SUPPORT_MISMATCH.value,
+        )
+    if assessment.protocol_reference != evidence.protocol_reference:
+        raise StatisticalConstraintError(
+            "reliability design protocol does not match the source-bound assumption assessment",
+            RES69ReasonCode.IDENTITY_UNRESOLVED.value,
+        )
+    if assessment.study_identity != evidence.study_identity:
+        raise StatisticalConstraintError(
+            "reliability design study identity does not match the source-bound "
+            "assumption assessment",
+            RES69ReasonCode.SUPPORT_MISMATCH.value,
+        )
     expected_records = tuple(
         sorted(
             (
@@ -346,9 +508,7 @@ def build_reliability_design_authority(
         rater_identity=evidence.rater_identity,
         evidence_references=evidence.evidence_references,
         repeatability_question=evidence.repeatability_question,
-        stable_underlying_quantity=evidence.stable_underlying_quantity,
-        systematic_trial_effect=evidence.systematic_trial_effect,
-        error_scale=evidence.error_scale,
+        assumption_assessment=evidence.assumption_assessment,
         missingness_policy=evidence.missingness_policy,
         balanced_design=evidence.balanced_design,
         producing_method=evidence.producing_method,
@@ -478,6 +638,61 @@ def _sample_sd(values: tuple[float, ...]) -> float:
     return math.sqrt(math.fsum((value - mean) ** 2 for value in values) / (len(values) - 1))
 
 
+def _raw_relative_error_values(
+    first_values: tuple[float, ...],
+    second_values: tuple[float, ...],
+) -> tuple[float, float, float]:
+    """Pure arithmetic helper; source scale authority remains in the caller."""
+
+    if len(first_values) != len(second_values) or len(first_values) < 2:
+        raise ValueError("raw relative error requires at least two paired values")
+    raw_values = tuple(
+        value for pair in zip(first_values, second_values, strict=True) for value in pair
+    )
+    raw_reference_mean = math.fsum(raw_values) / len(raw_values)
+    if raw_reference_mean <= 0:
+        raise ValueError("pooled raw grand mean must be strictly positive")
+    differences = tuple(
+        second - first for first, second in zip(first_values, second_values, strict=True)
+    )
+    random_error_sd = _sample_sd(differences) / math.sqrt(2.0)
+    return raw_reference_mean, random_error_sd, 100.0 * random_error_sd / raw_reference_mean
+
+
+def _log_scale_typical_error_values(
+    first_values: tuple[float, ...],
+    second_values: tuple[float, ...],
+) -> tuple[float, float, float, float, float, float, float, float]:
+    """Pure log-error arithmetic helper; source scale authority remains in the caller."""
+
+    if len(first_values) != len(second_values) or len(first_values) < 2:
+        raise ValueError("log typical error requires at least two paired values")
+    if any(value <= 0 for value in (*first_values, *second_values)):
+        raise ValueError("log typical error requires strictly positive values")
+    logs = tuple(
+        math.log(second) - math.log(first)
+        for first, second in zip(first_values, second_values, strict=True)
+    )
+    mean_log_shift = math.fsum(logs) / len(logs)
+    sd_log_difference = _sample_sd(logs)
+    te_log = sd_log_difference / math.sqrt(2.0)
+    factor = math.exp(te_log)
+    lower_factor = math.exp(-te_log)
+    upper_factor = math.exp(te_log)
+    lower_percent = 100.0 * (1.0 - lower_factor)
+    upper_percent = 100.0 * (upper_factor - 1.0)
+    return (
+        mean_log_shift,
+        sd_log_difference,
+        te_log,
+        factor,
+        lower_factor,
+        upper_factor,
+        lower_percent,
+        upper_percent,
+    )
+
+
 def _reliability_authority_references(
     authority: ReliabilityDesignAuthority,
 ) -> tuple[RegistryReference, ...]:
@@ -596,16 +811,10 @@ def calculate_raw_relative_error_percent(
                 "registered scale semantics do not authorize raw relative error",
                 RES69ReasonCode.SCALE_OPERATION_NOT_AUTHORIZED.value,
             )
-        raw_values = tuple(value for pair in pairs for value in (pair[3], pair[4]))
-        raw_reference_mean = math.fsum(raw_values) / len(raw_values)
-        if raw_reference_mean <= 0:
-            raise StatisticalConstraintError(
-                "pooled raw grand mean must be strictly positive",
-                RES69ReasonCode.SCALE_OPERATION_NOT_AUTHORIZED.value,
-            )
-        differences = tuple(item[4] - item[3] for item in pairs)
-        random_error_sd = _sample_sd(differences) / math.sqrt(2.0)
-        relative_error_percent = 100.0 * random_error_sd / raw_reference_mean
+        raw_reference_mean, random_error_sd, relative_error_percent = _raw_relative_error_values(
+            tuple(item[3] for item in pairs),
+            tuple(item[4] for item in pairs),
+        )
         parameters = _parameters(
             ("pair_count", len(pairs)),
             ("support_hash", support.canonical_support_hash),
@@ -693,23 +902,27 @@ def calculate_log_scale_typical_error(
                 "registered scale semantics do not authorize log-scale error",
                 RES69ReasonCode.SCALE_OPERATION_NOT_AUTHORIZED.value,
             )
-        log_differences = []
-        for pair in pairs:
-            if pair[3] <= 0 or pair[4] <= 0:
+        try:
+            (
+                mean_log_shift,
+                sd_log_difference,
+                te_log,
+                factor,
+                lower_factor,
+                upper_factor,
+                lower_percent,
+                upper_percent,
+            ) = _log_scale_typical_error_values(
+                tuple(item[3] for item in pairs),
+                tuple(item[4] for item in pairs),
+            )
+        except ValueError as exc:
+            if "positive" in str(exc):
                 raise StatisticalConstraintError(
-                    "log typical error requires strictly positive replicate values",
+                    str(exc),
                     RES69ReasonCode.NONPOSITIVE_LOG_INPUT.value,
-                )
-            log_differences.append(math.log(pair[4]) - math.log(pair[3]))
-        logs = tuple(log_differences)
-        mean_log_shift = math.fsum(logs) / len(logs)
-        sd_log_difference = _sample_sd(logs)
-        te_log = sd_log_difference / math.sqrt(2.0)
-        factor = math.exp(te_log)
-        lower_factor = math.exp(-te_log)
-        upper_factor = math.exp(te_log)
-        lower_percent = 100.0 * (1.0 - lower_factor)
-        upper_percent = 100.0 * (upper_factor - 1.0)
+                ) from exc
+            raise
         parameters = _parameters(
             ("pair_count", len(pairs)),
             ("support_hash", support.canonical_support_hash),
@@ -843,6 +1056,8 @@ calculate_log_typical_error = calculate_log_scale_typical_error
 
 
 __all__ = [
+    "build_reliability_assumption_assessment",
+    "build_reliability_assumption_source_evidence",
     "build_reliability_design_authority",
     "build_reliability_design_evidence",
     "calculate_generic_sem",

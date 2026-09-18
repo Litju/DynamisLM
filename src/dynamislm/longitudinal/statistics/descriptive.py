@@ -213,6 +213,18 @@ def _check_ratio_domain(
         )
 
 
+def _relative_change_value(baseline: float, followup: float) -> float:
+    """Pure arithmetic helper; production authorization remains in the caller."""
+
+    return (followup - baseline) / baseline
+
+
+def _log_ratio_value(baseline: float, followup: float) -> float:
+    """Pure log-ratio arithmetic helper; production authorization remains in the caller."""
+
+    return math.log(followup) - math.log(baseline)
+
+
 def calculate_absolute_change(
     support: StatisticalSupport,
     *,
@@ -293,7 +305,7 @@ def calculate_relative_change(
         baseline_value, _ = scalar_value(baseline)
         followup_value, _ = scalar_value(followup)
         _check_ratio_domain(baseline_value, followup_value, semantics)
-        relative = (followup_value - baseline_value) / baseline_value
+        relative = _relative_change_value(baseline_value, followup_value)
         percent = 100.0 * relative
         parameters = _parameters(
             ("baseline_entry_id", baseline.canonical_entry_id.qualified),
@@ -381,7 +393,7 @@ def calculate_log_ratio_change(
                 "log ratio requires strictly positive baseline and follow-up values",
                 "RES69_NONPOSITIVE_LOG_INPUT",
             )
-        value = math.log(followup_value) - math.log(baseline_value)
+        value = _log_ratio_value(baseline_value, followup_value)
         parameters = _parameters(
             ("baseline_entry_id", baseline.canonical_entry_id.qualified),
             ("followup_entry_id", followup.canonical_entry_id.qualified),

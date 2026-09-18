@@ -53,6 +53,12 @@ The registered operations are:
 9. two-replicate pooled raw relative error percent; and
 10. simple B-minus-A method-comparison bias and SD of differences.
 
+The scale-dependent operations in items 2, 3, and 9 (and the log-scale
+reliability operation) remain registered deterministic paths, but the
+current production scale registry has zero keys. They therefore refuse for
+real production data until an owning scientific registry supplies an
+authorized production entry.
+
 Every numerical output is a `StatisticalEstimate` with its own typed unit.
 The `StatisticalResult` contains the immutable support snapshot and an
 immutable `StatisticalAnalysisRun` with RES-62 processing runs and provenance
@@ -195,14 +201,22 @@ and `WHY_EACH_REGISTERED_KEY_IS_AUTHORIZED` is empty. Synthetic tests may add
 one exact `MeasurementScaleSemantics` entry only through the
 `SYNTHETIC_TEST` origin and a new immutable registry value. The exact
 RES-34..68 metric-ID enumeration is recorded in
-`docs/decisions/RES69-SCALE-REGISTRY-AUDIT.md`.
+`docs/decisions/RES69-SCALE-REGISTRY-AUDIT.md`. Public calculators resolve
+only the canonical production registry; a caller-supplied synthetic registry
+or synthetic entry can never authorize a `StatisticalResult`.
 
 ## Reliability-design authority
 
-`ReliabilityDesignEvidence` is the source/protocol-bound input. Only its
-validated builder produces a `ReliabilityDesignAuthority` with
-`AuthorityStatus.SOURCE_BOUND`. Direct construction remains unverified and is
-refused by public calculations.
+`ReliabilityAssumptionSourceEvidence` carries explicit stable-quantity,
+systematic-trial-effect, and error-scale claims. The registered
+`ReliabilityAssumptionAssessment` normalizer binds those claims to the exact
+support ID/hash, source records, source artifacts/provenance, protocol,
+evidence references, producing method, registry version, immutable source
+evidence hash, and authority token. `ReliabilityDesignEvidence` accepts only
+that assessment; free enum fields cannot mint design authority. Only the
+validated design normalizer produces a `ReliabilityDesignAuthority` with
+`AuthorityStatus.SOURCE_BOUND`; direct construction or an unverified
+assessment is refused by public calculations.
 
 The normalized authority binds the study/design identity, exact athletes,
 ordered replicate references, RES-62 entry and observation IDs/hashes, source
@@ -216,11 +230,18 @@ registry version, source-evidence hash, and authority hash.
 ## Method-comparison authority and BA boundary
 
 `MethodComparisonDesignEvidence` is normalized only after its exact subject
-pairings, method identities, target construct/measurand, metrics, units,
+pairings, stable `MethodComparisonMethodKeyV1` method keys, target
+construct/measurand, metrics, units,
 occasion policy, `B_MINUS_A` sign convention, no-hidden-transformation state,
 one-pair-per-subject policy, source lineage, evidence, producing method, and
 registry version match the actual support. Direct construction of
 `MethodComparisonDesignAuthority` is unverified and cannot authorize BA.
+
+The stable method key uses material semantic, processing, version, unit, and
+acquisition dimensions while excluding observation-instance, result,
+artifact, acquisition-instance, processing-run, athlete, session, and
+timestamp identities. The producing method must equal the registered
+`RES69_METHOD_COMPARISON_DESIGN_OPERATION`.
 
 V1 emits only:
 
@@ -287,8 +308,10 @@ cases for temporal order, identity, exact units, unregistered scale semantics,
 caller flags, zero/nonpositive domains, explicit windows, reference leakage,
 duplicate timestamps, source-bound reliability and method-comparison
 authorities, incomplete/unbalanced pairs, derived raw denominators,
-log-factor asymmetry, BA LoA refusal, serialization round-trips, support and
-authority tampering, and V3 hash stability.
+log-factor asymmetry, synthetic scale-authority refusal, source-bound
+assumption binding/tampering, stable method-key resolution across instance
+IDs, BA LoA refusal, serialization round-trips, support and authority
+tampering, and V3 hash stability.
 
 The existing `tests/test_longitudinal.py` remains authoritative for RES-62 and
 passes without semantic mutation.
