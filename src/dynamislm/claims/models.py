@@ -172,6 +172,7 @@ class ClaimAuthorityResult:
     decision_id: InstanceIdentifier
     status: ClaimAuthorityStatus
     claim_intent_reference: RegistryReference
+    claim_intent_hash: str
     allowed_measurement_levels: tuple[MeasurementClaimLevel, ...]
     allowed_relationship_levels: tuple[RelationshipClaimLevel, ...]
     prediction_status: PredictionStatus
@@ -200,6 +201,7 @@ class ClaimAuthorityResult:
             RegistryReference,
             "claim_intent_reference",
         )
+        _require_hash(self.claim_intent_hash, "claim_intent_hash")
         _require_tuple_items(
             self.allowed_measurement_levels,
             MeasurementClaimLevel,
@@ -239,6 +241,7 @@ class ClaimAuthorityResult:
             {
                 "status": self.status,
                 "claim_intent_reference": self.claim_intent_reference,
+                "claim_intent_hash": self.claim_intent_hash,
                 "allowed_measurement_levels": self.allowed_measurement_levels,
                 "allowed_relationship_levels": self.allowed_relationship_levels,
                 "prediction_status": self.prediction_status,
@@ -266,6 +269,78 @@ class ClaimAuthorityResult:
         )
         if self.decision_id != expected_id:
             raise ValueError("decision_id does not match immutable claim decision content")
+
+    @classmethod
+    def create(
+        cls,
+        *,
+        status: ClaimAuthorityStatus,
+        claim_intent_reference: RegistryReference,
+        claim_intent_hash: str,
+        allowed_measurement_levels: tuple[MeasurementClaimLevel, ...],
+        allowed_relationship_levels: tuple[RelationshipClaimLevel, ...],
+        prediction_status: PredictionStatus,
+        blocked_claims: tuple[str, ...],
+        first_blocking_prerequisite: str | None,
+        reason_codes: tuple[str, ...],
+        missing_information: tuple[str, ...],
+        safe_descriptions: tuple[str, ...],
+        support_hashes: tuple[str, ...],
+        analysis_hashes: tuple[str, ...],
+        comparability_hashes: tuple[str, ...],
+        bridge_hashes: tuple[str, ...],
+        evidence_applicability_hash: str | None,
+        registry_version: str,
+        software_version: str,
+        refusal_result: RefusalResult | None = None,
+    ) -> ClaimAuthorityResult:
+        content = {
+            "status": status,
+            "claim_intent_reference": claim_intent_reference,
+            "claim_intent_hash": claim_intent_hash,
+            "allowed_measurement_levels": allowed_measurement_levels,
+            "allowed_relationship_levels": allowed_relationship_levels,
+            "prediction_status": prediction_status,
+            "blocked_claims": blocked_claims,
+            "first_blocking_prerequisite": first_blocking_prerequisite,
+            "reason_codes": reason_codes,
+            "missing_information": missing_information,
+            "safe_descriptions": safe_descriptions,
+            "support_hashes": support_hashes,
+            "analysis_hashes": analysis_hashes,
+            "comparability_hashes": comparability_hashes,
+            "bridge_hashes": bridge_hashes,
+            "evidence_applicability_hash": evidence_applicability_hash,
+            "registry_version": registry_version,
+            "software_version": software_version,
+            "refusal_result": refusal_result,
+        }
+        decision_hash = canonical_hash(content)
+        return cls(
+            decision_id=InstanceIdentifier(
+                "claim-authority-decision", decision_hash.removeprefix(_SHA256_PREFIX)
+            ),
+            status=status,
+            claim_intent_reference=claim_intent_reference,
+            claim_intent_hash=claim_intent_hash,
+            allowed_measurement_levels=allowed_measurement_levels,
+            allowed_relationship_levels=allowed_relationship_levels,
+            prediction_status=prediction_status,
+            blocked_claims=blocked_claims,
+            first_blocking_prerequisite=first_blocking_prerequisite,
+            reason_codes=reason_codes,
+            missing_information=missing_information,
+            safe_descriptions=safe_descriptions,
+            support_hashes=support_hashes,
+            analysis_hashes=analysis_hashes,
+            comparability_hashes=comparability_hashes,
+            bridge_hashes=bridge_hashes,
+            evidence_applicability_hash=evidence_applicability_hash,
+            registry_version=registry_version,
+            software_version=software_version,
+            refusal_result=refusal_result,
+            decision_hash=decision_hash,
+        )
 
     @property
     def canonical_decision_hash(self) -> str:
