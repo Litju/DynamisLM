@@ -9,7 +9,7 @@ from dynamislm.claims.registry import (
     ClaimPolicyRegistry,
     is_canonical_claim_registry,
 )
-from dynamislm.evidence.res70 import validate_claim_evidence_applicability
+from dynamislm.evidence.res70 import validate_claim_evidence_authority
 from dynamislm.serialization import canonical_hash
 
 
@@ -30,7 +30,7 @@ def validate_claim_authority(
     if result.claim_intent_hash != intent.intent_hash:
         raise ValueError("claim result intent hash does not match claim intent")
     if intent.evidence_applicability is not None:
-        validate_claim_evidence_applicability(intent.evidence_applicability)
+        validate_claim_evidence_authority(intent.evidence_applicability)
         if result.evidence_applicability_hash != (
             intent.evidence_applicability.canonical_applicability_hash
         ):

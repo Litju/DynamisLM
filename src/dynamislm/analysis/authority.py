@@ -226,6 +226,7 @@ def authorize_analysis(
         safe_descriptions=(
             "the registered analysis capability is authorized at the requested level of analysis",
         ),
+        request_hash=request.request_hash,
     )
 
 
@@ -245,6 +246,10 @@ def validate_analysis_authorization(
         raise ValueError("analysis capability is absent from canonical registry")
     if authorization.request_id != request.request_id:
         raise ValueError("authorization request ID does not match request")
+    if authorization.request_hash is None:
+        raise ValueError("authorization is missing the exact originating request hash")
+    if authorization.request_hash != request.request_hash:
+        raise ValueError("authorization request hash does not match request")
     if authorization.capability_hash != capability.canonical_capability_hash:
         raise ValueError("authorization capability hash does not match registry")
     expected_support_hashes = (
@@ -252,6 +257,9 @@ def validate_analysis_authorization(
     )
     if authorization.support_hashes != expected_support_hashes:
         raise ValueError("authorization support hash does not match request")
+    expected = authorize_analysis(request, registry=registry)
+    if not isinstance(expected, AnalysisAuthorization) or expected != authorization:
+        raise ValueError("analysis authorization does not recompute from canonical authority")
 
 
 __all__ = [

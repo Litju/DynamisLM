@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from typing import cast
 
+from dynamislm.analysis.authority import validate_analysis_authorization
 from dynamislm.analysis.models import AnalysisAuthorizationStatus
+from dynamislm.analysis.registry import CANONICAL_ANALYSIS_CAPABILITY_REGISTRY
 from dynamislm.claims.models import (
     ClaimAuthorityResult,
     ClaimAuthorityStatus,
@@ -21,10 +23,16 @@ from dynamislm.claims.registry import (
     ClaimPolicyRegistry,
     is_canonical_claim_registry,
 )
-from dynamislm.comparability.res70_validation import build_res70_refusal
+from dynamislm.comparability.res70_validation import (
+    RES70ValidationError,
+    build_res70_refusal,
+    validate_cross_source_decision_set,
+)
 from dynamislm.evidence.models import ApplicabilityDecision
-from dynamislm.evidence.res70 import validate_claim_evidence_applicability
+from dynamislm.evidence.res70 import validate_claim_evidence_authority
+from dynamislm.longitudinal.statistics.validation import validate_statistical_result
 from dynamislm.measurement.identity import InstanceIdentifier
+from dynamislm.measurement.observation import ScientificMeasurementObservation
 from dynamislm.measurement.result import ResultStatus
 from dynamislm.refusal.models import RefusalClass, RefusalResult
 from dynamislm.serialization import canonical_hash
@@ -86,6 +94,116 @@ def _safe_observation(intent: ClaimIntent) -> bool:
     return intent.statistical_result is not None and intent.statistical_result.support is not None
 
 
+class ClaimUpstreamValidationError(ValueError):
+    """Raised when a typed upstream authority cannot be canonically revalidated."""
+
+    def __init__(self, message: str, code: str, missing_information: tuple[str, ...] = ()) -> None:
+        super().__init__(message)
+        self.code = code
+        self.missing_information = missing_information
+
+
+def _exact_upstream_observations(
+    intent: ClaimIntent,
+) -> tuple[ScientificMeasurementObservation, ...]:
+    if intent.analysis_authorization_request is not None:
+        support = intent.analysis_authorization_request.support
+        if support is not None:
+            return tuple(entry.observation for entry in support.included_entries)
+    if intent.statistical_result is not None and intent.statistical_result.support is not None:
+        return tuple(
+            entry.observation for entry in intent.statistical_result.support.included_entries
+        )
+    return intent.observations
+
+
+def _validate_upstream_authority(intent: ClaimIntent) -> None:
+    authorization = intent.analysis_authorization
+    authorization_request = intent.analysis_authorization_request
+    if authorization is not None:
+        if authorization_request is None:
+            raise ClaimUpstreamValidationError(
+                "authorized analysis is missing its exact originating request",
+                "RES70_REGISTRY_INTEGRITY_FAILURE",
+                ("AnalysisAuthorizationRequest",),
+            )
+        try:
+            validate_analysis_authorization(authorization, authorization_request)
+        except (TypeError, ValueError) as exc:
+            raise ClaimUpstreamValidationError(
+                str(exc),
+                "RES70_REGISTRY_INTEGRITY_FAILURE",
+                ("canonical analysis authorization recomputation",),
+            ) from exc
+    elif authorization_request is not None:
+        raise ClaimUpstreamValidationError(
+            "analysis authorization request was supplied without its authority result",
+            "RES70_REGISTRY_INTEGRITY_FAILURE",
+        )
+
+    if intent.comparability_decisions:
+        requests = intent.comparability_requests
+        if not requests and authorization_request is not None:
+            requests = authorization_request.comparability_requests
+        if not requests:
+            raise ClaimUpstreamValidationError(
+                "comparability decisions are missing their exact originating requests",
+                "RES70_COMPARABILITY_AUTHORITY_MISSING",
+                ("CrossSourceComparabilityRequest",),
+            )
+        bridge_requests = intent.bridge_requests
+        bridge_executions = intent.bridge_executions
+        if authorization_request is not None:
+            bridge_requests = bridge_requests or authorization_request.bridge_requests
+            bridge_executions = bridge_executions or authorization_request.bridge_executions
+        try:
+            validate_cross_source_decision_set(
+                intent.comparability_decisions,
+                requests,
+                _exact_upstream_observations(intent),
+                bridge_requests=bridge_requests,
+                bridge_executions=bridge_executions,
+            )
+        except (RES70ValidationError, ValueError) as exc:
+            raise ClaimUpstreamValidationError(
+                str(exc),
+                "RES70_COMPARABILITY_AUTHORITY_MISSING",
+                ("canonical pairwise comparability recomputation",),
+            ) from exc
+
+    if intent.evidence_applicability is not None:
+        try:
+            validate_claim_evidence_authority(intent.evidence_applicability)
+        except ValueError as exc:
+            raise ClaimUpstreamValidationError(
+                str(exc),
+                "RES70_INSUFFICIENT_EVIDENCE_APPLICABILITY",
+                ("canonical evidence applicability provenance",),
+            ) from exc
+
+    if intent.statistical_result is not None:
+        try:
+            validate_statistical_result(intent.statistical_result)
+        except (TypeError, ValueError) as exc:
+            raise ClaimUpstreamValidationError(
+                str(exc),
+                "RES70_STATISTICAL_AUTHORITY_INSUFFICIENT",
+                ("canonical StatisticalResult validation",),
+            ) from exc
+        if authorization_request is not None and authorization_request.support is not None:
+            result_support = intent.statistical_result.support
+            if (
+                result_support is None
+                or result_support.canonical_support_hash
+                != authorization_request.support.canonical_support_hash
+            ):
+                raise ClaimUpstreamValidationError(
+                    "statistical result support does not match exact analysis support",
+                    "RES70_STATISTICAL_AUTHORITY_INSUFFICIENT",
+                    ("exact statistical support",),
+                )
+
+
 def _analysis_matches(
     intent: ClaimIntent,
     level: object,
@@ -112,6 +230,40 @@ def _analysis_matches(
             "analysis reference bound to the claim intent",
             ("RES70_REGISTRY_INTEGRITY_FAILURE",),
         )
+    capability = CANONICAL_ANALYSIS_CAPABILITY_REGISTRY.resolve_reference(auth.capability_reference)
+    if capability is None:
+        return (
+            False,
+            "canonical analysis capability",
+            ("RES70_REGISTRY_INTEGRITY_FAILURE",),
+        )
+    if capability.output_claim_floor is not None:
+        if isinstance(level, MeasurementClaimLevel):
+            try:
+                measurement_floor = MeasurementClaimLevel(capability.output_claim_floor)
+            except ValueError:
+                measurement_floor = None
+            if measurement_floor is None or _MEASUREMENT_LEVELS.index(
+                level
+            ) > _MEASUREMENT_LEVELS.index(measurement_floor):
+                return (
+                    False,
+                    "analysis capability output claim floor",
+                    ("RES70_UNSUPPORTED_CLAIM_ESCALATION",),
+                )
+        else:
+            try:
+                relationship_floor = RelationshipClaimLevel(capability.output_claim_floor)
+            except ValueError:
+                relationship_floor = None
+            if relationship_floor is None or _RELATIONSHIP_LEVELS.index(
+                level
+            ) > _RELATIONSHIP_LEVELS.index(relationship_floor):
+                return (
+                    False,
+                    "analysis capability output claim floor",
+                    ("RES70_UNSUPPORTED_CLAIM_ESCALATION",),
+                )
     if isinstance(level, MeasurementClaimLevel):
         allowed = {
             MeasurementClaimLevel.NUMERICAL_CHANGE: {
@@ -208,7 +360,7 @@ def _evidence_supports(
             ("RES70_APPLICABILITY_AXIS_UNASSESSED",),
         )
     try:
-        validate_claim_evidence_applicability(bundle)
+        validate_claim_evidence_authority(bundle)
     except ValueError:
         return (
             False,
@@ -447,6 +599,61 @@ def authorize_claim(
             registry_version=registry.registry_version,
             software_version="dynamislm-res70-1.0.0",
             refusal_result=registry_refusal,
+        )
+
+    try:
+        _validate_upstream_authority(intent)
+    except ClaimUpstreamValidationError as exc:
+        requested_measurement = (
+            (intent.measurement_level,) if intent.measurement_level is not None else ()
+        )
+        requested_relationship = (
+            (intent.relationship_level,) if intent.relationship_level is not None else ()
+        )
+        blocked = tuple(item.value for item in (*requested_measurement, *requested_relationship))
+        if intent.predictive_intent is not None:
+            blocked = (*blocked, intent.predictive_intent.stable_id)
+        upstream_refusal = build_res70_refusal(
+            "claim authority upstream validation",
+            exc.code,
+            refusal_class=RefusalClass.COMPUTATION_NOT_REGISTERED
+            if exc.code == "RES70_REGISTRY_INTEGRITY_FAILURE"
+            else RefusalClass.EVIDENCE_SCOPE_UNSUPPORTED,
+            missing_information=exc.missing_information,
+            observation_ids=_observation_ids(intent),
+        )
+        return ClaimAuthorityResult.create(
+            status=ClaimAuthorityStatus.REFUSED,
+            claim_intent_reference=intent.claim_reference,
+            claim_intent_hash=intent.intent_hash,
+            allowed_measurement_levels=(),
+            allowed_relationship_levels=(),
+            prediction_status=(
+                PredictionStatus.REFUSED
+                if intent.predictive_intent is not None
+                else PredictionStatus.NOT_REQUESTED
+            ),
+            blocked_claims=blocked,
+            first_blocking_prerequisite=exc.missing_information[0]
+            if exc.missing_information
+            else str(exc),
+            reason_codes=(exc.code,),
+            missing_information=exc.missing_information,
+            safe_descriptions=(
+                "exact observations remain independently describable under their recorded identity",
+            ),
+            support_hashes=_support_hashes(intent),
+            analysis_hashes=_analysis_hashes(intent),
+            comparability_hashes=_comparability_hashes(intent),
+            bridge_hashes=_bridge_hashes(intent),
+            evidence_applicability_hash=(
+                intent.evidence_applicability.canonical_applicability_hash
+                if intent.evidence_applicability is not None
+                else None
+            ),
+            registry_version=registry.registry_version,
+            software_version="dynamislm-res70-1.0.0",
+            refusal_result=upstream_refusal,
         )
 
     (

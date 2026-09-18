@@ -16,7 +16,11 @@ from dynamislm.analysis.registry import (
 )
 from dynamislm.comparability.models import ComparabilityState
 from dynamislm.comparability.res70_models import SemanticIdentityKey
-from dynamislm.comparability.res70_validation import validate_pairwise_decisions
+from dynamislm.comparability.res70_validation import (
+    RES70ValidationError,
+    validate_cross_source_decision_set,
+    validate_pairwise_decisions,
+)
 from dynamislm.evidence.res70 import (
     ApplicabilityAxis,
     validate_claim_evidence_authority,
@@ -268,6 +272,25 @@ def validate_comparability_authority(
     decisions = request.comparability_decisions
     if decisions:
         validate_pairwise_decisions(decisions)
+        try:
+            validate_cross_source_decision_set(
+                decisions,
+                request.comparability_requests,
+                tuple(entry.observation for entry in support.included_entries),
+                bridge_requests=request.bridge_requests,
+                bridge_executions=request.bridge_executions,
+            )
+        except RES70ValidationError as exc:
+            raise AnalysisValidationError(
+                str(exc),
+                "RES70_COMPARABILITY_AUTHORITY_MISSING",
+                ("exact originating comparability request and canonical decision",),
+            ) from exc
+    elif request.comparability_requests or request.bridge_executions:
+        raise AnalysisValidationError(
+            "comparability requests or executions were supplied without decisions",
+            "RES70_REGISTRY_INTEGRITY_FAILURE",
+        )
     entries = support.entries
     required_pairs = tuple(
         (left, right)
@@ -296,16 +319,17 @@ def validate_comparability_authority(
                 "RES70_BRIDGE_NOT_EXECUTED",
                 ("executed registered bridge output",),
             )
-        if decision.state not in (
+        allowed_states = capability.required_comparability_states or (
             ComparabilityState.COMPARABLE,
             ComparabilityState.COMPARABLE_WITH_CONDITIONS,
-        ):
+        )
+        if decision.state not in allowed_states:
             raise AnalysisValidationError(
                 "cross-source comparability is not affirmative",
                 "RES70_COMPARABILITY_AUTHORITY_MISSING",
             )
         hashes.append(decision.canonical_decision_hash)
-        if capability.required_bridge_execution and decision.bridge_application_reference is None:
+        if capability.required_bridge_execution and decision.bridge_execution_hash is None:
             raise AnalysisValidationError(
                 "registered capability requires executed bridge authority",
                 "RES70_BRIDGE_NOT_EXECUTED",

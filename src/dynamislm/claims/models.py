@@ -5,8 +5,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import StrEnum
 
-from dynamislm.analysis.models import AnalysisAuthorization
-from dynamislm.comparability.res70_models import CrossSourceComparabilityDecision
+from dynamislm.analysis.models import AnalysisAuthorization, AnalysisAuthorizationRequest
+from dynamislm.comparability.res70_models import (
+    BridgeApplicationRequest,
+    BridgeExecutionResult,
+    CrossSourceComparabilityDecision,
+    CrossSourceComparabilityRequest,
+)
 from dynamislm.evidence.res70 import ClaimEvidenceApplicability
 from dynamislm.longitudinal.statistics.models import StatisticalResult
 from dynamislm.measurement.identity import (
@@ -99,6 +104,10 @@ class ClaimIntent:
     comparability_decisions: tuple[CrossSourceComparabilityDecision, ...] = ()
     statistical_result: StatisticalResult | None = None
     evidence_applicability: ClaimEvidenceApplicability | None = None
+    analysis_authorization_request: AnalysisAuthorizationRequest | None = None
+    comparability_requests: tuple[CrossSourceComparabilityRequest, ...] = ()
+    bridge_requests: tuple[BridgeApplicationRequest, ...] = ()
+    bridge_executions: tuple[BridgeExecutionResult, ...] = ()
 
     def __post_init__(self) -> None:
         _require_instance(self.claim_reference, RegistryReference, "claim_reference")
@@ -148,6 +157,22 @@ class ClaimIntent:
             ClaimEvidenceApplicability,
             "evidence_applicability",
         )
+        _require_optional_instance(
+            self.analysis_authorization_request,
+            AnalysisAuthorizationRequest,
+            "analysis_authorization_request",
+        )
+        _require_tuple_items(
+            self.comparability_requests,
+            CrossSourceComparabilityRequest,
+            "comparability_requests",
+        )
+        _require_tuple_items(self.bridge_requests, BridgeApplicationRequest, "bridge_requests")
+        _require_tuple_items(
+            self.bridge_executions,
+            BridgeExecutionResult,
+            "bridge_executions",
+        )
         if self.evidence_applicability is not None:
             if (
                 self.evidence_applicability_reference is not None
@@ -158,6 +183,15 @@ class ClaimIntent:
         if self.analysis_authorization is not None and self.analysis_reference is not None:
             if self.analysis_authorization.capability_reference != self.analysis_reference:
                 raise ValueError("analysis reference does not match its authorization")
+        if (
+            self.analysis_authorization is not None
+            and self.analysis_authorization_request is not None
+        ):
+            if (
+                self.analysis_authorization.request_id
+                != self.analysis_authorization_request.request_id
+            ):
+                raise ValueError("analysis request does not match its authorization")
 
     @property
     def intent_hash(self) -> str:

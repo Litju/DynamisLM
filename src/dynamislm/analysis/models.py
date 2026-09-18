@@ -6,7 +6,12 @@ from dataclasses import dataclass
 from enum import StrEnum
 
 from dynamislm.comparability.models import ComparabilityState
-from dynamislm.comparability.res70_models import CrossSourceComparabilityDecision
+from dynamislm.comparability.res70_models import (
+    BridgeApplicationRequest,
+    BridgeExecutionResult,
+    CrossSourceComparabilityDecision,
+    CrossSourceComparabilityRequest,
+)
 from dynamislm.evidence.res70 import ClaimEvidenceApplicability
 from dynamislm.longitudinal.statistics.models import (
     MeasurementScaleSemantics,
@@ -257,6 +262,9 @@ class AnalysisAuthorizationRequest:
     requested_level: AnalysisLevelIdentity
     evidence_applicability: ClaimEvidenceApplicability | None
     context_references: tuple[RegistryReference, ...]
+    comparability_requests: tuple[CrossSourceComparabilityRequest, ...] = ()
+    bridge_requests: tuple[BridgeApplicationRequest, ...] = ()
+    bridge_executions: tuple[BridgeExecutionResult, ...] = ()
     requested_parameters: tuple[MetadataEntry, ...] = ()
     reliability_authority: ReliabilityDesignAuthority | None = None
     reliability_assessment: ReliabilityAssumptionAssessment | None = None
@@ -289,6 +297,17 @@ class AnalysisAuthorizationRequest:
             "evidence_applicability",
         )
         _require_tuple_items(self.context_references, RegistryReference, "context_references")
+        _require_tuple_items(
+            self.comparability_requests,
+            CrossSourceComparabilityRequest,
+            "comparability_requests",
+        )
+        _require_tuple_items(self.bridge_requests, BridgeApplicationRequest, "bridge_requests")
+        _require_tuple_items(
+            self.bridge_executions,
+            BridgeExecutionResult,
+            "bridge_executions",
+        )
         _require_tuple_items(self.requested_parameters, MetadataEntry, "requested_parameters")
         _require_optional_instance(
             self.reliability_authority,
@@ -345,6 +364,7 @@ class AnalysisAuthorization:
     reason_codes: tuple[str, ...]
     missing_information: tuple[str, ...]
     safe_descriptions: tuple[str, ...]
+    request_hash: str | None = None
     refusal_result: RefusalResult | None = None
     authorization_hash: str | None = None
 
@@ -380,6 +400,8 @@ class AnalysisAuthorization:
         _require_string_tuple(self.reason_codes, "reason_codes")
         _require_string_tuple(self.missing_information, "missing_information")
         _require_string_tuple(self.safe_descriptions, "safe_descriptions")
+        if self.request_hash is not None:
+            _require_hash(self.request_hash, "request_hash")
         _require_optional_instance(self.refusal_result, RefusalResult, "refusal_result")
         if (
             self.status is AnalysisAuthorizationStatus.AUTHORIZED
@@ -407,6 +429,7 @@ class AnalysisAuthorization:
                 "reason_codes": self.reason_codes,
                 "missing_information": self.missing_information,
                 "safe_descriptions": self.safe_descriptions,
+                "request_hash": self.request_hash,
                 "refusal_result": self.refusal_result,
             }
         )
@@ -441,6 +464,7 @@ class AnalysisAuthorization:
         reason_codes: tuple[str, ...],
         missing_information: tuple[str, ...],
         safe_descriptions: tuple[str, ...],
+        request_hash: str | None = None,
         refusal_result: RefusalResult | None = None,
     ) -> AnalysisAuthorization:
         content = {
@@ -461,6 +485,7 @@ class AnalysisAuthorization:
             "reason_codes": reason_codes,
             "missing_information": missing_information,
             "safe_descriptions": safe_descriptions,
+            "request_hash": request_hash,
             "refusal_result": refusal_result,
         }
         authorization_hash = canonical_hash(content)
@@ -485,6 +510,7 @@ class AnalysisAuthorization:
             reason_codes=reason_codes,
             missing_information=missing_information,
             safe_descriptions=safe_descriptions,
+            request_hash=request_hash,
             refusal_result=refusal_result,
             authorization_hash=authorization_hash,
         )
