@@ -175,14 +175,6 @@ _IRRECONCILABLE_DIMENSIONS = {
 _TRANSFORMATION_DIMENSIONS = {
     ComparabilityDimension.UNIT,
 }
-_BRIDGE_DIMENSIONS = (
-    set(ComparabilityDimension)
-    - _IRRECONCILABLE_DIMENSIONS
-    - {
-        ComparabilityDimension.UNIT,
-        ComparabilityDimension.FOOTBALL_WORLD_CONTEXT,
-    }
-)
 _OPTIONAL_NOT_APPLICABLE_DIMENSIONS = {
     ComparabilityDimension.NORMALIZATION,
     ComparabilityDimension.REGISTERED_PROCESSING_OPERATION,

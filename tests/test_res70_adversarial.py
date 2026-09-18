@@ -48,8 +48,6 @@ def _reference(object_type: str, key: str, label: str = "fixture") -> RegistryRe
 def _complete_pair() -> tuple[object, object, CrossSourceComparabilityRequest]:
     left = _derived_observation("res70-adversarial-left")
     right = _derived_observation("res70-adversarial-third")
-    unit = _reference("unit", "meter", "m")
-    del unit
     request = CrossSourceComparabilityRequest(
         request_id=InstanceIdentifier("cross-source-comparability-request", "adversarial"),
         left_observation=ObservationAuthorityReference.from_observation(left),

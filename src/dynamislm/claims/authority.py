@@ -339,13 +339,6 @@ def _policy_result(
     ok, missing, reasons = _target_level_supports(intent)
     if not ok:
         return False, missing, reasons, (missing or "level-of-analysis identity",)
-    if policy.causal_operation_required:
-        return (
-            False,
-            "registered causal operation",
-            ("RES70_UNSUPPORTED_CAUSAL_CLAIM",),
-            ("causal estimand and identification strategy",),
-        )
     return True, None, (), ()
 
 
