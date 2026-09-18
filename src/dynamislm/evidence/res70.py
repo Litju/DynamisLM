@@ -6,6 +6,10 @@ from dataclasses import dataclass
 from enum import StrEnum
 
 from dynamislm.evidence.models import ApplicabilityDecision
+from dynamislm.football.models import FootballWorldContext
+from dynamislm.football.validation import validate_football_world_context
+from dynamislm.longitudinal.statistics.models import StatisticalSupport
+from dynamislm.longitudinal.statistics.support import validate_statistical_support
 from dynamislm.measurement.identity import (
     RegistryReference,
     _require_enum,
@@ -13,6 +17,18 @@ from dynamislm.measurement.identity import (
     _require_text,
     _require_tuple_items,
     require_tuple,
+)
+from dynamislm.population.models import (
+    CanonicalPopulationDecision,
+    CanonicalPopulationStatus,
+    CanonicalSourceDecision,
+    CanonicalSourceStatus,
+    EvidenceClass,
+    V2EvidenceApplicability,
+)
+from dynamislm.population.qualification import (
+    qualify_canonical_population,
+    qualify_canonical_source,
 )
 from dynamislm.serialization import canonical_hash, register_serializable_type
 
@@ -34,6 +50,43 @@ class ApplicabilityAxis(StrEnum):
 
 @register_serializable_type
 @dataclass(frozen=True, slots=True)
+class ApplicabilityAuthorityProvenance:
+    """Typed source authority that can support one applicability judgment."""
+
+    source_decisions: tuple[CanonicalSourceDecision, ...] = ()
+    population_decisions: tuple[CanonicalPopulationDecision, ...] = ()
+    evidence_applicabilities: tuple[V2EvidenceApplicability, ...] = ()
+    statistical_support: StatisticalSupport | None = None
+    statistical_authority_hashes: tuple[str, ...] = ()
+    football_contexts: tuple[FootballWorldContext, ...] = ()
+
+    def __post_init__(self) -> None:
+        _require_tuple_items(self.source_decisions, CanonicalSourceDecision, "source_decisions")
+        _require_tuple_items(
+            self.population_decisions,
+            CanonicalPopulationDecision,
+            "population_decisions",
+        )
+        _require_tuple_items(
+            self.evidence_applicabilities,
+            V2EvidenceApplicability,
+            "evidence_applicabilities",
+        )
+        if self.statistical_support is not None and not isinstance(
+            self.statistical_support,
+            StatisticalSupport,
+        ):
+            raise ValueError("statistical_support must be a StatisticalSupport")
+        _require_string_tuple(self.statistical_authority_hashes, "statistical_authority_hashes")
+        _require_tuple_items(self.football_contexts, FootballWorldContext, "football_contexts")
+
+    @property
+    def canonical_provenance_hash(self) -> str:
+        return canonical_hash(self)
+
+
+@register_serializable_type
+@dataclass(frozen=True, slots=True)
 class ApplicabilityAssessment:
     """One independent evidence-applicability judgment."""
 
@@ -44,6 +97,7 @@ class ApplicabilityAssessment:
     authority_references: tuple[RegistryReference, ...]
     conditions: tuple[str, ...]
     rationale: str
+    authority_provenance: ApplicabilityAuthorityProvenance | None = None
 
     def __post_init__(self) -> None:
         _require_enum(self.axis, ApplicabilityAxis, "axis")
@@ -58,6 +112,11 @@ class ApplicabilityAssessment:
         )
         _require_string_tuple(self.conditions, "conditions")
         _require_text(self.rationale, "rationale")
+        if self.authority_provenance is not None and not isinstance(
+            self.authority_provenance,
+            ApplicabilityAuthorityProvenance,
+        ):
+            raise ValueError("authority_provenance must be an ApplicabilityAuthorityProvenance")
         if self.required_for_claim and self.decision is ApplicabilityDecision.UNASSESSED:
             raise ValueError("a required applicability axis cannot be unassessed")
 
@@ -135,7 +194,7 @@ def build_claim_evidence_applicability(
 
 
 def validate_claim_evidence_applicability(value: ClaimEvidenceApplicability) -> None:
-    """Recompute the applicability hash and reject tampering."""
+    """Recompute the applicability hash and reject structural tampering."""
 
     if not isinstance(value, ClaimEvidenceApplicability):
         raise ValueError("value must be a ClaimEvidenceApplicability")
@@ -150,10 +209,112 @@ def validate_claim_evidence_applicability(value: ClaimEvidenceApplicability) -> 
         raise ValueError("applicability hash does not match immutable content")
 
 
+def _validate_source_authority(
+    decisions: tuple[CanonicalSourceDecision, ...],
+) -> None:
+    if not decisions:
+        raise ValueError("affirmative applicability requires canonical source authority")
+    for decision in decisions:
+        if qualify_canonical_source(decision.source) != decision:
+            raise ValueError("source applicability authority does not recompute canonically")
+        if decision.status is not CanonicalSourceStatus.CANONICAL_EMPIRICAL_TARGET:
+            raise ValueError("source applicability authority is not an affirmative source decision")
+
+
+def _validate_population_authority(
+    decisions: tuple[CanonicalPopulationDecision, ...],
+) -> None:
+    if not decisions:
+        raise ValueError("affirmative applicability requires canonical population authority")
+    for decision in decisions:
+        if qualify_canonical_population(decision.population) != decision:
+            raise ValueError("population applicability authority does not recompute canonically")
+        if decision.status is not CanonicalPopulationStatus.PASS:
+            raise ValueError(
+                "population applicability authority is not an affirmative population decision"
+            )
+
+
+def _validate_evidence_authority(
+    provenance: ApplicabilityAuthorityProvenance,
+) -> None:
+    if not provenance.evidence_applicabilities:
+        raise ValueError("affirmative method applicability requires canonical evidence authority")
+    if not provenance.source_decisions:
+        raise ValueError("evidence applicability must be bound to canonical source decisions")
+    source_ids = {item.source.source_id.identifier for item in provenance.source_decisions}
+    for evidence in provenance.evidence_applicabilities:
+        if evidence.source_id not in source_ids:
+            raise ValueError("evidence applicability source is not canonically qualified")
+        if evidence.decision not in (
+            ApplicabilityDecision.SUPPORTED,
+            ApplicabilityDecision.LIMITED,
+        ):
+            raise ValueError("evidence applicability is not affirmative")
+        if evidence.evidence_class is EvidenceClass.REJECTED_OR_UNRESOLVED:
+            raise ValueError("rejected evidence cannot support affirmative applicability")
+
+
+def _validate_context_authority(
+    provenance: ApplicabilityAuthorityProvenance,
+) -> None:
+    if not provenance.football_contexts:
+        raise ValueError("contextual applicability requires typed football-world contexts")
+    for context in provenance.football_contexts:
+        validate_football_world_context(context)
+
+
+def _validate_statistical_authority(
+    provenance: ApplicabilityAuthorityProvenance,
+) -> None:
+    if provenance.statistical_support is None:
+        raise ValueError("statistical applicability requires exact statistical support")
+    validate_statistical_support(provenance.statistical_support)
+    if provenance.statistical_support.canonical_support_hash not in set(
+        provenance.statistical_authority_hashes
+    ):
+        raise ValueError("statistical applicability authority must bind the exact support hash")
+
+
+def _validate_assessment_authority(assessment: ApplicabilityAssessment) -> None:
+    if assessment.decision not in (
+        ApplicabilityDecision.SUPPORTED,
+        ApplicabilityDecision.LIMITED,
+    ):
+        return
+    provenance = assessment.authority_provenance
+    if provenance is None:
+        raise ValueError(
+            "caller-supplied affirmative applicability has no verifiable authority provenance"
+        )
+    if not assessment.authority_references:
+        raise ValueError("affirmative applicability requires authority references")
+    if assessment.axis is ApplicabilityAxis.METHOD_VALIDITY:
+        _validate_evidence_authority(provenance)
+    elif assessment.axis is ApplicabilityAxis.SOURCE_QUALITY:
+        _validate_source_authority(provenance.source_decisions)
+    elif assessment.axis is ApplicabilityAxis.POPULATION_RELEVANCE:
+        _validate_population_authority(provenance.population_decisions)
+    elif assessment.axis is ApplicabilityAxis.CONTEXTUAL_RELEVANCE:
+        _validate_context_authority(provenance)
+    elif assessment.axis is ApplicabilityAxis.STATISTICAL_ADEQUACY:
+        _validate_statistical_authority(provenance)
+
+
+def validate_claim_evidence_authority(value: ClaimEvidenceApplicability) -> None:
+    """Require canonical provenance for every affirmative applicability axis."""
+
+    validate_claim_evidence_applicability(value)
+    for assessment in value.assessments:
+        _validate_assessment_authority(assessment)
+
+
 __all__ = [
     "ApplicabilityAssessment",
+    "ApplicabilityAuthorityProvenance",
     "ApplicabilityAxis",
     "ClaimEvidenceApplicability",
     "build_claim_evidence_applicability",
     "validate_claim_evidence_applicability",
+    "validate_claim_evidence_authority",
 ]

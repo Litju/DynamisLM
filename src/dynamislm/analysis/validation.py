@@ -17,7 +17,10 @@ from dynamislm.analysis.registry import (
 from dynamislm.comparability.models import ComparabilityState
 from dynamislm.comparability.res70_models import SemanticIdentityKey
 from dynamislm.comparability.res70_validation import validate_pairwise_decisions
-from dynamislm.evidence.res70 import ApplicabilityAxis
+from dynamislm.evidence.res70 import (
+    ApplicabilityAxis,
+    validate_claim_evidence_authority,
+)
 from dynamislm.longitudinal.statistics.models import StatisticalSupport
 from dynamislm.longitudinal.statistics.support import (
     StatisticalConstraintError,
@@ -314,6 +317,15 @@ def validate_evidence_applicability(
     request: AnalysisAuthorizationRequest,
     capability: AnalysisCapability,
 ) -> None:
+    if request.evidence_applicability is not None:
+        try:
+            validate_claim_evidence_authority(request.evidence_applicability)
+        except ValueError as exc:
+            raise AnalysisValidationError(
+                str(exc),
+                "RES70_INSUFFICIENT_EVIDENCE_APPLICABILITY",
+                ("canonical applicability authority provenance",),
+            ) from exc
     if not capability.required_evidence_axes:
         return
     if request.evidence_applicability is None:

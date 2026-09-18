@@ -103,6 +103,7 @@ from dynamislm.comparability import (
 )
 from dynamislm.evidence import (
     ApplicabilityAssessment,
+    ApplicabilityAuthorityProvenance,
     ApplicabilityAxis,
     ApplicabilityDecision,
     ClaimEvidenceApplicability,
@@ -110,6 +111,7 @@ from dynamislm.evidence import (
     EvidenceDecisionRecord,
     build_claim_evidence_applicability,
     validate_claim_evidence_applicability,
+    validate_claim_evidence_authority,
 )
 from dynamislm.external_load import (
     EXTERNAL_LOAD_ACCELERATION_EVENT_COUNT_METRIC,
@@ -542,6 +544,7 @@ __all__ = [
     "AnalysisUnitOfAnalysis",
     "AnalysisValidationError",
     "ApplicabilityAssessment",
+    "ApplicabilityAuthorityProvenance",
     "ApplicabilityAxis",
     "BUILD_LONGITUDINAL_SOURCE_MANIFEST",
     "CANONICAL_ANALYSIS_CAPABILITY_REGISTRY",
@@ -857,6 +860,7 @@ __all__ = [
     "validate_observation_hashes",
     "validate_support_shape",
     "validate_claim_evidence_applicability",
+    "validate_claim_evidence_authority",
     "validate_canonical_replay",
     "validate_complete_multi_source_provenance_graph",
     "validate_football_context_for_observation",

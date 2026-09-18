@@ -7,14 +7,17 @@ from dynamislm.evidence.models import (
 )
 from dynamislm.evidence.res70 import (
     ApplicabilityAssessment,
+    ApplicabilityAuthorityProvenance,
     ApplicabilityAxis,
     ClaimEvidenceApplicability,
     build_claim_evidence_applicability,
     validate_claim_evidence_applicability,
+    validate_claim_evidence_authority,
 )
 
 __all__ = [
     "ApplicabilityAssessment",
+    "ApplicabilityAuthorityProvenance",
     "ApplicabilityAxis",
     "ApplicabilityDecision",
     "ClaimEvidenceApplicability",
@@ -22,4 +25,5 @@ __all__ = [
     "EvidenceDecisionRecord",
     "build_claim_evidence_applicability",
     "validate_claim_evidence_applicability",
+    "validate_claim_evidence_authority",
 ]
