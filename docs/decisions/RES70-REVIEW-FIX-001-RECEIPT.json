@@ -1,0 +1,74 @@
+{
+  "mission": "RES-70-REVIEW-FIX-001",
+  "project": "DynamisLM",
+  "linear_issue": "RES-70",
+  "design_record": "docs/decisions/RES70-DR-001-cross-source-comparability-analysis-claim-authority.md",
+  "entry_head": "eb0baf4f20d9e780cda5b7ed17259972853a7d34",
+  "code_head_before_receipt_commit": "ac6b5c2",
+  "base_main": "83041cd3e69e0dc0947c181b19effd5402bd5a38",
+  "pr": 33,
+  "branch": "work/res-70-cross-source-comparability-analysis-claim-authority",
+  "serialization_version": 3,
+  "atomic_code_commits": [
+    "70dd4f0 fix(res70): bind comparability and bridge execution authority",
+    "0965ec8 fix(res70): source-bind applicability authority",
+    "7818991 fix(res70): revalidate upstream claim authority",
+    "23a02a1 fix(res70): enforce claim hierarchy and capability prerequisites",
+    "9040ef1 fix(res70): adjudicate exact claim context",
+    "ac6b5c2 test(res70): qualify authority forgery and prerequisite bypasses"
+  ],
+  "authority_seams": {
+    "comparability_authority_origin": "PASS",
+    "evidence_applicability_authority": "PASS",
+    "claim_upstream_revalidation": "PASS",
+    "bridge_execution_authority": "PASS",
+    "claim_predecessor_enforcement": "PASS",
+    "capability_prerequisites_executable": "PASS",
+    "claim_context_adjudication": "PASS"
+  },
+  "adversarial_guards": {
+    "caller_minted_comparability": "BLOCKED",
+    "caller_minted_applicability": "BLOCKED",
+    "forged_analysis_authority": "BLOCKED",
+    "forged_bridge_execution": "BLOCKED",
+    "skipped_claim_predecessor": "BLOCKED",
+    "unknown_prerequisite_token": "REFUSED",
+    "res34_69_science_changed": "NO",
+    "res71_plus_implemented": "NO",
+    "dependency_expansion": "NO",
+    "deferred_res69_methods_implemented": "NO"
+  },
+  "local_qa": {
+    "command": "./scripts/ci.sh",
+    "ruff": "PASS",
+    "format": "PASS",
+    "mypy": "PASS",
+    "repository_policy": "PASS",
+    "pytest": "PASS",
+    "test_count": 838,
+    "tracked_mutation": "NONE",
+    "git_diff_check": "PASS"
+  },
+  "codebase_memory": {
+    "project": "home-litju-projects-DynamisLM",
+    "indexed_root": "/home/litju/projects/DynamisLM",
+    "reindexed_at_code_head": "ac6b5c2",
+    "index_status": "ready",
+    "changed_symbol_downstream_audit": "PASS",
+    "unexpected_downstream_impact": "NONE"
+  },
+  "scope": {
+    "real_empirical_data_added": false,
+    "model_training_implemented": false,
+    "gpu_code_added": false,
+    "parallel_observation_or_provenance_system": false,
+    "scientific_design_reopened": false
+  },
+  "remote_state_at_receipt_preparation": {
+    "hosted_ci": "PENDING_NEW_HEAD",
+    "coderabbit_review": "PENDING_NEW_HEAD",
+    "unresolved_review_threads": "PENDING_NEW_HEAD"
+  },
+  "linear_status": "IN_PROGRESS",
+  "next_authorized_action": "RES-70-FINAL-REVIEW-001"
+}
