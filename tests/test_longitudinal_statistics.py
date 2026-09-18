@@ -680,7 +680,7 @@ def test_reliability_assumption_wrong_protocol_refuses() -> None:
 
 
 def test_reliability_assumption_missing_protocol_refuses() -> None:
-    support, authority, entries, _records, _pairs = _reliability_fixture()
+    _, authority, entries, _records, _pairs = _reliability_fixture()
     first = entries[:2]
     second = entries[2:]
     missing_protocol = _with_unit(
