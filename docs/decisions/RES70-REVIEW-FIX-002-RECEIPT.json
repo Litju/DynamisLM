@@ -1,0 +1,37 @@
+{
+  "mission": "RES-70-REVIEW-FIX-002",
+  "project": "DynamisLM",
+  "linear_issue": "RES-70",
+  "pull_request": 33,
+  "base_main": "83041cd3e69e0dc0947c181b19effd5402bd5a38",
+  "prior_head": "0767aa64add22899e8ad282f87ba418585bdb092",
+  "code_head": "87ae21d",
+  "follow_ups_closed": {
+    "declarative_bridge_uncovered_mismatches": "PASS",
+    "empty_declarative_applicability_conditions": "PASS",
+    "unused_bridge_test_binding": "PASS"
+  },
+  "local_qa": {
+    "command": "./scripts/ci.sh",
+    "ruff": "PASS",
+    "format": "PASS",
+    "mypy": "PASS",
+    "repository_policy": "PASS",
+    "pytest": "PASS",
+    "test_count": 840,
+    "tracked_mutation": "NONE"
+  },
+  "codebase_memory": {
+    "project": "home-litju-projects-DynamisLM",
+    "indexed_root": "/home/litju/projects/DynamisLM",
+    "reindexed_at_code_head": "87ae21d",
+    "changed_symbol_downstream_audit": "PASS"
+  },
+  "scope": {
+    "res34_69_science_changed": "NO",
+    "res71_plus_implemented": "NO",
+    "dependency_expansion": "NO",
+    "serialization_version": 3
+  },
+  "next_authorized_action": "RES-70-FINAL-REVIEW-001"
+}
