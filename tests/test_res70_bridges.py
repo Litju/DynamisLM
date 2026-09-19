@@ -11,6 +11,7 @@ from dynamislm import (
     BridgeInvertibility,
     BridgeMode,
     BridgeRegistration,
+    ComparabilityDimension,
     CrossSourceComparabilityRequest,
     InstanceIdentifier,
     MetadataEntry,
@@ -165,7 +166,7 @@ def test_executed_bridge_supports_conditional_pairwise_comparability() -> None:
 
 
 def test_declared_bridge_without_execution_never_supports_transformed_values() -> None:
-    source, target, bridge, registry, claim = _bridge_fixture()
+    source, target, _bridge, registry, claim = _bridge_fixture()
     original_registry = res70_registry.CANONICAL_BRIDGE_REGISTRY
     res70_registry.CANONICAL_BRIDGE_REGISTRY = registry
     try:
@@ -182,6 +183,76 @@ def test_declared_bridge_without_execution_never_supports_transformed_values() -
     assert decision.state.value == "REQUIRES_TRANSFORMATION"
     assert "RES70_BRIDGE_NOT_EXECUTED" in decision.reason_codes
     assert decision.transformations_required
+
+
+def test_declarative_bridge_preserves_uncovered_material_mismatches() -> None:
+    source, target, bridge, _registry, claim = _bridge_fixture()
+    declarative = replace(
+        bridge,
+        bridge_mode=BridgeMode.DECLARATIVE_EQUIVALENCE,
+        transformation_operation=None,
+        fixed_parameters=(),
+        bridge_hash=None,
+    )
+    registry = BridgeRegistry(entries=(declarative,))
+    original_registry = res70_registry.CANONICAL_BRIDGE_REGISTRY
+    res70_registry.CANONICAL_BRIDGE_REGISTRY = registry
+    try:
+        request = CrossSourceComparabilityRequest(
+            request_id=InstanceIdentifier(
+                "cross-source-comparability-request", "res70-declarative"
+            ),
+            left_observation=ObservationAuthorityReference.from_observation(source),
+            right_observation=ObservationAuthorityReference.from_observation(target),
+            claim_intent=claim,
+        )
+        covered = assess_cross_source_comparability(request, (source, target))
+        changed_target = replace(
+            target,
+            context=replace(
+                target.context,
+                environment=(MetadataEntry("surface", "outdoor"),),
+            ),
+        )
+        uncovered_request = replace(
+            request,
+            request_id=InstanceIdentifier(
+                "cross-source-comparability-request", "res70-declarative-uncovered"
+            ),
+            right_observation=ObservationAuthorityReference.from_observation(changed_target),
+        )
+        uncovered = assess_cross_source_comparability(
+            uncovered_request,
+            (source, changed_target),
+        )
+    finally:
+        res70_registry.CANONICAL_BRIDGE_REGISTRY = original_registry
+
+    assert covered.state.value == "COMPARABLE_WITH_CONDITIONS"
+    assert any(
+        item.dimension is ComparabilityDimension.DEVICE_MEASURING_SYSTEM
+        and item.status.value == "BRIDGED"
+        for item in covered.dimension_findings
+    )
+    assert uncovered.state.value == "BRIDGE_VALIDATION_REQUIRED"
+    assert any(
+        item.dimension is ComparabilityDimension.ACQUISITION_CONTEXT
+        and item.status.value == "MISMATCH"
+        for item in uncovered.dimension_findings
+    )
+
+
+def test_declarative_bridge_requires_applicability_conditions() -> None:
+    _source, _target, bridge, _registry, _claim = _bridge_fixture()
+
+    with pytest.raises(ValueError, match="applicability conditions"):
+        replace(
+            bridge,
+            bridge_mode=BridgeMode.DECLARATIVE_EQUIVALENCE,
+            transformation_operation=None,
+            applicability_conditions=(),
+            bridge_hash=None,
+        )
 
 
 def test_forged_bridge_execution_hash_and_registration_are_rejected() -> None:

@@ -637,6 +637,11 @@ class BridgeRegistration:
             MetadataEntry,
             "applicability_conditions",
         )
+        if (
+            self.bridge_mode is BridgeMode.DECLARATIVE_EQUIVALENCE
+            and not self.applicability_conditions
+        ):
+            raise ValueError("declarative bridges require applicability conditions")
         _require_instance(self.method_version, RegistryReference, "method_version")
         _require_reference_tuple(self.evidence_references, "evidence_references")
         _require_reference_tuple(self.evidence_applicability, "evidence_applicability")

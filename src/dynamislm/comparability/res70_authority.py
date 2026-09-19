@@ -454,6 +454,49 @@ def _bridge_for_request(
     return candidates[0] if candidates else None
 
 
+def _bridge_covered_dimensions(
+    bridge: BridgeRegistration,
+) -> frozenset[ComparabilityDimension]:
+    """Resolve which material dimensions a semantic bridge actually covers."""
+
+    component_dimensions = {
+        "semantic.construct": ComparabilityDimension.CONSTRUCT,
+        "semantic.test_family": ComparabilityDimension.TEST_FAMILY,
+        "semantic.protocol": ComparabilityDimension.PROTOCOL,
+        "semantic.measurand": ComparabilityDimension.MEASURAND,
+        "semantic.metric_definition": ComparabilityDimension.METRIC_DEFINITION,
+        "acquisition.device": ComparabilityDimension.DEVICE_MEASURING_SYSTEM,
+        "acquisition.sensor_channel": ComparabilityDimension.DEVICE_MEASURING_SYSTEM,
+        "acquisition.sampling": ComparabilityDimension.SAMPLING_AND_TIMEBASE,
+        "acquisition.calibration_reference": ComparabilityDimension.CALIBRATION_REFERENCE,
+        "acquisition.hardware_firmware": ComparabilityDimension.HARDWARE_FIRMWARE_VERSION,
+        "processing.event_definitions": ComparabilityDimension.EVENT_DEFINITION,
+        "processing.phase_definitions": ComparabilityDimension.PHASE_DEFINITION,
+        "processing.estimator": ComparabilityDimension.ESTIMATOR,
+        "processing.registered_operation": ComparabilityDimension.REGISTERED_PROCESSING_OPERATION,
+        "processing.method_parameters": ComparabilityDimension.PROCESSING_PARAMETERS,
+        "processing.filtering": ComparabilityDimension.FILTERING_SMOOTHING_RESAMPLING,
+        "processing.differentiation_method": ComparabilityDimension.ESTIMATOR,
+        "processing.integration_method": ComparabilityDimension.ESTIMATOR,
+        "processing.unit": ComparabilityDimension.UNIT,
+        "processing.sign_convention": ComparabilityDimension.SIGN_CONVENTION_AND_REFERENCE_FRAME,
+        "processing.normalization": ComparabilityDimension.NORMALIZATION,
+        "processing.trial_selection": ComparabilityDimension.TRIAL_SELECTION_POLICY,
+        "processing.aggregation": ComparabilityDimension.AGGREGATION_POLICY,
+        "version.processing_method": ComparabilityDimension.SOFTWARE_ALGORITHM_VERSION,
+        "version.method_registry_version": ComparabilityDimension.SOFTWARE_ALGORITHM_VERSION,
+        "version.software_version": ComparabilityDimension.SOFTWARE_ALGORITHM_VERSION,
+        "version.hardware_firmware": ComparabilityDimension.HARDWARE_FIRMWARE_VERSION,
+    }
+    source = bridge.source_semantic_key.as_mapping()
+    target = bridge.target_semantic_key.as_mapping()
+    return frozenset(
+        dimension
+        for key, dimension in component_dimensions.items()
+        if source.get(key) != target.get(key)
+    )
+
+
 def assess_cross_source_comparability(
     request: CrossSourceComparabilityRequest,
     observations: Mapping[object, ScientificMeasurementObservation]
@@ -636,19 +679,31 @@ def assess_cross_source_comparability(
             reasons = tuple(dict.fromkeys(("RES70_REGISTRY_INTEGRITY_FAILURE", *reasons)))
             missing = ("canonical production bridge registry",)
         elif bridge.bridge_mode is BridgeMode.DECLARATIVE_EQUIVALENCE:
-            state = ComparabilityState.COMPARABLE_WITH_CONDITIONS
             bridge_reference = bridge.bridge_reference
             conditions = tuple(
                 f"{item.key}={item.value}" for item in bridge.applicability_conditions
             )
             evidence = bridge.evidence_references
+            covered_dimensions = _bridge_covered_dimensions(bridge)
+            uncovered_mismatches = tuple(
+                finding for finding in mismatches if finding.dimension not in covered_dimensions
+            )
             for index, finding in enumerate(findings):
-                if finding.status is DimensionFindingStatus.MISMATCH:
+                if (
+                    finding.status is DimensionFindingStatus.MISMATCH
+                    and finding.dimension in covered_dimensions
+                ):
                     findings = (
                         *findings[:index],
                         replace(finding, status=DimensionFindingStatus.BRIDGED),
                         *findings[index + 1 :],
                     )
+            if uncovered_mismatches:
+                state = ComparabilityState.BRIDGE_VALIDATION_REQUIRED
+                conditions = ("registered bridge does not cover every material mismatch",)
+                reasons = tuple(dict.fromkeys(("RES70_BRIDGE_REQUIRED", *reasons)))
+            else:
+                state = ComparabilityState.COMPARABLE_WITH_CONDITIONS
         elif bridge_applied:
             state = ComparabilityState.COMPARABLE_WITH_CONDITIONS
             bridge_reference = bridge.bridge_reference
