@@ -2,8 +2,7 @@
   "MISSION": "RES-71-SCIENTIFIC-ENGINE-GATE-001",
   "STATUS": "PASS",
   "BASE_MAIN": "7508a9025759c2863d163e09b22f325494828602",
-  "QUALIFIED_ENGINE_HEAD": "49988aa3cd03e460dc8ae8c60f8afa890e75706e",
-  "FINAL_HEAD": "49988aa3cd03e460dc8ae8c60f8afa890e75706e",
+  "QUALIFIED_CONTENT_HEAD": "49988aa3cd03e460dc8ae8c60f8afa890e75706e",
   "ENTRY": {
     "one_worktree": true,
     "branch": "work/res-71-scientific-engine-qualification-gate",
@@ -21,6 +20,7 @@
   "REGISTERED_OPERATION_INVENTORY": "PASS",
   "COVERAGE_MATRIX": "PASS",
   "UNRESOLVED_COMPUTATION_INVENTORY": "PASS",
+  "REFERENCE_CASE_VALIDATION": "PASS",
   "IDENTITY_PROVENANCE": "PASS",
   "NUMERICAL_QUALIFICATION": "PASS",
   "SCIENTIFIC_BOUNDARIES": "PASS",
@@ -41,7 +41,7 @@
     "unresolved_capabilities": 23,
     "coverage_domains": 12,
     "verifier_reference_cases": 12,
-    "verifier_reference_digest": "sha256:9807b6e0be63abd44135bc855a97d37775ef09763d25c0f7025f4395ab673af6"
+    "verifier_reference_digest": "sha256:d29d84699b7cf70c2d409d370c5ffd6c7ad7cd704375b14b541527a95fa385e5"
   },
   "QA_RUFF": "PASS",
   "QA_FORMAT": "PASS",

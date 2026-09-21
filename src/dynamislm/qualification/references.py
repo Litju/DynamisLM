@@ -16,6 +16,9 @@ from dynamislm.qualification.contracts import (
 from dynamislm.serialization import canonical_hash, canonical_json
 
 RES71_REFERENCE_INTERFACE_VERSION = "1.0.0"
+RES71_SEALED_REFERENCE_DIGEST = (
+    "sha256:d29d84699b7cf70c2d409d370c5ffd6c7ad7cd704375b14b541527a95fa385e5"
+)
 
 
 def _operation(key: str, version: str = "1.0.0") -> str:
@@ -318,6 +321,9 @@ def validate_reference_cases(cases: tuple[ReferenceCase, ...] | None = None) -> 
     ids = tuple(case.case_id for case in cases)
     if len(set(ids)) != len(ids):
         raise ValueError("RES-71 reference cases must have unique case IDs")
+    expected_ids = tuple(case.case_id for case in _cases())
+    if ids != expected_ids:
+        raise ValueError("RES-71 reference cases do not match the sealed case artifact")
     if not any(case.status is ReferenceCaseStatus.VALUE for case in cases):
         raise ValueError("reference set needs a value case")
     if not any(case.status is ReferenceCaseStatus.REFUSAL for case in cases):
@@ -331,6 +337,18 @@ def validate_reference_cases(cases: tuple[ReferenceCase, ...] | None = None) -> 
             "dynamislm:registered-operation:"
         ):
             raise ValueError(f"invalid operation identity in {case.case_id}")
+    from dynamislm.qualification.inventory import discovered_registered_operation_ids
+
+    live_operation_ids = set(discovered_registered_operation_ids())
+    for case in cases:
+        if case.operation_id is not None and case.operation_id not in live_operation_ids:
+            raise ValueError(f"stale operation identity in {case.case_id}: {case.operation_id}")
+    digest = canonical_hash(cases)
+    if digest != RES71_SEALED_REFERENCE_DIGEST:
+        raise ValueError(
+            "RES-71 reference cases diverge from the sealed digest: "
+            f"expected {RES71_SEALED_REFERENCE_DIGEST}, got {digest}"
+        )
 
 
 def reference_case_manifest(cases: tuple[ReferenceCase, ...] | None = None) -> str:
@@ -353,6 +371,7 @@ def reference_case_digest(cases: tuple[ReferenceCase, ...] | None = None) -> str
 
 __all__ = [
     "RES71_REFERENCE_INTERFACE_VERSION",
+    "RES71_SEALED_REFERENCE_DIGEST",
     "get_reference_case",
     "get_reference_cases",
     "reference_case_digest",

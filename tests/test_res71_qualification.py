@@ -36,6 +36,7 @@ from dynamislm.measurement.medicine_ball_throw.metrics import (
 from dynamislm.qualification import (
     ReferenceCaseStatus,
     build_coverage_matrix,
+    build_gate_runtime_evidence,
     build_registered_operation_inventory,
     build_unresolved_computation_inventory,
     discovered_registered_operation_ids,
@@ -43,6 +44,7 @@ from dynamislm.qualification import (
     reference_case_digest,
     reference_case_manifest,
     validate_coverage_matrix,
+    validate_gate_receipt,
     validate_reference_cases,
     validate_registered_operation_inventory,
     validate_unresolved_computation_inventory,
@@ -76,6 +78,26 @@ def test_coverage_and_unresolved_contracts_are_complete() -> None:
     assert validate_unresolved_computation_inventory(unresolved).value == "PASS"
     assert any(item.registered_operation_id is None for item in unresolved)
     assert any(item.registered_operation_id is not None for item in unresolved)
+
+
+def test_gate_receipt_matches_recomputed_runtime_evidence() -> None:
+    evidence = build_gate_runtime_evidence()
+
+    assert validate_gate_receipt().value == "PASS"
+    assert evidence["RUNTIME_COUNTS"] == {
+        "registered_operations": 100,
+        "implemented": 81,
+        "historical_replay_only": 1,
+        "represented_but_do_not_compute": 7,
+        "deferred": 8,
+        "rejected": 3,
+        "unresolved_capabilities": 23,
+        "coverage_domains": 12,
+        "verifier_reference_cases": 12,
+        "verifier_reference_digest": (
+            "sha256:d29d84699b7cf70c2d409d370c5ffd6c7ad7cd704375b14b541527a95fa385e5"
+        ),
+    }
 
 
 def test_independent_external_load_gold_values_and_domain_refusals() -> None:
