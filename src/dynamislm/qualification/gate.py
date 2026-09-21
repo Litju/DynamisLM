@@ -28,6 +28,8 @@ from dynamislm.serialization import SERIALIZATION_VERSION
 RES71_GATE_RECEIPT_PATH = (
     Path(__file__).resolve().parents[3] / "docs" / "qualification" / "RES71-GATE-RECEIPT.json"
 )
+RES71_GATE_MISSION = "RES-71-SCIENTIFIC-ENGINE-GATE-001"
+RES71_BASE_MAIN = "7508a9025759c2863d163e09b22f325494828602"
 RES71_QUALIFIED_CONTENT_HEAD = "49988aa3cd03e460dc8ae8c60f8afa890e75706e"
 _SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 _NON_IMPLEMENTATION_FLAGS = {
@@ -69,6 +71,7 @@ def build_gate_runtime_evidence() -> dict[str, object]:
         "verifier_reference_digest": reference_digest,
     }
     return {
+        "STATUS": "PASS",
         "REGISTERED_OPERATION_INVENTORY": "PASS",
         "COVERAGE_MATRIX": "PASS",
         "UNRESOLVED_COMPUTATION_INVENTORY": "PASS",
@@ -90,9 +93,42 @@ def _load_receipt() -> Mapping[str, object]:
     return cast(Mapping[str, object], payload)
 
 
+def _strict_equal(actual: object, expected: object) -> bool:
+    """Compare receipt values without Python's bool/int equality coercion."""
+
+    if type(actual) is not type(expected):
+        return False
+    if actual != expected:
+        return False
+    if isinstance(expected, Mapping):
+        actual_mapping = cast(Mapping[object, object], actual)
+        expected_mapping = cast(Mapping[object, object], expected)
+        if len(actual_mapping) != len(expected_mapping):
+            return False
+        for expected_key, expected_value in expected_mapping.items():
+            matching_keys = tuple(
+                key
+                for key in actual_mapping
+                if type(key) is type(expected_key) and key == expected_key
+            )
+            if len(matching_keys) != 1:
+                return False
+            if not _strict_equal(actual_mapping[matching_keys[0]], expected_value):
+                return False
+        return True
+    if isinstance(expected, list | tuple):
+        actual_sequence = cast(list[object] | tuple[object, ...], actual)
+        expected_sequence = cast(list[object] | tuple[object, ...], expected)
+        return len(actual_sequence) == len(expected_sequence) and all(
+            _strict_equal(actual_item, expected_item)
+            for actual_item, expected_item in zip(actual_sequence, expected_sequence, strict=True)
+        )
+    return True
+
+
 def _require_field(receipt: Mapping[str, object], key: str, expected: object) -> None:
     actual = receipt.get(key)
-    if actual != expected:
+    if not _strict_equal(actual, expected):
         raise ValueError(
             f"RES-71 gate receipt field {key} differs: expected {expected!r}, got {actual!r}"
         )
@@ -103,37 +139,40 @@ def validate_gate_receipt(receipt: Mapping[str, object] | None = None) -> GateCo
 
     receipt_data = _load_receipt() if receipt is None else receipt
     evidence = build_gate_runtime_evidence()
-    _require_field(receipt_data, "STATUS", "PASS")
-    _require_field(receipt_data, "SCIENTIFIC_ENGINE_GATE", "PASS")
-    for key in (
-        "REGISTERED_OPERATION_INVENTORY",
-        "COVERAGE_MATRIX",
-        "UNRESOLVED_COMPUTATION_INVENTORY",
-        "REFERENCE_CASE_VALIDATION",
-        "RUNTIME_COUNTS",
-        "SERIALIZATION_VERSION",
-        "MODEL_INFERENCE",
-        "GPU_WORK",
-    ):
-        _require_field(receipt_data, key, evidence[key])
+    expected = {
+        "MISSION": RES71_GATE_MISSION,
+        "BASE_MAIN": RES71_BASE_MAIN,
+        "QUALIFIED_CONTENT_HEAD": RES71_QUALIFIED_CONTENT_HEAD,
+        **evidence,
+    }
+    extra_fields = set(receipt_data) - set(expected)
+    missing_fields = set(expected) - set(receipt_data)
+    if extra_fields:
+        raise ValueError(
+            "RES-71 gate receipt contains non-authoritative or unchecked fields: "
+            f"{sorted(extra_fields)}"
+        )
+    if missing_fields:
+        raise ValueError(
+            f"RES-71 gate receipt is missing authoritative fields: {sorted(missing_fields)}"
+        )
+    for key, expected_value in expected.items():
+        _require_field(receipt_data, key, expected_value)
 
-    if "FINAL_HEAD" in receipt_data or "QUALIFIED_ENGINE_HEAD" in receipt_data:
-        raise ValueError("RES-71 gate receipt must not claim a branch FINAL_HEAD")
-    qualified_content_head = receipt_data.get("QUALIFIED_CONTENT_HEAD")
+    qualified_content_head = receipt_data["QUALIFIED_CONTENT_HEAD"]
     if not isinstance(qualified_content_head, str) or not _SHA_RE.fullmatch(qualified_content_head):
         raise ValueError("RES-71 gate receipt must contain a full QUALIFIED_CONTENT_HEAD SHA")
+
+    for key in _NON_IMPLEMENTATION_FLAGS:
+        _require_field(receipt_data, key, evidence[key])
     if qualified_content_head != RES71_QUALIFIED_CONTENT_HEAD:
         raise ValueError("RES-71 qualified content head differs from the sealed content head")
-
-    for key in receipt_data:
-        if (key.startswith("MODEL_") or key.startswith("GPU_")) and key not in {
-            *_NON_IMPLEMENTATION_FLAGS,
-        }:
-            raise ValueError(f"RES-71 gate receipt contains an unapproved model/GPU flag: {key}")
     return GateComponentStatus.PASS
 
 
 __all__ = [
+    "RES71_BASE_MAIN",
+    "RES71_GATE_MISSION",
     "RES71_GATE_RECEIPT_PATH",
     "RES71_QUALIFIED_CONTENT_HEAD",
     "build_gate_runtime_evidence",

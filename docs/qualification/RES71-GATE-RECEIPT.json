@@ -1,37 +1,12 @@
 {
   "MISSION": "RES-71-SCIENTIFIC-ENGINE-GATE-001",
-  "STATUS": "PASS",
   "BASE_MAIN": "7508a9025759c2863d163e09b22f325494828602",
   "QUALIFIED_CONTENT_HEAD": "49988aa3cd03e460dc8ae8c60f8afa890e75706e",
-  "ENTRY": {
-    "one_worktree": true,
-    "branch": "work/res-71-scientific-engine-qualification-gate",
-    "clean_worktree": true,
-    "origin_main_equals_qualified_base": true
-  },
-  "ATOMIC_COMMITS": [
-    "adfa150 feat(res71): add qualification inventory and coverage contracts",
-    "f25ebbd test(res71): add cross-engine adversarial and gold qualification",
-    "fa0daf6 feat(res71): add verifier-ready deterministic reference cases",
-    "49988aa docs(res71): add provenance coverage and unresolved inventories",
-    "36d5408 fix(res71): harden qualification validators and refusal bindings",
-    "5fe4a6f fix(res71): bind verifier references and gate receipt to runtime evidence",
-    "c7b1961 test(res71): qualify empty-input stale-artifact and refusal-route attacks"
-  ],
+  "STATUS": "PASS",
   "REGISTERED_OPERATION_INVENTORY": "PASS",
   "COVERAGE_MATRIX": "PASS",
   "UNRESOLVED_COMPUTATION_INVENTORY": "PASS",
   "REFERENCE_CASE_VALIDATION": "PASS",
-  "IDENTITY_PROVENANCE": "PASS",
-  "NUMERICAL_QUALIFICATION": "PASS",
-  "SCIENTIFIC_BOUNDARIES": "PASS",
-  "DATASET_COMPATIBILITY": "PASS",
-  "VERIFIER_REFERENCE_INTERFACE": "PASS",
-  "IMPLICIT_LM_ARITHMETIC": "BLOCKED",
-  "UNREGISTERED_ACCEPTED_OPERATION": "NONE",
-  "PROVENANCE_GAPS": "NONE",
-  "CLAIM_AUTHORITY_BYPASS": "NONE",
-  "SCIENTIFIC_BLOCKERS": "NONE",
   "RUNTIME_COUNTS": {
     "registered_operations": 100,
     "implemented": 81,
@@ -44,17 +19,8 @@
     "verifier_reference_cases": 12,
     "verifier_reference_digest": "sha256:d29d84699b7cf70c2d409d370c5ffd6c7ad7cd704375b14b541527a95fa385e5"
   },
-  "QA_RUFF": "PASS",
-  "QA_FORMAT": "PASS",
-  "QA_MYPY": "PASS",
-  "REPOSITORY_POLICY": "PASS",
-  "QA_PYTEST": "PASS",
-  "TEST_COUNT": 857,
-  "QA_TRACKED_MUTATION": "NONE",
+  "SERIALIZATION_VERSION": 3,
   "MODEL_INFERENCE": "NOT_IMPLEMENTED",
   "GPU_WORK": "NOT_IMPLEMENTED",
-  "SERIALIZATION_VERSION": 3,
-  "LINEAR_RES71_STATUS": "IN_PROGRESS",
-  "NEXT_AUTHORIZED_ACTION": "RES-71-FINAL-REVIEW-002",
   "SCIENTIFIC_ENGINE_GATE": "PASS"
 }
