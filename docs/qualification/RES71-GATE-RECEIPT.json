@@ -1,0 +1,26 @@
+{
+  "MISSION": "RES-71-SCIENTIFIC-ENGINE-GATE-001",
+  "BASE_MAIN": "7508a9025759c2863d163e09b22f325494828602",
+  "QUALIFIED_CONTENT_HEAD": "0a51127628f1bfc1f0b89064bf92d7fc2703ff39",
+  "STATUS": "PASS",
+  "REGISTERED_OPERATION_INVENTORY": "PASS",
+  "COVERAGE_MATRIX": "PASS",
+  "UNRESOLVED_COMPUTATION_INVENTORY": "PASS",
+  "REFERENCE_CASE_VALIDATION": "PASS",
+  "RUNTIME_COUNTS": {
+    "registered_operations": 100,
+    "implemented": 81,
+    "historical_replay_only": 1,
+    "represented_but_do_not_compute": 7,
+    "deferred": 8,
+    "rejected": 3,
+    "unresolved_capabilities": 23,
+    "coverage_domains": 12,
+    "verifier_reference_cases": 12,
+    "verifier_reference_digest": "sha256:d29d84699b7cf70c2d409d370c5ffd6c7ad7cd704375b14b541527a95fa385e5"
+  },
+  "SERIALIZATION_VERSION": 3,
+  "MODEL_INFERENCE": "NOT_IMPLEMENTED",
+  "GPU_WORK": "NOT_IMPLEMENTED",
+  "SCIENTIFIC_ENGINE_GATE": "PASS"
+}
