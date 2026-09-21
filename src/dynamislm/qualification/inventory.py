@@ -876,8 +876,16 @@ def validate_registered_operation_inventory(
     operation_ids = tuple(item.operation_id for item in entries)
     if len(set(operation_ids)) != len(operation_ids):
         raise ValueError("RES-71 inventory contains duplicate operation IDs")
-    if set(operation_ids) != set(discovered_registered_operation_ids()):
+    canonical = build_registered_operation_inventory()
+    canonical_by_id = {item.operation_id: item for item in canonical}
+    supplied_by_id = {item.operation_id: item for item in entries}
+    if set(supplied_by_id) != set(canonical_by_id):
         raise ValueError("RES-71 inventory is not complete against the live registry")
+    for operation_id, supplied in supplied_by_id.items():
+        if supplied != canonical_by_id[operation_id]:
+            raise ValueError(
+                f"RES-71 inventory metadata differs from canonical entry: {operation_id}"
+            )
     root = _repository_root()
     for item in entries:
         for path in item.implementation:
@@ -1221,6 +1229,9 @@ def build_coverage_matrix() -> tuple[CoverageRow, ...]:
 def validate_coverage_matrix(rows: tuple[CoverageRow, ...] | None = None) -> GateComponentStatus:
     if rows is None:
         rows = build_coverage_matrix()
+    canonical = build_coverage_matrix()
+    canonical_by_domain = {row.domain: row for row in canonical}
+    supplied_by_domain = {row.domain: row for row in rows}
     required = {
         "population/source authority",
         "football world/context",
@@ -1235,11 +1246,16 @@ def validate_coverage_matrix(rows: tuple[CoverageRow, ...] | None = None) -> Gat
         "analysis capability",
         "claim authority",
     }
-    actual = {row.domain for row in rows}
+    actual = set(supplied_by_domain)
     if actual != required:
         raise ValueError(f"RES-71 coverage matrix domain mismatch: {sorted(actual ^ required)}")
     if len(rows) != len(actual):
         raise ValueError("RES-71 coverage matrix contains duplicate domains")
+    if set(canonical_by_domain) != required:
+        raise ValueError("RES-71 canonical coverage matrix domain set is incomplete")
+    for domain, supplied in supplied_by_domain.items():
+        if supplied != canonical_by_domain[domain]:
+            raise ValueError(f"RES-71 coverage row differs from canonical row: {domain}")
     root = _repository_root()
     for row in rows:
         if not row.authoritative_surfaces or not row.test_coverage:
@@ -1360,9 +1376,13 @@ def validate_unresolved_computation_inventory(
     if len(set(capabilities)) != len(capabilities):
         raise ValueError("RES-71 unresolved inventory contains duplicate capabilities")
     expected = build_unresolved_computation_inventory()
-    expected_capabilities = {item.capability for item in expected}
-    if set(capabilities) != expected_capabilities:
+    expected_by_capability = {item.capability: item for item in expected}
+    supplied_by_capability = {item.capability: item for item in entries}
+    if set(supplied_by_capability) != set(expected_by_capability):
         raise ValueError("RES-71 unresolved inventory is incomplete against the reviewed set")
+    for capability, supplied in supplied_by_capability.items():
+        if supplied != expected_by_capability[capability]:
+            raise ValueError(f"RES-71 unresolved row differs from canonical row: {capability}")
     root = _repository_root()
     for item in entries:
         if item.disposition is OperationDisposition.IMPLEMENTED:

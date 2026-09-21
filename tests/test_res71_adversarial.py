@@ -115,7 +115,7 @@ def test_stale_inventory_routes_are_rejected() -> None:
         operation,
         implementation=("dynamislm.qualification.inventory:missing_implementation",),
     )
-    with pytest.raises(ValueError, match="implementation route is stale"):
+    with pytest.raises(ValueError, match="metadata differs from canonical entry"):
         validate_registered_operation_inventory(
             (stale_implementation, *build_registered_operation_inventory()[1:])
         )
@@ -124,7 +124,7 @@ def test_stale_inventory_routes_are_rejected() -> None:
         operation,
         refusal_path=("dynamislm.qualification.inventory:missing_refusal",),
     )
-    with pytest.raises(ValueError, match="refusal route is stale"):
+    with pytest.raises(ValueError, match="metadata differs from canonical entry"):
         validate_registered_operation_inventory(
             (stale_refusal, *build_registered_operation_inventory()[1:])
         )
@@ -134,7 +134,7 @@ def test_stale_inventory_routes_are_rejected() -> None:
         unresolved[0],
         refusal_path=("dynamislm.qualification.inventory:missing_unresolved_route",),
     )
-    with pytest.raises(ValueError, match="refusal route is stale"):
+    with pytest.raises(ValueError, match="differs from canonical row"):
         validate_unresolved_computation_inventory((stale_unresolved, *unresolved[1:]))
 
 
