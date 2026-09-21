@@ -32,6 +32,11 @@ machine-readable set is returned by
 | Sprint acceleration from split averages | `refuse_sprint_acceleration` |
 | VIFT relabelled as VO2max, MAS or maximum sprint speed | `refuse_vift_as_vo2max`, `refuse_vift_as_mas`, `refuse_vift_as_mss` |
 
+The VIFT relabelling routes are identity refusals, not missing-computation
+refusals: their expected class is `IDENTITY_UNRESOLVED` with
+`MEASURAND_MISMATCH` and `METRIC_DEFINITION_MISMATCH` reason codes. CMJ RFD
+expects the producer reason code `NO_REGISTERED_OPERATION`.
+
 Every refusal preserves the blocked claim, reason code(s), missing information
 and safe description where the owning family exposes them. No placeholder
 number is returned. This is the intended behavior for later LM verifiers:

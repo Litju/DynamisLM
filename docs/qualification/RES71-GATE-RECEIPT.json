@@ -6,7 +6,6 @@
   "ENTRY": {
     "one_worktree": true,
     "branch": "work/res-71-scientific-engine-qualification-gate",
-    "head_equals_qualified_base": true,
     "clean_worktree": true,
     "origin_main_equals_qualified_base": true
   },
@@ -15,7 +14,9 @@
     "f25ebbd test(res71): add cross-engine adversarial and gold qualification",
     "fa0daf6 feat(res71): add verifier-ready deterministic reference cases",
     "49988aa docs(res71): add provenance coverage and unresolved inventories",
-    "RECEIPT_COMMIT seals this decision"
+    "36d5408 fix(res71): harden qualification validators and refusal bindings",
+    "5fe4a6f fix(res71): bind verifier references and gate receipt to runtime evidence",
+    "c7b1961 test(res71): qualify empty-input stale-artifact and refusal-route attacks"
   ],
   "REGISTERED_OPERATION_INVENTORY": "PASS",
   "COVERAGE_MATRIX": "PASS",
@@ -54,6 +55,6 @@
   "GPU_WORK": "NOT_IMPLEMENTED",
   "SERIALIZATION_VERSION": 3,
   "LINEAR_RES71_STATUS": "IN_PROGRESS",
-  "NEXT_AUTHORIZED_ACTION": "RES-71-FINAL-REVIEW-001",
+  "NEXT_AUTHORIZED_ACTION": "RES-71-FINAL-REVIEW-002",
   "SCIENTIFIC_ENGINE_GATE": "PASS"
 }

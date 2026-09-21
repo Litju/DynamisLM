@@ -21,7 +21,7 @@ python scripts/res71_reference_cases.py --manifest
 Interface version: `res71-reference-interface@1.0.0`
 
 Reference digest:
-`sha256:9807b6e0be63abd44135bc855a97d37775ef09763d25c0f7025f4395ab673af6`
+`sha256:d29d84699b7cf70c2d409d370c5ffd6c7ad7cd704375b14b541527a95fa385e5`
 
 ## Case contract
 
@@ -49,3 +49,6 @@ The interface is a reference contract, not a second numerical engine. Later
 PerformanceScience-Eval/SFT/RLVR verifier code must call the registered
 operation and compare its typed result/refusal against the case contract. It
 must not treat the expected values as a license for LM arithmetic.
+
+The digest is sealed in runtime code and pinned by tests; the CMJ RFD case
+expects the producer reason code `NO_REGISTERED_OPERATION`.

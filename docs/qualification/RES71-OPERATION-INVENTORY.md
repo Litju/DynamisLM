@@ -35,9 +35,9 @@ tolerance_contract
 | External load | 3 | 3 | 0 | 0 | 0 | 0 |
 | CMJ | 25 | 24 | 1 | 0 | 0 | 0 |
 | Strength/IMTP/VBT | 14 | 12 | 0 | 1 | 1 | 0 |
-| Field testing | 14 | 11 | 0 | 1 | 1 | 1 |
+| Field testing | 14 | 12 | 0 | 1 | 1 | 0 |
 | DJ/BPT/MBT | 10 | 9 | 0 | 1 | 0 | 0 |
-| Longitudinal statistics | 27 | 15 | 0 | 5 | 6 | 3 |
+| Longitudinal statistics | 27 | 14 | 0 | 4 | 6 | 3 |
 | Cross-source bridge | 1 | 1 | 0 | 0 | 0 | 0 |
 | **Total** | **100** | **81** | **1** | **7** | **8** | **3** |
 

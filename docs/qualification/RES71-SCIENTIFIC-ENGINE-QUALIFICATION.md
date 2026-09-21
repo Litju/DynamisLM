@@ -29,7 +29,7 @@ The entry checks were performed before mutation:
 |---|---|
 | One worktree | PASS |
 | Branch | `work/res-71-scientific-engine-qualification-gate` |
-| `HEAD` | `7508a9025759c2863d163e09b22f325494828602` |
+| `HEAD` | `54c2c21171e951081bda4bb23c88fa06986a2d79` |
 | `origin/main` | `7508a9025759c2863d163e09b22f325494828602` |
 | Worktree | clean at entry |
 | Linear RES-71 | In Progress; no LM/GPU work authorized |
