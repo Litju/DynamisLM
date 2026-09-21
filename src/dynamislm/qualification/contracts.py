@@ -156,6 +156,7 @@ class UnresolvedComputation:
     safe_description: str
     test_coverage: tuple[str, ...]
     authority_references: tuple[str, ...]
+    expected_reason_codes: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         for field_name in (
@@ -168,10 +169,19 @@ class UnresolvedComputation:
                 raise ValueError(f"{field_name} must be non-empty")
         if not isinstance(self.refusal_path, tuple) or not self.refusal_path:
             raise ValueError("refusal_path must be non-empty")
-        for field_name in ("refusal_path", "test_coverage", "authority_references"):
+        for field_name in (
+            "refusal_path",
+            "test_coverage",
+            "authority_references",
+            "expected_reason_codes",
+        ):
             value = getattr(self, field_name)
-            if any(not isinstance(item, str) or not item.strip() for item in value):
+            if not isinstance(value, tuple) or any(
+                not isinstance(item, str) or not item.strip() for item in value
+            ):
                 raise ValueError(f"{field_name} must contain non-empty strings")
+        if not self.expected_reason_codes:
+            raise ValueError("expected_reason_codes must be non-empty")
         if self.disposition is OperationDisposition.IMPLEMENTED:
             raise ValueError("unresolved computation cannot be implemented")
 

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import importlib
 import pkgutil
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from types import ModuleType
@@ -25,6 +26,7 @@ from dynamislm.qualification.contracts import (
     RegisteredOperationInventoryEntry,
     UnresolvedComputation,
 )
+from dynamislm.refusal.models import RefusalResult
 
 RES71_REGISTRY_VERSION = "1.0.0"
 
@@ -45,6 +47,8 @@ class _OperationMetadata:
     tolerance_contract: str
     reason: str = ""
     safe_description: str = ""
+    expected_refusal_class: str = "COMPUTATION_NOT_REGISTERED"
+    expected_reason_codes: tuple[str, ...] = ("NO_REGISTERED_OPERATION",)
 
     @property
     def lookup_key(self) -> str:
@@ -168,8 +172,11 @@ def _add(
     reason: str = "",
     safe_description: str = "",
     tolerance_contract: str = "Finite deterministic output; compare canonical serialized values with the operation-specific tolerance stated by its method contract.",
+    expected_refusal_class: str = "COMPUTATION_NOT_REGISTERED",
+    expected_reason_codes: tuple[str, ...] = ("NO_REGISTERED_OPERATION",),
 ) -> None:
-    versions = versions or {}
+    if versions is None:
+        versions = {}
     for key in keys:
         version = versions.get(key, "1.0.0")
         lookup_key = f"{key}@{version}"
@@ -190,6 +197,8 @@ def _add(
             tolerance_contract=tolerance_contract,
             reason=reason,
             safe_description=safe_description,
+            expected_refusal_class=expected_refusal_class,
+            expected_reason_codes=expected_reason_codes,
         )
 
 
@@ -221,6 +230,8 @@ def _metadata() -> dict[str, _OperationMetadata]:
         test_coverage=source_meta.test_coverage,
         authority_references=source_meta.authority_references,
         tolerance_contract=source_meta.tolerance_contract,
+        expected_refusal_class=source_meta.expected_refusal_class,
+        expected_reason_codes=source_meta.expected_reason_codes,
     )
     _add(
         metadata,
@@ -417,6 +428,7 @@ def _metadata() -> dict[str, _OperationMetadata]:
         ),
         reason="Metric support and acceleration/gravity boundary are not registered for generic BPT MPV computation.",
         safe_description="Provider-reported or represented MPV remains origin-qualified; no DynamisLM MPV number is emitted.",
+        expected_reason_codes=("NO_REGISTERED_OPERATION", "COMPUTATION_NOT_REGISTERED"),
     )
     _add(
         metadata,
@@ -474,6 +486,12 @@ def _metadata() -> dict[str, _OperationMetadata]:
         refusal_path=("dynamislm.measurement.strength.vbt:estimate_1rm_from_load_velocity_model",),
         reason="Current evidence does not authorize terminal-velocity applicability across devices/calibration designs.",
         safe_description="The individual load-velocity model remains describable; no numeric estimated 1RM is emitted.",
+        expected_reason_codes=(
+            "UNKNOWN_THRESHOLD",
+            "UNKNOWN_THRESHOLD_BASIS",
+            "DEVICE_BRIDGE_NOT_REGISTERED",
+            "NO_REGISTERED_OPERATION",
+        ),
     )
     _add(
         metadata,
@@ -491,6 +509,7 @@ def _metadata() -> dict[str, _OperationMetadata]:
         refusal_path=("dynamislm.measurement.strength.vbt:calculate_vbt_mean_propulsive_velocity",),
         reason="Acceleration, gravity, filtering, sampling and propulsive-boundary authority are not frozen.",
         safe_description="Concentric velocity is not relabelled as mean propulsive velocity.",
+        expected_reason_codes=("NO_REGISTERED_OPERATION",),
     )
     _add(
         metadata,
@@ -512,6 +531,7 @@ def _metadata() -> dict[str, _OperationMetadata]:
         refusal_path=("dynamislm.measurement.field_testing.cod:refuse_505_asymmetry",),
         reason="No single denominator, direction and sign convention is registered for 505 asymmetry.",
         safe_description="Left and right 505 results remain separate observations.",
+        expected_reason_codes=("NO_REGISTERED_OPERATION", "METRIC_DEFINITION_MISMATCH"),
     )
     _add(
         metadata,
@@ -558,6 +578,7 @@ def _metadata() -> dict[str, _OperationMetadata]:
         ),
         reason="A dwell/sustain estimator and evidence are not registered; V1 is sampled maximum only.",
         safe_description="Sampled maximum velocity remains separately describable and is not relabelled as sustained maximum.",
+        expected_reason_codes=("ESTIMATOR_MISMATCH", "NO_REGISTERED_OPERATION"),
     )
     _add(
         metadata,
@@ -663,6 +684,7 @@ def _metadata() -> dict[str, _OperationMetadata]:
         ),
         reason="The named reliability/agreement method is represented but lacks a registered V1 estimand/design implementation.",
         safe_description="The underlying observations and method label remain describable without placeholder arithmetic.",
+        expected_reason_codes=("RES69_OPERATION_NOT_REGISTERED",),
     )
     _add(
         metadata,
@@ -681,6 +703,7 @@ def _metadata() -> dict[str, _OperationMetadata]:
         ),
         reason="The method remains outside the sealed V1 numerical surface until its estimand, design and uncertainty contract are registered.",
         safe_description="No numeric result is emitted; a later mission may register the method with explicit prerequisites.",
+        expected_reason_codes=("RES69_OPERATION_NOT_REGISTERED",),
     )
     _add(
         metadata,
@@ -692,6 +715,7 @@ def _metadata() -> dict[str, _OperationMetadata]:
         ),
         reason="The generic claim is outside current scientific authority and has no registered estimand or decision criterion.",
         safe_description="Observed values and registered descriptive/error results remain independently describable.",
+        expected_reason_codes=("RES69_OPERATION_NOT_REGISTERED",),
     )
     _add(
         metadata,
@@ -738,6 +762,8 @@ def _replace_implementation(
         tolerance_contract=metadata.tolerance_contract,
         reason=metadata.reason,
         safe_description=metadata.safe_description,
+        expected_refusal_class=metadata.expected_refusal_class,
+        expected_reason_codes=metadata.expected_reason_codes,
     )
 
 
@@ -826,6 +852,16 @@ def _resolve_symbol(path: str) -> object:
     return value
 
 
+def _resolve_route(path: str, *, kind: str, owner: str, require_callable: bool = True) -> object:
+    try:
+        value = _resolve_symbol(path)
+    except (AttributeError, ImportError, ValueError) as exc:
+        raise ValueError(f"RES-71 {kind} route is stale for {owner}: {path}") from exc
+    if require_callable and not callable(value):
+        raise ValueError(f"RES-71 {kind} route is not callable for {owner}: {path}")
+    return value
+
+
 def _repository_root() -> Path:
     return Path(__file__).resolve().parents[3]
 
@@ -835,7 +871,8 @@ def validate_registered_operation_inventory(
 ) -> GateComponentStatus:
     """Validate registry completeness, implementation bindings and test paths."""
 
-    entries = entries or build_registered_operation_inventory()
+    if entries is None:
+        entries = build_registered_operation_inventory()
     operation_ids = tuple(item.operation_id for item in entries)
     if len(set(operation_ids)) != len(operation_ids):
         raise ValueError("RES-71 inventory contains duplicate operation IDs")
@@ -844,7 +881,11 @@ def validate_registered_operation_inventory(
     root = _repository_root()
     for item in entries:
         for path in item.implementation:
-            _resolve_symbol(path)
+            _resolve_route(
+                path, kind="implementation", owner=item.operation_id, require_callable=False
+            )
+        for path in item.refusal_path:
+            _resolve_route(path, kind="refusal", owner=item.operation_id)
         for path in item.test_coverage:
             if not (root / path).is_file():
                 raise ValueError(f"RES-71 operation test path is missing: {path}")
@@ -1178,7 +1219,8 @@ def build_coverage_matrix() -> tuple[CoverageRow, ...]:
 
 
 def validate_coverage_matrix(rows: tuple[CoverageRow, ...] | None = None) -> GateComponentStatus:
-    rows = rows or build_coverage_matrix()
+    if rows is None:
+        rows = build_coverage_matrix()
     required = {
         "population/source authority",
         "football world/context",
@@ -1225,11 +1267,12 @@ def build_unresolved_computation_inventory() -> tuple[UnresolvedComputation, ...
                 reason=metadata.reason
                 or "The operation is explicitly outside current numerical authority.",
                 refusal_path=entry.refusal_path,
-                expected_refusal_class="COMPUTATION_NOT_REGISTERED",
+                expected_refusal_class=metadata.expected_refusal_class,
                 safe_description=metadata.safe_description
                 or "The input observation remains independently describable.",
                 test_coverage=entry.test_coverage,
                 authority_references=entry.authority_references,
+                expected_reason_codes=metadata.expected_reason_codes,
             )
         )
     unresolved.extend(
@@ -1244,6 +1287,7 @@ def build_unresolved_computation_inventory() -> tuple[UnresolvedComputation, ...
                 "Force/event observations and registered CMJ metrics remain describable.",
                 ("tests/test_cmj_metrics.py",),
                 ("docs/decisions/RES65-RECEIPT.json",),
+                expected_reason_codes=("NO_REGISTERED_OPERATION",),
             ),
             UnresolvedComputation(
                 "generic BPT load-times-velocity power",
@@ -1257,6 +1301,7 @@ def build_unresolved_computation_inventory() -> tuple[UnresolvedComputation, ...
                 "BPT velocity series and provider metrics remain separately describable.",
                 ("tests/test_explosive_test_families.py",),
                 ("docs/decisions/RES68-RECEIPT.json",),
+                expected_reason_codes=("NO_REGISTERED_OPERATION", "COMPUTATION_NOT_REGISTERED"),
             ),
             UnresolvedComputation(
                 "MBT distance-as-power or protocol-independent normative score",
@@ -1271,6 +1316,7 @@ def build_unresolved_computation_inventory() -> tuple[UnresolvedComputation, ...
                 "Qualified MBT distance or instrumented release velocity remains describable.",
                 ("tests/test_explosive_test_families.py",),
                 ("docs/decisions/RES68-RECEIPT.json",),
+                expected_reason_codes=("NO_REGISTERED_OPERATION", "COMPUTATION_NOT_REGISTERED"),
             ),
             UnresolvedComputation(
                 "sprint acceleration",
@@ -1282,6 +1328,7 @@ def build_unresolved_computation_inventory() -> tuple[UnresolvedComputation, ...
                 "Qualified split times and segment-average velocities remain describable.",
                 ("tests/test_field_testing.py",),
                 ("docs/decisions/RES67-RECEIPT.json",),
+                expected_reason_codes=("NO_REGISTERED_OPERATION", "METRIC_DEFINITION_MISMATCH"),
             ),
             UnresolvedComputation(
                 "VIFT as VO2max, MAS or maximum sprint speed",
@@ -1293,10 +1340,11 @@ def build_unresolved_computation_inventory() -> tuple[UnresolvedComputation, ...
                     "dynamislm.measurement.field_testing.ift:refuse_vift_as_mas",
                     "dynamislm.measurement.field_testing.ift:refuse_vift_as_mss",
                 ),
-                "COMPUTATION_NOT_REGISTERED",
+                "IDENTITY_UNRESOLVED",
                 "The exact VIFT stage result remains describable.",
                 ("tests/test_field_testing.py",),
                 ("docs/decisions/RES67-RECEIPT.json",),
+                expected_reason_codes=("MEASURAND_MISMATCH", "METRIC_DEFINITION_MISMATCH"),
             ),
         )
     )
@@ -1306,16 +1354,55 @@ def build_unresolved_computation_inventory() -> tuple[UnresolvedComputation, ...
 def validate_unresolved_computation_inventory(
     entries: tuple[UnresolvedComputation, ...] | None = None,
 ) -> GateComponentStatus:
-    entries = entries or build_unresolved_computation_inventory()
+    if entries is None:
+        entries = build_unresolved_computation_inventory()
     capabilities = tuple(item.capability for item in entries)
     if len(set(capabilities)) != len(capabilities):
         raise ValueError("RES-71 unresolved inventory contains duplicate capabilities")
+    expected = build_unresolved_computation_inventory()
+    expected_capabilities = {item.capability for item in expected}
+    if set(capabilities) != expected_capabilities:
+        raise ValueError("RES-71 unresolved inventory is incomplete against the reviewed set")
     root = _repository_root()
     for item in entries:
         if item.disposition is OperationDisposition.IMPLEMENTED:
             raise ValueError(
                 f"implemented capability leaked into unresolved inventory: {item.capability}"
             )
+        for path in item.refusal_path:
+            route_object = _resolve_route(path, kind="refusal", owner=item.capability)
+            if not callable(route_object):
+                raise ValueError(f"RES-71 refusal route is not callable: {path}")
+            route: Callable[..., object] = route_object
+            if item.registered_operation_id is not None and path.endswith(
+                "refuse_unimplemented_reliability_operation"
+            ):
+                references = _discover_references()
+                try:
+                    operation = references[item.registered_operation_id]
+                except KeyError as exc:
+                    raise ValueError(
+                        f"unresolved inventory operation is not live: {item.registered_operation_id}"
+                    ) from exc
+                result = route(operation)
+            elif path.endswith("estimate_1rm_from_load_velocity_model"):
+                result = route(None)
+            else:
+                result = route()
+            if not isinstance(result, RefusalResult):
+                raise ValueError(
+                    f"RES-71 refusal route did not return RefusalResult: {item.capability}"
+                )
+            if result.refusal_class.value != item.expected_refusal_class:
+                raise ValueError(
+                    f"RES-71 refusal class mismatch for {item.capability}: "
+                    f"expected {item.expected_refusal_class}, got {result.refusal_class.value}"
+                )
+            if tuple(result.reason_codes) != item.expected_reason_codes:
+                raise ValueError(
+                    f"RES-71 refusal reason-code mismatch for {item.capability}: "
+                    f"expected {item.expected_reason_codes}, got {result.reason_codes}"
+                )
         for path in item.test_coverage:
             if not (root / path).is_file():
                 raise ValueError(f"unresolved inventory test path is missing: {path}")

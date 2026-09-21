@@ -622,7 +622,7 @@ def test_no_test_specific_arithmetic_or_science_is_in_generic_public_package() -
         and "measurement/strength" not in path.as_posix()
         # RES-71 qualification metadata inventories upstream family names but
         # does not add a generic numerical operation to the public kernel.
-        and "qualification" not in path.as_posix()
+        and path.relative_to(package_root).parts[0] != "qualification"
     )
 
     assert "cmj" not in source.lower()

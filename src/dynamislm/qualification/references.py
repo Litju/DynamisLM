@@ -180,7 +180,7 @@ def _cases() -> tuple[ReferenceCase, ...]:
             synthetic_input=(_value("requested_operation", "CMJ RFD"),),
             expected_values=(),
             expected_refusal_class="COMPUTATION_NOT_REGISTERED",
-            expected_reason_codes=("CMJ_RFD_NOT_REGISTERED",),
+            expected_reason_codes=("NO_REGISTERED_OPERATION",),
             expected_comparability_state=None,
             expected_claim_level=None,
             tolerance_absolute=None,
@@ -313,7 +313,8 @@ def get_reference_case(case_id: str) -> ReferenceCase:
 
 
 def validate_reference_cases(cases: tuple[ReferenceCase, ...] | None = None) -> None:
-    cases = cases or get_reference_cases()
+    if cases is None:
+        cases = get_reference_cases()
     ids = tuple(case.case_id for case in cases)
     if len(set(ids)) != len(ids):
         raise ValueError("RES-71 reference cases must have unique case IDs")
@@ -335,7 +336,8 @@ def validate_reference_cases(cases: tuple[ReferenceCase, ...] | None = None) -> 
 def reference_case_manifest(cases: tuple[ReferenceCase, ...] | None = None) -> str:
     """Return canonical JSON suitable for a later verifier artifact."""
 
-    cases = cases or get_reference_cases()
+    if cases is None:
+        cases = get_reference_cases()
     validate_reference_cases(cases)
     return canonical_json(cases)
 
@@ -343,7 +345,8 @@ def reference_case_manifest(cases: tuple[ReferenceCase, ...] | None = None) -> s
 def reference_case_digest(cases: tuple[ReferenceCase, ...] | None = None) -> str:
     """Return the deterministic digest of the reference interface."""
 
-    cases = cases or get_reference_cases()
+    if cases is None:
+        cases = get_reference_cases()
     validate_reference_cases(cases)
     return canonical_hash(cases)
 
