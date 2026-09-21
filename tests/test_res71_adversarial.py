@@ -12,7 +12,10 @@ import pytest
 
 from dynamislm.qualification import (
     RES71_GATE_RECEIPT_PATH,
+    CoverageStatus,
+    OperationDisposition,
     ReferenceCaseStatus,
+    build_coverage_matrix,
     build_registered_operation_inventory,
     build_unresolved_computation_inventory,
     get_reference_cases,
@@ -138,6 +141,79 @@ def test_stale_inventory_routes_are_rejected() -> None:
         validate_unresolved_computation_inventory((stale_unresolved, *unresolved[1:]))
 
 
+def test_registered_operation_metadata_substitutions_are_rejected() -> None:
+    entries = build_registered_operation_inventory()
+    operation = entries[0]
+    mutations = (
+        replace(
+            operation,
+            implementation=("dynamislm.qualification.inventory:forged_implementation",),
+        ),
+        replace(operation, disposition=OperationDisposition.DEFERRED),
+        replace(operation, provenance_contract=operation.provenance_contract + " forged"),
+        replace(
+            operation,
+            authority_references=(*operation.authority_references, "docs/forged.md"),
+        ),
+        replace(
+            operation,
+            test_coverage=(*operation.test_coverage, "tests/test_res71_adversarial.py"),
+        ),
+        replace(
+            operation,
+            refusal_path=(*operation.refusal_path, "dynamislm.refusal.models:RefusalResult"),
+        ),
+        replace(operation, tolerance_contract=operation.tolerance_contract + " forged"),
+    )
+
+    for mutation in mutations:
+        with pytest.raises(ValueError, match="metadata differs from canonical entry"):
+            validate_registered_operation_inventory((mutation, *entries[1:]))
+
+
+def test_unresolved_metadata_substitutions_are_rejected() -> None:
+    entries = build_unresolved_computation_inventory()
+    item = next(entry for entry in entries if entry.registered_operation_id is not None)
+    index = entries.index(item)
+    mutations = (
+        replace(item, registered_operation_id=None),
+        replace(item, disposition=OperationDisposition.REJECTED),
+        replace(item, reason=item.reason + " forged"),
+        replace(item, refusal_path=(*item.refusal_path, *item.refusal_path[:1])),
+        replace(item, expected_refusal_class="FORGED_REFUSAL_CLASS"),
+        replace(item, expected_reason_codes=(*item.expected_reason_codes, "FORGED_CODE")),
+        replace(item, safe_description=item.safe_description + " forged"),
+        replace(item, test_coverage=(*item.test_coverage, "tests/test_res71_adversarial.py")),
+        replace(item, authority_references=(*item.authority_references, "docs/forged.md")),
+    )
+
+    for mutation in mutations:
+        supplied = list(entries)
+        supplied[index] = mutation
+        with pytest.raises(ValueError, match="differs from canonical row"):
+            validate_unresolved_computation_inventory(tuple(supplied))
+
+
+def test_coverage_metadata_substitutions_are_rejected() -> None:
+    rows = build_coverage_matrix()
+    row = rows[0]
+    mutations = (
+        replace(row, status=CoverageStatus.QUALIFIED_WITH_EXPLICIT_DEFERRED),
+        replace(row, authoritative_surfaces=(*row.authoritative_surfaces, "forged")),
+        replace(row, registered_operations=(*row.registered_operations, "forged")),
+        replace(row, unresolved_capabilities=(*row.unresolved_capabilities, "forged")),
+        replace(row, provenance_boundary=row.provenance_boundary + " forged"),
+        replace(row, comparability_boundary=row.comparability_boundary + " forged"),
+        replace(row, claim_boundary=row.claim_boundary + " forged"),
+        replace(row, authority_references=(*row.authority_references, "docs/forged.md")),
+        replace(row, test_coverage=(*row.test_coverage, "tests/test_res71_adversarial.py")),
+    )
+
+    for mutation in mutations:
+        with pytest.raises(ValueError, match="differs from canonical row"):
+            validate_coverage_matrix((mutation, *rows[1:]))
+
+
 def test_manually_listed_unresolved_routes_bind_to_actual_refusals() -> None:
     unresolved = tuple(
         item
@@ -184,4 +260,35 @@ def test_gate_receipt_rejects_stale_or_self_referential_edits() -> None:
 
     for mutated in mutations:
         with pytest.raises(ValueError):
+            validate_gate_receipt(mutated)
+
+
+@pytest.mark.parametrize("replacement", [True, 1.0])
+def test_gate_receipt_rejects_nested_runtime_count_type_substitution(
+    replacement: bool | float,
+) -> None:
+    receipt = json.loads(RES71_GATE_RECEIPT_PATH.read_text(encoding="utf-8"))
+    receipt["RUNTIME_COUNTS"]["historical_replay_only"] = replacement
+
+    with pytest.raises(ValueError, match="RUNTIME_COUNTS"):
+        validate_gate_receipt(receipt)
+
+
+def test_gate_receipt_rejects_reintroduced_unchecked_status_fields() -> None:
+    receipt = json.loads(RES71_GATE_RECEIPT_PATH.read_text(encoding="utf-8"))
+    for field in (
+        "IDENTITY_PROVENANCE",
+        "NUMERICAL_QUALIFICATION",
+        "SCIENTIFIC_BOUNDARIES",
+        "DATASET_COMPATIBILITY",
+        "VERIFIER_REFERENCE_INTERFACE",
+        "IMPLICIT_LM_ARITHMETIC",
+        "UNREGISTERED_ACCEPTED_OPERATION",
+        "PROVENANCE_GAPS",
+        "CLAIM_AUTHORITY_BYPASS",
+        "SCIENTIFIC_BLOCKERS",
+    ):
+        mutated = copy.deepcopy(receipt)
+        mutated[field] = "PASS"
+        with pytest.raises(ValueError, match="unchecked fields"):
             validate_gate_receipt(mutated)
