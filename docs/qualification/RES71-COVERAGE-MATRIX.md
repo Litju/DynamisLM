@@ -3,7 +3,9 @@
 `build_coverage_matrix()` returns the machine-readable version. Every row has
 authoritative surfaces, registered operations (where applicable), unresolved
 capabilities, provenance boundary, comparability boundary, claim boundary,
-authority references and test paths.
+authority references and test paths. Validation keys supplied and canonical
+rows by `domain` and requires exact frozen-dataclass equality before preserving
+the existing domain and test-path checks.
 
 | V2 domain | Status | Explicit boundary / unresolved surface |
 |---|---|---|

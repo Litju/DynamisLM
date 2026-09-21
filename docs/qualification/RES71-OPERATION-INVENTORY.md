@@ -3,9 +3,11 @@
 The authoritative inventory is the immutable tuple returned by
 `dynamislm.qualification.build_registered_operation_inventory()`.
 `validate_registered_operation_inventory()` discovers every
-`RegistryReference` whose object type is `registered-operation` and requires an
-exact set match. A newly exposed operation therefore fails qualification until
-its contract is reviewed.
+`RegistryReference` whose object type is `registered-operation`, keys supplied
+and canonical rows by `operation_id`, and requires exact frozen-dataclass
+equality before route/path/runtime checks. A newly exposed operation or a
+metadata substitution therefore fails qualification until its contract is
+reviewed.
 
 Each row contains:
 

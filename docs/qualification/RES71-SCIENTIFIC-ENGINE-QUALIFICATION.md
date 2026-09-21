@@ -21,6 +21,29 @@ reason, refusal path, safe description and tests.
 
 The formal gate decision is sealed in `RES71-GATE-RECEIPT.json` after final QA.
 
+## RES-71 review-fix-002 qualification-integrity hardening
+
+Review-fix entry head: `dc29909a13fbb27d463632f2cd5c4f239c4cd07f`
+
+Qualified content head: `0a51127628f1bfc1f0b89064bf92d7fc2703ff39`
+
+The review fix canonically binds registered-operation rows by `operation_id`,
+unresolved-computation rows by `capability`, and coverage rows by `domain`.
+Supplied rows must equal freshly built canonical frozen records before route,
+path or refusal-runtime checks. The receipt comparison is recursively
+type-strict, including nested `RUNTIME_COUNTS` values.
+
+`RES71-GATE-RECEIPT.json` is deliberately narrow and runtime-authoritative.
+It contains only identity fields and evidence derived by
+`validate_gate_receipt()`. The former checklist assertions
+(`IDENTITY_PROVENANCE`, `NUMERICAL_QUALIFICATION`, `SCIENTIFIC_BOUNDARIES`,
+`DATASET_COMPATIBILITY`, `VERIFIER_REFERENCE_INTERFACE`,
+`IMPLICIT_LM_ARITHMETIC`, `UNREGISTERED_ACCEPTED_OPERATION`,
+`PROVENANCE_GAPS`, `CLAIM_AUTHORITY_BYPASS`, and `SCIENTIFIC_BLOCKERS`) are
+narrative qualification documentation, not unchecked fields in the sealed
+runtime receipt. CI results and test counts are handoff evidence outside that
+receipt.
+
 ## Entry and upstream authority
 
 The entry checks were performed before mutation:

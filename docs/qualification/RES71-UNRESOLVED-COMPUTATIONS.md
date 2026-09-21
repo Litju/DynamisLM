@@ -2,8 +2,9 @@
 
 Unsupported methods remain explicit and non-authoritative. The complete
 machine-readable set is returned by
-`build_unresolved_computation_inventory()` and validated by
-`validate_unresolved_computation_inventory()`.
+`build_unresolved_computation_inventory()`. Validation keys supplied and
+canonical rows by `capability` and requires exact frozen-dataclass equality
+before runtime refusal-route checks.
 
 ## Registered but not computed
 
