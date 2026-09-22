@@ -173,8 +173,10 @@ BenchmarkCaseV1 {
 
 `case_id` is never reused. A semantic mutation creates a new case ID or a new
 case version and a new hash; it never edits an existing frozen case. The
-`case_payload_hash` is computed over the canonical case payload before the
-manifest and split digests are attached.
+`case_payload_hash` is computed over the exact case-content projection defined
+in Section 2.6, before any split binding, split-manifest hash,
+contamination/exclusion-manifest hash, or final benchmark-manifest hash is
+attached.
 
 ### 2.2 Field-level contract
 
@@ -196,10 +198,10 @@ manifest and split digests are attached.
 | `scoring_contract` | Versioned scorer profile, required output fields, critical fields, accepted normalization, error-class rules, and task-level status policy. No global case weight is embedded. |
 | `tolerance_contract` | Required only for numeric fields. Contains units, absolute tolerance, relative tolerance, finite-value rule, and comparison rule. A tolerance is not a license to change the registered engine output. |
 | `provenance` | Mutually explicit origin class, authority lineage, creator/reviewer references, generator and seed metadata when applicable, parent case hash for mutations, source/artifact hashes, and derivation status. |
-| `split` | Immutable split name, split-manifest version/hash, allocation stratum, isolation cluster, and membership digest. |
-| `contamination` | Source/document/DOI IDs, text fingerprints, semantic-cluster ID, generator namespace/seed block, benchmark artifact IDs, and future training-exclusion identifiers. |
+| `split` | Split-bound metadata attached only after `case_payload_hash`: immutable split name, split-manifest version/hash, allocation stratum, isolation cluster, and membership digest. The whole field is outside the case-content projection and is covered by the split and final benchmark manifests. |
+| `contamination` | Case-content contamination facts: source/document/DOI IDs, text fingerprints, optional semantic-cluster ID, generator namespace/seed block, benchmark artifact IDs, and future training-exclusion identifiers. Derived aggregate manifest digests are not part of the case-content projection. |
 | `difficulty`, `adversarial_tags` | Registered difficulty level plus one or more controlled adversarial tags. These describe case construction and do not change authority or scoring. |
-| `case_payload_hash` | Canonical SHA-256 digest. A mismatch is a hard validation failure. |
+| `case_payload_hash` | Canonical SHA-256 digest of the Section 2.6 case-content projection. A mismatch is a hard validation failure; it never depends on split or aggregate-manifest state. |
 
 ### 2.3 Input contract
 
@@ -268,7 +270,121 @@ A refusal blocks the requested claim, not necessarily the underlying
 observation. A correct refusal therefore includes both the blocked claim and
 the strongest independently safe description.
 
-### 2.6 Case invariants
+### 2.6 Canonical hash and manifest construction
+
+All V1 hashes use Serialization V3 canonical JSON encoded as UTF-8 and
+SHA-256, rendered as `sha256:` followed by 64 lowercase hexadecimal
+characters. The canonical serializer sorts map keys and preserves declared
+tuple order. Hash inputs are exact-key objects; unknown keys are not silently
+included or ignored. No hash includes the field that stores that hash.
+
+The construction is strictly ordered and non-circular:
+
+1. **Case content projection.** Before split allocation, construct exactly
+   `CaseContentV1` with these keys and values from `BenchmarkCaseV1`:
+   `benchmark_version`, `schema_version`, `case_id`, `case_version`,
+   `capability_id`, `benchmark_family`, `practitioner_question_class`,
+   `question`, `input`, `source_evidence_refs`, `expected_answer`,
+   `authority`, `refusal_expectation`, `claim_contract`,
+   `comparability_contract`, `scoring_contract`, `tolerance_contract`,
+   `provenance`, `contamination`, `difficulty`, and `adversarial_tags`.
+   The `provenance` and `contamination` values in this projection contain
+   only their case-local source, generator, mutation, fingerprint, and
+   review facts. They must not contain a current case hash, split assignment,
+   split-manifest hash, contamination/exclusion-manifest hash, or final
+   benchmark-manifest hash.
+2. **Case payload hash.** Set
+   `case_payload_hash = SHA256(UTF8(canonical_json(CaseContentV1)))`.
+   The entire `split` field is excluded from `CaseContentV1`, as are
+   `case_payload_hash` itself and every derived/binding digest named in step
+   1. These exclusions are semantic: split allocation and aggregate
+   manifests cannot alter case meaning or retroactively alter a case hash.
+3. **Cluster allocation.** Validate the complete case set and allocate whole
+   isolation clusters using the deterministic procedure in Section 7.2. The
+   allocator consumes `case_id`, `case_payload_hash`, and the declared
+   isolation metadata; it never rewrites step 2.
+4. **Split membership records.** For each allocated case, construct exactly:
+
+   ```text
+   SplitMembershipRecordV1 {
+       benchmark_version
+       split_manifest_version
+       split_name
+       case_id
+       case_payload_hash
+       allocation_stratum
+       isolation_cluster_id
+   }
+   ```
+
+   `membership_digest` is the SHA-256 of this record's canonical JSON. The
+   final case artifact may then store `split_name`,
+   `split_manifest_version`, `split_manifest_hash`, `allocation_stratum`,
+   `isolation_cluster_id`, and `membership_digest` in `split`; all of these
+   are outside `case_payload_hash`.
+5. **Split manifests.** For each split, sort its membership records by
+   `case_id` UTF-8 bytes and then `case_payload_hash` bytes, and construct:
+
+   ```text
+   SplitManifestV1 {
+       benchmark_version
+       split_manifest_version
+       split_name
+       target_case_count
+       membership_records
+   }
+   ```
+
+   `split_manifest_hash` is the SHA-256 of that canonical JSON. The manifest
+   therefore commits to the case hashes and their split-bound metadata without
+   feeding its digest back into any case hash.
+6. **Authority and scorer manifests.** Construct an authority manifest from
+   the canonical, case-ID-keyed tuple of all `AuthorityBinding` records,
+   sorted by `(case_id, authority_kind, source_reference_id, version,
+   digest, governed_field_ids)`, plus the global RES-71 runtime authority
+   binding in Section 10.1. Construct a scorer manifest from the canonical,
+   case-ID-keyed tuple of each `ScoringContract` and its registered profile
+   definition, sorted by `(case_id, profile_id, profile_version)`. Each
+   manifest excludes its own digest. Hash each with the same V3/SHA-256 rule
+   to obtain `authority_manifest_hash` and `scorer_manifest_hash`.
+7. **Contamination/exclusion manifest.** After split assignment, construct
+   `PSE-V1-EXCLUSION-REGISTRY@1.0.0` from the exact `ExclusionEntry` records
+   in Section 9.1, including their case IDs, case payload hashes, and split
+   names. Sort entries by `(artifact_id, source_id, source_content_sha256,
+   normalized_text_sha256, exact_shingle_digest, fuzzy_fingerprint,
+   semantic_cluster_id, split_names)`. Include the fixed normalization,
+   mandatory detector rules, and the V1 optional-semantic-diagnostic policy
+   from Section 9.2. The stored `manifest_digest` key is excluded from the
+   hashed payload. `contamination_exclusion_manifest_hash` is the SHA-256 of
+   this canonical payload.
+8. **Final benchmark manifest.** Construct exactly:
+
+   ```text
+   BenchmarkManifestV1 {
+       benchmark_semantic_version
+       case_schema_version
+       case_entries: tuple({case_id, case_payload_hash}, ...)
+       split_manifests: tuple({split_name, split_manifest_version,
+                               split_manifest_hash}, ...)
+       authority_manifest_hash
+       scorer_manifest_hash
+       contamination_exclusion_manifest_hash
+   }
+   ```
+
+   Sort `case_entries` by `case_id` UTF-8 bytes and `split_manifests` by the
+   fixed split order in Section 7.2. `benchmark_manifest_hash` is the
+   SHA-256 of this canonical JSON, with no self-reference. It is the final
+   V1 identity for the complete case, split, authority, scorer, and exclusion
+   set.
+
+The only fields excluded from the case-content hash are the whole `split`
+binding, `case_payload_hash`, and derived aggregate/binding digests listed
+above. Those values remain integrity-protected by their own manifests and by
+the final benchmark manifest. A case hash must never depend on a split
+manifest that depends on that case hash.
+
+### 2.7 Case invariants
 
 The following are hard validation failures:
 
@@ -489,26 +605,109 @@ coverage constraints below cannot be met.
 
 ### 7.2 Deterministic allocation and balancing
 
-Allocation is performed once, after case validation and contamination audit:
+Allocation is performed once, after case validation and the mandatory
+contamination audit. The allocator input is the canonical set of cases and
+their case-content hashes; it never consumes a previously assigned split.
 
-1. Build an isolation cluster from source family/document, construct/test
-   identity, protocol/template, expert-author batch, generator family, and
-   mutation lineage.
-2. Assign the entire cluster atomically; no cluster may cross public,
-   validation, and hidden partitions.
-3. Within the eligible clusters, use a versioned deterministic hash of
-   `benchmark_version + isolation_cluster_id + origin_class + seed_block` to
-   produce the target allocation, then solve the registered balancing
-   constraints in canonical cluster order.
-4. Balance each split across all 14 families, all 18 capabilities, all eight
-   question classes, answer/refusal outcome, origin class, difficulty, and
-   critical-error eligibility. If a required cell cannot be filled without
-   leakage, generation stops with `STATUS=BLOCKED`.
-5. Each critical error class has eligible cases in validation and hidden
-   splits; each family and capability has answerable and boundary/refusal
-   coverage in validation and hidden splits where the capability applies.
-6. Freeze membership in `split-manifest@1.0.0`; changing membership creates a
-   new benchmark version and invalidates prior comparisons.
+#### Target counts and ordering
+
+Let `N` be the number of eligible cases. `N` must be positive. The fixed split
+order is:
+
+1. `PUBLIC_DEVELOPMENT`
+2. `FROZEN_VALIDATION`
+3. `HIDDEN_FINAL`
+
+For split proportions `(3/5, 1/5, 1/5)`, calculate ideal counts
+`q_s = N * proportion_s`, set `T_s = floor(q_s)`, and distribute the
+remaining `N - sum(T_s)` cases one at a time to splits in descending order of
+`q_s - floor(q_s)`, breaking equal fractional remainders by the fixed split
+order above. The resulting integer `T_s` values are the exact target counts
+recorded in the split manifests. The permitted target-count deviation is
+exactly zero: every valid allocation must satisfy
+`actual_count_s = T_s` for all three splits.
+
+#### Isolation clusters and deterministic keys
+
+Build one isolation cluster from the union of source family/document,
+construct/test identity, protocol/template, expert-author batch, generator
+family, and mutation lineage. A cluster is atomic and may not cross splits.
+For each cluster, construct this exact hash input, with member records sorted
+by `case_id` UTF-8 bytes:
+
+```text
+ClusterKeyInput {
+    benchmark_version
+    isolation_cluster_id
+    member_case_keys: tuple({case_id, case_payload_hash}, ...)
+    allocation_strata: tuple[string, ...]
+    origin_classes: tuple[string, ...]
+    generator_seed_blocks: tuple[string, ...]
+}
+```
+
+`cluster_key` is the lowercase hexadecimal SHA-256 digest of the V3 canonical
+JSON for this object without the `sha256:` display prefix. Clusters are
+ordered by `(cluster_key, isolation_cluster_id)` using UTF-8 byte order. The
+preferred split rank for a cluster is
+`integer(cluster_key, base 16) modulo 3`; it is a deterministic preference,
+not permission to violate a hard constraint.
+
+#### Hard constraints and soft balancing
+
+An assignment is eligible only when all of these hard constraints hold:
+
+- every case is assigned to exactly one split;
+- every isolation cluster is assigned atomically;
+- each split has its exact `T_s` count, with zero deviation;
+- no source family, provider export, protocol template, author batch,
+  generator seed block, or mutation lineage crosses splits;
+- every applicable coverage obligation marked `D/V/H` in Section 12 is
+  present in each required split, including the answerable and
+  boundary/refusal coverage declared by that row; and
+- a critical-error class required by Section 5 and Section 12 has an eligible case in
+  `FROZEN_VALIDATION` and `HIDDEN_FINAL`.
+
+The following are soft balancing dimensions, applied for every cell present in
+the canonical case set: all 14 families, all 18 capabilities, all eight
+question classes, answer/refusal outcome, origin class, difficulty, and
+critical-error eligibility. A multi-tag case contributes to each declared
+tag cell. Soft balance never overrides a hard constraint.
+
+#### Assignment objective and tie-breaking
+
+For every assignment satisfying the hard constraints, let `n(s,d)` be the
+number of cases in split `s` and soft-balance cell `d`, `N_d` the total number
+of cases in cell `d`, and `T_s` the exact target count. Minimize the integer
+proportional-imbalance cost:
+
+```text
+C_balance = sum over d,s of abs(N * n(s,d) - T_s * N_d)
+```
+
+Then minimize the integer hash-preference cost:
+
+```text
+C_hash = sum over clusters c of size(c)
+         * (assigned_split_rank(c) != preferred_split_rank(c))
+```
+
+Finally, choose the lexicographically smallest assignment vector of split
+ranks for the clusters in the canonical `(cluster_key, isolation_cluster_id)`
+order. This three-level objective is the complete tie-break rule. An
+implementation may use deterministic exhaustive search or deterministic
+branch-and-bound, but it must return the same lexicographic argmin; an
+optimizer, thread schedule, library version, or random seed may not decide a
+tie.
+
+Generation fails closed with `STATUS=BLOCKED` when `N` is zero, a required
+coverage cell has no eligible case, exact target counts cannot be formed from
+atomic clusters, no assignment satisfies all hard constraints, or any
+mandatory contamination/isolation check is unresolved. There is no
+best-effort allocation and no nonzero target-count deviation. Freeze
+membership in `split-manifest@1.0.0`; changing membership creates a new
+benchmark version and invalidates prior comparisons. The same canonical
+case/cluster set therefore always produces identical split membership.
 
 ### 7.3 Access and isolation controls
 
@@ -555,8 +754,23 @@ structured rubric, not the reviewer’s preference.
 
 ### 8.2 Numeric and structured semantics
 
-- Numeric fields use the case tolerance, not a benchmark-wide arbitrary
-  tolerance. Nonfinite outputs fail.
+- `NUMERIC_TOLERANCE_V1` is exactly the following rule for finite real scalar
+  `actual`, finite real scalar `expected`, and the registered `abs_tol` and
+  `rel_tol`:
+
+  ```text
+  abs_error = abs(actual - expected)
+
+  relative_error = abs_error / abs(expected)  when expected != 0
+  ```
+
+  The numeric field passes when `abs_error <= abs_tol` or, only when
+  `expected != 0`, `relative_error <= rel_tol`. When `expected == 0`, the
+  relative criterion is not evaluated and absolute tolerance alone governs.
+  `actual`, `expected`, `abs_tol`, and `rel_tol` must all be finite;
+  `abs_tol >= 0` and `rel_tol >= 0` are required. Exact registered unit and
+  field identity is mandatory. No unit conversion is performed unless a
+  registered transformation is part of the case authority.
 - A unit mismatch fails even when the number is numerically convertible unless
   the expected answer explicitly contains a registered transformation.
 - A classification answer is correct only when the controlled label and
@@ -639,6 +853,8 @@ The registry covers source documents, evidence excerpts, benchmark prompts,
 structured answers, generated artifacts, rubrics, and manifests. It is
 versioned and hash-bound. All V1 artifact IDs and fingerprints are excluded
 from future training-corpus construction, including public-development cases.
+`semantic_cluster_id` is optional metadata and is not a mandatory result of a
+semantic detector in V1.
 
 ### 9.2 Detection rules
 
@@ -654,18 +870,24 @@ The frozen contamination audit runs in this order:
    5-gram Jaccard and normalized character 5-gram Jaccard. A candidate with
    either score at or above `0.85`, or normalized edit similarity at or above
    `0.90`, is a contamination review failure until explicitly adjudicated.
-4. **Semantic duplication where feasible:** run the pinned semantic-duplicate
-   detector declared by `contamination.detector_version` over candidate pairs.
-   The detector is a screening mechanism, never a ground-truth judge. Every
-   candidate above its registered threshold receives an expert disposition;
-   an unresolved candidate cannot enter validation or hidden splits.
+4. **Optional semantic-duplicate diagnostics:** V1 does not freeze a semantic-
+   duplicate detector, version, dependency set, threshold, or runtime. An
+   implementation may record a semantic-duplication diagnostic, but it is
+   non-gating metadata only: it cannot accept or reject a case, alter split
+   membership, create ground truth, or block a manifest. If such a diagnostic
+   is recorded, its detector/version/runtime/threshold are provenance fields;
+   their absence means `NOT_APPLICABLE`, not `BLOCKED`.
 5. **Source-family isolation:** a source family, DOI family, provider export,
    protocol template, expert-author batch, or generator/mutation lineage may
    not cross a split boundary.
 
-The normalization and detector versions, thresholds, candidate decisions, and
-reviewer evidence are stored in the contamination audit manifest. A missing
-detector or unresolved candidate is `BLOCKED`, not silently accepted.
+The mandatory V1 contamination authority is exactly the deterministic identity
+and content-hash checks in steps 1–3, source-family isolation in step 5, and
+the disjoint seed/mutation isolation in Section 9.3. Their normalization,
+thresholds, candidate decisions, and reviewer evidence are stored in the
+contamination audit manifest. A failure or unresolved decision in a mandatory
+check is `BLOCKED`; a missing optional semantic diagnostic or unresolved
+optional diagnostic is not.
 
 ### 9.3 Generated-seed isolation
 
@@ -701,7 +923,9 @@ PSE-V1-EXCLUSION-MANIFEST@1.0.0 {
 
 Corpus construction must fail closed when the manifest digest is absent,
 stale, or unverifiable. It must reject exact, normalized/fuzzy, and known
-semantic-cluster matches before training data is materialized. The interface
+semantic-cluster matches backed by deterministic lineage or explicit
+adjudication before training data is materialized. Optional V1 semantic
+diagnostics do not create mandatory exclusion matches. The interface
 identifies hidden artifacts by digest/ID without granting the training
 workflow access to hidden payloads or answers.
 
@@ -722,18 +946,34 @@ The implementation must emit and record:
 - benchmark manifest hash/digest over canonical sorted case, split, authority,
   scorer, and exclusion references.
 
-The current RES-71 references consumed by V1 are:
+The current RES-71 runtime authority consumed by V1 is exactly:
 
 ```text
-RES71_REFERENCE_INTERFACE_VERSION = res71-reference-interface@1.0.0
-RES71_REFERENCE_CASE_DIGEST = sha256:d29d84699b7cf70c2d409d370c5ffd6c7ad7cd704375b14b541527a95fa385e5
-RES71_VERIFIER_MANIFEST_DIGEST = sha256:9807b6e0be63abd44135bc855a97d37775ef09763d25c0f7025f4395ab673af6
+RES71_REFERENCE_INTERFACE_ID = res71-reference-interface
+RES71_REFERENCE_INTERFACE_VERSION = 1.0.0
+RES71_REFERENCE_INTERFACE_BINDING = res71-reference-interface@1.0.0
+RES71_SEALED_REFERENCE_DIGEST = sha256:d29d84699b7cf70c2d409d370c5ffd6c7ad7cd704375b14b541527a95fa385e5
 RES71_SERIALIZATION_VERSION = 3
 RES71_QUALIFIED_CONTENT_HEAD = 0a51127628f1bfc1f0b89064bf92d7fc2703ff39
+RES71_GATE_RECEIPT = docs/qualification/RES71-GATE-RECEIPT.json
+RES71_GATE_RUNTIME_VALIDATOR = dynamislm.qualification.gate:validate_gate_receipt()
+RES71_GATE_RUNTIME_VALIDATION = PASS
 ```
 
-The reference-case digest and qualification/verifier-manifest digest are
-different artifacts and must not be substituted for one another.
+`RES71_SEALED_REFERENCE_DIGEST` is produced by the live
+`dynamislm.qualification.reference_case_digest()` interface after
+`validate_reference_cases()` and is pinned by the reference-interface tests.
+`validate_gate_receipt()` must pass against the checked-in gate receipt and
+recompute the registered-operation inventory, coverage matrix, unresolved-
+computation inventory, reference-case digest, Serialization V3, and qualified
+content head at benchmark generation and verification time. A digest or
+runtime-validation mismatch makes the bound authority stale and blocks the
+benchmark operation.
+
+V1 deliberately freezes no verifier-manifest digest. The historical value
+appearing in narrative qualification documentation has no live canonical
+producer and validator in the current runtime, so it is not benchmark
+authority and must not be copied into a V1 manifest.
 
 ### 10.2 Version bump rules
 
@@ -759,11 +999,11 @@ interfaces:
 | --- | --- |
 | Registered operation inventory | Resolve `build_registered_operation_inventory()` and its validation result. Store operation ID, method version, family, disposition, input/output/provenance/refusal contracts, tolerance, and authority references in the case binding. Caller formulas, thresholds, operation IDs, or comparability overrides are rejected. |
 | Unresolved-computation inventory | Resolve `build_unresolved_computation_inventory()`. Use its capability, disposition, expected refusal class, reason codes, safe description, and refusal path for negative/refusal cases. Deferred/represented/rejected work is a scored scientific outcome, not a hole to fill. |
-| Reference cases | Consume `get_reference_case(s)`, `reference_case_manifest()`, and `reference_case_digest()` from `dynamislm.qualification`. Pin `res71-reference-interface@1.0.0` and the exact reference digest above. Later verifier code invokes the registered operation and compares its typed result/refusal; it does not calculate from the expected scalar itself. |
+| Reference cases | Consume `get_reference_case(s)`, `reference_case_manifest()`, and `reference_case_digest()` from `dynamislm.qualification`; run `validate_reference_cases()` and require `RES71_REFERENCE_INTERFACE_VERSION` plus `RES71_SEALED_REFERENCE_DIGEST` to match the runtime output. Later verifier code invokes the registered operation and compares its typed result/refusal; it does not calculate from the expected scalar itself. |
 | Claim authority | Consume RES-70 `authorize_claim` and `validate_claim_authority`, exact claim intent/support/analysis/comparability/evidence hashes, allowed lower levels, and refusal result. A model proposal cannot mint an authorized claim. |
 | Comparability authority | Consume RES-70 `assess_cross_source_comparability`, exact observation/provenance references, pairwise decision, material dimension findings, bridge execution, conditions, registry version/hash, and refusal. No label/unit/correlation/transitive shortcut is accepted. |
 | Refusal taxonomy | Use the existing `RefusalClass`, `RefusalReasonCode`, `RefusalResult`, RES-70 reason codes, and RES-71 unresolved expected codes. Preserve blocked claim, missing information, safe descriptions, observation IDs, and evidence references. |
-| Deterministic reference digest | Bind every engine-derived case to the exact reference/manifest digest and current qualified content head. If the digest or runtime validation differs, the case is stale and the benchmark generation/verification gate fails. |
+| RES-71 runtime authority | Bind every engine-derived case to the exact `RES71_REFERENCE_INTERFACE_VERSION`, `RES71_SEALED_REFERENCE_DIGEST`, Serialization V3, `RES71_QUALIFIED_CONTENT_HEAD`, and a passing `validate_gate_receipt()` runtime check against `RES71-GATE-RECEIPT.json`. If any value or runtime validation differs, the case is stale and the benchmark generation/verification gate fails. No narrative verifier-manifest digest is accepted. |
 
 The RES-71 reference adapter is a reference contract, not a second numerical
 engine. No V1 code may add a parallel formula, alternate tolerance, hidden
@@ -841,6 +1081,11 @@ mission and blocks V1 implementation until requalified.
 | Case provenance | `FROZEN` |
 | Scoring contract | `FROZEN` |
 | Contamination contract | `FROZEN` |
+| RES-71 digest authority | `FROZEN` |
+| Case hash and manifest construction | `FROZEN` |
+| Semantic contamination policy | `FROZEN` |
+| Deterministic split allocator | `FROZEN` |
+| Numeric tolerance | `FROZEN` |
 | Versioning freeze | `FROZEN` |
 | RES-71 integration | `FROZEN` |
 | Acceptance matrix | `PASS` |
