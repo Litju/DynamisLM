@@ -7,23 +7,33 @@ import pytest
 from dynamislm.benchmark import (
     CandidateAnswer,
     ErrorClass,
+    ExclusionRegistry,
     HiddenAccessRequest,
     HiddenStoreDescriptor,
     Principal,
     SplitName,
     TaskOutcome,
+    allocate_splits,
     audit_contamination,
+    bind_case_payload,
     bind_res71_operation,
     bind_res71_refusal,
+    build_contamination_report,
+    build_error_event_report,
     build_fixture_allocation,
     build_fixture_exclusion_registry,
     build_fixture_manifest_bundle,
     build_res71_runtime_binding,
     build_synthetic_reference_fixture_cases,
     coverage_manifest_digest,
+    coverage_obligation_count,
+    make_authority_binding,
+    minimum_full_coverage_case_count,
     preflight_hidden_access,
     preflight_training_exclusion,
     score_case,
+    target_counts,
+    validate_authority_binding,
     validate_case,
     validate_case_coverage,
     validate_case_payload_hash,
@@ -35,7 +45,12 @@ from dynamislm.benchmark import (
     validate_res71_runtime_binding,
     validate_split_assignment,
 )
-from dynamislm.benchmark.constants import CaseOrigin, PreflightStatus
+from dynamislm.benchmark.constants import (
+    AuthorityKind,
+    CaseOrigin,
+    PreflightStatus,
+    ScoringProfile,
+)
 from dynamislm.benchmark.contracts import BenchmarkCaseV1
 from dynamislm.serialization import canonical_json, from_canonical_json
 
@@ -120,6 +135,74 @@ def test_authority_and_provenance_fail_closed() -> None:
                 ),
             )
         )
+
+
+def test_res60_res62_res69_bindings_reject_cross_authority_forgery() -> None:
+    population = make_authority_binding(
+        AuthorityKind.RES60_POPULATION,
+        governed_field_ids=("expected_answer",),
+    )
+    provenance = make_authority_binding(
+        AuthorityKind.RES62_PROVENANCE,
+        governed_field_ids=("expected_answer",),
+    )
+    statistics = make_authority_binding(
+        AuthorityKind.RES69_STATISTICS,
+        governed_field_ids=("expected_answer",),
+    )
+    for binding in (population, provenance, statistics):
+        validate_authority_binding(binding)
+    with pytest.raises(ValueError):
+        validate_authority_binding(replace(population, digest=provenance.digest))
+    with pytest.raises(ValueError):
+        validate_authority_binding(replace(provenance, version="0.0.0"))
+    with pytest.raises(ValueError):
+        make_authority_binding(
+            AuthorityKind.RES69_STATISTICS,
+            source_reference_id=population.source_reference_id,
+            governed_field_ids=("expected_answer",),
+        )
+
+
+def test_ground_truth_and_mutation_contracts_reject_forged_metadata() -> None:
+    cases = build_synthetic_reference_fixture_cases()
+    engine = cases[0]
+    missing_expected = bind_case_payload(
+        replace(
+            engine,
+            expected_answer=replace(
+                engine.expected_answer,
+                required_field_ids=("value", "missing"),
+            ),
+            case_payload_hash="sha256:" + "0" * 64,
+        )
+    )
+    with pytest.raises(ValueError, match="absent from expected_fields"):
+        validate_case(missing_expected)
+    missing_authority = bind_case_payload(
+        replace(
+            engine,
+            authority=tuple(
+                replace(binding, governed_field_ids=("input.deterministic_results",))
+                for binding in engine.authority
+            ),
+            case_payload_hash="sha256:" + "0" * 64,
+        )
+    )
+    with pytest.raises(ValueError, match="not covered"):
+        validate_case(missing_authority)
+    mutation = next(
+        case for case in cases if case.provenance.origin_class is CaseOrigin.ADVERSARIAL_MUTATION
+    )
+    forged_mutation = bind_case_payload(
+        replace(
+            mutation,
+            provenance=replace(mutation.provenance, changed_fields=("question",)),
+            case_payload_hash="sha256:" + "0" * 64,
+        )
+    )
+    with pytest.raises(ValueError, match="changed_fields"):
+        validate_case_set(tuple(forged_mutation if case is mutation else case for case in cases))
     with pytest.raises(ValueError):
         replace(engine.provenance.review, approval_status="PENDING")
 
@@ -165,6 +248,80 @@ def test_split_allocator_is_deterministic_exact_and_lineage_atomic() -> None:
         validate_split_assignment(allocated)
 
 
+def test_split_allocator_qualifies_the_frozen_benchmark_scale() -> None:
+    """The allocator must handle the first exact-count feasible matrix scale."""
+
+    from dataclasses import replace
+
+    from dynamislm.benchmark.hashing import bind_case_payload
+
+    assert coverage_obligation_count() == 87
+    assert minimum_full_coverage_case_count() == 434
+    assert target_counts(434) == {
+        SplitName.PUBLIC_DEVELOPMENT: 260,
+        SplitName.FROZEN_VALIDATION: 87,
+        SplitName.HIDDEN_FINAL: 87,
+    }
+
+    template = next(
+        case
+        for case in build_synthetic_reference_fixture_cases()
+        if case.provenance.origin_class is CaseOrigin.DETERMINISTIC_SYNTHETIC
+    )
+    scale_cases = []
+    for index in range(434):
+        case_id = f"scale-fixture-{index:03d}"
+        namespace = f"PSE-V1/scale/fixture-generator/{index:03d}"
+        seed_block = f"seed-{index:04d}"
+        scale_cases.append(
+            bind_case_payload(
+                replace(
+                    template,
+                    case_id=case_id,
+                    question=f"{template.question} Fixture member {index}.",
+                    input=replace(
+                        template.input,
+                        question_text=f"{template.question} Fixture member {index}.",
+                    ),
+                    provenance=replace(
+                        template.provenance,
+                        seed_namespace=namespace,
+                        seed_block=seed_block,
+                        generator_family=f"scale-generator-family-{index:03d}",
+                    ),
+                    split=replace(
+                        template.split,
+                        isolation_cluster_id=f"scale-cluster-{index:03d}",
+                    ),
+                    contamination=replace(
+                        template.contamination,
+                        source_family_id=f"scale-source-{index:03d}",
+                        protocol_template_id=f"scale-template-{index:03d}",
+                        expert_author_batch_id=f"scale-batch-{index:03d}",
+                        artifact_ids=(f"scale-artifact-{index:03d}",),
+                        benchmark_artifact_ids=(f"scale-artifact-{index:03d}",),
+                        training_exclusion_ids=(f"scale-exclusion-{index:03d}",),
+                        generator_namespace=namespace,
+                        generator_seed_block=seed_block,
+                    ),
+                    case_payload_hash="sha256:" + "0" * 64,
+                )
+            )
+        )
+    cases = tuple(scale_cases)
+    first = allocate_splits(cases)
+    second = allocate_splits(cases)
+    assert first.cases == second.cases
+    assert tuple(
+        sum(case.split.split_name is split for case in first.cases)
+        for split in (
+            SplitName.PUBLIC_DEVELOPMENT,
+            SplitName.FROZEN_VALIDATION,
+            SplitName.HIDDEN_FINAL,
+        )
+    ) == (260, 87, 87)
+
+
 def test_contamination_registry_runs_exact_and_fuzzy_mandatory_checks() -> None:
     allocation = build_fixture_allocation()
     registry = build_fixture_exclusion_registry(allocation)
@@ -192,6 +349,12 @@ def test_contamination_registry_runs_exact_and_fuzzy_mandatory_checks() -> None:
         approved_overlap_artifact_ids=(reference.artifact_id,),
     )
     assert approved.status == "PASS"
+    no_private_index = ExclusionRegistry(entries=registry.entries)
+    blocked_without_private_text = audit_contamination(exact_candidate, no_private_index)
+    assert blocked_without_private_text.status == "BLOCKED"
+    report = build_contamination_report(approved)
+    assert report.audit_label == "PSE_V1_CONTAMINATION_AUDIT=PASS"
+    assert report.pretraining_exposure == "UNKNOWN"
 
 
 def test_manifest_bundle_rejects_stale_bindings_and_hidden_training_access() -> None:
@@ -246,6 +409,64 @@ def test_manifest_bundle_rejects_stale_bindings_and_hidden_training_access() -> 
         preflight_training_exclusion(None, expected_manifest_hash=None).status
         is PreflightStatus.BLOCKED
     )
+
+
+def test_exclusion_preflight_rejects_incomplete_artifact_inventory() -> None:
+    bundle = build_fixture_manifest_bundle()
+    incomplete = replace(
+        bundle.exclusion_manifest,
+        entries=bundle.exclusion_manifest.entries[1:],
+    )
+    from dynamislm.benchmark.hashing import bind_exclusion_manifest
+
+    incomplete = bind_exclusion_manifest(incomplete)
+    result = preflight_training_exclusion(
+        incomplete,
+        expected_manifest_hash=incomplete.manifest_digest,
+    )
+    assert result.status is PreflightStatus.BLOCKED
+
+
+def test_error_reports_fail_closed_for_positive_events_without_denominators() -> None:
+    bundle = build_fixture_manifest_bundle()
+    engine = next(case for case in bundle.cases if case.capability_id == "C08")
+    result = score_case(engine, {"fields": {"value": 999.0}, "unit": "m"})
+    with pytest.raises(ValueError, match="no eligible case denominator"):
+        build_error_event_report((result,), cases=())
+
+
+def test_calibration_profile_is_explicitly_not_scored_until_runner_support() -> None:
+    engine = next(
+        case
+        for case in build_synthetic_reference_fixture_cases()
+        if case.provenance.origin_class is CaseOrigin.DETERMINISTIC_ENGINE_DERIVED
+    )
+    calibration = bind_case_payload(
+        replace(
+            engine,
+            expected_answer=replace(
+                engine.expected_answer,
+                required_field_ids=("probabilities",),
+                expected_fields={"probabilities": ("PASS", "FAIL")},
+            ),
+            scoring_contract=replace(
+                engine.scoring_contract,
+                profile_id=ScoringProfile.CALIBRATION_V1,
+                required_output_fields=("probabilities",),
+                critical_fields=("probabilities",),
+                error_attribution=(
+                    ("probabilities", ErrorClass.INVENTED_NUMERICAL_SCIENCE),
+                    ("__over_refusal__", ErrorClass.OVER_REFUSAL),
+                ),
+            ),
+            case_payload_hash="sha256:" + "0" * 64,
+        )
+    )
+    calibration_score = score_case(
+        calibration,
+        {"fields": {"probabilities": {"PASS": 1.0}}},
+    )
+    assert calibration_score.outcome is TaskOutcome.NOT_SCORED
 
 
 def test_scorers_apply_exact_unit_zero_tolerance_and_refusal_contract() -> None:
