@@ -777,6 +777,32 @@ def test_exclusion_preflight_rejects_incomplete_artifact_inventory() -> None:
     assert result.status is PreflightStatus.BLOCKED
 
 
+def test_exclusion_preflight_rejects_conflicting_case_hashes_without_private_cases() -> None:
+    from dynamislm.benchmark.hashing import bind_exclusion_manifest
+
+    bundle = build_fixture_manifest_bundle()
+    case_id = bundle.cases[0].case_id
+    entries = tuple(
+        replace(
+            entry,
+            benchmark_case_hashes=("sha256:" + "f" * 64,),
+        )
+        if entry.artifact_id == f"prompt:{case_id}"
+        else entry
+        for entry in bundle.exclusion_manifest.entries
+    )
+    conflicting = bind_exclusion_manifest(
+        replace(bundle.exclusion_manifest, entries=entries, manifest_digest="sha256:" + "0" * 64)
+    )
+
+    result = preflight_training_exclusion(
+        conflicting,
+        expected_manifest_hash=conflicting.manifest_digest,
+    )
+    assert result.status is PreflightStatus.BLOCKED
+    assert "conflicting hashes for case" in result.reason
+
+
 def test_error_reports_fail_closed_for_positive_events_without_denominators() -> None:
     bundle = build_fixture_manifest_bundle()
     engine = next(case for case in bundle.cases if case.capability_id == "C08")

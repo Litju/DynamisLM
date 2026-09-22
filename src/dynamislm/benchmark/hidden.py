@@ -218,13 +218,20 @@ def preflight_training_exclusion(
                 actual_hash,
             )
     else:
-        case_pairs = {
-            case_id: case_hash
-            for entry in entries
+        case_pairs: dict[str, str] = {}
+        for entry in entries:
             for case_id, case_hash in zip(
                 entry.benchmark_case_ids, entry.benchmark_case_hashes, strict=True
-            )
-        }
+            ):
+                prior_hash = case_pairs.get(case_id)
+                if prior_hash is not None and prior_hash != case_hash:
+                    return HiddenPreflightResult(
+                        PreflightStatus.BLOCKED,
+                        f"exclusion registry has conflicting hashes for case: {case_id}",
+                        None,
+                        actual_hash,
+                    )
+                case_pairs[case_id] = case_hash
         if not case_pairs:
             return HiddenPreflightResult(
                 PreflightStatus.BLOCKED,
