@@ -178,6 +178,16 @@ in Section 2.6, before any split binding, split-manifest hash,
 contamination/exclusion-manifest hash, or final benchmark-manifest hash is
 attached.
 
+For source-backed ground truth, `source_artifact_ids` and
+`source_content_digests` are positionally paired and must resolve to the same
+source identity/digest pairs in the typed source-reference or evidence-excerpt
+envelope. `SOURCE_DOCUMENT` authority binds that exact source-reference ID,
+version, and digest and must agree with source provenance.
+`SOURCE_EVIDENCE_SPAN` authority binds the exact `EvidenceExcerpt.excerpt_id`,
+the excerpt digest, and its source-reference version, source ID, and locator.
+The provenance tuple cannot self-authorize an identity or digest that is
+absent from the typed envelope.
+
 ### 2.2 Field-level contract
 
 | Field | Required semantics and invariants |
@@ -195,11 +205,11 @@ attached.
 | `refusal_expectation` | Whether refusal is required, allowed, or prohibited; expected refusal class; required reason codes; missing-information fields; blocked claim; and safe descriptions. |
 | `claim_contract` | Requested claim/estimand, maximum supported claim level, lower-level claims that remain safe, and prohibited escalation. Claim levels are axis-specific. |
 | `comparability_contract` | Claim-relative requested state, material dimensions, dimension findings, conditions, transformations, and whether comparison is not applicable. Pairwise comparability is never inferred transitively. |
-| `scoring_contract` | Versioned scorer profile, required output fields, critical fields, accepted normalization, error-class rules, and task-level status policy. No global case weight is embedded. |
+| `scoring_contract` | Versioned scorer profile, required output fields, critical fields, accepted normalization, declared error-class rules, explicit field/error attribution, and task-level status policy. No global case weight is embedded. |
 | `tolerance_contract` | Required only for numeric fields. Contains units, absolute tolerance, relative tolerance, finite-value rule, and comparison rule. A tolerance is not a license to change the registered engine output. |
 | `provenance` | Mutually explicit origin class, authority lineage, creator/reviewer references, generator and seed metadata when applicable, parent case hash for mutations, source/artifact hashes, and derivation status. |
 | `split` | Split-bound metadata attached only after `case_payload_hash`: immutable split name, split-manifest version/hash, allocation stratum, isolation cluster, and membership digest. The whole field is outside the case-content projection and is covered by the split and final benchmark manifests. |
-| `contamination` | Case-content contamination facts: source/document/DOI IDs, text fingerprints, optional semantic-cluster ID, generator namespace/seed block, benchmark artifact IDs, and future training-exclusion identifiers. Derived aggregate manifest digests are not part of the case-content projection. |
+| `contamination` | Case-content contamination facts: source/document/DOI and construct/test identity IDs, text fingerprints, optional semantic-cluster ID, generator namespace/seed block, benchmark artifact IDs, and future training-exclusion identifiers. Derived aggregate manifest digests are not part of the case-content projection. |
 | `difficulty`, `adversarial_tags` | Registered difficulty level plus one or more controlled adversarial tags. These describe case construction and do not change authority or scoring. |
 | `case_payload_hash` | Canonical SHA-256 digest of the Section 2.6 case-content projection. A mismatch is a hard validation failure; it never depends on split or aggregate-manifest state. |
 
@@ -646,6 +656,11 @@ ClusterKeyInput {
 }
 ```
 
+`generator_seed_blocks` is the sorted unique tuple of every non-empty seed
+block recorded in either provenance or contamination metadata. Isolation checks
+retain both metadata values if both are present, so a disagreement cannot
+silently drop one identity.
+
 `cluster_key` is the lowercase hexadecimal SHA-256 digest of the V3 canonical
 JSON for this object without the `sha256:` display prefix. Clusters are
 ordered by `(cluster_key, isolation_cluster_id)` using UTF-8 byte order. The
@@ -660,8 +675,9 @@ An assignment is eligible only when all of these hard constraints hold:
 - every case is assigned to exactly one split;
 - every isolation cluster is assigned atomically;
 - each split has its exact `T_s` count, with zero deviation;
-- no source family, provider export, protocol template, author batch,
-  generator seed block, or mutation lineage crosses splits;
+- no source family, document identity, construct/test identity, provider
+  export, protocol template, author batch, generator family/seed namespace or
+  seed block, or mutation lineage crosses splits;
 - every applicable coverage obligation marked `D/V/H` in Section 12 is
   present in each required split, including the answerable and
   boundary/refusal coverage declared by that row; and
@@ -777,7 +793,7 @@ evidence:
 | `COMPARABILITY_V1` | Exact state match is primary; material dimension findings, reasons, conditions, and bridge/transformation fields are separately scored. |
 | `REFUSAL_V1` | Refusal decision, class, reason codes, blocked claim, missing information, and safe description are separately scored. |
 | `CAUSAL_BOUNDARY_V1` | Claim level and prohibited causal/latent language are checked against the authority; causal-boundary violations are separately counted. |
-| `CALIBRATION_V1` | Optional only for a registered mutually exclusive classification task with a valid probability vector. Report Brier/ECE with a declared sample-size floor; otherwise calibration is `NOT_SCORED`. |
+| `CALIBRATION_V1` | Registered as an unsupported diagnostic profile. The current scorer returns `NOT_SCORED` for every case using it; no probability vector, Brier score, or ECE is scored until separately implemented and authorized. |
 
 There is no model-as-judge profile. A human expert may review an implementation
 dispute, but the frozen ground truth remains the authority binding and the
@@ -829,6 +845,26 @@ Refusal metrics are reported at two levels:
 `OVER_REFUSAL`, `UNDER_SPECIFIED_REFUSAL`, and `EXCESSIVE_CONSERVATISM` are
 not hidden inside precision/recall; each has its own rate.
 
+### Explicit error attribution
+
+`ScoringContract.error_attribution` is an immutable tuple of
+`(field_id, ErrorClass)` bindings. Each required output field must have an
+explicit binding or use the declared `__default__` binding. Error classes must
+be present in that case's `error_class_rules`. The scorer uses these exact
+bindings and does not infer a class from field names.
+
+The reserved attribution keys are:
+
+- `__decision__` for a candidate accepting a required-refusal claim;
+- `__over_refusal__` for a refusal on a case whose refusal decision is
+  prohibited;
+- `__refusal__` for an incomplete structured refusal; and
+- `__prohibited_claim__` for a structured prohibited claim.
+
+Construction validation requires the applicable reserved keys for each case's
+refusal and prohibited-claim policy. Missing attribution fails case validation
+before scoring.
+
 ### 8.4 Task outcomes
 
 The case outcome is assigned by this precedence:
@@ -847,6 +883,13 @@ The case outcome is assigned by this precedence:
 - `REFUSAL_INCORRECT`: a refusal-required case is accepted, or an answerable
   case is refused, or the refusal class/decision is wrong. The corresponding
   over-refusal or false-acceptance error is recorded.
+- `NOT_SCORED`: a distinct non-score outcome currently returned by
+  `CALIBRATION_V1`. It has no field scores or error events and is not a
+  pass/fail outcome. The current error-event report derives eligible
+  denominators from the supplied case contracts and may include these cases;
+  that denominator is not a calibration score. The profile remains
+  unimplemented until a separately authorized change defines and qualifies
+  probability validation, scoring, and any sample floor.
 
 `REFUSAL_CORRECT` and `REFUSAL_INCORRECT` are task outcomes, not a replacement
 for per-field scores. The benchmark report must retain case-level evidence,
@@ -877,6 +920,7 @@ ExclusionEntry {
     benchmark_case_hashes
     split_names
     exclusion_reason
+    membership_digests
 }
 ```
 
@@ -886,6 +930,23 @@ versioned and hash-bound. All V1 artifact IDs and fingerprints are excluded
 from future training-corpus construction, including public-development cases.
 `semantic_cluster_id` is optional metadata and is not a mandatory result of a
 semantic detector in V1.
+
+Case associations are canonical tuples ordered by case ID in UTF-8 byte order;
+case IDs are unique within an entry and `benchmark_case_hashes` align
+positionally. `split_names` are unique and use the fixed D/V/H order.
+`membership_digests`, when present, align positionally with those case IDs and
+must equal each case's current split membership digest. The core `case`,
+`prompt`, `answer`, `rubric`, and `split` artifact IDs are case-scoped. Shared
+source/document, generator, RES-71 reference, mutation-parent, and other shared
+artifact IDs have one registry entry whose ordered bindings enumerate every
+case that requires that identity. Shared entries bind the exact associated
+case/hash set and the exact unique split set. Stale, duplicate, missing, or
+conflicting case associations fail closed. `split:<case_id>` always binds one
+case and its exact membership digest.
+
+Training-exclusion preflight without private case payloads must still reject
+two different hashes associated with the same case ID across any entries; a
+mapping overwrite cannot choose which case hash is authoritative.
 
 ### 9.2 Detection rules
 
@@ -1131,3 +1192,72 @@ No claimed V1 capability lacks a benchmark family, case origin, authority,
 scorer, adversarial contract, critical-error mapping, or split rule. Therefore
 the design is not blocked. The full benchmark remains intentionally
 unmaterialized until the next authorized RES-21 implementation mission.
+
+## 15 RES-21 implementation repair amendment — review 002
+
+This narrow amendment resolves the pre-materialization implementation review.
+It supersedes earlier wording only for the case isolation dimensions, source
+identity binding, scorer attribution, exclusion membership, calibration
+outcome, and final freeze gate specified here and in Sections 2.2, 7.2, 8, and
+9.1. It does not change RES-59..71 science, scientific formulas, or the
+Serialization V3 contract.
+
+### 15.1 Canonical isolation identity
+
+The hash-covered `ContaminationBinding` includes
+`construct_test_identity_ids: tuple[str, ...]`. Split allocation and
+post-allocation validation use the same atomic identity dimensions:
+source-family ID, every document ID, every construct/test identity ID,
+provider-export ID, protocol/template ID, expert-author batch ID, generator
+family, generator seed namespaces and blocks recorded in either provenance or
+contamination, and mutation-lineage ID. Mutation parent hashes also join the
+same cluster. Any shared identity crossing splits is a hard validation
+failure. These case-content identities enter the V3 case projection before
+allocation.
+
+### 15.2 Scoring and exclusion schema semantics
+
+`ScoringContract.error_attribution` is the exact case-local mapping described
+in Section 8. Every scored field and each applicable reserved decision/refusal/
+prohibited-claim key resolves only through that mapping or `__default__`; the
+scorer does not infer error classes from field names. `TaskOutcome.NOT_SCORED`
+is the current unconditional `CALIBRATION_V1` outcome. It emits no field
+scores or error events and is not pass/fail; the current error-event report
+continues to form eligibility denominators from the supplied case contracts.
+No probability calibration metric is currently implemented.
+
+`ExclusionEntry.membership_digests` is an optional ordered tuple positionally
+paired with `benchmark_case_ids` and hashes. If supplied, every digest must
+match that case's current split membership. A split artifact always carries
+exactly its one case's membership digest. Case-scoped artifacts bind one case;
+shared artifacts use one entry binding the complete sorted set of required
+case IDs, hashes, and unique D/V/H splits. Duplicate, stale, unexpected,
+missing, or conflicting associations fail closed. The entries and their
+association tuples use canonical UTF-8 artifact/case ordering before
+Serialization V3 hashing.
+
+### 15.3 FINAL V1 freeze gate
+
+`validate_final_v1_freeze` is the only final benchmark freeze validator. The
+generic manifest-bundle builder and infrastructure fixture bundle remain
+usable for implementation tests, but neither can bypass this gate. The final
+validator requires:
+
+1. every manifest and its digest to validate against the current cases and
+   live RES-71 runtime authority;
+2. at least the first feasible full-coverage scale (`N >= 434`), every
+   capability×family×split obligation, full row-level adversarial/error
+   coverage, and exact largest-remainder D/V/H counts for the registered
+   60/20/20 proportions;
+3. exclusion completeness and a private text index, plus resolved
+   manifest-bound contamination decisions for every case-associated exclusion
+   artifact;
+4. exact split isolation across every frozen identity in Section 15.1;
+5. no fixture-only case marker or fixture population scope; and
+6. a hidden store bound to the exact benchmark manifest and complete hidden
+   case/hash set, with payload and answer access denied to training principals
+   and allowed through preflight only for the evaluation-service principal.
+
+The full benchmark remains unmaterialized. The N=434 allocator qualification
+is deterministic, synthetic, and in-memory test material; it is not V1 data.
+No model inference, training, or RES-22/RES-23 work is part of this amendment.
