@@ -259,18 +259,18 @@ def _validate_origin(case: BenchmarkCaseV1) -> None:
                         "to canonical source provenance"
                     )
             elif binding.authority_kind == AuthorityKind.SOURCE_EVIDENCE_SPAN.value:
-                excerpt = excerpts_by_id.get(binding.source_reference_id)
-                matches_span_reference = excerpt is not None and any(
-                    reference.source_reference_id == excerpt.source_id
+                span_excerpt = excerpts_by_id.get(binding.source_reference_id)
+                matches_span_reference = span_excerpt is not None and any(
+                    reference.source_reference_id == span_excerpt.source_id
                     and reference.version == binding.version
-                    and reference.digest == excerpt.content_digest
-                    and reference.locator == excerpt.locator
+                    and reference.digest == span_excerpt.content_digest
+                    and reference.locator == span_excerpt.locator
                     for reference in references
                 )
                 if (
-                    excerpt is None
+                    span_excerpt is None
                     or binding.source_reference_id not in provenance.evidence_span_refs
-                    or binding.digest != excerpt.content_digest
+                    or binding.digest != span_excerpt.content_digest
                     or not matches_span_reference
                 ):
                     raise ValueError(

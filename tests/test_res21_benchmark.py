@@ -355,7 +355,7 @@ def test_split_allocator_qualifies_the_frozen_benchmark_scale() -> None:
         for case in fixtures
         if case.provenance.origin_class is CaseOrigin.DETERMINISTIC_ENGINE_DERIVED
     )
-    scale_cases = []
+    scale_cases: list[BenchmarkCaseV1] = []
     for row in COVERAGE_MATRIX:
         template = engine_template if row.capability_id in {"C08", "C16"} else expert_template
         profile = (
@@ -508,8 +508,16 @@ def test_split_isolation_clusters_and_rejects_shared_identity_attacks(
     from dynamislm.benchmark.split import _union_find_clusters
 
     engine, semantic = build_synthetic_reference_fixture_cases()[:2]
-    engine_contamination = replace(engine.contamination, **{identity_field: identity_value})
-    semantic_contamination = replace(semantic.contamination, **{identity_field: identity_value})
+    if identity_field == "document_ids":
+        engine_contamination = replace(engine.contamination, document_ids=identity_value)
+        semantic_contamination = replace(semantic.contamination, document_ids=identity_value)
+    else:
+        engine_contamination = replace(
+            engine.contamination, construct_test_identity_ids=identity_value
+        )
+        semantic_contamination = replace(
+            semantic.contamination, construct_test_identity_ids=identity_value
+        )
     paired = (
         replace(engine, contamination=engine_contamination),
         replace(semantic, contamination=semantic_contamination),

@@ -600,8 +600,8 @@ def validate_exclusion_completeness(
                 f"split artifact does not bind the exact membership digest: {case.case_id}"
             )
     for artifact_id, associated_cases in required_members.items():
-        entry = by_artifact_id.get(artifact_id)
-        if entry is None:
+        expected_entry = by_artifact_id.get(artifact_id)
+        if expected_entry is None:
             continue
         expected_ids = tuple(sorted(associated_cases, key=lambda item: item.encode("utf-8")))
         expected_hashes = tuple(
@@ -613,13 +613,13 @@ def validate_exclusion_completeness(
             if any(associated_cases[case_id].split.split_name is split for case_id in expected_ids)
         )
         if (
-            entry.benchmark_case_ids != expected_ids
-            or entry.benchmark_case_hashes != expected_hashes
+            expected_entry.benchmark_case_ids != expected_ids
+            or expected_entry.benchmark_case_hashes != expected_hashes
         ):
             raise ValueError(
                 f"artifact {artifact_id} has stale, duplicate, or incomplete case associations"
             )
-        if entry.split_names != expected_splits:
+        if expected_entry.split_names != expected_splits:
             raise ValueError(f"artifact {artifact_id} has stale split associations")
     if require_manifest_artifacts:
         required_manifest_ids = {
