@@ -70,6 +70,118 @@ def _unresolved_inventory_digest() -> str:
     return canonical_hash(build_unresolved_computation_inventory())
 
 
+def _reference_snapshot(reference: object) -> dict[str, object]:
+    """Return the complete live identity for a registry reference."""
+
+    return {"reference": reference}
+
+
+def _live_authority_snapshot(
+    kind: AuthorityKind,
+) -> tuple[str, tuple[str, ...], str]:
+    """Resolve RES-60/62/69 authority from the live registries.
+
+    These snapshots hash the registry contents as well as the version. A
+    benchmark binding therefore cannot be made valid by copying the RES-71
+    operation-inventory digest into an unrelated authority slot.
+    """
+
+    if kind is AuthorityKind.RES60_POPULATION:
+        from dynamislm.population import (
+            CANONICAL_POPULATION_DIMENSIONS,
+            CANONICAL_POPULATION_QUALIFICATION_METHOD,
+            CANONICAL_SOURCE_QUALIFICATION_METHOD,
+            CANONICAL_SOURCE_REQUIREMENTS,
+            RES60_REGISTRY_VERSION,
+        )
+
+        references = tuple(
+            sorted(
+                (
+                    CANONICAL_POPULATION_QUALIFICATION_METHOD,
+                    CANONICAL_SOURCE_QUALIFICATION_METHOD,
+                ),
+                key=lambda item: item.stable_id.encode("utf-8"),
+            )
+        )
+        population_payload: dict[str, object] = {
+            "authority_kind": kind.value,
+            "registry_version": RES60_REGISTRY_VERSION,
+            "references": tuple(_reference_snapshot(item) for item in references),
+            "canonical_population_dimensions": CANONICAL_POPULATION_DIMENSIONS,
+            "canonical_source_requirements": CANONICAL_SOURCE_REQUIREMENTS,
+        }
+        return (
+            RES60_REGISTRY_VERSION,
+            tuple(item.stable_id for item in references),
+            canonical_hash(population_payload),
+        )
+    if kind is AuthorityKind.RES62_PROVENANCE:
+        from dynamislm.longitudinal import (
+            LONGITUDINAL_RECORD_METHOD,
+            MULTI_SOURCE_ANALYSIS_INPUT_METHOD,
+            RES62_MULTI_SOURCE_MANIFEST,
+            RES62_REGISTRY_VERSION,
+            RES62_SOFTWARE_VERSION,
+        )
+
+        references = tuple(
+            sorted(
+                (
+                    LONGITUDINAL_RECORD_METHOD,
+                    MULTI_SOURCE_ANALYSIS_INPUT_METHOD,
+                    RES62_MULTI_SOURCE_MANIFEST,
+                ),
+                key=lambda item: item.stable_id.encode("utf-8"),
+            )
+        )
+        provenance_payload: dict[str, object] = {
+            "authority_kind": kind.value,
+            "registry_version": RES62_REGISTRY_VERSION,
+            "software_version": RES62_SOFTWARE_VERSION,
+            "references": tuple(_reference_snapshot(item) for item in references),
+        }
+        return (
+            RES62_REGISTRY_VERSION,
+            tuple(item.stable_id for item in references),
+            canonical_hash(provenance_payload),
+        )
+    if kind is AuthorityKind.RES69_STATISTICS:
+        from dynamislm.longitudinal.statistics import registry as res69_registry
+        from dynamislm.measurement.identity import RegistryReference
+
+        references = tuple(
+            sorted(
+                {
+                    value
+                    for name in res69_registry.__all__
+                    if isinstance(value := getattr(res69_registry, name), RegistryReference)
+                },
+                key=lambda item: item.stable_id.encode("utf-8"),
+            )
+        )
+        statistics_payload: dict[str, object] = {
+            "authority_kind": kind.value,
+            "registry_version": res69_registry.RES69_REGISTRY_VERSION,
+            "software_version": res69_registry.RES69_SOFTWARE_VERSION,
+            "references": tuple(_reference_snapshot(item) for item in references),
+            "operation_registry": res69_registry.RES69_OPERATION_REGISTRY,
+            "scale_registry": res69_registry.RES69_SCALE_REGISTRY,
+            "reliability_assumption_registry": (
+                res69_registry.RES69_RELIABILITY_ASSUMPTION_DECLARATION_REGISTRY
+            ),
+            "registered_scale_keys": res69_registry.REGISTERED_SCALE_KEYS,
+            "unregistered_scale_keys": res69_registry.UNREGISTERED_SCALE_KEYS,
+            "scale_registry_audit": res69_registry.SCALE_REGISTRY_AUDIT,
+        }
+        return (
+            res69_registry.RES69_REGISTRY_VERSION,
+            tuple(item.stable_id for item in references),
+            canonical_hash(statistics_payload),
+        )
+    raise ValueError(f"{kind.value} is not a live RES-60/62/69 authority")
+
+
 def _operation_entry(operation_id: str) -> RegisteredOperationInventoryEntry:
     matches = tuple(
         item for item in build_registered_operation_inventory() if item.operation_id == operation_id
@@ -194,6 +306,13 @@ def _canonical_registry_digest(kind: AuthorityKind) -> tuple[str, str, tuple[str
             RES71_SEALED_REFERENCE_DIGEST,
             (RES71_REFERENCE_INTERFACE_ID, RES71_REFERENCE_INTERFACE_BINDING),
         )
+    if kind in {
+        AuthorityKind.RES60_POPULATION,
+        AuthorityKind.RES62_PROVENANCE,
+        AuthorityKind.RES69_STATISTICS,
+    }:
+        version, references, digest = _live_authority_snapshot(kind)
+        return (version, digest, references)
     raise ValueError(f"{kind.value} is not a single canonical registry authority")
 
 
@@ -216,11 +335,14 @@ def make_authority_binding(
         AuthorityKind.RES70_CLAIM,
         AuthorityKind.RES70_ANALYSIS,
         AuthorityKind.RES70_COMPARABILITY,
+        AuthorityKind.RES60_POPULATION,
+        AuthorityKind.RES62_PROVENANCE,
+        AuthorityKind.RES69_STATISTICS,
     }:
         version, digest, references = _canonical_registry_digest(kind)
         source = source_reference_id or references[0]
         if source not in references:
-            raise ValueError("caller cannot choose an unregistered RES-70 authority reference")
+            raise ValueError("caller cannot choose an unregistered canonical authority reference")
         return AuthorityBinding(kind.value, source, version, digest, governed_field_ids)
     raise ValueError("make_authority_binding only constructs canonical registry bindings")
 
@@ -239,6 +361,9 @@ def validate_authority_binding(binding: AuthorityBinding) -> None:
         AuthorityKind.RES70_CLAIM,
         AuthorityKind.RES70_ANALYSIS,
         AuthorityKind.RES70_COMPARABILITY,
+        AuthorityKind.RES60_POPULATION,
+        AuthorityKind.RES62_PROVENANCE,
+        AuthorityKind.RES69_STATISTICS,
     }:
         version, digest, references = _canonical_registry_digest(kind)
         if binding.version != version or binding.digest != digest:
@@ -268,15 +393,6 @@ def validate_authority_binding(binding: AuthorityBinding) -> None:
             or binding.digest != _unresolved_inventory_digest()
         ):
             raise ValueError("RES-71 unresolved authority binding is stale or caller-minted")
-    elif kind in {
-        AuthorityKind.RES69_STATISTICS,
-        AuthorityKind.RES60_POPULATION,
-        AuthorityKind.RES62_PROVENANCE,
-    }:
-        if binding.version != "1.0.0":
-            raise ValueError("registered authority version mismatch")
-        if binding.digest != _operation_inventory_digest():
-            raise ValueError("registered authority digest is not live")
     elif kind in {
         AuthorityKind.SOURCE_DOCUMENT,
         AuthorityKind.SOURCE_EVIDENCE_SPAN,

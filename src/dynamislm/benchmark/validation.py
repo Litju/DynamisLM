@@ -11,16 +11,18 @@ from dynamislm.benchmark.authority import (
 from dynamislm.benchmark.constants import (
     BENCHMARK_SEMANTIC_VERSION,
     CASE_SCHEMA_VERSION,
+    AuthorityKind,
     CaseOrigin,
     ExpectedAnswerKind,
     RefusalDecision,
     ScoringProfile,
 )
 from dynamislm.benchmark.contracts import (
+    AuthorityBinding,
     BenchmarkCaseV1,
     ExpertReviewMetadata,
 )
-from dynamislm.benchmark.hashing import validate_case_payload_hash
+from dynamislm.benchmark.hashing import case_content_projection, validate_case_payload_hash
 from dynamislm.refusal.models import RefusalClass
 
 
@@ -120,6 +122,37 @@ def _validate_origin(case: BenchmarkCaseV1) -> None:
             raise ValueError("engine-derived answer/reference provenance mismatch")
         if case.expected_answer.expected_operation_id != provenance.engine_operation_id:
             raise ValueError("engine-derived answer/operation provenance mismatch")
+        operation_binding = next(
+            binding
+            for binding in case.authority
+            if binding.authority_kind == AuthorityKind.RES71_OPERATION.value
+            and binding.source_reference_id == provenance.engine_operation_id
+        )
+        reference_binding = next(
+            binding
+            for binding in case.authority
+            if binding.authority_kind == AuthorityKind.RES71_REFERENCE_CASE.value
+            and binding.source_reference_id == provenance.engine_reference_case_id
+        )
+        if provenance.engine_method_version != operation_binding.version:
+            raise ValueError("engine-derived method version is stale")
+        if provenance.engine_registry_digest != operation_binding.digest:
+            raise ValueError("engine-derived registry digest is stale or forged")
+        if provenance.engine_reference_digest != reference_binding.digest:
+            raise ValueError("engine-derived reference digest is stale or forged")
+        if not case.input.deterministic_results:
+            raise ValueError("engine-derived case requires a deterministic result view")
+        for result in case.input.deterministic_results:
+            if result.operation_id != provenance.engine_operation_id:
+                raise ValueError("deterministic result operation does not match provenance")
+            if result.method_version != provenance.engine_method_version:
+                raise ValueError("deterministic result method version does not match provenance")
+            if result.authority_reference != provenance.engine_reference_case_id:
+                raise ValueError(
+                    "deterministic result authority reference does not match provenance"
+                )
+            if result.result_or_refusal_digest != provenance.engine_reference_digest:
+                raise ValueError("deterministic result digest does not match provenance")
     elif origin is CaseOrigin.EXPERT_AUTHORED_SEMANTIC:
         if not provenance.authority_lineage or not provenance.review.rubric_digest:
             raise ValueError("expert semantic case requires rubric and authority lineage")
@@ -151,6 +184,41 @@ def _validate_origin(case: BenchmarkCaseV1) -> None:
             if binding.authority_kind in {"SOURCE_DOCUMENT", "SOURCE_EVIDENCE_SPAN"}
         ):
             raise ValueError("source authority is not bound to a source digest")
+        source_ids = {
+            *provenance.source_artifact_ids,
+            *(reference.source_reference_id for reference in case.source_evidence_refs),
+            *(excerpt.source_id for excerpt in case.input.evidence_excerpts),
+        }
+        if any(item not in source_ids for item in provenance.source_artifact_ids):
+            raise ValueError("source artifact identity is not present in canonical evidence")
+        excerpt_ids = {excerpt.excerpt_id for excerpt in case.input.evidence_excerpts}
+        if any(item not in excerpt_ids for item in provenance.evidence_span_refs):
+            raise ValueError("evidence span identity is not present in the input evidence")
+        excerpts_by_id = {excerpt.excerpt_id: excerpt for excerpt in case.input.evidence_excerpts}
+        for reference in case.source_evidence_refs:
+            matching_excerpts = tuple(
+                excerpt
+                for excerpt in case.input.evidence_excerpts
+                if excerpt.source_id == reference.source_reference_id
+                and excerpt.locator == reference.locator
+                and excerpt.content_digest == reference.digest
+            )
+            if not matching_excerpts:
+                raise ValueError(
+                    "source evidence reference is not bound to an exact canonical span"
+                )
+        if any(span not in excerpts_by_id for span in provenance.evidence_span_refs):
+            raise ValueError("source provenance span is not present in the exact evidence index")
+        source_authorities = tuple(
+            binding
+            for binding in case.authority
+            if binding.authority_kind
+            in {AuthorityKind.SOURCE_DOCUMENT.value, AuthorityKind.SOURCE_EVIDENCE_SPAN.value}
+        )
+        if not source_authorities:
+            raise ValueError(
+                "source-backed case requires source-document or evidence-span authority"
+            )
         if (
             provenance.generator_id
             or provenance.seed_namespace
@@ -174,6 +242,51 @@ def _validate_origin(case: BenchmarkCaseV1) -> None:
 
 def _validate_answer_contract(case: BenchmarkCaseV1) -> None:
     answer = case.expected_answer
+    expected_field_ids = tuple(answer.required_field_ids)
+    if len(set(expected_field_ids)) != len(expected_field_ids):
+        raise ValueError("expected required field IDs must be unique")
+    missing_expected = tuple(
+        field_id for field_id in expected_field_ids if field_id not in answer.expected_fields
+    )
+    if missing_expected:
+        raise ValueError(
+            "expected required fields are absent from expected_fields: "
+            + ", ".join(missing_expected)
+        )
+    if set(case.scoring_contract.required_output_fields) != set(expected_field_ids):
+        raise ValueError("scoring required_output_fields must equal expected required fields")
+    if any(
+        field_id not in case.scoring_contract.required_output_fields
+        for field_id in case.scoring_contract.critical_fields
+    ):
+        raise ValueError("critical fields must be valid scored fields")
+    attribution = dict(case.scoring_contract.error_attribution)
+    if any(
+        field_id not in attribution and "__default__" not in attribution
+        for field_id in case.scoring_contract.required_output_fields
+    ):
+        raise ValueError("every scored field requires explicit error attribution metadata")
+    if case.refusal_expectation.decision is not RefusalDecision.PROHIBITED:
+        if "__decision__" not in attribution:
+            raise ValueError(
+                "non-prohibited refusal semantics require explicit decision attribution"
+            )
+    else:
+        if "__over_refusal__" not in attribution:
+            raise ValueError(
+                "prohibited refusal semantics require explicit over-refusal attribution"
+            )
+    if case.refusal_expectation.decision is RefusalDecision.REQUIRED:
+        if "__refusal__" not in attribution:
+            raise ValueError("required refusal semantics require explicit refusal attribution")
+    if case.expected_answer.prohibited_claims and "__prohibited_claim__" not in attribution:
+        raise ValueError("prohibited claims require explicit error attribution metadata")
+    if (
+        case.expected_answer.kind is ExpectedAnswerKind.REFUSAL
+        and case.refusal_expectation.decision is RefusalDecision.PROHIBITED
+    ):
+        raise ValueError("a refusal answer cannot be paired with PROHIBITED refusal semantics")
+    _validate_answer_authority_contract(case)
     numeric_fields = _walk_numbers(answer.expected_fields)
     if numeric_fields:
         if case.tolerance_contract is None:
@@ -217,6 +330,68 @@ def _validate_answer_contract(case: BenchmarkCaseV1) -> None:
             raise ValueError("numeric scorer requires tolerance")
 
 
+def _authority_covers_field(binding: AuthorityBinding, field_id: str) -> bool:
+    governed = set(binding.governed_field_ids)
+    return bool(
+        governed
+        & {
+            field_id,
+            f"expected_answer.{field_id}",
+            "expected_answer",
+            "scoring_contract",
+            "refusal_expectation",
+            "claim_contract",
+        }
+    )
+
+
+def _validate_answer_authority_contract(case: BenchmarkCaseV1) -> None:
+    """Require field-level authority coverage and answer-kind authority."""
+
+    for field_id in case.scoring_contract.required_output_fields:
+        if not any(_authority_covers_field(binding, field_id) for binding in case.authority):
+            raise ValueError(f"scored field is not covered by an applicable authority: {field_id}")
+
+    kinds = {binding.authority_kind for binding in case.authority}
+    answer_kind = case.expected_answer.kind
+    if answer_kind is ExpectedAnswerKind.NUMERIC_RESULT:
+        required = {
+            AuthorityKind.RES71_OPERATION.value,
+            AuthorityKind.RES71_REFERENCE_CASE.value,
+        }
+        if not required.issubset(kinds):
+            raise ValueError("numeric answer requires RES-71 operation and reference authority")
+    elif answer_kind is ExpectedAnswerKind.COMPARABILITY_DECISION:
+        if AuthorityKind.RES70_COMPARABILITY.value not in kinds:
+            raise ValueError("comparability answer requires RES-70 comparability authority")
+    elif answer_kind is ExpectedAnswerKind.CLAIM_AUTHORITY_DECISION:
+        if AuthorityKind.RES70_CLAIM.value not in kinds:
+            raise ValueError("claim answer requires RES-70 claim authority")
+    elif answer_kind is ExpectedAnswerKind.EVIDENCE_EXTRACTION:
+        if not kinds.intersection(
+            {
+                AuthorityKind.SOURCE_DOCUMENT.value,
+                AuthorityKind.SOURCE_EVIDENCE_SPAN.value,
+            }
+        ):
+            raise ValueError("evidence answer requires canonical source authority")
+    elif answer_kind is ExpectedAnswerKind.REFUSAL:
+        refusal_authorities = {
+            AuthorityKind.RES71_UNRESOLVED.value,
+            AuthorityKind.RES70_CLAIM.value,
+            AuthorityKind.RES70_ANALYSIS.value,
+            AuthorityKind.RES70_COMPARABILITY.value,
+            AuthorityKind.RES69_STATISTICS.value,
+            AuthorityKind.RES60_POPULATION.value,
+            AuthorityKind.RES62_PROVENANCE.value,
+            AuthorityKind.SOURCE_DOCUMENT.value,
+            AuthorityKind.SOURCE_EVIDENCE_SPAN.value,
+            AuthorityKind.EXPERT_RUBRIC.value,
+        }
+        if not kinds.intersection(refusal_authorities):
+            raise ValueError("refusal answer requires a refusal-capable scientific authority")
+
+
 def validate_case(case: BenchmarkCaseV1, *, validate_hash: bool = True) -> None:
     """Validate a single case against the frozen schema and live authority."""
 
@@ -229,6 +404,9 @@ def validate_case(case: BenchmarkCaseV1, *, validate_hash: bool = True) -> None:
         raise ValueError("case version is not the frozen V1 contract")
     if validate_hash:
         validate_case_payload_hash(case)
+    from dynamislm.benchmark.contamination import validate_case_contamination_binding
+
+    validate_case_contamination_binding(case)
     validate_authority_bindings(case.authority)
     _validate_origin(case)
     _validate_answer_contract(case)
@@ -264,6 +442,49 @@ def validate_case_set(cases: tuple[BenchmarkCaseV1, ...], *, validate_hash: bool
             parent = by_hash[provenance.parent_case_hash]
             if provenance.parent_origin_class is not parent.provenance.origin_class:
                 raise ValueError("mutation parent origin class is not preserved")
+            parent_projection = case_content_projection(parent)
+            child_projection = case_content_projection(case)
+            changed_projection_fields = tuple(
+                sorted(
+                    (
+                        field_name
+                        for field_name in parent_projection
+                        if parent_projection[field_name] != child_projection[field_name]
+                    ),
+                    key=lambda item: item.encode("utf-8"),
+                )
+            )
+            declared_changed_fields = tuple(
+                sorted(provenance.changed_fields, key=lambda item: item.encode("utf-8"))
+            )
+            if declared_changed_fields != changed_projection_fields:
+                raise ValueError(
+                    "mutation changed_fields do not match the canonical parent-to-child "
+                    "semantic projection"
+                )
+            if not any(
+                edge.upstream_id == provenance.parent_case_hash
+                and edge.downstream_id == case.case_id
+                and edge.relation == "MUTATION"
+                for edge in provenance.derivation_edges
+            ):
+                raise ValueError("mutation lineage must contain an explicit parent-to-child edge")
+            parent_primary_authority = tuple(
+                binding
+                for binding in parent.authority
+                if any(
+                    governed in {"expected_answer", "refusal_expectation", "claim_contract"}
+                    or governed.startswith("expected_answer.")
+                    for governed in binding.governed_field_ids
+                )
+            )
+            if not parent_primary_authority:
+                raise ValueError("mutation parent has no primary answer authority")
+            if any(binding not in case.authority for binding in parent_primary_authority):
+                raise ValueError("mutation does not preserve the parent primary authority")
+            # Revalidate the preserved authority against the live registries rather than
+            # trusting the parent's already-materialized object identity.
+            validate_authority_bindings(parent.authority)
             if case.split.split_name is not None and parent.split.split_name is not None:
                 if case.split.split_name is not parent.split.split_name:
                     raise ValueError("mutation lineage crosses split boundary")

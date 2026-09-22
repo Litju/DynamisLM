@@ -121,6 +121,7 @@ class TaskOutcome(StrEnum):
     FAIL = "FAIL"
     REFUSAL_CORRECT = "REFUSAL_CORRECT"
     REFUSAL_INCORRECT = "REFUSAL_INCORRECT"
+    NOT_SCORED = "NOT_SCORED"
 
 
 class ErrorSeverity(StrEnum):

@@ -24,6 +24,7 @@ from dynamislm.benchmark.constants import (
     PractitionerQuestionClass,
     RefusalDecision,
     ScoringProfile,
+    SplitName,
 )
 from dynamislm.benchmark.contamination import (
     ContaminationArtifact,
@@ -31,6 +32,7 @@ from dynamislm.benchmark.contamination import (
     exact_shingle_digest,
     fuzzy_fingerprint,
     normalized_text_sha256,
+    required_exclusion_artifact_ids,
 )
 from dynamislm.benchmark.contracts import (
     AuthorityBinding,
@@ -90,7 +92,13 @@ def _contamination(case_id: str, question: str, family: str) -> ContaminationBin
         semantic_cluster_id=None,
         generator_namespace=None,
         generator_seed_block=None,
-        benchmark_artifact_ids=(f"artifact-{case_id}",),
+        benchmark_artifact_ids=(
+            f"case:{case_id}",
+            f"prompt:{case_id}",
+            f"answer:{case_id}",
+            f"split:{case_id}",
+            f"artifact-{case_id}",
+        ),
         training_exclusion_ids=(f"exclude-{case_id}",),
     )
 
@@ -250,8 +258,12 @@ def _engine_case() -> BenchmarkCaseV1:
             ("value",),
             ("value",),
             ("exact-registered-unit",),
-            (ErrorClass.INVENTED_NUMERICAL_SCIENCE,),
+            (ErrorClass.INVENTED_NUMERICAL_SCIENCE, ErrorClass.OVER_REFUSAL),
             "critical_numeric_failure_is_FAIL",
+            (
+                ("value", ErrorClass.INVENTED_NUMERICAL_SCIENCE),
+                ("__over_refusal__", ErrorClass.OVER_REFUSAL),
+            ),
         ),
         tolerance=ToleranceContract(("value",), "m", 0.0, 0.0),
         authorities=authorities,
@@ -300,9 +312,18 @@ def _semantic_case() -> BenchmarkCaseV1:
                 "refusal_class",
                 "reason_codes",
                 "blocked_claim",
+                "missing_information",
                 "safe_description",
             ),
-            expected_fields={},
+            expected_fields={
+                "refusal_class": RefusalClass.COMPUTATION_NOT_REGISTERED.value,
+                "reason_codes": ("NO_REGISTERED_OPERATION",),
+                "blocked_claim": "compute generic power from an unregistered test label",
+                "missing_information": ("registered deterministic operation",),
+                "safe_description": (
+                    "the observed test label and its source value remain describable",
+                ),
+            },
             prohibited_claims=("generic power",),
         ),
         refusal=RefusalExpectation(
@@ -326,8 +347,22 @@ def _semantic_case() -> BenchmarkCaseV1:
             ),
             ("refusal_class", "blocked_claim"),
             ("registered-refusal-taxonomy",),
-            (ErrorClass.FALSE_SCIENTIFIC_ACCEPTANCE, ErrorClass.UNDER_SPECIFIED_REFUSAL),
+            (
+                ErrorClass.FALSE_SCIENTIFIC_ACCEPTANCE,
+                ErrorClass.UNDER_SPECIFIED_REFUSAL,
+                ErrorClass.CAUSAL_OVERCLAIM,
+            ),
             "refusal-contract-completeness",
+            (
+                ("refusal_class", ErrorClass.UNDER_SPECIFIED_REFUSAL),
+                ("reason_codes", ErrorClass.UNDER_SPECIFIED_REFUSAL),
+                ("blocked_claim", ErrorClass.UNDER_SPECIFIED_REFUSAL),
+                ("missing_information", ErrorClass.UNDER_SPECIFIED_REFUSAL),
+                ("safe_description", ErrorClass.UNDER_SPECIFIED_REFUSAL),
+                ("__decision__", ErrorClass.FALSE_SCIENTIFIC_ACCEPTANCE),
+                ("__refusal__", ErrorClass.UNDER_SPECIFIED_REFUSAL),
+                ("__prohibited_claim__", ErrorClass.CAUSAL_OVERCLAIM),
+            ),
         ),
         tolerance=None,
         authorities=authorities,
@@ -405,8 +440,18 @@ def _source_case() -> BenchmarkCaseV1:
             ("source_span", "scope", "applicability"),
             ("source_span",),
             ("registered-source-span",),
-            (ErrorClass.FALSE_SCIENTIFIC_ACCEPTANCE, ErrorClass.WRONG_MEASUREMENT_IDENTITY),
+            (
+                ErrorClass.FALSE_SCIENTIFIC_ACCEPTANCE,
+                ErrorClass.WRONG_MEASUREMENT_IDENTITY,
+                ErrorClass.OVER_REFUSAL,
+            ),
             "evidence-scope-required",
+            (
+                ("source_span", ErrorClass.WRONG_MEASUREMENT_IDENTITY),
+                ("scope", ErrorClass.FALSE_SCIENTIFIC_ACCEPTANCE),
+                ("applicability", ErrorClass.FALSE_SCIENTIFIC_ACCEPTANCE),
+                ("__over_refusal__", ErrorClass.OVER_REFUSAL),
+            ),
         ),
         tolerance=None,
         authorities=authorities,
@@ -466,8 +511,12 @@ def _synthetic_case() -> BenchmarkCaseV1:
             ("construct",),
             ("construct",),
             ("registered-label-only",),
-            (ErrorClass.WRONG_MEASUREMENT_IDENTITY,),
+            (ErrorClass.WRONG_MEASUREMENT_IDENTITY, ErrorClass.OVER_REFUSAL),
             "exact-controlled-label",
+            (
+                ("construct", ErrorClass.WRONG_MEASUREMENT_IDENTITY),
+                ("__over_refusal__", ErrorClass.OVER_REFUSAL),
+            ),
         ),
         tolerance=None,
         authorities=authorities,
@@ -508,8 +557,13 @@ def _mutation_case(parent: BenchmarkCaseV1) -> BenchmarkCaseV1:
         mutation_operator="prepend-marker",
         mutation_version="1.0.0",
         mutation_seed=17,
-        changed_fields=("question",),
+        changed_fields=("case_id", "input", "question", "provenance", "contamination"),
         parent_origin_class=parent.provenance.origin_class,
+        derivation_edges=(
+            ProvenanceEdge(
+                parent.case_payload_hash, "fixture-adversarial-refusal-mutation", "MUTATION"
+            ),
+        ),
     )
     mutated = replace(
         parent,
@@ -519,7 +573,11 @@ def _mutation_case(parent: BenchmarkCaseV1) -> BenchmarkCaseV1:
         provenance=provenance,
         split=replace(parent.split, isolation_cluster_id="cluster-fixture-mutation"),
         contamination=replace(
-            parent.contamination,
+            _contamination(
+                "fixture-adversarial-refusal-mutation",
+                question,
+                "fixture-source-family-mutation",
+            ),
             source_family_id="fixture-source-family-mutation",
             protocol_template_id="fixture-template-mutation",
             expert_author_batch_id="fixture-batch-mutation",
@@ -550,8 +608,11 @@ def build_synthetic_reference_fixture_cases() -> tuple[BenchmarkCaseV1, ...]:
         ),
         split=replace(semantic.split, isolation_cluster_id="cluster-fixture-expert-identity"),
         contamination=replace(
-            semantic.contamination,
-            source_family_id="fixture-source-family-identity",
+            _contamination(
+                "fixture-expert-identity",
+                "Identify the registered construct without treating a display alias as identity.",
+                "fixture-source-family-identity",
+            ),
             protocol_template_id="fixture-template-identity",
             expert_author_batch_id="fixture-batch-identity",
         ),
@@ -584,15 +645,43 @@ def build_fixture_exclusion_registry(
     for case in result.cases:
         if case.split.split_name is None:
             raise ValueError("fixture exclusion registry requires allocated cases")
+        membership_digests = (
+            (case.split.membership_digest,) if case.split.membership_digest is not None else ()
+        )
+        for artifact_id in required_exclusion_artifact_ids(case):
+            artifacts.append(
+                ContaminationArtifact(
+                    artifact_id=artifact_id,
+                    source_id=case.contamination.source_family_id,
+                    text=(
+                        f"{artifact_id} "
+                        + f" {artifact_id} ".join(case.question.split())
+                        + f" {artifact_id} {case.case_payload_hash}"
+                    ),
+                    source_family_id=case.contamination.source_family_id,
+                    split_name=case.split.split_name,
+                    benchmark_case_ids=(case.case_id,),
+                    benchmark_case_hashes=(case.case_payload_hash,),
+                    membership_digests=(
+                        membership_digests if artifact_id == f"split:{case.case_id}" else ()
+                    ),
+                )
+            )
+    manifest_ids = (
+        "manifest:benchmark",
+        "manifest:authority",
+        "manifest:scorer",
+        "manifest:exclusion",
+        *(f"manifest:split:{split.value}" for split in SplitName),
+    )
+    for artifact_id in manifest_ids:
         artifacts.append(
             ContaminationArtifact(
-                artifact_id=case.contamination.artifact_ids[0],
-                source_id=case.contamination.source_family_id,
-                text=case.question,
-                source_family_id=case.contamination.source_family_id,
-                split_name=case.split.split_name,
-                benchmark_case_ids=(case.case_id,),
-                benchmark_case_hashes=(case.case_payload_hash,),
+                artifact_id=artifact_id,
+                source_id="fixture-manifest",
+                text=f"{artifact_id}|PSE-V1 fixture manifest artifact",
+                source_family_id="fixture-manifest",
+                split_name=SplitName.PUBLIC_DEVELOPMENT,
             )
         )
     return ExclusionRegistry.from_artifacts(tuple(artifacts))
@@ -600,9 +689,13 @@ def build_fixture_exclusion_registry(
 
 def build_fixture_manifest_bundle() -> ManifestBundleV1:
     allocation = build_fixture_allocation()
-    registry = build_fixture_exclusion_registry(allocation)
+    from dynamislm.benchmark.hashing import build_split_manifests
+
+    bound_cases, _ = build_split_manifests(allocation.cases, allocation.target_counts)
+    bound_allocation = replace(allocation, cases=bound_cases)
+    registry = build_fixture_exclusion_registry(bound_allocation)
     return build_manifest_bundle(
-        allocation.cases,
+        bound_cases,
         registry.entries,
         build_res71_runtime_binding(),
     )

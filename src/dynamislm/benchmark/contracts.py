@@ -446,6 +446,7 @@ class ScoringContract:
     accepted_normalization: tuple[str, ...]
     error_class_rules: tuple[ErrorClass, ...]
     task_status_policy: str
+    error_attribution: tuple[tuple[str, ErrorClass], ...] = ()
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "profile_id", _enum(self.profile_id, ScoringProfile, "profile_id"))
@@ -460,6 +461,22 @@ class ScoringContract:
         )
         object.__setattr__(self, "error_class_rules", errors)
         _text(self.task_status_policy, "task_status_policy")
+        raw_attribution = self.error_attribution
+        if isinstance(raw_attribution, Mapping):
+            raw_attribution = tuple(raw_attribution.items())
+        _tuple_of(raw_attribution, "error_attribution")
+        attribution: list[tuple[str, ErrorClass]] = []
+        for item in raw_attribution:
+            if not isinstance(item, tuple) or len(item) != 2:
+                raise ValueError("error_attribution entries must be (field_id, error_class) tuples")
+            field_id, error_class = item
+            _text(field_id, "error_attribution field_id")
+            attribution.append((field_id, _enum(error_class, ErrorClass, "error_attribution")))
+        if len({field_id for field_id, _ in attribution}) != len(attribution):
+            raise ValueError("error_attribution cannot contain duplicate field IDs")
+        if any(error_class not in errors for _, error_class in attribution):
+            raise ValueError("error_attribution may only use declared error_class_rules")
+        object.__setattr__(self, "error_attribution", tuple(attribution))
 
 
 @register_serializable_type
@@ -1025,6 +1042,7 @@ class ExclusionEntry:
     benchmark_case_hashes: tuple[str, ...]
     split_names: tuple[SplitName, ...]
     exclusion_reason: str
+    membership_digests: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         for name in ("artifact_id", "source_id", "source_family_id", "exclusion_reason"):
@@ -1044,6 +1062,11 @@ class ExclusionEntry:
             raise ValueError("benchmark case IDs and hashes must align")
         splits = tuple(_enum(item, SplitName, "split_names") for item in self.split_names)
         object.__setattr__(self, "split_names", splits)
+        _strings(self.membership_digests, "membership_digests", allow_empty=True)
+        for item in self.membership_digests:
+            _sha(item, "membership_digests item")
+        if self.membership_digests and len(self.membership_digests) != len(self.benchmark_case_ids):
+            raise ValueError("membership digests and benchmark case IDs must align")
 
 
 @register_serializable_type
