@@ -7,7 +7,7 @@ import re
 import unicodedata
 from dataclasses import dataclass
 
-from dynamislm.benchmark.constants import SplitName
+from dynamislm.benchmark.constants import CaseOrigin, SplitName
 from dynamislm.benchmark.contracts import (
     BenchmarkCaseV1,
     ExclusionEntry,
@@ -15,6 +15,9 @@ from dynamislm.benchmark.contracts import (
 from dynamislm.benchmark.hashing import case_payload_hash
 
 _TOKEN_RE = re.compile(r"\w+|[^\w\s]", flags=re.UNICODE)
+
+PSE_V1_CONTAMINATION_AUDIT = "PSE_V1_CONTAMINATION_AUDIT"
+PRETRAINING_EXPOSURE_UNKNOWN = "UNKNOWN"
 
 
 def normalize_text(text: str) -> str:
@@ -139,6 +142,7 @@ class ContaminationArtifact:
     semantic_cluster_id: str | None = None
     benchmark_case_ids: tuple[str, ...] = ()
     benchmark_case_hashes: tuple[str, ...] = ()
+    membership_digests: tuple[str, ...] = ()
     exclusion_reason: str = "PSE-V1 benchmark/training exclusion"
 
     def __post_init__(self) -> None:
@@ -153,6 +157,8 @@ class ContaminationArtifact:
             raise ValueError("canonical_url must not be empty")
         if len(self.benchmark_case_ids) != len(self.benchmark_case_hashes):
             raise ValueError("benchmark case IDs and hashes must align")
+        if self.membership_digests and len(self.membership_digests) != len(self.benchmark_case_ids):
+            raise ValueError("membership digests and benchmark case IDs must align")
 
 
 def build_exclusion_entry(artifact: ContaminationArtifact) -> ExclusionEntry:
@@ -173,6 +179,7 @@ def build_exclusion_entry(artifact: ContaminationArtifact) -> ExclusionEntry:
         benchmark_case_hashes=artifact.benchmark_case_hashes,
         split_names=(artifact.split_name,),
         exclusion_reason=artifact.exclusion_reason,
+        membership_digests=artifact.membership_digests,
     )
 
 
@@ -189,6 +196,8 @@ class ExclusionRegistry:
             raise ValueError("exclusion registry must not be empty")
         if any(not isinstance(item, ExclusionEntry) for item in self.entries):
             raise ValueError("exclusion registry entries must be typed")
+        if self.artifacts and len(self.artifacts) != len(self.entries):
+            raise ValueError("private exclusion text index must align with registry entries")
         if any(
             build_exclusion_entry(item) != entry
             for item, entry in zip(self.artifacts, self.entries, strict=False)
@@ -221,6 +230,38 @@ class ContaminationAudit:
             raise ValueError("candidate artifact ID must be non-empty")
 
 
+@dataclass(frozen=True, slots=True)
+class ContaminationReport:
+    """Policy-bounded audit language; this is not a universal detector claim."""
+
+    audit_label: str
+    pretraining_exposure: str = PRETRAINING_EXPOSURE_UNKNOWN
+
+    def __post_init__(self) -> None:
+        if self.audit_label not in {
+            f"{PSE_V1_CONTAMINATION_AUDIT}=PASS",
+            f"{PSE_V1_CONTAMINATION_AUDIT}=BLOCKED",
+        }:
+            raise ValueError("contamination report must use the policy-bounded V1 audit label")
+        if not self.pretraining_exposure.strip():
+            raise ValueError("pretraining exposure label must be non-empty")
+
+
+def build_contamination_report(
+    audit: ContaminationAudit,
+    *,
+    pretraining_exposure: str = PRETRAINING_EXPOSURE_UNKNOWN,
+) -> ContaminationReport:
+    """Name deterministic V1 overlap results without claiming universal freedom."""
+
+    if not isinstance(audit, ContaminationAudit):
+        raise TypeError("audit must be ContaminationAudit")
+    return ContaminationReport(
+        audit_label=f"{PSE_V1_CONTAMINATION_AUDIT}={audit.status}",
+        pretraining_exposure=pretraining_exposure,
+    )
+
+
 def audit_contamination(
     candidate: ContaminationArtifact,
     registry: ExclusionRegistry,
@@ -229,14 +270,36 @@ def audit_contamination(
 ) -> ContaminationAudit:
     """Run mandatory exact, fuzzy, and source-family checks in frozen order."""
 
+    if len(registry.entries) != len(registry.artifacts):
+        return ContaminationAudit(
+            status="BLOCKED",
+            candidate_artifact_id=candidate.artifact_id,
+            exact_matches=(),
+            fuzzy_matches=(),
+            source_family_conflicts=(),
+            semantic_diagnostic="NOT_APPLICABLE",
+            reason="private audit text index is unavailable for the mandatory fuzzy audit",
+        )
+
     approved = set(approved_overlap_artifact_ids)
+    approved_case_pairs = {
+        (case_id, case_hash)
+        for entry in registry.entries
+        if entry.artifact_id in approved
+        for case_id, case_hash in zip(
+            entry.benchmark_case_ids, entry.benchmark_case_hashes, strict=True
+        )
+    }
     candidate_entry = build_exclusion_entry(candidate)
     exact_matches: list[str] = []
     fuzzy_matches: list[str] = []
     family_conflicts: list[str] = []
     candidate_shingles = exact_13_token_shingles(candidate.text)
     for entry, artifact in zip(registry.entries, registry.artifacts, strict=False):
-        if entry.artifact_id in approved:
+        entry_case_pairs = set(
+            zip(entry.benchmark_case_ids, entry.benchmark_case_hashes, strict=True)
+        )
+        if entry.artifact_id in approved or entry_case_pairs & approved_case_pairs:
             continue
         if entry.normalized_text_sha256 == candidate_entry.normalized_text_sha256:
             exact_matches.append(entry.artifact_id)
@@ -321,11 +384,129 @@ def validate_case_contamination_binding(case: BenchmarkCaseV1) -> None:
         raise ValueError("source family is required for contamination isolation")
 
 
+def required_exclusion_artifact_ids(case: BenchmarkCaseV1) -> tuple[str, ...]:
+    """Derive the complete case-local exclusion artifact inventory."""
+
+    required = {
+        f"case:{case.case_id}",
+        f"prompt:{case.case_id}",
+        f"answer:{case.case_id}",
+        f"split:{case.case_id}",
+        *case.contamination.artifact_ids,
+        *case.contamination.benchmark_artifact_ids,
+        *case.contamination.training_exclusion_ids,
+    }
+    origin = case.provenance.origin_class
+    if origin is CaseOrigin.EXPERT_AUTHORED_SEMANTIC:
+        required.add(f"rubric:{case.case_id}")
+    if origin is CaseOrigin.SOURCE_BACKED_EVIDENCE_EXTRACTION:
+        required.update(f"source:{item}" for item in case.provenance.source_artifact_ids)
+        required.update(f"document:{item}" for item in case.contamination.document_ids)
+        required.update(f"evidence:{item}" for item in case.provenance.evidence_span_refs)
+    if origin is CaseOrigin.DETERMINISTIC_SYNTHETIC:
+        if case.provenance.generator_id is None:
+            raise ValueError("synthetic case has no generator identity for exclusion coverage")
+        required.add(f"generated:{case.provenance.generator_id}")
+    if origin is CaseOrigin.DETERMINISTIC_ENGINE_DERIVED:
+        if case.provenance.engine_reference_case_id is None:
+            raise ValueError("engine-derived case has no reference identity for exclusion coverage")
+        required.add(f"engine:{case.provenance.engine_reference_case_id}")
+    if origin is CaseOrigin.ADVERSARIAL_MUTATION:
+        if case.provenance.parent_case_hash is None:
+            raise ValueError("mutation case has no parent identity for exclusion coverage")
+        required.add(f"mutation:{case.case_id}")
+        required.add(f"mutation-parent:{case.provenance.parent_case_hash}")
+    return tuple(sorted(required, key=lambda item: item.encode("utf-8")))
+
+
+def validate_exclusion_completeness(
+    cases: tuple[BenchmarkCaseV1, ...],
+    entries: tuple[ExclusionEntry, ...],
+    *,
+    require_manifest_artifacts: bool = True,
+) -> None:
+    """Fail closed unless every frozen benchmark artifact is represented once."""
+
+    if not cases:
+        raise ValueError("exclusion completeness requires a non-empty case set")
+    if len({case.case_id for case in cases}) != len(cases):
+        raise ValueError("exclusion completeness cannot operate on duplicate case IDs")
+    if len({entry.artifact_id for entry in entries}) != len(entries):
+        raise ValueError("exclusion registry contains duplicate artifact IDs")
+    by_artifact_id = {entry.artifact_id: entry for entry in entries}
+    by_case_id = {case.case_id: case for case in cases}
+    case_hashes = {case.case_id: case.case_payload_hash for case in cases}
+    manifest_split_names: set[str] = set()
+    for entry in entries:
+        for case_id, case_hash in zip(
+            entry.benchmark_case_ids, entry.benchmark_case_hashes, strict=True
+        ):
+            if case_id not in case_hashes:
+                raise ValueError(f"exclusion registry references unknown case: {case_id}")
+            if case_hashes[case_id] != case_hash:
+                raise ValueError(f"exclusion registry case hash is stale: {case_id}")
+            case = by_case_id[case_id]
+            if case.split.split_name is None:
+                raise ValueError("exclusion completeness requires allocated split membership")
+            manifest_split_names.add(case.split.split_name.value)
+            if case.split.split_name not in entry.split_names:
+                raise ValueError(
+                    f"exclusion artifact has stale split membership: {entry.artifact_id}"
+                )
+            if (
+                entry.membership_digests
+                and case.split.membership_digest not in entry.membership_digests
+            ):
+                raise ValueError(
+                    f"exclusion artifact has stale membership digest: {entry.artifact_id}"
+                )
+    for case in cases:
+        required_ids = required_exclusion_artifact_ids(case)
+        missing = tuple(item for item in required_ids if item not in by_artifact_id)
+        if missing:
+            raise ValueError(
+                f"case {case.case_id} has incomplete exclusion artifact coverage: {missing}"
+            )
+        for artifact_id in required_ids:
+            entry = by_artifact_id[artifact_id]
+            if entry.benchmark_case_ids != (case.case_id,) or entry.benchmark_case_hashes != (
+                case.case_payload_hash,
+            ):
+                raise ValueError(f"artifact {artifact_id} does not bind exactly one case/hash")
+        split_entry = by_artifact_id[f"split:{case.case_id}"]
+        if not split_entry.membership_digests or split_entry.membership_digests != (
+            case.split.membership_digest,
+        ):
+            raise ValueError(
+                f"split artifact does not bind the exact membership digest: {case.case_id}"
+            )
+    if require_manifest_artifacts:
+        required_manifest_ids = {
+            "manifest:benchmark",
+            "manifest:authority",
+            "manifest:scorer",
+            "manifest:exclusion",
+            *(f"manifest:split:{split_name}" for split_name in manifest_split_names),
+        }
+        missing_manifest_ids = tuple(
+            item for item in sorted(required_manifest_ids) if item not in by_artifact_id
+        )
+        if missing_manifest_ids:
+            raise ValueError(
+                "exclusion registry is missing benchmark manifest artifacts: "
+                + ", ".join(missing_manifest_ids)
+            )
+
+
 __all__ = [
+    "PRETRAINING_EXPOSURE_UNKNOWN",
+    "PSE_V1_CONTAMINATION_AUDIT",
     "ContaminationArtifact",
     "ContaminationAudit",
+    "ContaminationReport",
     "ExclusionRegistry",
     "audit_contamination",
+    "build_contamination_report",
     "build_exclusion_entry",
     "character_5gram_jaccard",
     "exact_13_token_shingles",
@@ -335,8 +516,10 @@ __all__ = [
     "normalize_text",
     "normalized_edit_similarity",
     "normalized_text_sha256",
+    "required_exclusion_artifact_ids",
     "token_5gram_jaccard",
     "tokenize",
     "validate_case_contamination_binding",
+    "validate_exclusion_completeness",
     "validate_source_family_isolation",
 ]

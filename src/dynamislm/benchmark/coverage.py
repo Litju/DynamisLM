@@ -424,6 +424,9 @@ class CoverageValidation:
     missing_families: tuple[str, ...]
     missing_cells: tuple[tuple[str, str, str], ...]
     reason: str
+    missing_adversarial_tags: tuple[tuple[str, str, str], ...] = ()
+    missing_error_classes: tuple[tuple[str, str, str], ...] = ()
+    c17_c18_qualified: bool = False
 
 
 def validate_coverage_matrix(rows: Iterable[CoverageRow] = COVERAGE_MATRIX) -> CoverageValidation:
@@ -459,12 +462,39 @@ def coverage_manifest_digest() -> str:
     return canonical_hash(COVERAGE_MATRIX)
 
 
+def minimum_full_coverage_case_count() -> int:
+    """Return the first N whose exact split targets fit every row obligation."""
+
+    obligations = coverage_obligation_count()
+    from dynamislm.benchmark.split import target_counts
+
+    case_count = obligations
+    while min(target_counts(case_count).values()) < obligations:
+        case_count += 1
+    return case_count
+
+
+def coverage_obligation_count() -> int:
+    """Return the frozen 87 capability-by-family obligations per split."""
+
+    return sum(len(row.benchmark_families) for row in COVERAGE_MATRIX)
+
+
 def _case_satisfies_row(case: BenchmarkCaseV1, row: CoverageRow, family: str) -> bool:
     return (
         case.capability_id == row.capability_id
         and case.benchmark_family == family
         and case.provenance.origin_class in row.case_origins
+        and bool(
+            {binding.authority_kind for binding in case.authority} & set(row.answer_authorities)
+        )
         and case.scoring_contract.profile_id in row.scorer_profiles
+    )
+
+
+def _case_satisfies_obligation(case: BenchmarkCaseV1, row: CoverageRow, family: str) -> bool:
+    return (
+        _case_satisfies_row(case, row, family)
         and bool(set(case.adversarial_tags) & set(row.adversarial_tags))
         and bool(set(case.scoring_contract.error_class_rules) & set(row.error_classes))
     )
@@ -473,9 +503,9 @@ def _case_satisfies_row(case: BenchmarkCaseV1, row: CoverageRow, family: str) ->
 def validate_case_coverage(
     cases: tuple[BenchmarkCaseV1, ...],
     *,
-    require_all_splits: bool = False,
+    require_all_splits: bool = True,
 ) -> CoverageValidation:
-    """Check actual cases; small fixtures may prove infrastructure without full V1 coverage."""
+    """Prove actual matrix obligations, authority classes, tags, and errors."""
 
     validate_coverage_matrix()
     represented_capabilities = tuple(sorted({case.capability_id for case in cases}))
@@ -485,6 +515,8 @@ def validate_case_coverage(
     )
     missing_families = tuple(item for item in FAMILY_IDS if item not in represented_families)
     missing_cells: list[tuple[str, str, str]] = []
+    missing_tags: list[tuple[str, str, str]] = []
+    missing_errors: list[tuple[str, str, str]] = []
     expected_cells = tuple(
         (row, family, split)
         for row in COVERAGE_MATRIX
@@ -495,14 +527,53 @@ def validate_case_coverage(
         if not require_all_splits and split != SplitName.PUBLIC_DEVELOPMENT:
             continue
         if not any(
-            _case_satisfies_row(case, row, family)
-            and (case.split.split_name is None or case.split.split_name is split)
+            _case_satisfies_obligation(case, row, family)
+            and (
+                case.split.split_name is split
+                if require_all_splits
+                else case.split.split_name is None or case.split.split_name is split
+            )
             for case in cases
         ):
             missing_cells.append((row.capability_id, family, split.value))
+    for row in COVERAGE_MATRIX:
+        for split in SPLIT_ORDER:
+            relevant = tuple(
+                case
+                for case in cases
+                if (
+                    any(_case_satisfies_row(case, row, family) for family in row.benchmark_families)
+                    and (
+                        case.split.split_name is split
+                        if require_all_splits
+                        else case.split.split_name is None or case.split.split_name is split
+                    )
+                )
+            )
+            represented_tags = {tag for case in relevant for tag in case.adversarial_tags}
+            represented_errors = {
+                error.value
+                for case in relevant
+                for error in case.scoring_contract.error_class_rules
+            }
+            for tag in row.adversarial_tags:
+                if tag not in represented_tags:
+                    missing_tags.append((row.capability_id, split.value, tag))
+            for error in row.error_classes:
+                if error.value not in represented_errors:
+                    missing_errors.append((row.capability_id, split.value, error.value))
+    c17_c18_missing = tuple(
+        item
+        for item in (*missing_cells, *missing_tags, *missing_errors)
+        if item[0] in {"C17", "C18"}
+    )
     status = (
         "PASS"
-        if not missing_capabilities and not missing_families and not missing_cells
+        if not missing_capabilities
+        and not missing_families
+        and not missing_cells
+        and not missing_tags
+        and not missing_errors
         else "BLOCKED"
     )
     return CoverageValidation(
@@ -512,10 +583,15 @@ def validate_case_coverage(
         missing_capabilities=missing_capabilities,
         missing_families=missing_families,
         missing_cells=tuple(missing_cells),
+        missing_adversarial_tags=tuple(missing_tags),
+        missing_error_classes=tuple(missing_errors),
+        c17_c18_qualified=not c17_c18_missing,
         reason=(
-            "case set satisfies requested coverage"
+            "case set satisfies every capability-by-family-by-split obligation, including "
+            "full adversarial/error row coverage and explicit C17/C18 qualification"
             if status == "PASS"
-            else "case set is an infrastructure fixture or is missing frozen coverage cells"
+            else "case set is an infrastructure fixture or is missing frozen coverage, "
+            "authority, adversarial, or error obligations"
         ),
     )
 
@@ -525,6 +601,8 @@ __all__ = [
     "CoverageRow",
     "CoverageValidation",
     "coverage_manifest_digest",
+    "coverage_obligation_count",
+    "minimum_full_coverage_case_count",
     "validate_case_coverage",
     "validate_coverage_matrix",
 ]

@@ -503,6 +503,9 @@ def validate_manifest_bundle(bundle: ManifestBundleV1) -> None:
     from dynamislm.benchmark.split import validate_split_assignment
 
     validate_split_assignment(cases)
+    from dynamislm.benchmark.contamination import validate_exclusion_completeness
+
+    validate_exclusion_completeness(cases, bundle.exclusion_manifest.entries)
     expected_authority_hash = authority_manifest_hash(bundle.authority_manifest)
     if expected_authority_hash != bundle.authority_manifest.authority_manifest_hash:
         raise ValueError("stale authority manifest hash")
