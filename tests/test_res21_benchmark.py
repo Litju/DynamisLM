@@ -249,10 +249,11 @@ def test_split_allocator_is_deterministic_exact_and_lineage_atomic() -> None:
 
 
 def test_split_allocator_qualifies_the_frozen_benchmark_scale() -> None:
-    """The allocator must handle the first exact-count feasible matrix scale."""
+    """Exercise the actual full-coverage path at its first exact feasible scale."""
 
     from dataclasses import replace
 
+    from dynamislm.benchmark.coverage import COVERAGE_MATRIX
     from dynamislm.benchmark.hashing import bind_case_payload
 
     assert coverage_obligation_count() == 87
@@ -263,32 +264,120 @@ def test_split_allocator_qualifies_the_frozen_benchmark_scale() -> None:
         SplitName.HIDDEN_FINAL: 87,
     }
 
-    template = next(
+    fixtures = build_synthetic_reference_fixture_cases()
+    expert_template = next(
         case
-        for case in build_synthetic_reference_fixture_cases()
-        if case.provenance.origin_class is CaseOrigin.DETERMINISTIC_SYNTHETIC
+        for case in fixtures
+        if case.provenance.origin_class is CaseOrigin.EXPERT_AUTHORED_SEMANTIC
+    )
+    engine_template = next(
+        case
+        for case in fixtures
+        if case.provenance.origin_class is CaseOrigin.DETERMINISTIC_ENGINE_DERIVED
     )
     scale_cases = []
-    for index in range(434):
-        case_id = f"scale-fixture-{index:03d}"
-        namespace = f"PSE-V1/scale/fixture-generator/{index:03d}"
-        seed_block = f"seed-{index:04d}"
+    for row in COVERAGE_MATRIX:
+        template = engine_template if row.capability_id in {"C08", "C16"} else expert_template
+        profile = (
+            ScoringProfile.NUMERIC_TOLERANCE_V1
+            if template is engine_template
+            else next(
+                item
+                for item in (
+                    ScoringProfile.CLASSIFICATION_V1,
+                    ScoringProfile.STRUCTURED_FIELDS_V1,
+                    ScoringProfile.REFUSAL_V1,
+                )
+                if item in row.scorer_profiles
+            )
+        )
+        assert profile in row.scorer_profiles
+        for family in row.benchmark_families:
+            for replica in range(3):
+                index = len(scale_cases)
+                case_id = f"scale-qualification-{row.capability_id}-{family}-{replica}"
+                errors = tuple(row.error_classes)
+                primary_error = errors[0]
+                attribution = [
+                    (field_id, primary_error)
+                    for field_id in template.scoring_contract.required_output_fields
+                ]
+                if template.refusal_expectation.decision.value == "REQUIRED":
+                    attribution.extend(
+                        (("__decision__", primary_error), ("__refusal__", primary_error))
+                    )
+                else:
+                    attribution.append(("__over_refusal__", primary_error))
+                if template.expected_answer.prohibited_claims:
+                    attribution.append(("__prohibited_claim__", primary_error))
+                question = f"In-memory scale qualification case {case_id}."
+                scale_cases.append(
+                    bind_case_payload(
+                        replace(
+                            template,
+                            case_id=case_id,
+                            capability_id=row.capability_id,
+                            benchmark_family=family,
+                            question=question,
+                            input=replace(template.input, question_text=question),
+                            scoring_contract=replace(
+                                template.scoring_contract,
+                                profile_id=profile,
+                                error_class_rules=errors,
+                                error_attribution=tuple(attribution),
+                            ),
+                            adversarial_tags=tuple(row.adversarial_tags),
+                            split=replace(
+                                template.split,
+                                isolation_cluster_id=f"scale-cluster-{index:03d}",
+                            ),
+                            contamination=replace(
+                                template.contamination,
+                                source_family_id=f"scale-source-{index:03d}",
+                                provider_export_id=f"scale-provider-{index:03d}",
+                                protocol_template_id=f"scale-template-{index:03d}",
+                                expert_author_batch_id=f"scale-batch-{index:03d}",
+                                artifact_ids=(f"scale-artifact-{index:03d}",),
+                                benchmark_artifact_ids=(f"scale-artifact-{index:03d}",),
+                                training_exclusion_ids=(f"scale-exclusion-{index:03d}",),
+                            ),
+                            case_payload_hash="sha256:" + "0" * 64,
+                        )
+                    )
+                )
+
+    # Add 173 unique, already-covered cases so N=434 has exact 260/87/87 targets.
+    for replica in range(173):
+        row = COVERAGE_MATRIX[0]
+        template = expert_template
+        errors = tuple(row.error_classes)
+        primary_error = errors[0]
+        attribution = [
+            (field_id, primary_error)
+            for field_id in template.scoring_contract.required_output_fields
+        ]
+        attribution.extend((("__decision__", primary_error), ("__refusal__", primary_error)))
+        if template.expected_answer.prohibited_claims:
+            attribution.append(("__prohibited_claim__", primary_error))
+        index = len(scale_cases)
+        case_id = f"scale-qualification-fill-{replica:03d}"
+        question = f"In-memory scale qualification fill case {case_id}."
         scale_cases.append(
             bind_case_payload(
                 replace(
                     template,
                     case_id=case_id,
-                    question=f"{template.question} Fixture member {index}.",
-                    input=replace(
-                        template.input,
-                        question_text=f"{template.question} Fixture member {index}.",
+                    capability_id=row.capability_id,
+                    benchmark_family=row.benchmark_families[0],
+                    question=question,
+                    input=replace(template.input, question_text=question),
+                    scoring_contract=replace(
+                        template.scoring_contract,
+                        profile_id=ScoringProfile.CLASSIFICATION_V1,
+                        error_class_rules=errors,
+                        error_attribution=tuple(attribution),
                     ),
-                    provenance=replace(
-                        template.provenance,
-                        seed_namespace=namespace,
-                        seed_block=seed_block,
-                        generator_family=f"scale-generator-family-{index:03d}",
-                    ),
+                    adversarial_tags=tuple(row.adversarial_tags),
                     split=replace(
                         template.split,
                         isolation_cluster_id=f"scale-cluster-{index:03d}",
@@ -296,30 +385,25 @@ def test_split_allocator_qualifies_the_frozen_benchmark_scale() -> None:
                     contamination=replace(
                         template.contamination,
                         source_family_id=f"scale-source-{index:03d}",
+                        provider_export_id=f"scale-provider-{index:03d}",
                         protocol_template_id=f"scale-template-{index:03d}",
                         expert_author_batch_id=f"scale-batch-{index:03d}",
                         artifact_ids=(f"scale-artifact-{index:03d}",),
                         benchmark_artifact_ids=(f"scale-artifact-{index:03d}",),
                         training_exclusion_ids=(f"scale-exclusion-{index:03d}",),
-                        generator_namespace=namespace,
-                        generator_seed_block=seed_block,
                     ),
                     case_payload_hash="sha256:" + "0" * 64,
                 )
             )
         )
     cases = tuple(scale_cases)
-    first = allocate_splits(cases)
-    second = allocate_splits(cases)
+    assert len(cases) == 434
+    first = allocate_splits(cases, require_full_coverage=True)
+    second = allocate_splits(cases, require_full_coverage=True)
     assert first.cases == second.cases
-    assert tuple(
-        sum(case.split.split_name is split for case in first.cases)
-        for split in (
-            SplitName.PUBLIC_DEVELOPMENT,
-            SplitName.FROZEN_VALIDATION,
-            SplitName.HIDDEN_FINAL,
-        )
-    ) == (260, 87, 87)
+    assert first.target_counts == target_counts(434)
+    assert tuple(first.target_counts[split] for split in SplitName) == (260, 87, 87)
+    assert validate_case_coverage(first.cases, require_all_splits=True).status == "PASS"
 
 
 def test_contamination_registry_runs_exact_and_fuzzy_mandatory_checks() -> None:
