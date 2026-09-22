@@ -485,6 +485,98 @@ def test_contamination_registry_runs_exact_and_fuzzy_mandatory_checks() -> None:
     assert report.pretraining_exposure == "UNKNOWN"
 
 
+def test_shared_exclusion_artifacts_bind_many_cases_canonically() -> None:
+    from dynamislm.benchmark.contamination import validate_exclusion_completeness
+    from dynamislm.benchmark.fixtures import build_fixture_exclusion_registry
+    from dynamislm.benchmark.hashing import build_manifest_bundle, build_split_manifests
+    from dynamislm.benchmark.split import SplitAllocationResult
+
+    source_cases = build_synthetic_reference_fixture_cases()
+    split_by_case = {
+        source_cases[0].case_id: SplitName.PUBLIC_DEVELOPMENT,
+        source_cases[1].case_id: SplitName.PUBLIC_DEVELOPMENT,
+        source_cases[2].case_id: SplitName.PUBLIC_DEVELOPMENT,
+        source_cases[3].case_id: SplitName.PUBLIC_DEVELOPMENT,
+        source_cases[4].case_id: SplitName.FROZEN_VALIDATION,
+        source_cases[5].case_id: SplitName.HIDDEN_FINAL,
+    }
+    cases = []
+    for case in source_cases:
+        contamination = case.contamination
+        if case.case_id in {source_cases[0].case_id, source_cases[3].case_id}:
+            contamination = replace(
+                contamination,
+                source_family_id="fixture-shared-document-family",
+                document_ids=("fixture-shared-document",),
+            )
+        cases.append(
+            bind_case_payload(
+                replace(
+                    case,
+                    contamination=contamination,
+                    split=replace(
+                        case.split,
+                        split_name=split_by_case[case.case_id],
+                        split_manifest_version=None,
+                        split_manifest_hash=None,
+                        membership_digest=None,
+                    ),
+                    case_payload_hash="sha256:" + "0" * 64,
+                )
+            )
+        )
+    bound_cases, _ = build_split_manifests(tuple(cases), target_counts(6))
+    allocation = SplitAllocationResult(
+        cases=bound_cases,
+        target_counts=target_counts(6),
+        balance_cost=0,
+        hash_preference_cost=0,
+        cluster_assignments=(),
+    )
+    registry = build_fixture_exclusion_registry(allocation)
+    bundle = build_manifest_bundle(
+        bound_cases,
+        registry.entries,
+        build_res71_runtime_binding(),
+    )
+
+    shared = next(
+        entry
+        for entry in bundle.exclusion_manifest.entries
+        if entry.artifact_id == "document:fixture-shared-document"
+    )
+    assert shared.benchmark_case_ids == tuple(
+        sorted((source_cases[0].case_id, source_cases[3].case_id))
+    )
+    assert shared.benchmark_case_hashes == tuple(
+        next(case.case_payload_hash for case in bound_cases if case.case_id == case_id)
+        for case_id in shared.benchmark_case_ids
+    )
+    assert shared.split_names == (SplitName.PUBLIC_DEVELOPMENT,)
+    assert len(shared.membership_digests) == 2
+    validate_exclusion_completeness(bound_cases, bundle.exclusion_manifest.entries)
+
+    incomplete = tuple(
+        replace(
+            entry,
+            benchmark_case_ids=entry.benchmark_case_ids[:1],
+            benchmark_case_hashes=entry.benchmark_case_hashes[:1],
+            membership_digests=entry.membership_digests[:1],
+        )
+        if entry.artifact_id == shared.artifact_id
+        else entry
+        for entry in bundle.exclusion_manifest.entries
+    )
+    with pytest.raises(ValueError, match="incomplete case associations"):
+        validate_exclusion_completeness(bound_cases, incomplete)
+    with pytest.raises(ValueError, match="same case more than once"):
+        replace(
+            shared,
+            benchmark_case_ids=(shared.benchmark_case_ids[0],) * 2,
+            benchmark_case_hashes=(shared.benchmark_case_hashes[0],) * 2,
+        )
+
+
 def test_manifest_bundle_rejects_stale_bindings_and_hidden_training_access() -> None:
     bundle = build_fixture_manifest_bundle()
     validate_manifest_bundle(bundle)

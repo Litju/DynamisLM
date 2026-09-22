@@ -641,32 +641,51 @@ def build_fixture_exclusion_registry(
     allocation: SplitAllocationResult | None = None,
 ) -> ExclusionRegistry:
     result = allocation or build_fixture_allocation()
-    artifacts: list[ContaminationArtifact] = []
+    associated_cases: dict[str, list[BenchmarkCaseV1]] = {}
     for case in result.cases:
         if case.split.split_name is None:
             raise ValueError("fixture exclusion registry requires allocated cases")
-        membership_digests = (
-            (case.split.membership_digest,) if case.split.membership_digest is not None else ()
-        )
         for artifact_id in required_exclusion_artifact_ids(case):
-            artifacts.append(
-                ContaminationArtifact(
-                    artifact_id=artifact_id,
-                    source_id=case.contamination.source_family_id,
-                    text=(
-                        f"{artifact_id} "
-                        + f" {artifact_id} ".join(case.question.split())
-                        + f" {artifact_id} {case.case_payload_hash}"
-                    ),
-                    source_family_id=case.contamination.source_family_id,
-                    split_name=case.split.split_name,
-                    benchmark_case_ids=(case.case_id,),
-                    benchmark_case_hashes=(case.case_payload_hash,),
-                    membership_digests=(
-                        membership_digests if artifact_id == f"split:{case.case_id}" else ()
-                    ),
-                )
+            associated_cases.setdefault(artifact_id, []).append(case)
+    artifacts: list[ContaminationArtifact] = []
+    for artifact_id, unsorted_cases in associated_cases.items():
+        cases = tuple(sorted(unsorted_cases, key=lambda item: item.case_id.encode("utf-8")))
+        source_families = {case.contamination.source_family_id for case in cases}
+        if len(source_families) != 1:
+            raise ValueError(
+                f"shared fixture artifact has conflicting source families: {artifact_id}"
             )
+        split_names = tuple(
+            split for split in SplitName if any(case.split.split_name is split for case in cases)
+        )
+        case_ids = tuple(case.case_id for case in cases)
+        case_hashes = tuple(case.case_payload_hash for case in cases)
+        membership_digests = (
+            tuple(
+                case.split.membership_digest
+                for case in cases
+                if case.split.membership_digest is not None
+            )
+            if all(case.split.membership_digest is not None for case in cases)
+            else ()
+        )
+        artifacts.append(
+            ContaminationArtifact(
+                artifact_id=artifact_id,
+                source_id=next(iter(source_families)),
+                text=(
+                    f"{artifact_id} "
+                    + " ".join(f"{case.case_id} {case.case_payload_hash}" for case in cases)
+                    + f" {artifact_id}"
+                ),
+                source_family_id=next(iter(source_families)),
+                split_name=split_names[0],
+                benchmark_case_ids=case_ids,
+                benchmark_case_hashes=case_hashes,
+                membership_digests=membership_digests,
+                benchmark_split_names=split_names,
+            )
+        )
     manifest_ids = (
         "manifest:benchmark",
         "manifest:authority",
@@ -675,13 +694,18 @@ def build_fixture_exclusion_registry(
         *(f"manifest:split:{split.value}" for split in SplitName),
     )
     for artifact_id in manifest_ids:
+        manifest_split = next(
+            (split for split in SplitName if artifact_id == f"manifest:split:{split.value}"),
+            SplitName.PUBLIC_DEVELOPMENT,
+        )
         artifacts.append(
             ContaminationArtifact(
                 artifact_id=artifact_id,
                 source_id="fixture-manifest",
                 text=f"{artifact_id}|PSE-V1 fixture manifest artifact",
                 source_family_id="fixture-manifest",
-                split_name=SplitName.PUBLIC_DEVELOPMENT,
+                split_name=manifest_split,
+                benchmark_split_names=(manifest_split,),
             )
         )
     return ExclusionRegistry.from_artifacts(tuple(artifacts))

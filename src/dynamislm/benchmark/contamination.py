@@ -7,7 +7,7 @@ import re
 import unicodedata
 from dataclasses import dataclass
 
-from dynamislm.benchmark.constants import CaseOrigin, SplitName
+from dynamislm.benchmark.constants import SPLIT_ORDER, CaseOrigin, SplitName
 from dynamislm.benchmark.contracts import (
     BenchmarkCaseV1,
     ExclusionEntry,
@@ -144,6 +144,7 @@ class ContaminationArtifact:
     benchmark_case_hashes: tuple[str, ...] = ()
     membership_digests: tuple[str, ...] = ()
     exclusion_reason: str = "PSE-V1 benchmark/training exclusion"
+    benchmark_split_names: tuple[SplitName, ...] = ()
 
     def __post_init__(self) -> None:
         for name in ("artifact_id", "source_id", "text", "source_family_id", "exclusion_reason"):
@@ -151,12 +152,26 @@ class ContaminationArtifact:
             if not isinstance(value, str) or not value.strip():
                 raise ValueError(f"{name} must be non-empty")
         object.__setattr__(self, "split_name", SplitName(self.split_name))
+        split_names = tuple(SplitName(item) for item in self.benchmark_split_names)
+        if len(set(split_names)) != len(split_names):
+            raise ValueError("benchmark split associations cannot contain duplicates")
+        if split_names and split_names != tuple(
+            split for split in SPLIT_ORDER if split in split_names
+        ):
+            raise ValueError("benchmark split associations must use canonical split ordering")
+        object.__setattr__(self, "benchmark_split_names", split_names)
         if self.normalized_doi is not None and not self.normalized_doi.strip():
             raise ValueError("normalized_doi must not be empty")
         if self.canonical_url is not None and not self.canonical_url.strip():
             raise ValueError("canonical_url must not be empty")
         if len(self.benchmark_case_ids) != len(self.benchmark_case_hashes):
             raise ValueError("benchmark case IDs and hashes must align")
+        if len(set(self.benchmark_case_ids)) != len(self.benchmark_case_ids):
+            raise ValueError("an artifact cannot associate the same case more than once")
+        if self.benchmark_case_ids != tuple(
+            sorted(self.benchmark_case_ids, key=lambda item: item.encode("utf-8"))
+        ):
+            raise ValueError("benchmark case associations must use canonical case-ID ordering")
         if self.membership_digests and len(self.membership_digests) != len(self.benchmark_case_ids):
             raise ValueError("membership digests and benchmark case IDs must align")
 
@@ -177,7 +192,7 @@ def build_exclusion_entry(artifact: ContaminationArtifact) -> ExclusionEntry:
         semantic_cluster_id=artifact.semantic_cluster_id,
         benchmark_case_ids=artifact.benchmark_case_ids,
         benchmark_case_hashes=artifact.benchmark_case_hashes,
-        split_names=(artifact.split_name,),
+        split_names=artifact.benchmark_split_names or (artifact.split_name,),
         exclusion_reason=artifact.exclusion_reason,
         membership_digests=artifact.membership_digests,
     )
@@ -196,8 +211,15 @@ class ExclusionRegistry:
             raise ValueError("exclusion registry must not be empty")
         if any(not isinstance(item, ExclusionEntry) for item in self.entries):
             raise ValueError("exclusion registry entries must be typed")
+        artifact_ids = tuple(item.artifact_id for item in self.entries)
+        if artifact_ids != tuple(sorted(artifact_ids, key=lambda item: item.encode("utf-8"))):
+            raise ValueError("exclusion registry entries must use canonical artifact-ID ordering")
+        if len(set(artifact_ids)) != len(artifact_ids):
+            raise ValueError("exclusion registry contains duplicate artifact IDs")
         if self.artifacts and len(self.artifacts) != len(self.entries):
             raise ValueError("private exclusion text index must align with registry entries")
+        if self.artifacts and tuple(item.artifact_id for item in self.artifacts) != artifact_ids:
+            raise ValueError("private exclusion text index must use registry artifact ordering")
         if any(
             build_exclusion_entry(item) != entry
             for item, entry in zip(self.artifacts, self.entries, strict=False)
@@ -208,8 +230,12 @@ class ExclusionRegistry:
     def from_artifacts(cls, artifacts: tuple[ContaminationArtifact, ...]) -> ExclusionRegistry:
         if not artifacts:
             raise ValueError("cannot build exclusion registry from no artifacts")
+        artifact_ids = tuple(item.artifact_id for item in artifacts)
+        if len(set(artifact_ids)) != len(artifact_ids):
+            raise ValueError("cannot build exclusion registry from duplicate artifact IDs")
+        ordered = tuple(sorted(artifacts, key=lambda item: item.artifact_id.encode("utf-8")))
         return cls(
-            entries=tuple(build_exclusion_entry(item) for item in artifacts), artifacts=artifacts
+            entries=tuple(build_exclusion_entry(item) for item in ordered), artifacts=ordered
         )
 
 
@@ -407,12 +433,12 @@ def required_exclusion_artifact_ids(case: BenchmarkCaseV1) -> tuple[str, ...]:
         *case.contamination.benchmark_artifact_ids,
         *case.contamination.training_exclusion_ids,
     }
+    required.update(f"document:{item}" for item in case.contamination.document_ids)
     origin = case.provenance.origin_class
     if origin is CaseOrigin.EXPERT_AUTHORED_SEMANTIC:
         required.add(f"rubric:{case.case_id}")
     if origin is CaseOrigin.SOURCE_BACKED_EVIDENCE_EXTRACTION:
         required.update(f"source:{item}" for item in case.provenance.source_artifact_ids)
-        required.update(f"document:{item}" for item in case.contamination.document_ids)
         required.update(f"evidence:{item}" for item in case.provenance.evidence_span_refs)
     if origin is CaseOrigin.DETERMINISTIC_SYNTHETIC:
         if case.provenance.generator_id is None:
@@ -436,17 +462,26 @@ def validate_exclusion_completeness(
     *,
     require_manifest_artifacts: bool = True,
 ) -> None:
-    """Fail closed unless every frozen benchmark artifact is represented once."""
+    """Require exact one-to-one core and many-to-many shared artifact bindings."""
 
     if not cases:
         raise ValueError("exclusion completeness requires a non-empty case set")
     if len({case.case_id for case in cases}) != len(cases):
         raise ValueError("exclusion completeness cannot operate on duplicate case IDs")
-    if len({entry.artifact_id for entry in entries}) != len(entries):
+    artifact_ids = tuple(entry.artifact_id for entry in entries)
+    if len(set(artifact_ids)) != len(entries):
         raise ValueError("exclusion registry contains duplicate artifact IDs")
+    if artifact_ids != tuple(sorted(artifact_ids, key=lambda item: item.encode("utf-8"))):
+        raise ValueError("exclusion registry entries are not canonically ordered")
     by_artifact_id = {entry.artifact_id: entry for entry in entries}
     by_case_id = {case.case_id: case for case in cases}
     case_hashes = {case.case_id: case.case_payload_hash for case in cases}
+    required_members: dict[str, dict[str, BenchmarkCaseV1]] = {}
+    for case in cases:
+        for artifact_id in required_exclusion_artifact_ids(case):
+            required_members.setdefault(artifact_id, {})[case.case_id] = case
+
+    observed_case_hashes: dict[str, str] = {}
     manifest_split_names: set[str] = set()
     for entry in entries:
         for case_id, case_hash in zip(
@@ -456,21 +491,28 @@ def validate_exclusion_completeness(
                 raise ValueError(f"exclusion registry references unknown case: {case_id}")
             if case_hashes[case_id] != case_hash:
                 raise ValueError(f"exclusion registry case hash is stale: {case_id}")
+            prior_hash = observed_case_hashes.get(case_id)
+            if prior_hash is not None and prior_hash != case_hash:
+                raise ValueError(f"exclusion registry has conflicting hashes for case: {case_id}")
+            observed_case_hashes[case_id] = case_hash
+            expected_cases = required_members.get(entry.artifact_id)
+            if expected_cases is None or case_id not in expected_cases:
+                raise ValueError(
+                    f"exclusion artifact has a stale or unexpected case association: "
+                    f"{entry.artifact_id}/{case_id}"
+                )
             case = by_case_id[case_id]
             if case.split.split_name is None:
                 raise ValueError("exclusion completeness requires allocated split membership")
             manifest_split_names.add(case.split.split_name.value)
-            if case.split.split_name not in entry.split_names:
-                raise ValueError(
-                    f"exclusion artifact has stale split membership: {entry.artifact_id}"
-                )
-            if (
-                entry.membership_digests
-                and case.split.membership_digest not in entry.membership_digests
+        if entry.membership_digests:
+            for case_id, membership_digest in zip(
+                entry.benchmark_case_ids, entry.membership_digests, strict=True
             ):
-                raise ValueError(
-                    f"exclusion artifact has stale membership digest: {entry.artifact_id}"
-                )
+                if by_case_id[case_id].split.membership_digest != membership_digest:
+                    raise ValueError(
+                        f"exclusion artifact has stale membership digest: {entry.artifact_id}"
+                    )
     for case in cases:
         required_ids = required_exclusion_artifact_ids(case)
         missing = tuple(item for item in required_ids if item not in by_artifact_id)
@@ -478,12 +520,6 @@ def validate_exclusion_completeness(
             raise ValueError(
                 f"case {case.case_id} has incomplete exclusion artifact coverage: {missing}"
             )
-        for artifact_id in required_ids:
-            entry = by_artifact_id[artifact_id]
-            if entry.benchmark_case_ids != (case.case_id,) or entry.benchmark_case_hashes != (
-                case.case_payload_hash,
-            ):
-                raise ValueError(f"artifact {artifact_id} does not bind exactly one case/hash")
         split_entry = by_artifact_id[f"split:{case.case_id}"]
         if not split_entry.membership_digests or split_entry.membership_digests != (
             case.split.membership_digest,
@@ -491,6 +527,28 @@ def validate_exclusion_completeness(
             raise ValueError(
                 f"split artifact does not bind the exact membership digest: {case.case_id}"
             )
+    for artifact_id, associated_cases in required_members.items():
+        entry = by_artifact_id.get(artifact_id)
+        if entry is None:
+            continue
+        expected_ids = tuple(sorted(associated_cases, key=lambda item: item.encode("utf-8")))
+        expected_hashes = tuple(
+            associated_cases[case_id].case_payload_hash for case_id in expected_ids
+        )
+        expected_splits = tuple(
+            split
+            for split in SPLIT_ORDER
+            if any(associated_cases[case_id].split.split_name is split for case_id in expected_ids)
+        )
+        if (
+            entry.benchmark_case_ids != expected_ids
+            or entry.benchmark_case_hashes != expected_hashes
+        ):
+            raise ValueError(
+                f"artifact {artifact_id} has stale, duplicate, or incomplete case associations"
+            )
+        if entry.split_names != expected_splits:
+            raise ValueError(f"artifact {artifact_id} has stale split associations")
     if require_manifest_artifacts:
         required_manifest_ids = {
             "manifest:benchmark",

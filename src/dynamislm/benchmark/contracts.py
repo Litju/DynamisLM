@@ -23,6 +23,7 @@ from dynamislm.benchmark.constants import (
     FAMILY_IDS,
     SERIALIZATION_V3,
     SPLIT_MANIFEST_VERSION,
+    SPLIT_ORDER,
     CaseOrigin,
     DifficultyLevel,
     ErrorClass,
@@ -1058,11 +1059,21 @@ class ExclusionEntry:
         _sha(self.exact_shingle_digest, "exact_shingle_digest")
         _sha(self.fuzzy_fingerprint, "fuzzy_fingerprint")
         _strings(self.benchmark_case_ids, "benchmark_case_ids", allow_empty=True)
+        if len(set(self.benchmark_case_ids)) != len(self.benchmark_case_ids):
+            raise ValueError("an exclusion artifact cannot associate the same case more than once")
+        if self.benchmark_case_ids != tuple(
+            sorted(self.benchmark_case_ids, key=lambda item: item.encode("utf-8"))
+        ):
+            raise ValueError("exclusion case associations must use canonical case-ID ordering")
         for item in self.benchmark_case_hashes:
             _sha(item, "benchmark_case_hashes item")
         if len(self.benchmark_case_ids) != len(self.benchmark_case_hashes):
             raise ValueError("benchmark case IDs and hashes must align")
         splits = tuple(_enum(item, SplitName, "split_names") for item in self.split_names)
+        if len(set(splits)) != len(splits):
+            raise ValueError("exclusion split associations cannot contain duplicates")
+        if splits != tuple(split for split in SPLIT_ORDER if split in splits):
+            raise ValueError("exclusion split associations must use canonical split ordering")
         object.__setattr__(self, "split_names", splits)
         _strings(self.membership_digests, "membership_digests", allow_empty=True)
         for item in self.membership_digests:
@@ -1087,6 +1098,11 @@ class ExclusionManifestV1:
         _tuple_of(self.entries, "exclusion entries")
         if any(not isinstance(item, ExclusionEntry) for item in self.entries):
             raise ValueError("exclusion entries must be typed")
+        artifact_ids = tuple(item.artifact_id for item in self.entries)
+        if artifact_ids != tuple(sorted(artifact_ids, key=lambda item: item.encode("utf-8"))):
+            raise ValueError("exclusion manifest entries must use canonical artifact-ID ordering")
+        if len(set(artifact_ids)) != len(artifact_ids):
+            raise ValueError("exclusion manifest cannot contain duplicate artifact IDs")
         for name in ("normalization_policy", "detector_policy", "semantic_diagnostic_policy"):
             _text(getattr(self, name), name)
         _sha(self.manifest_digest, "manifest_digest")
