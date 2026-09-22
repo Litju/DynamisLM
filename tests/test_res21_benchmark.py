@@ -223,6 +223,83 @@ def test_ground_truth_and_mutation_contracts_reject_forged_metadata() -> None:
         )
 
 
+def test_source_authority_must_bind_typed_source_and_exact_span_identity() -> None:
+    source = next(
+        case
+        for case in build_synthetic_reference_fixture_cases()
+        if case.provenance.origin_class is CaseOrigin.SOURCE_BACKED_EVIDENCE_EXTRACTION
+    )
+    source_binding = source.authority[0]
+
+    wrong_span_identity = bind_case_payload(
+        replace(
+            source,
+            authority=(replace(source_binding, source_reference_id="fixture-source"),),
+            case_payload_hash="sha256:" + "0" * 64,
+        )
+    )
+    with pytest.raises(ValueError, match="source-evidence-span authority identity"):
+        validate_case(wrong_span_identity)
+
+    wrong_span_digest = bind_case_payload(
+        replace(
+            source,
+            authority=(replace(source_binding, digest="sha256:" + "0" * 64),),
+            case_payload_hash="sha256:" + "0" * 64,
+        )
+    )
+    with pytest.raises(ValueError, match="source-evidence-span authority identity"):
+        validate_case(wrong_span_digest)
+
+    caller_minted_artifact = bind_case_payload(
+        replace(
+            source,
+            provenance=replace(source.provenance, source_artifact_ids=("caller-source",)),
+            case_payload_hash="sha256:" + "0" * 64,
+        )
+    )
+    with pytest.raises(ValueError, match="source artifact identity/digest"):
+        validate_case(caller_minted_artifact)
+
+    caller_minted_document = bind_case_payload(
+        replace(
+            source,
+            contamination=replace(source.contamination, document_ids=("caller-document",)),
+            case_payload_hash="sha256:" + "0" * 64,
+        )
+    )
+    with pytest.raises(ValueError, match="contamination document identity"):
+        validate_case(caller_minted_document)
+
+    source_document_authority = replace(
+        source_binding,
+        authority_kind=AuthorityKind.SOURCE_DOCUMENT.value,
+        source_reference_id="fixture-source",
+        governed_field_ids=("expected_answer",),
+    )
+    document_bound = bind_case_payload(
+        replace(
+            source,
+            authority=(*source.authority, source_document_authority),
+            case_payload_hash="sha256:" + "0" * 64,
+        )
+    )
+    validate_case(document_bound)
+
+    wrong_document_identity = bind_case_payload(
+        replace(
+            document_bound,
+            authority=(
+                source_binding,
+                replace(source_document_authority, source_reference_id="caller-source"),
+            ),
+            case_payload_hash="sha256:" + "0" * 64,
+        )
+    )
+    with pytest.raises(ValueError, match="source-document authority identity"):
+        validate_case(wrong_document_identity)
+
+
 def test_split_allocator_is_deterministic_exact_and_lineage_atomic() -> None:
     from dynamislm.benchmark.split import allocate_splits
 
@@ -496,14 +573,14 @@ def test_shared_exclusion_artifacts_bind_many_cases_canonically() -> None:
         source_cases[0].case_id: SplitName.PUBLIC_DEVELOPMENT,
         source_cases[1].case_id: SplitName.PUBLIC_DEVELOPMENT,
         source_cases[2].case_id: SplitName.PUBLIC_DEVELOPMENT,
-        source_cases[3].case_id: SplitName.PUBLIC_DEVELOPMENT,
-        source_cases[4].case_id: SplitName.FROZEN_VALIDATION,
-        source_cases[5].case_id: SplitName.HIDDEN_FINAL,
+        source_cases[3].case_id: SplitName.FROZEN_VALIDATION,
+        source_cases[4].case_id: SplitName.HIDDEN_FINAL,
+        source_cases[5].case_id: SplitName.PUBLIC_DEVELOPMENT,
     }
     cases = []
     for case in source_cases:
         contamination = case.contamination
-        if case.case_id in {source_cases[0].case_id, source_cases[3].case_id}:
+        if case.case_id in {source_cases[0].case_id, source_cases[5].case_id}:
             contamination = replace(
                 contamination,
                 source_family_id="fixture-shared-document-family",
@@ -546,7 +623,7 @@ def test_shared_exclusion_artifacts_bind_many_cases_canonically() -> None:
         if entry.artifact_id == "document:fixture-shared-document"
     )
     assert shared.benchmark_case_ids == tuple(
-        sorted((source_cases[0].case_id, source_cases[3].case_id))
+        sorted((source_cases[0].case_id, source_cases[5].case_id))
     )
     assert shared.benchmark_case_hashes == tuple(
         next(case.case_payload_hash for case in bound_cases if case.case_id == case_id)

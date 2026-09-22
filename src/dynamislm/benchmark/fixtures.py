@@ -398,7 +398,7 @@ def _source_case() -> BenchmarkCaseV1:
     authorities = (
         AuthorityBinding(
             "SOURCE_EVIDENCE_SPAN",
-            "fixture-source",
+            excerpt.excerpt_id,
             "1.0.0",
             source_digest,
             ("input.evidence_excerpts", "expected_answer"),
@@ -460,6 +460,15 @@ def _source_case() -> BenchmarkCaseV1:
         modalities=(InputModality.TEXT, InputModality.EVIDENCE_EXCERPT),
         evidence_excerpts=(excerpt,),
         tags=("FIXTURE", "SOURCE_BACKED", "SYNTHETIC_SOURCE_MATERIAL"),
+    )
+    case = replace(
+        case,
+        contamination=replace(
+            case.contamination,
+            source_ids=("fixture-source",),
+            document_ids=("fixture-source",),
+            source_content_sha256=source_digest,
+        ),
     )
     return bind_case_payload(case)
 
