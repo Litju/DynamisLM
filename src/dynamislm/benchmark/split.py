@@ -142,9 +142,15 @@ def _union_find_clusters(cases: tuple[BenchmarkCaseV1, ...]) -> tuple[_Cluster, 
         )
         generator_seed_blocks = tuple(
             sorted(
-                item
-                for item in (cases[index].provenance.seed_block for index in ordered_indices)
-                if item is not None
+                {
+                    item
+                    for index in ordered_indices
+                    for item in (
+                        cases[index].provenance.seed_block,
+                        cases[index].contamination.generator_seed_block,
+                    )
+                    if item is not None
+                }
             )
         )
         cluster_input = {

@@ -563,7 +563,13 @@ def test_split_isolation_enforces_all_recorded_generator_seed_keys() -> None:
                 ),
             )
         )
-    assert len(_union_find_clusters(tuple(cases))) == 1
+    clusters = _union_find_clusters(tuple(cases))
+    assert len(clusters) == 1
+    assert clusters[0].generator_seed_blocks == (
+        "provenance-block-0",
+        "provenance-block-1",
+        "shared-contamination-block",
+    )
     cross_split = (
         replace(
             cases[0],
