@@ -13,6 +13,7 @@ from dynamislm.benchmark.constants import (
     HIGH_ERROR_CLASSES,
     ErrorClass,
     ErrorSeverity,
+    ExpectedAnswerKind,
     FieldScoreStatus,
     RefusalDecision,
     ScoringProfile,
@@ -127,6 +128,18 @@ def validate_scoring_contract(contract: ScoringContract) -> None:
     unknown = set(contract.error_class_rules) - set(ErrorClass)
     if unknown:
         raise ValueError(f"unknown scorer error class: {sorted(unknown)}")
+    if len(set(contract.required_output_fields)) != len(contract.required_output_fields):
+        raise ValueError("scoring required output fields must be unique")
+    if any(field not in contract.required_output_fields for field in contract.critical_fields):
+        raise ValueError("critical scoring fields must be required output fields")
+    attribution = dict(contract.error_attribution)
+    if any(
+        field not in attribution and "__default__" not in attribution
+        for field in contract.required_output_fields
+    ):
+        raise ValueError("every scored field requires explicit error attribution metadata")
+    if any(error_class not in contract.error_class_rules for error_class in attribution.values()):
+        raise ValueError("error attribution contains an undeclared error class")
 
 
 @dataclass(frozen=True, slots=True)
@@ -250,24 +263,19 @@ def _numeric_match(
     return False, "numeric value is outside the registered tolerance"
 
 
-def _error_for_field(case: BenchmarkCaseV1, field_id: str, actual: object | None) -> ErrorEvent:
-    lower = field_id.lower()
-    if lower in {"comparability_state", "state", "comparability"}:
-        error_class = ErrorClass.FALSE_COMPARABILITY_ACCEPTANCE
-    elif "claim" in lower or "causal" in lower:
-        error_class = ErrorClass.CAUSAL_OVERCLAIM
-    elif "analysis" in lower or "estimand" in lower:
-        error_class = ErrorClass.WRONG_ANALYSIS_CLASS
-    elif "within" in lower or "between" in lower or "level_of_analysis" in lower:
-        error_class = ErrorClass.BETWEEN_TO_WITHIN_MISINFERENCE
-    elif "origin" in lower or "direct" in lower or "derived" in lower:
-        error_class = ErrorClass.DIRECT_DERIVED_COLLAPSE
-    elif "latent" in lower or "physiolog" in lower or "readiness" in lower or "fatigue" in lower:
-        error_class = ErrorClass.UNSUPPORTED_LATENT_OR_PHYSIOLOGICAL_INFERENCE
-    elif "numeric" in lower or "value" in lower or "result" in lower:
-        error_class = ErrorClass.INVENTED_NUMERICAL_SCIENCE
-    else:
-        error_class = ErrorClass.WRONG_MEASUREMENT_IDENTITY
+def _attributed_error(
+    case: BenchmarkCaseV1,
+    attribution_key: str,
+    *,
+    field_id: str | None,
+    evidence: str,
+) -> ErrorEvent:
+    attribution = dict(case.scoring_contract.error_attribution)
+    error_class = attribution.get(attribution_key, attribution.get("__default__"))
+    if error_class is None:
+        raise ValueError(
+            f"case {case.case_id} has no explicit error attribution for {attribution_key!r}"
+        )
     severity = (
         ErrorSeverity.CRITICAL.value
         if error_class in CRITICAL_ERROR_CLASSES
@@ -280,22 +288,34 @@ def _error_for_field(case: BenchmarkCaseV1, field_id: str, actual: object | None
         error_class=error_class,
         severity=severity,
         field_id=field_id,
-        evidence=f"required structured field {field_id!r} did not satisfy the frozen authority",
+        evidence=evidence,
     )
 
 
 def _refusal_field_scores(
     case: BenchmarkCaseV1, candidate: CandidateAnswer
 ) -> tuple[FieldScore, ...]:
-    expected = case.refusal_expectation
+    expected_refusal = case.refusal_expectation
     actual = candidate.refusal or {}
-    expected_values: dict[str, object] = {
-        "blocked_claim": expected.blocked_claim,
-        "refusal_class": expected.refusal_class.value if expected.refusal_class else None,
-        "reason_codes": expected.reason_codes,
-        "missing_information": expected.missing_information,
-        "safe_description": expected.what_can_still_be_safely_described,
+    refusal_fields = {
+        "blocked_claim": expected_refusal.blocked_claim,
+        "refusal_class": (
+            expected_refusal.refusal_class.value
+            if expected_refusal.refusal_class is not None
+            else None
+        ),
+        "reason_codes": expected_refusal.reason_codes,
+        "missing_information": expected_refusal.missing_information,
+        "safe_description": expected_refusal.what_can_still_be_safely_described,
     }
+    expected_values = (
+        {
+            field_id: case.expected_answer.expected_fields[field_id]
+            for field_id in case.expected_answer.required_field_ids
+        }
+        if case.expected_answer.kind is ExpectedAnswerKind.REFUSAL
+        else {field_id: value for field_id, value in refusal_fields.items() if value is not None}
+    )
     scores: list[FieldScore] = []
     for field_id, expected_value in expected_values.items():
         actual_value = actual.get(field_id)
@@ -342,24 +362,40 @@ def score_case(
         validate_case(case)
     validate_scoring_contract(case.scoring_contract)
     answer = coerce_candidate_answer(candidate)
-    expected_refusal = case.refusal_expectation.decision is RefusalDecision.REQUIRED
-    refusal_decision_correct = answer.is_refusal if expected_refusal else not answer.is_refusal
+    if case.scoring_contract.profile_id is ScoringProfile.CALIBRATION_V1:
+        return ScoreResult(
+            case_id=case.case_id,
+            outcome=TaskOutcome.NOT_SCORED,
+            field_scores=(),
+            error_events=(),
+            primary_decision_correct=False,
+            refusal_decision_correct=False,
+        )
+    refusal_policy = case.refusal_expectation.decision
+    expected_refusal = refusal_policy is RefusalDecision.REQUIRED
+    refusal_allowed = refusal_policy is RefusalDecision.ALLOWED
+    refusal_decision_correct = (
+        answer.is_refusal
+        if expected_refusal
+        else not answer.is_refusal
+        if not refusal_allowed
+        else True
+    )
     field_scores: list[FieldScore] = []
     errors: list[ErrorEvent] = []
 
-    if expected_refusal:
+    if answer.is_refusal and refusal_policy is not RefusalDecision.PROHIBITED:
         field_scores.extend(_refusal_field_scores(case, answer))
-    else:
-        if answer.is_refusal:
+        if any(field.status is not FieldScoreStatus.CORRECT for field in field_scores):
             errors.append(
-                ErrorEvent(
-                    case_id=case.case_id,
-                    error_class=ErrorClass.OVER_REFUSAL,
-                    severity=ErrorSeverity.BEHAVIOR.value,
+                _attributed_error(
+                    case,
+                    "__refusal__",
                     field_id=None,
-                    evidence="candidate refused a claim not marked refusal-required",
+                    evidence="candidate refusal did not satisfy the explicit refusal contract",
                 )
             )
+    elif not answer.is_refusal:
         for field_id in case.expected_answer.required_field_ids:
             expected_value = case.expected_answer.expected_fields.get(field_id)
             actual_value = _actual_field(answer, field_id)
@@ -371,6 +407,14 @@ def score_case(
                         expected_value,
                         None,
                         "required field is missing",
+                    )
+                )
+                errors.append(
+                    _attributed_error(
+                        case,
+                        field_id,
+                        field_id=field_id,
+                        evidence=f"required structured field {field_id!r} is missing",
                     )
                 )
                 continue
@@ -408,40 +452,54 @@ def score_case(
                 )
             )
             if not matched:
-                errors.append(_error_for_field(case, field_id, actual_value))
+                errors.append(
+                    _attributed_error(
+                        case,
+                        field_id,
+                        field_id=field_id,
+                        evidence=f"required structured field {field_id!r} did not match authority",
+                    )
+                )
 
         for field_id in case.expected_answer.prohibited_claims:
             if field_id in answer.claims:
                 errors.append(
-                    ErrorEvent(
-                        case_id=case.case_id,
-                        error_class=ErrorClass.CAUSAL_OVERCLAIM,
-                        severity=ErrorSeverity.CRITICAL.value,
+                    _attributed_error(
+                        case,
+                        "__prohibited_claim__",
                         field_id=field_id,
                         evidence="candidate emitted a structured prohibited claim",
                     )
                 )
 
-    if expected_refusal and not refusal_decision_correct:
+    if expected_refusal and not answer.is_refusal:
         errors.append(
-            ErrorEvent(
-                case_id=case.case_id,
-                error_class=ErrorClass.FALSE_SCIENTIFIC_ACCEPTANCE,
-                severity=ErrorSeverity.CRITICAL.value,
+            _attributed_error(
+                case,
+                "__decision__",
                 field_id=None,
                 evidence="candidate accepted a claim whose frozen contract requires refusal",
             )
         )
-    if expected_refusal and answer.is_refusal:
-        required_fields = {
-            item.field_id for item in field_scores if item.status is FieldScoreStatus.CORRECT
-        }
-        if len(required_fields) < len(field_scores):
+    if refusal_policy is RefusalDecision.PROHIBITED and answer.is_refusal:
+        errors.append(
+            _attributed_error(
+                case,
+                "__over_refusal__",
+                field_id=None,
+                evidence="candidate refused a claim whose frozen contract prohibits refusal",
+            )
+        )
+    if (
+        expected_refusal
+        and answer.is_refusal
+        and any(field.status is not FieldScoreStatus.CORRECT for field in field_scores)
+    ):
+        if not any(event.error_class is ErrorClass.UNDER_SPECIFIED_REFUSAL for event in errors):
             errors.append(
-                ErrorEvent(
-                    case_id=case.case_id,
-                    error_class=ErrorClass.UNDER_SPECIFIED_REFUSAL,
-                    severity=ErrorSeverity.BEHAVIOR.value,
+                _attributed_error(
+                    case,
+                    "__refusal__",
                     field_id=None,
                     evidence=(
                         "refusal decision is correct but the structured refusal contract "
@@ -453,10 +511,15 @@ def score_case(
     has_critical_or_high = any(
         event.error_class in (*CRITICAL_ERROR_CLASSES, *HIGH_ERROR_CLASSES) for event in errors
     )
-    all_fields_correct = bool(field_scores) and all(
-        field.status is FieldScoreStatus.CORRECT for field in field_scores
+    all_fields_correct = all(field.status is FieldScoreStatus.CORRECT for field in field_scores)
+    if not field_scores and not answer.is_refusal:
+        all_fields_correct = False
+    critical_field_failure = any(
+        field.status is not FieldScoreStatus.CORRECT
+        and field.field_id in case.scoring_contract.critical_fields
+        for field in field_scores
     )
-    if expected_refusal:
+    if expected_refusal or (refusal_allowed and answer.is_refusal):
         if refusal_decision_correct and all_fields_correct and not has_critical_or_high:
             outcome = TaskOutcome.REFUSAL_CORRECT
         elif refusal_decision_correct and not has_critical_or_high:
@@ -465,9 +528,7 @@ def score_case(
             outcome = TaskOutcome.REFUSAL_INCORRECT
     elif answer.is_refusal:
         outcome = TaskOutcome.REFUSAL_INCORRECT
-    elif has_critical_or_high or any(
-        field.status is FieldScoreStatus.WRONG for field in field_scores
-    ):
+    elif has_critical_or_high or critical_field_failure:
         outcome = TaskOutcome.FAIL
     elif all_fields_correct:
         outcome = TaskOutcome.PASS
@@ -497,7 +558,7 @@ class ErrorEventReport:
     events: tuple[ErrorEvent, ...]
     counts: Mapping[str, int]
     eligible_denominators: Mapping[str, int]
-    rates: Mapping[str, float]
+    rates: Mapping[str, float | None]
     by_split: Mapping[str, Mapping[str, int]]
 
     def __post_init__(self) -> None:
@@ -533,9 +594,18 @@ def build_error_event_report(
     for error_class in ErrorClass:
         denominators.setdefault(error_class.value, 0)
         counts.setdefault(error_class.value, 0)
+    uneligible_events = tuple(
+        error_class
+        for error_class, count in counts.items()
+        if count > 0 and denominators[error_class] == 0
+    )
+    if uneligible_events:
+        raise ValueError(
+            "error event has no eligible case denominator: " + ", ".join(sorted(uneligible_events))
+        )
     rates = {
         error_class: (
-            counts[error_class] / denominators[error_class] if denominators[error_class] else 0.0
+            counts[error_class] / denominators[error_class] if denominators[error_class] else None
         )
         for error_class in counts
     }
