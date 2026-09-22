@@ -446,12 +446,15 @@ def case_isolation_values(case: BenchmarkCaseV1) -> tuple[tuple[str, str], ...]:
         ("protocol-template", contamination.protocol_template_id),
         ("expert-author-batch", contamination.expert_author_batch_id),
         ("generator-family", provenance.generator_family),
-        ("seed-namespace", provenance.seed_namespace or contamination.generator_namespace),
-        ("seed-block", provenance.seed_block or contamination.generator_seed_block),
         ("mutation-lineage", provenance.mutation_lineage_id),
     ):
         if value:
             values.add((kind, value))
+    for kind, identities in (
+        ("seed-namespace", (provenance.seed_namespace, contamination.generator_namespace)),
+        ("seed-block", (provenance.seed_block, contamination.generator_seed_block)),
+    ):
+        values.update((kind, value) for value in identities if value)
     return tuple(
         sorted(values, key=lambda item: (item[0].encode("utf-8"), item[1].encode("utf-8")))
     )

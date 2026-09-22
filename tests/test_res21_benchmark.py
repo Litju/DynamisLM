@@ -530,6 +530,54 @@ def test_split_isolation_clusters_and_rejects_shared_identity_attacks(
         validate_source_family_isolation(cross_split)
 
 
+def test_split_isolation_enforces_all_recorded_generator_seed_keys() -> None:
+    from dynamislm.benchmark.contamination import validate_source_family_isolation
+    from dynamislm.benchmark.split import _union_find_clusters
+
+    template = next(
+        case
+        for case in build_synthetic_reference_fixture_cases()
+        if case.provenance.origin_class is CaseOrigin.DETERMINISTIC_SYNTHETIC
+    )
+    cases = []
+    for index in range(2):
+        case_id = f"seed-isolation-{index}"
+        cases.append(
+            replace(
+                template,
+                case_id=case_id,
+                split=replace(template.split, isolation_cluster_id=f"seed-cluster-{index}"),
+                provenance=replace(
+                    template.provenance,
+                    generator_family=f"seed-generator-family-{index}",
+                    seed_namespace=f"provenance-namespace-{index}",
+                    seed_block=f"provenance-block-{index}",
+                ),
+                contamination=replace(
+                    template.contamination,
+                    source_family_id=f"seed-source-family-{index}",
+                    protocol_template_id=f"seed-template-{index}",
+                    expert_author_batch_id=f"seed-batch-{index}",
+                    generator_namespace="shared-contamination-namespace",
+                    generator_seed_block="shared-contamination-block",
+                ),
+            )
+        )
+    assert len(_union_find_clusters(tuple(cases))) == 1
+    cross_split = (
+        replace(
+            cases[0],
+            split=replace(cases[0].split, split_name=SplitName.PUBLIC_DEVELOPMENT),
+        ),
+        replace(
+            cases[1],
+            split=replace(cases[1].split, split_name=SplitName.FROZEN_VALIDATION),
+        ),
+    )
+    with pytest.raises(ValueError, match="seed-block crosses split boundary"):
+        validate_source_family_isolation(cross_split)
+
+
 def test_contamination_registry_runs_exact_and_fuzzy_mandatory_checks() -> None:
     allocation = build_fixture_allocation()
     registry = build_fixture_exclusion_registry(allocation)
