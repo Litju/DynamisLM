@@ -6,6 +6,8 @@ import pytest
 
 from dynamislm.benchmark import (
     CandidateAnswer,
+    ContaminationAudit,
+    ContaminationGateEvidence,
     ErrorClass,
     ExclusionRegistry,
     HiddenAccessRequest,
@@ -39,6 +41,7 @@ from dynamislm.benchmark import (
     validate_case_payload_hash,
     validate_case_set,
     validate_coverage_matrix,
+    validate_final_v1_freeze,
     validate_manifest_bundle,
     validate_res71_operation_binding,
     validate_res71_refusal_binding,
@@ -706,6 +709,56 @@ def test_manifest_bundle_rejects_stale_bindings_and_hidden_training_access() -> 
         preflight_training_exclusion(None, expected_manifest_hash=None).status
         is PreflightStatus.BLOCKED
     )
+
+
+def test_final_v1_freeze_rejects_infrastructure_fixture_bundle() -> None:
+    bundle = build_fixture_manifest_bundle()
+    from dynamislm.benchmark.split import SplitAllocationResult
+
+    registry = build_fixture_exclusion_registry(
+        SplitAllocationResult(
+            cases=bundle.cases,
+            target_counts=target_counts(len(bundle.cases)),
+            balance_cost=0,
+            hash_preference_cost=0,
+            cluster_assignments=(),
+        )
+    )
+    audit_ids = tuple(
+        sorted(
+            entry.artifact_id
+            for entry in bundle.exclusion_manifest.entries
+            if entry.benchmark_case_ids
+        )
+    )
+    gate = ContaminationGateEvidence(
+        benchmark_manifest_hash=bundle.benchmark_manifest.benchmark_manifest_hash,
+        exclusion_manifest_hash=bundle.exclusion_manifest.manifest_digest,
+        audits=tuple(
+            ContaminationAudit(
+                "PASS", artifact_id, (), (), (), "NOT_APPLICABLE", "in-memory gate fixture"
+            )
+            for artifact_id in audit_ids
+        ),
+    )
+    hidden = next(case for case in bundle.cases if case.split.split_name is SplitName.HIDDEN_FINAL)
+    store = HiddenStoreDescriptor(
+        store_id="fixture-hidden-store",
+        store_version="1.0.0",
+        benchmark_manifest_hash=bundle.benchmark_manifest.benchmark_manifest_hash,
+        hidden_case_ids=(hidden.case_id,),
+        payloads_available=True,
+        answers_available=True,
+        hidden_case_hashes=((hidden.case_id, hidden.case_payload_hash),),
+    )
+
+    with pytest.raises(ValueError, match="fixture-only cases"):
+        validate_final_v1_freeze(
+            bundle,
+            exclusion_registry=registry,
+            contamination_gate=gate,
+            hidden_store=store,
+        )
 
 
 def test_exclusion_preflight_rejects_incomplete_artifact_inventory() -> None:

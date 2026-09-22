@@ -257,6 +257,32 @@ class ContaminationAudit:
 
 
 @dataclass(frozen=True, slots=True)
+class ContaminationGateEvidence:
+    """Manifest-bound set of mandatory per-artifact contamination decisions."""
+
+    benchmark_manifest_hash: str
+    exclusion_manifest_hash: str
+    audits: tuple[ContaminationAudit, ...]
+
+    def __post_init__(self) -> None:
+        for name in ("benchmark_manifest_hash", "exclusion_manifest_hash"):
+            value = getattr(self, name)
+            if not re.fullmatch(r"sha256:[0-9a-f]{64}", value):
+                raise ValueError(f"{name} must be a canonical SHA-256 digest")
+        if not self.audits or any(not isinstance(item, ContaminationAudit) for item in self.audits):
+            raise ValueError("contamination gate evidence must contain typed audit results")
+        artifact_ids = tuple(item.candidate_artifact_id for item in self.audits)
+        if len(set(artifact_ids)) != len(artifact_ids):
+            raise ValueError("contamination gate evidence cannot duplicate artifact audits")
+        if artifact_ids != tuple(sorted(artifact_ids, key=lambda item: item.encode("utf-8"))):
+            raise ValueError("contamination gate audits must use canonical artifact-ID ordering")
+
+    @property
+    def resolved(self) -> bool:
+        return all(item.status == "PASS" for item in self.audits)
+
+
+@dataclass(frozen=True, slots=True)
 class ContaminationReport:
     """Policy-bounded audit language; this is not a universal detector claim."""
 
@@ -364,6 +390,43 @@ def audit_contamination(
         source_family_conflicts=tuple(family_conflicts),
         semantic_diagnostic="NOT_APPLICABLE",
         reason="; ".join(reasons) if reasons else "mandatory contamination checks passed",
+    )
+
+
+def build_contamination_gate_evidence(
+    bundle: object,
+    registry: ExclusionRegistry,
+) -> ContaminationGateEvidence:
+    """Compute mandatory deterministic audits bound to a manifest bundle."""
+
+    from dynamislm.benchmark.contracts import ManifestBundleV1
+
+    if not isinstance(bundle, ManifestBundleV1):
+        raise TypeError("bundle must be ManifestBundleV1")
+    if registry.entries != bundle.exclusion_manifest.entries:
+        raise ValueError("private contamination registry differs from the exclusion manifest")
+    if len(registry.artifacts) != len(registry.entries):
+        raise ValueError("private contamination text material is required for the final gate")
+    case_artifacts = tuple(
+        artifact for artifact in registry.artifacts if artifact.benchmark_case_ids
+    )
+    audits = tuple(
+        sorted(
+            (
+                audit_contamination(
+                    artifact,
+                    registry,
+                    approved_overlap_artifact_ids=(artifact.artifact_id,),
+                )
+                for artifact in case_artifacts
+            ),
+            key=lambda item: item.candidate_artifact_id.encode("utf-8"),
+        )
+    )
+    return ContaminationGateEvidence(
+        benchmark_manifest_hash=bundle.benchmark_manifest.benchmark_manifest_hash,
+        exclusion_manifest_hash=bundle.exclusion_manifest.manifest_digest,
+        audits=audits,
     )
 
 
@@ -572,9 +635,11 @@ __all__ = [
     "PSE_V1_CONTAMINATION_AUDIT",
     "ContaminationArtifact",
     "ContaminationAudit",
+    "ContaminationGateEvidence",
     "ContaminationReport",
     "ExclusionRegistry",
     "audit_contamination",
+    "build_contamination_gate_evidence",
     "build_contamination_report",
     "build_exclusion_entry",
     "case_isolation_values",
