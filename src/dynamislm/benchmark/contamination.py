@@ -279,7 +279,13 @@ class ContaminationGateEvidence:
 
     @property
     def resolved(self) -> bool:
-        return all(item.status == "PASS" for item in self.audits)
+        return all(
+            item.status == "PASS"
+            and not item.exact_matches
+            and not item.fuzzy_matches
+            and not item.source_family_conflicts
+            for item in self.audits
+        )
 
 
 @dataclass(frozen=True, slots=True)

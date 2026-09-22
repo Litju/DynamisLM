@@ -815,6 +815,25 @@ def test_final_v1_freeze_rejects_infrastructure_fixture_bundle() -> None:
         )
 
 
+def test_contamination_gate_rejects_pass_status_with_unresolved_findings() -> None:
+    gate = ContaminationGateEvidence(
+        benchmark_manifest_hash="sha256:" + "1" * 64,
+        exclusion_manifest_hash="sha256:" + "2" * 64,
+        audits=(
+            ContaminationAudit(
+                "PASS",
+                "case:case-1",
+                ("prompt:other-case",),
+                (),
+                (),
+                "NOT_APPLICABLE",
+                "inconsistent pass receipt",
+            ),
+        ),
+    )
+    assert not gate.resolved
+
+
 def test_exclusion_preflight_rejects_incomplete_artifact_inventory() -> None:
     bundle = build_fixture_manifest_bundle()
     incomplete = replace(
