@@ -677,6 +677,7 @@ class ContaminationBinding:
     generator_seed_block: str | None
     benchmark_artifact_ids: tuple[str, ...]
     training_exclusion_ids: tuple[str, ...]
+    construct_test_identity_ids: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         for name, values in (
@@ -685,6 +686,7 @@ class ContaminationBinding:
             ("artifact_ids", self.artifact_ids),
             ("benchmark_artifact_ids", self.benchmark_artifact_ids),
             ("training_exclusion_ids", self.training_exclusion_ids),
+            ("construct_test_identity_ids", self.construct_test_identity_ids),
         ):
             _strings(values, name, allow_empty=True)
         _text(self.source_family_id, "source_family_id")

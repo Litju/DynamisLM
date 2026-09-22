@@ -317,7 +317,7 @@ def audit_contamination(
             if token_score >= 0.85 or character_score >= 0.85 or edit_score >= 0.90:
                 fuzzy_matches.append(entry.artifact_id)
             if entry.source_family_id == candidate.source_family_id and entry.split_names:
-                if entry.split_names[0] is not candidate.split_name:
+                if candidate.split_name not in entry.split_names:
                     family_conflicts.append(entry.artifact_id)
     exact_matches = sorted(set(exact_matches))
     fuzzy_matches = sorted(set(fuzzy_matches))
@@ -341,37 +341,48 @@ def audit_contamination(
     )
 
 
-def validate_source_family_isolation(cases: tuple[BenchmarkCaseV1, ...]) -> None:
-    """Require each source/provider/template family to occupy one split only."""
+def case_isolation_values(case: BenchmarkCaseV1) -> tuple[tuple[str, str], ...]:
+    """Return the frozen identity dimensions that must remain split-atomic."""
 
-    family_splits: dict[str, SplitName] = {}
+    contamination = case.contamination
+    provenance = case.provenance
+    values: set[tuple[str, str]] = {("source-family", contamination.source_family_id)}
+    for kind, items in (
+        ("document-identity", contamination.document_ids),
+        ("construct-test-identity", contamination.construct_test_identity_ids),
+    ):
+        values.update((kind, item) for item in items)
+    for kind, value in (
+        ("provider-export", contamination.provider_export_id),
+        ("protocol-template", contamination.protocol_template_id),
+        ("expert-author-batch", contamination.expert_author_batch_id),
+        ("generator-family", provenance.generator_family),
+        ("seed-namespace", provenance.seed_namespace or contamination.generator_namespace),
+        ("seed-block", provenance.seed_block or contamination.generator_seed_block),
+        ("mutation-lineage", provenance.mutation_lineage_id),
+    ):
+        if value:
+            values.add((kind, value))
+    return tuple(
+        sorted(values, key=lambda item: (item[0].encode("utf-8"), item[1].encode("utf-8")))
+    )
+
+
+def validate_source_family_isolation(cases: tuple[BenchmarkCaseV1, ...]) -> None:
+    """Require every frozen source/test/generator identity to occupy one split."""
+
     isolation_keys: dict[str, SplitName] = {}
     for case in cases:
         split = case.split.split_name
         if split is None:
             raise ValueError("source-family isolation requires allocated splits")
         assert isinstance(split, SplitName)
-        metadata = case.contamination
-        keys = [
-            ("source-family", metadata.source_family_id),
-            ("provider-export", metadata.provider_export_id),
-            ("protocol-template", metadata.protocol_template_id),
-            ("expert-author-batch", metadata.expert_author_batch_id),
-            ("generator-family", case.provenance.generator_family),
-            ("mutation-lineage", case.provenance.mutation_lineage_id),
-        ]
-        for kind, value in keys:
-            if value is None:
-                continue
+        for kind, value in case_isolation_values(case):
             key = f"{kind}:{value}"
             prior = isolation_keys.get(key)
             if prior is not None and prior is not split:
                 raise ValueError(f"{kind} crosses split boundary: {value}")
             isolation_keys[key] = split
-        prior_family = family_splits.get(metadata.source_family_id)
-        if prior_family is not None and prior_family is not split:
-            raise ValueError(f"source family crosses split boundary: {metadata.source_family_id}")
-        family_splits[metadata.source_family_id] = split
 
 
 def validate_case_contamination_binding(case: BenchmarkCaseV1) -> None:
@@ -508,6 +519,7 @@ __all__ = [
     "audit_contamination",
     "build_contamination_report",
     "build_exclusion_entry",
+    "case_isolation_values",
     "character_5gram_jaccard",
     "exact_13_token_shingles",
     "exact_shingle_digest",

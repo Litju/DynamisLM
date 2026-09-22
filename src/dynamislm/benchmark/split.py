@@ -81,27 +81,9 @@ def target_counts(case_count: int) -> dict[SplitName, int]:
 
 
 def _isolation_values(case: BenchmarkCaseV1) -> tuple[str, ...]:
-    contamination = case.contamination
-    provenance = case.provenance
-    values = (
-        f"source-family:{contamination.source_family_id}",
-        f"provider-export:{contamination.provider_export_id}"
-        if contamination.provider_export_id
-        else "",
-        f"protocol-template:{contamination.protocol_template_id}"
-        if contamination.protocol_template_id
-        else "",
-        f"expert-author-batch:{contamination.expert_author_batch_id}"
-        if contamination.expert_author_batch_id
-        else "",
-        f"generator-family:{provenance.generator_family}" if provenance.generator_family else "",
-        f"mutation-lineage:{provenance.mutation_lineage_id}"
-        if provenance.mutation_lineage_id
-        else "",
-        f"seed-namespace:{provenance.seed_namespace}" if provenance.seed_namespace else "",
-        f"seed-block:{provenance.seed_block}" if provenance.seed_block else "",
-    )
-    return tuple(item for item in values if item)
+    from dynamislm.benchmark.contamination import case_isolation_values
+
+    return tuple(f"{kind}:{value}" for kind, value in case_isolation_values(case))
 
 
 def _union_find_clusters(cases: tuple[BenchmarkCaseV1, ...]) -> tuple[_Cluster, ...]:

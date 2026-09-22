@@ -334,6 +334,8 @@ def test_split_allocator_qualifies_the_frozen_benchmark_scale() -> None:
                             contamination=replace(
                                 template.contamination,
                                 source_family_id=f"scale-source-{index:03d}",
+                                document_ids=(f"scale-document-{index:03d}",),
+                                construct_test_identity_ids=(f"scale-construct-test-{index:03d}",),
                                 provider_export_id=f"scale-provider-{index:03d}",
                                 protocol_template_id=f"scale-template-{index:03d}",
                                 expert_author_batch_id=f"scale-batch-{index:03d}",
@@ -385,6 +387,8 @@ def test_split_allocator_qualifies_the_frozen_benchmark_scale() -> None:
                     contamination=replace(
                         template.contamination,
                         source_family_id=f"scale-source-{index:03d}",
+                        document_ids=(f"scale-document-{index:03d}",),
+                        construct_test_identity_ids=(f"scale-construct-test-{index:03d}",),
                         provider_export_id=f"scale-provider-{index:03d}",
                         protocol_template_id=f"scale-template-{index:03d}",
                         expert_author_batch_id=f"scale-batch-{index:03d}",
@@ -404,6 +408,46 @@ def test_split_allocator_qualifies_the_frozen_benchmark_scale() -> None:
     assert first.target_counts == target_counts(434)
     assert tuple(first.target_counts[split] for split in SplitName) == (260, 87, 87)
     assert validate_case_coverage(first.cases, require_all_splits=True).status == "PASS"
+
+
+@pytest.mark.parametrize(
+    ("identity_field", "identity_value", "expected_kind"),
+    (
+        ("document_ids", ("shared-document",), "document-identity"),
+        (
+            "construct_test_identity_ids",
+            ("CMJ:countermovement-jump:test-v1",),
+            "construct-test-identity",
+        ),
+    ),
+)
+def test_split_isolation_clusters_and_rejects_shared_identity_attacks(
+    identity_field: str, identity_value: tuple[str, ...], expected_kind: str
+) -> None:
+    from dynamislm.benchmark.contamination import validate_source_family_isolation
+    from dynamislm.benchmark.split import _union_find_clusters
+
+    engine, semantic = build_synthetic_reference_fixture_cases()[:2]
+    engine_contamination = replace(engine.contamination, **{identity_field: identity_value})
+    semantic_contamination = replace(semantic.contamination, **{identity_field: identity_value})
+    paired = (
+        replace(engine, contamination=engine_contamination),
+        replace(semantic, contamination=semantic_contamination),
+    )
+    assert len(_union_find_clusters(paired)) == 1
+
+    cross_split = (
+        replace(
+            paired[0],
+            split=replace(paired[0].split, split_name=SplitName.PUBLIC_DEVELOPMENT),
+        ),
+        replace(
+            paired[1],
+            split=replace(paired[1].split, split_name=SplitName.FROZEN_VALIDATION),
+        ),
+    )
+    with pytest.raises(ValueError, match=expected_kind):
+        validate_source_family_isolation(cross_split)
 
 
 def test_contamination_registry_runs_exact_and_fuzzy_mandatory_checks() -> None:
