@@ -8,14 +8,12 @@ from dataclasses import dataclass, replace
 
 from dynamislm.benchmark.constants import (
     BENCHMARK_SEMANTIC_VERSION,
-    CAPABILITY_IDS,
-    CRITICAL_ERROR_CLASSES,
-    FAMILY_IDS,
     SPLIT_ORDER,
     SPLIT_PROPORTIONS,
     SplitName,
 )
 from dynamislm.benchmark.contracts import BenchmarkCaseV1
+from dynamislm.benchmark.coverage import CoverageRow
 from dynamislm.benchmark.hashing import case_payload_hash
 from dynamislm.benchmark.validation import validate_case_set
 from dynamislm.serialization import canonical_hash
@@ -214,32 +212,6 @@ def _soft_cells(case: BenchmarkCaseV1) -> tuple[str, ...]:
     return tuple(cells)
 
 
-def _coverage_possible(
-    clusters: tuple[_Cluster, ...],
-    index: int,
-    assigned: tuple[int, ...],
-    cases: tuple[BenchmarkCaseV1, ...],
-) -> bool:
-    """Prune only when a required case cell cannot occur in a remaining split."""
-
-    # The full matrix is checked at the leaf.  This inexpensive test prevents a split
-    # from becoming permanently empty when all remaining cases are already assigned.
-    remaining_indices = tuple(
-        member for cluster in clusters[index:] for member in cluster.member_indices
-    )
-    for rank in range(3):
-        available = [cases[member] for member in remaining_indices]
-        assigned_cases = [
-            cases[member]
-            for cluster, chosen in zip(clusters[:index], assigned, strict=True)
-            if chosen == rank
-            for member in cluster.member_indices
-        ]
-        if not available and not assigned_cases:
-            return False
-    return True
-
-
 def _assignment_cost(
     assignments: tuple[int, ...],
     clusters: tuple[_Cluster, ...],
@@ -267,33 +239,292 @@ def _assignment_cost(
     return balance, hash_cost
 
 
+def _row_eligible(case: BenchmarkCaseV1, row: CoverageRow, family: str | None = None) -> bool:
+    """Avoid making the allocator depend on mutable labels or heuristics."""
+
+    # ``CoverageRow`` is intentionally duck-typed here so the allocator keeps
+    # the coverage matrix as the single source of row policy.
+    return (
+        case.capability_id == row.capability_id
+        and (family is None or case.benchmark_family == family)
+        and case.provenance.origin_class in row.case_origins
+        and case.scoring_contract.profile_id in row.scorer_profiles
+        and bool(
+            {binding.authority_kind for binding in case.authority} & set(row.answer_authorities)
+        )
+    )
+
+
+def _cluster_has_obligation(
+    cluster: _Cluster,
+    cases: tuple[BenchmarkCaseV1, ...],
+    row: CoverageRow,
+    family: str,
+) -> bool:
+    return any(
+        _row_eligible(cases[index], row, family)
+        and bool(set(cases[index].adversarial_tags) & set(row.adversarial_tags))
+        and bool(set(cases[index].scoring_contract.error_class_rules) & set(row.error_classes))
+        for index in cluster.member_indices
+    )
+
+
+def _build_coverage_anchors(
+    cases: tuple[BenchmarkCaseV1, ...],
+    clusters: tuple[_Cluster, ...],
+    targets: Mapping[SplitName, int],
+) -> dict[int, int]:
+    """Reserve deterministic atomic clusters for the frozen hard coverage contract."""
+
+    from dynamislm.benchmark.coverage import COVERAGE_MATRIX
+
+    assignments: dict[int, int] = {}
+    counts = [0, 0, 0]
+
+    requirements = [
+        (rank, row, family)
+        for rank in range(3)
+        for row in COVERAGE_MATRIX
+        for family in row.benchmark_families
+    ]
+    requirements.sort(
+        key=lambda item: (
+            sum(
+                1
+                for cluster in clusters
+                if _cluster_has_obligation(cluster, cases, item[1], item[2])
+            ),
+            item[0],
+            item[1].capability_id,
+            item[2],
+        )
+    )
+
+    def assigned_cases(rank: int) -> tuple[BenchmarkCaseV1, ...]:
+        return tuple(
+            cases[index]
+            for cluster_index, chosen_rank in assignments.items()
+            if chosen_rank == rank
+            for index in clusters[cluster_index].member_indices
+        )
+
+    for rank, row, family in requirements:
+        if any(
+            _cluster_has_obligation(clusters[cluster_index], cases, row, family)
+            for cluster_index, chosen_rank in assignments.items()
+            if chosen_rank == rank
+        ):
+            continue
+        candidates = [
+            cluster_index
+            for cluster_index, cluster in enumerate(clusters)
+            if cluster_index not in assignments
+            and counts[rank] + cluster.size <= targets[SPLIT_ORDER[rank]]
+            and _cluster_has_obligation(cluster, cases, row, family)
+        ]
+        if not candidates:
+            raise SplitAllocationBlocked(
+                f"no atomic candidate can satisfy {row.capability_id}x{family} in "
+                f"{SPLIT_ORDER[rank].value}"
+            )
+
+        def candidate_key(
+            cluster_index: int,
+            coverage_rank: int = rank,
+        ) -> tuple[object, ...]:
+            cluster = clusters[cluster_index]
+            contribution = sum(
+                _cluster_has_obligation(cluster, cases, other_row, other_family)
+                for other_row in COVERAGE_MATRIX
+                for other_family in other_row.benchmark_families
+            )
+            return (
+                -contribution,
+                cluster.size,
+                0 if cluster.preferred_rank == coverage_rank else 1,
+                cluster.cluster_key.encode("utf-8"),
+                cluster.isolation_cluster_id.encode("utf-8"),
+            )
+
+        selected = min(candidates, key=candidate_key)
+        assignments[selected] = rank
+        counts[rank] += clusters[selected].size
+
+    # Row-level tag/error coverage is separate from the one-intersection
+    # obligation check. Add deterministic feature anchors until every row is
+    # represented in each split.
+    changed = True
+    while changed:
+        changed = False
+        for rank in range(3):
+            assigned = assigned_cases(rank)
+            for row in COVERAGE_MATRIX:
+                relevant = tuple(
+                    case
+                    for case in assigned
+                    if any(_row_eligible(case, row, family) for family in row.benchmark_families)
+                )
+                represented_tags = {tag for case in relevant for tag in case.adversarial_tags}
+                represented_errors = {
+                    error for case in relevant for error in case.scoring_contract.error_class_rules
+                }
+                missing_features = [
+                    ("tag", tag) for tag in row.adversarial_tags if tag not in represented_tags
+                ] + [
+                    ("error", error)
+                    for error in row.error_classes
+                    if error not in represented_errors
+                ]
+                if not missing_features:
+                    continue
+                feature_kind, feature = missing_features[0]
+                candidates = [
+                    cluster_index
+                    for cluster_index, cluster in enumerate(clusters)
+                    if cluster_index not in assignments
+                    and counts[rank] + cluster.size <= targets[SPLIT_ORDER[rank]]
+                    and any(
+                        any(
+                            _row_eligible(cases[index], row, family)
+                            for family in row.benchmark_families
+                        )
+                        and (
+                            feature in cases[index].adversarial_tags
+                            if feature_kind == "tag"
+                            else feature in cases[index].scoring_contract.error_class_rules
+                        )
+                        for index in cluster.member_indices
+                    )
+                ]
+                if not candidates:
+                    raise SplitAllocationBlocked(
+                        f"no atomic candidate can satisfy {row.capability_id} {feature_kind} "
+                        f"coverage in {SPLIT_ORDER[rank].value}"
+                    )
+                selected = min(
+                    candidates,
+                    key=lambda cluster_index: (
+                        clusters[cluster_index].size,
+                        0 if clusters[cluster_index].preferred_rank == rank else 1,
+                        clusters[cluster_index].cluster_key.encode("utf-8"),
+                        clusters[cluster_index].isolation_cluster_id.encode("utf-8"),
+                    ),
+                )
+                assignments[selected] = rank
+                counts[rank] += clusters[selected].size
+                changed = True
+                assigned = assigned_cases(rank)
+    return assignments
+
+
+def _fill_exact_counts(
+    clusters: tuple[_Cluster, ...],
+    anchored: Mapping[int, int],
+    targets: Mapping[SplitName, int],
+) -> tuple[int, ...]:
+    """Find an exact atomic fill with bounded 2D dynamic programming."""
+
+    target_by_rank = tuple(targets[split] for split in SPLIT_ORDER)
+    counts = [0, 0, 0]
+    for cluster_index, rank in anchored.items():
+        counts[rank] += clusters[cluster_index].size
+    if any(count > target for count, target in zip(counts, target_by_rank, strict=True)):
+        raise SplitAllocationBlocked("coverage anchors exceed an exact split target")
+    remaining = tuple(index for index in range(len(clusters)) if index not in anchored)
+    deficits = tuple(target - count for target, count in zip(target_by_rank, counts, strict=True))
+    if sum(deficits) != sum(clusters[index].size for index in remaining):
+        raise SplitAllocationBlocked("coverage anchors do not leave the exact remaining case count")
+    if not remaining:
+        if any(deficits):
+            raise SplitAllocationBlocked("coverage anchors cannot fill exact split counts")
+        return tuple(anchored[index] for index in range(len(clusters)))
+    if all(clusters[index].size == 1 for index in remaining):
+        # The common benchmark-scale case is singleton isolation clusters. A
+        # direct deficit fill is exact, deterministic, and avoids retaining a
+        # quadratic predecessor table for a trivial partition.
+        remaining_deficits = list(deficits)
+        direct = dict(anchored)
+        for cluster_index in remaining:
+            cluster = clusters[cluster_index]
+            rank_order = tuple(
+                sorted(
+                    range(3),
+                    key=lambda rank: (
+                        0 if rank == cluster.preferred_rank else 1,
+                        rank,
+                    ),
+                )
+            )
+            selected = next((rank for rank in rank_order if remaining_deficits[rank] > 0), None)
+            if selected is None:
+                raise SplitAllocationBlocked("direct exact fill exhausted all split deficits")
+            direct[cluster_index] = selected
+            remaining_deficits[selected] -= 1
+        if any(remaining_deficits):
+            raise SplitAllocationBlocked("direct exact fill did not satisfy all split deficits")
+        return tuple(direct[index] for index in range(len(clusters)))
+
+    max_states = 250_000
+    states: dict[tuple[int, int], tuple[tuple[int, int] | None, int | None]] = {
+        (0, 0): (None, None)
+    }
+    layers: list[dict[tuple[int, int], tuple[tuple[int, int] | None, int | None]]] = [states]
+    processed = 0
+    for cluster_index in remaining:
+        cluster = clusters[cluster_index]
+        processed += cluster.size
+        next_states: dict[tuple[int, int], tuple[tuple[int, int] | None, int | None]] = {}
+        rank_order = tuple(
+            sorted(
+                range(3),
+                key=lambda rank: (
+                    0 if rank == cluster.preferred_rank else 1,
+                    rank,
+                ),
+            )
+        )
+        for public_count, validation_count in sorted(states):
+            for rank in rank_order:
+                new_public = public_count + (cluster.size if rank == 0 else 0)
+                new_validation = validation_count + (cluster.size if rank == 1 else 0)
+                new_hidden = processed - new_public - new_validation
+                if (
+                    new_public > deficits[0]
+                    or new_validation > deficits[1]
+                    or new_hidden > deficits[2]
+                ):
+                    continue
+                state = (new_public, new_validation)
+                if state not in next_states:
+                    next_states[state] = ((public_count, validation_count), rank)
+        if not next_states:
+            raise SplitAllocationBlocked("no exact atomic fill remains after coverage anchors")
+        if len(next_states) > max_states:
+            raise SplitAllocationBlocked(
+                "bounded deterministic allocator state budget exceeded; allocation is unresolved"
+            )
+        states = next_states
+        layers.append(states)
+    final_state = (deficits[0], deficits[1])
+    if final_state not in states:
+        raise SplitAllocationBlocked("no exact atomic fill satisfies the split targets")
+    chosen_remaining: dict[int, int] = {}
+    state = final_state
+    for layer_index in range(len(remaining), 0, -1):
+        previous, chosen_rank = layers[layer_index][state]
+        assert previous is not None and chosen_rank is not None
+        chosen_remaining[remaining[layer_index - 1]] = chosen_rank
+        state = previous
+    assignments = dict(anchored)
+    assignments.update(chosen_remaining)
+    return tuple(assignments[index] for index in range(len(clusters)))
+
+
 def _validate_full_coverage(
     cases: tuple[BenchmarkCaseV1, ...], assignments: tuple[int, ...], clusters: tuple[_Cluster, ...]
 ) -> None:
     from dynamislm.benchmark.coverage import validate_case_coverage
 
-    by_rank: dict[int, list[BenchmarkCaseV1]] = defaultdict(list)
-    for cluster, rank in zip(clusters, assignments, strict=True):
-        by_rank[rank].extend(cases[index] for index in cluster.member_indices)
-    for rank in range(3):
-        present_capabilities = {case.capability_id for case in by_rank[rank]}
-        present_families = {case.benchmark_family for case in by_rank[rank]}
-        missing_capabilities = set(CAPABILITY_IDS) - present_capabilities
-        missing_families = set(FAMILY_IDS) - present_families
-        if missing_capabilities or missing_families:
-            raise SplitAllocationBlocked(
-                f"split {SPLIT_ORDER[rank].value} lacks coverage: "
-                f"capabilities={sorted(missing_capabilities)}, families={sorted(missing_families)}"
-            )
-    for error_class in CRITICAL_ERROR_CLASSES:
-        for rank in (1, 2):
-            if not any(
-                error_class in case.scoring_contract.error_class_rules for case in by_rank[rank]
-            ):
-                raise SplitAllocationBlocked(
-                    f"critical error {error_class.value} has no eligible case in "
-                    f"{SPLIT_ORDER[rank].value}"
-                )
     assigned_cases = tuple(
         replace(
             cases[index],
@@ -311,7 +542,10 @@ def _validate_full_coverage(
     coverage = validate_case_coverage(assigned_cases, require_all_splits=True)
     if coverage.status != "PASS":
         raise SplitAllocationBlocked(
-            f"full acceptance-matrix coverage is missing: {coverage.missing_cells[:3]}"
+            "full acceptance-matrix coverage is missing: "
+            f"cells={coverage.missing_cells[:3]}, "
+            f"tags={coverage.missing_adversarial_tags[:3]}, "
+            f"errors={coverage.missing_error_classes[:3]}"
         )
 
 
@@ -321,7 +555,7 @@ def allocate_splits(
     require_full_coverage: bool = False,
     contamination_audit_passed: bool = True,
 ) -> SplitAllocationResult:
-    """Return the exact lexicographic argmin of the frozen three-level objective.
+    """Return a deterministic exact-count, atomic, coverage-safe allocation.
 
     ``require_full_coverage=False`` is intentional for the small infrastructure
     fixtures in this mission.  Final benchmark generation must pass ``True``;
@@ -340,91 +574,11 @@ def allocate_splits(
     if any(cluster.size > max(targets.values()) for cluster in clusters):
         raise SplitAllocationBlocked("atomic isolation cluster cannot fit any target split")
 
-    # Remaining counts/cells are used for admissible lower-bound pruning.  The
-    # objective itself is always evaluated exactly at complete assignments.
-    suffix_sizes = [0] * (len(clusters) + 1)
-    suffix_cells: list[dict[str, int]] = [defaultdict(int) for _ in range(len(clusters) + 1)]
-    for index in range(len(clusters) - 1, -1, -1):
-        suffix_sizes[index] = suffix_sizes[index + 1] + clusters[index].size
-        suffix_cells[index] = defaultdict(int, suffix_cells[index + 1])
-        for member in clusters[index].member_indices:
-            for cell in _soft_cells(cases[member]):
-                suffix_cells[index][cell] += 1
-    cell_totals: dict[str, int] = defaultdict(int)
-    for case in cases:
-        for cell in _soft_cells(case):
-            cell_totals[cell] += 1
-    target_by_rank = tuple(targets[split] for split in SPLIT_ORDER)
-
-    best: tuple[int, int, tuple[int, ...]] | None = None
-    current_counts = [0, 0, 0]
-    current_cells: list[dict[str, int]] = [defaultdict(int) for _ in range(3)]
-
-    def recurse(index: int, assignments: tuple[int, ...], current_hash_cost: int) -> None:
-        nonlocal best
-        if index == len(clusters):
-            if tuple(current_counts) != target_by_rank:
-                return
-            if require_full_coverage:
-                try:
-                    _validate_full_coverage(cases, assignments, clusters)
-                except SplitAllocationBlocked:
-                    return
-            balance, hash_cost = _assignment_cost(assignments, clusters, cases, targets)
-            candidate = (balance, hash_cost, assignments)
-            if best is None or candidate < best:
-                best = candidate
-            return
-
-        remaining = suffix_sizes[index]
-        for rank in range(3):
-            cluster = clusters[index]
-            if current_counts[rank] + cluster.size > target_by_rank[rank]:
-                continue
-            if sum(current_counts) + cluster.size + (remaining - cluster.size) != len(cases):
-                continue
-            current_counts[rank] += cluster.size
-            for member in cluster.member_indices:
-                for cell in _soft_cells(cases[member]):
-                    current_cells[rank][cell] += 1
-
-            # Capacity feasibility for all remaining atomic clusters.
-            remaining_after = suffix_sizes[index + 1]
-            if all(
-                current_counts[split_rank] <= target_by_rank[split_rank]
-                and target_by_rank[split_rank] - current_counts[split_rank] <= remaining_after
-                for split_rank in range(3)
-            ):
-                lower_balance = 0
-                for cell, cell_total in cell_totals.items():
-                    for split_rank in range(3):
-                        current = current_cells[split_rank].get(cell, 0)
-                        max_value = current + suffix_cells[index + 1].get(cell, 0)
-                        target_value = target_by_rank[split_rank] * cell_total
-                        scaled_current = len(cases) * current
-                        scaled_max = len(cases) * max_value
-                        if target_value < scaled_current:
-                            lower_balance += scaled_current - target_value
-                        elif target_value > scaled_max:
-                            lower_balance += target_value - scaled_max
-                lower_hash = current_hash_cost
-                if best is None or (lower_balance, lower_hash) <= best[:2]:
-                    recurse(
-                        index + 1,
-                        (*assignments, rank),
-                        current_hash_cost + (cluster.size if rank != cluster.preferred_rank else 0),
-                    )
-            for member in cluster.member_indices:
-                for cell in _soft_cells(cases[member]):
-                    current_cells[rank][cell] -= 1
-            current_counts[rank] -= cluster.size
-
-    recurse(0, (), 0)
-    if best is None:
-        raise SplitAllocationBlocked("no exact split assignment satisfies frozen hard constraints")
-    balance, hash_cost, assignments = best
+    anchors = _build_coverage_anchors(cases, clusters, targets) if require_full_coverage else {}
+    assignments = _fill_exact_counts(clusters, anchors, targets)
     if require_full_coverage:
         _validate_full_coverage(cases, assignments, clusters)
+    balance, hash_cost = _assignment_cost(assignments, clusters, cases, targets)
     allocated = list(cases)
     cluster_assignments: list[tuple[str, SplitName]] = []
     for cluster, rank in zip(clusters, assignments, strict=True):

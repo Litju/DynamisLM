@@ -709,6 +709,37 @@ membership in `split-manifest@1.0.0`; changing membership creates a new
 benchmark version and invalidates prior comparisons. The same canonical
 case/cluster set therefore always produces identical split membership.
 
+#### RES-21 implementation amendment — scalable allocator construction
+
+The exact recursive optimizer described above is retained as historical design
+intent, but it is not a practical implementation strategy at the first
+feasible matrix scale. The 87 capability-by-family obligations per split imply
+that the first exact 60/20/20 target is `N=434`, with counts `260/87/87`; an
+unbounded three-way recursive search has an exponential case-cluster search
+space at that scale.
+
+The RES-21 implementation therefore amends only the allocator construction:
+
+1. validate the complete case/cluster set and reserve whole clusters through a
+   canonical constrained greedy coverage construction, ordered by the number
+   of eligible candidates, then capability/family/split and cluster key;
+2. require every capability×family×split obligation, permitted origin,
+   answer-authority class, scorer, adversarial intersection, and error-class
+   intersection during reservation;
+3. add missing row-level adversarial/error features deterministically, with
+   explicit C17/C18 qualification;
+4. fill remaining exact split deficits with bounded two-dimensional dynamic
+   programming over atomic cluster sizes; and
+5. fail closed when an atomic exact fill is impossible or the fixed state budget
+   is exceeded.
+
+This construction is deterministic, exact-count, cluster-atomic,
+leakage-safe, coverage-safe, reproducible, and independent of optimizer,
+thread, library, or random-seed tie decisions. It does not add a large
+optimization dependency and does not alter the case, authority, scoring,
+contamination, or scientific-engine contracts. The allocator qualification
+test records the `N=434` scale gate without materializing the benchmark.
+
 ### 7.3 Access and isolation controls
 
 `HIDDEN_FINAL` is architecturally inaccessible to later training workflows:
@@ -888,6 +919,12 @@ thresholds, candidate decisions, and reviewer evidence are stored in the
 contamination audit manifest. A failure or unresolved decision in a mandatory
 check is `BLOCKED`; a missing optional semantic diagnostic or unresolved
 optional diagnostic is not.
+
+Reporting is policy-bounded: a passing audit is named
+`PSE_V1_CONTAMINATION_AUDIT=PASS`, not universal `CONTAMINATION_FREE`. When a
+base model's pretraining corpus cannot be inspected, the report records
+`PRETRAINING_EXPOSURE=UNKNOWN`. These are reporting semantics for the frozen
+deterministic overlap policy, not a new detector or model claim.
 
 ### 9.3 Generated-seed isolation
 
