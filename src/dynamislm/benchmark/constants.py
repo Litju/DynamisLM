@@ -145,6 +145,32 @@ class ErrorClass(StrEnum):
     EXCESSIVE_CONSERVATISM = "EXCESSIVE_CONSERVATISM"
 
 
+class OverlapMatchKind(StrEnum):
+    RAW_CONTENT_SHA256 = "RAW_CONTENT_SHA256"
+    NORMALIZED_TEXT_SHA256 = "NORMALIZED_TEXT_SHA256"
+    EXACT_13_TOKEN_SHINGLE = "EXACT_13_TOKEN_SHINGLE"
+
+
+class OverlapDecision(StrEnum):
+    APPROVED = "APPROVED"
+    REJECTED = "REJECTED"
+
+
+class OverlapSplitRelation(StrEnum):
+    SAME_SPLIT = "SAME_SPLIT"
+    CROSS_SPLIT = "CROSS_SPLIT"
+    MULTI_SPLIT = "MULTI_SPLIT"
+    UNBOUND = "UNBOUND"
+
+
+class OverlapLineageRelation(StrEnum):
+    PARENT_CHILD = "PARENT_CHILD"
+    SAME_SOURCE_ARTIFACT = "SAME_SOURCE_ARTIFACT"
+    SAME_CASE_COMPONENTS = "SAME_CASE_COMPONENTS"
+    UNRELATED = "UNRELATED"
+    UNKNOWN = "UNKNOWN"
+
+
 class Principal(StrEnum):
     EVALUATION_SERVICE = "EVALUATION_SERVICE"
     TRAINING = "TRAINING"
@@ -222,6 +248,10 @@ __all__ = [
     "ExpectedAnswerKind",
     "FieldScoreStatus",
     "InputModality",
+    "OverlapDecision",
+    "OverlapLineageRelation",
+    "OverlapMatchKind",
+    "OverlapSplitRelation",
     "PractitionerQuestionClass",
     "PreflightStatus",
     "Principal",

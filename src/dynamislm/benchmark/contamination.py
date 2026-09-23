@@ -2,24 +2,33 @@
 
 from __future__ import annotations
 
+import datetime as datetime_module
 import hashlib
 import re
 import unicodedata
+from collections import defaultdict
 from dataclasses import dataclass
 
 from dynamislm.benchmark.constants import (
     EXCLUSION_REGISTRY_VERSION,
     SPLIT_ORDER,
     CaseOrigin,
+    OverlapDecision,
+    OverlapLineageRelation,
+    OverlapMatchKind,
+    OverlapSplitRelation,
     SplitName,
 )
 from dynamislm.benchmark.contracts import (
     BenchmarkCaseV1,
     ExclusionEntry,
+    OverlapDispositionV1,
 )
 from dynamislm.benchmark.hashing import case_payload_hash
+from dynamislm.serialization import canonical_hash
 
 _TOKEN_RE = re.compile(r"\w+|[^\w\s]", flags=re.UNICODE)
+type _PairIndex = dict[object, tuple[int, ...]]
 
 PSE_V1_CONTAMINATION_AUDIT = "PSE_V1_CONTAMINATION_AUDIT"
 PRETRAINING_EXPOSURE_UNKNOWN = "UNKNOWN"
@@ -278,6 +287,95 @@ class ExclusionRegistry:
 
 
 @dataclass(frozen=True, slots=True)
+class _ContaminationMatchIndex:
+    raw_content: _PairIndex
+    normalized_text: _PairIndex
+    exact_shingles: _PairIndex
+    character_5grams: _PairIndex
+    token_5grams: _PairIndex
+    empty_character_5grams: tuple[int, ...]
+    empty_token_5grams: tuple[int, ...]
+    source_families: _PairIndex
+
+
+def _freeze_index(
+    values: dict[object, set[int]],
+) -> _PairIndex:
+    return {key: tuple(sorted(indices)) for key, indices in values.items()}
+
+
+def _build_contamination_match_index(registry: ExclusionRegistry) -> _ContaminationMatchIndex:
+    """Index exact fingerprints and 5-gram candidates before fuzzy checks."""
+
+    raw_content: dict[object, set[int]] = defaultdict(set)
+    normalized_text: dict[object, set[int]] = defaultdict(set)
+    exact_shingles: dict[object, set[int]] = defaultdict(set)
+    character_5grams: dict[object, set[int]] = defaultdict(set)
+    token_5grams: dict[object, set[int]] = defaultdict(set)
+    source_families: dict[object, set[int]] = defaultdict(set)
+    empty_character: list[int] = []
+    empty_tokens: list[int] = []
+    for index, (entry, artifact) in enumerate(
+        zip(registry.entries, registry.artifacts, strict=True)
+    ):
+        if entry.source_content_sha256 is not None:
+            raw_content[entry.source_content_sha256].add(index)
+        if entry.normalized_text_sha256 is not None:
+            normalized_text[entry.normalized_text_sha256].add(index)
+        for shingle in exact_13_token_shingles(artifact.text):
+            exact_shingles[shingle].add(index)
+        characters = _char_5grams(artifact.text)
+        tokens = _token_5grams(artifact.text)
+        if not characters:
+            empty_character.append(index)
+        for character_gram in characters:
+            character_5grams[character_gram].add(index)
+        if not tokens:
+            empty_tokens.append(index)
+        for token_gram in tokens:
+            token_5grams[token_gram].add(index)
+        source_families[entry.source_family_id].add(index)
+    return _ContaminationMatchIndex(
+        raw_content=_freeze_index(raw_content),
+        normalized_text=_freeze_index(normalized_text),
+        exact_shingles=_freeze_index(exact_shingles),
+        character_5grams=_freeze_index(character_5grams),
+        token_5grams=_freeze_index(token_5grams),
+        empty_character_5grams=tuple(empty_character),
+        empty_token_5grams=tuple(empty_tokens),
+        source_families=_freeze_index(source_families),
+    )
+
+
+def _candidate_match_indices(
+    candidate: ContaminationArtifact,
+    candidate_entry: ExclusionEntry,
+    match_index: _ContaminationMatchIndex,
+) -> tuple[int, ...]:
+    possible: set[int] = set()
+    if candidate_entry.source_content_sha256 is not None:
+        possible.update(match_index.raw_content.get(candidate_entry.source_content_sha256, ()))
+    if candidate_entry.normalized_text_sha256 is not None:
+        possible.update(match_index.normalized_text.get(candidate_entry.normalized_text_sha256, ()))
+    for shingle in exact_13_token_shingles(candidate.text):
+        possible.update(match_index.exact_shingles.get(shingle, ()))
+    character_grams = _char_5grams(candidate.text)
+    if character_grams:
+        for character_gram in character_grams:
+            possible.update(match_index.character_5grams.get(character_gram, ()))
+    else:
+        possible.update(match_index.empty_character_5grams)
+    token_grams = _token_5grams(candidate.text)
+    if token_grams:
+        for token_gram in token_grams:
+            possible.update(match_index.token_5grams.get(token_gram, ()))
+    else:
+        possible.update(match_index.empty_token_5grams)
+    possible.update(match_index.source_families.get(candidate.source_family_id, ()))
+    return tuple(sorted(possible))
+
+
+@dataclass(frozen=True, slots=True)
 class ContaminationAudit:
     status: str
     candidate_artifact_id: str
@@ -286,12 +384,45 @@ class ContaminationAudit:
     source_family_conflicts: tuple[str, ...]
     semantic_diagnostic: str
     reason: str
+    overlap_dispositions: tuple[OverlapDispositionV1, ...] = ()
 
     def __post_init__(self) -> None:
         if self.status not in {"PASS", "BLOCKED"}:
             raise ValueError("contamination audit status must be PASS or BLOCKED")
         if not self.candidate_artifact_id.strip():
             raise ValueError("candidate artifact ID must be non-empty")
+        for name in ("exact_matches", "fuzzy_matches", "source_family_conflicts"):
+            values = getattr(self, name)
+            if values != tuple(sorted(set(values), key=lambda item: item.encode("utf-8"))):
+                raise ValueError(f"{name} must use unique canonical artifact-ID ordering")
+        if any(not isinstance(item, OverlapDispositionV1) for item in self.overlap_dispositions):
+            raise ValueError("contamination audit dispositions must be typed")
+        disposition_matches = tuple(item.matched_artifact_id for item in self.overlap_dispositions)
+        if disposition_matches != tuple(
+            sorted(set(disposition_matches), key=lambda item: item.encode("utf-8"))
+        ):
+            raise ValueError("audit overlap dispositions must use canonical ordering")
+        if len(disposition_matches) != len(set(disposition_matches)):
+            raise ValueError("contamination audit cannot duplicate one overlap finding")
+        if any(
+            item.candidate_artifact_id != self.candidate_artifact_id
+            or item.matched_artifact_id not in self.exact_matches
+            or overlap_disposition_hash(item) != item.disposition_hash
+            for item in self.overlap_dispositions
+        ):
+            raise ValueError("contamination audit carries an unrelated or stale disposition")
+        approved_matches = {
+            item.matched_artifact_id
+            for item in self.overlap_dispositions
+            if item.decision is OverlapDecision.APPROVED
+            and item.split_relation is OverlapSplitRelation.SAME_SPLIT
+        }
+        if self.status == "PASS" and (
+            self.fuzzy_matches
+            or self.source_family_conflicts
+            or set(self.exact_matches) != approved_matches
+        ):
+            raise ValueError("PASS contamination audit lacks resolved findings")
 
 
 @dataclass(frozen=True, slots=True)
@@ -301,6 +432,7 @@ class ContaminationGateEvidence:
     benchmark_manifest_hash: str
     exclusion_manifest_hash: str
     audits: tuple[ContaminationAudit, ...]
+    dispositions: tuple[OverlapDispositionV1, ...] = ()
 
     def __post_init__(self) -> None:
         for name in ("benchmark_manifest_hash", "exclusion_manifest_hash"):
@@ -314,16 +446,74 @@ class ContaminationGateEvidence:
             raise ValueError("contamination gate evidence cannot duplicate artifact audits")
         if artifact_ids != tuple(sorted(artifact_ids, key=lambda item: item.encode("utf-8"))):
             raise ValueError("contamination gate audits must use canonical artifact-ID ordering")
+        if any(not isinstance(item, OverlapDispositionV1) for item in self.dispositions):
+            raise ValueError("contamination gate dispositions must be typed")
+        audit_dispositions = tuple(
+            disposition for audit in self.audits for disposition in audit.overlap_dispositions
+        )
+        canonical_audit_dispositions = tuple(
+            sorted(
+                audit_dispositions,
+                key=lambda item: (
+                    item.candidate_artifact_id.encode("utf-8"),
+                    item.matched_artifact_id.encode("utf-8"),
+                    item.match_kind.value.encode("utf-8"),
+                ),
+            )
+        )
+        if canonical_audit_dispositions != self.dispositions:
+            raise ValueError("gate dispositions do not match its per-artifact audit evidence")
+        disposition_keys = tuple(
+            (item.candidate_artifact_id, item.matched_artifact_id, item.match_kind.value)
+            for item in self.dispositions
+        )
+        if disposition_keys != tuple(
+            sorted(
+                disposition_keys,
+                key=lambda item: tuple(part.encode("utf-8") for part in item),
+            )
+        ):
+            raise ValueError("contamination dispositions must use canonical pair ordering")
+        if len(disposition_keys) != len(set(disposition_keys)):
+            raise ValueError("contamination gate cannot duplicate overlap dispositions")
+        disposition_pairs = tuple((item[0], item[1]) for item in disposition_keys)
+        if len(disposition_pairs) != len(set(disposition_pairs)):
+            raise ValueError("contamination gate cannot adjudicate one artifact pair twice")
+        if any(
+            overlap_disposition_hash(item) != item.disposition_hash for item in self.dispositions
+        ):
+            raise ValueError("contamination gate contains a stale overlap disposition hash")
 
     @property
     def resolved(self) -> bool:
+        dispositions = {
+            (item.candidate_artifact_id, item.matched_artifact_id): item
+            for item in self.dispositions
+        }
+        expected_pairs = {
+            (audit.candidate_artifact_id, matched_id)
+            for audit in self.audits
+            for matched_id in audit.exact_matches
+        }
+        if set(dispositions) != expected_pairs:
+            return False
         return all(
             item.status == "PASS"
-            and not item.exact_matches
             and not item.fuzzy_matches
             and not item.source_family_conflicts
+            and all(
+                (disposition := dispositions.get((item.candidate_artifact_id, matched_id)))
+                is not None
+                and disposition.decision is OverlapDecision.APPROVED
+                and disposition.split_relation is OverlapSplitRelation.SAME_SPLIT
+                for matched_id in item.exact_matches
+            )
             for item in self.audits
         )
+
+    @property
+    def disposition_manifest_digest(self) -> str:
+        return canonical_hash(tuple(item.disposition_hash for item in self.dispositions))
 
 
 @dataclass(frozen=True, slots=True)
@@ -358,13 +548,265 @@ def build_contamination_report(
     )
 
 
+def _case_pairs(entry: ExclusionEntry) -> frozenset[tuple[str, str]]:
+    return frozenset(zip(entry.benchmark_case_ids, entry.benchmark_case_hashes, strict=True))
+
+
+def _same_case_components(left: ExclusionEntry, right: ExclusionEntry) -> bool:
+    left_pairs = _case_pairs(left)
+    right_pairs = _case_pairs(right)
+    return bool(left_pairs) and left_pairs == right_pairs
+
+
+def _split_relation(
+    candidate: ContaminationArtifact, matched: ExclusionEntry
+) -> OverlapSplitRelation:
+    candidate_splits = set(candidate.benchmark_split_names or (candidate.split_name,))
+    matched_splits = set(matched.split_names)
+    if not candidate_splits or not matched_splits:
+        return OverlapSplitRelation.UNBOUND
+    if candidate_splits == matched_splits and len(candidate_splits) == 1:
+        return OverlapSplitRelation.SAME_SPLIT
+    if candidate_splits.isdisjoint(matched_splits):
+        return OverlapSplitRelation.CROSS_SPLIT
+    return OverlapSplitRelation.MULTI_SPLIT
+
+
+def _lineage_relation(
+    candidate: ContaminationArtifact, matched: ExclusionEntry
+) -> OverlapLineageRelation:
+    candidate_parent_prefix = "mutation-parent:"
+    if candidate.artifact_id.startswith(candidate_parent_prefix):
+        parent_hash = candidate.artifact_id.removeprefix(candidate_parent_prefix)
+        if parent_hash in matched.benchmark_case_hashes:
+            return OverlapLineageRelation.PARENT_CHILD
+    if matched.artifact_id.startswith(candidate_parent_prefix):
+        parent_hash = matched.artifact_id.removeprefix(candidate_parent_prefix)
+        if parent_hash in candidate.benchmark_case_hashes:
+            return OverlapLineageRelation.PARENT_CHILD
+    if (
+        candidate.source_artifact_id is not None
+        and candidate.source_artifact_id == matched.source_artifact_id
+    ):
+        return OverlapLineageRelation.SAME_SOURCE_ARTIFACT
+    if _case_pairs(build_exclusion_entry(candidate)) & _case_pairs(matched):
+        return OverlapLineageRelation.SAME_CASE_COMPONENTS
+    return OverlapLineageRelation.UNRELATED
+
+
+def _exact_overlap_kind(
+    candidate_entry: ExclusionEntry,
+    matched_entry: ExclusionEntry,
+    candidate_text: str,
+    matched_text: str,
+) -> tuple[OverlapMatchKind, str] | None:
+    if (
+        candidate_entry.source_content_sha256 is not None
+        and candidate_entry.source_content_sha256 == matched_entry.source_content_sha256
+    ):
+        return OverlapMatchKind.RAW_CONTENT_SHA256, "NOT_APPLICABLE"
+    if (
+        candidate_entry.normalized_text_sha256 is not None
+        and candidate_entry.normalized_text_sha256 == matched_entry.normalized_text_sha256
+    ):
+        return OverlapMatchKind.NORMALIZED_TEXT_SHA256, "NOT_APPLICABLE"
+    overlapping_shingles = exact_13_token_shingles(candidate_text) & exact_13_token_shingles(
+        matched_text
+    )
+    if overlapping_shingles:
+        return (
+            OverlapMatchKind.EXACT_13_TOKEN_SHINGLE,
+            canonical_hash(tuple(sorted(overlapping_shingles))),
+        )
+    return None
+
+
+def _overlap_match_evidence_digest(
+    candidate_entry: ExclusionEntry,
+    matched_entry: ExclusionEntry,
+    match_kind: OverlapMatchKind,
+    overlap_fingerprint: str,
+) -> str:
+    return canonical_hash(
+        {
+            "candidate_artifact_id": candidate_entry.artifact_id,
+            "candidate_document_id": candidate_entry.document_id,
+            "candidate_source_artifact_id": candidate_entry.source_artifact_id,
+            "candidate_source_content_sha256": candidate_entry.source_content_sha256,
+            "candidate_normalized_text_sha256": candidate_entry.normalized_text_sha256,
+            "candidate_exact_shingle_digest": candidate_entry.exact_shingle_digest,
+            "matched_artifact_id": matched_entry.artifact_id,
+            "matched_document_id": matched_entry.document_id,
+            "matched_source_artifact_id": matched_entry.source_artifact_id,
+            "matched_source_content_sha256": matched_entry.source_content_sha256,
+            "matched_normalized_text_sha256": matched_entry.normalized_text_sha256,
+            "matched_exact_shingle_digest": matched_entry.exact_shingle_digest,
+            "match_kind": match_kind,
+            "overlap_fingerprint": overlap_fingerprint,
+        }
+    )
+
+
+def _overlap_disposition_payload(disposition: OverlapDispositionV1) -> dict[str, object]:
+    return {
+        "candidate_artifact_id": disposition.candidate_artifact_id,
+        "matched_artifact_id": disposition.matched_artifact_id,
+        "match_kind": disposition.match_kind,
+        "split_relation": disposition.split_relation,
+        "lineage_relation": disposition.lineage_relation,
+        "decision": disposition.decision,
+        "rationale": disposition.rationale,
+        "reviewer_id": disposition.reviewer_id,
+        "reviewed_at": disposition.reviewed_at,
+        "evidence_digest": disposition.evidence_digest,
+    }
+
+
+def overlap_disposition_hash(disposition: OverlapDispositionV1) -> str:
+    """Hash every field of a reviewer disposition except its stored hash."""
+
+    return canonical_hash(_overlap_disposition_payload(disposition))
+
+
+def _disposition_evidence_digest(
+    overlap_digest: str,
+    *,
+    rationale: str,
+    reviewer_id: str,
+    reviewed_at: datetime_module.datetime,
+) -> str:
+    return canonical_hash(
+        {
+            "overlap_evidence_digest": overlap_digest,
+            "rationale": rationale,
+            "reviewer_id": reviewer_id,
+            "reviewed_at": reviewed_at,
+        }
+    )
+
+
+def build_overlap_disposition(
+    candidate: ContaminationArtifact,
+    matched_artifact_id: str,
+    registry: ExclusionRegistry,
+    *,
+    decision: OverlapDecision,
+    rationale: str,
+    reviewer_id: str,
+    reviewed_at: datetime_module.datetime,
+) -> OverlapDispositionV1:
+    """Bind a reviewer decision to one exact private-index overlap finding."""
+
+    if len(registry.entries) != len(registry.artifacts):
+        raise ValueError("private audit text index is required to adjudicate an overlap")
+    matched_index = next(
+        (
+            index
+            for index, entry in enumerate(registry.entries)
+            if entry.artifact_id == matched_artifact_id
+        ),
+        None,
+    )
+    if matched_index is None:
+        raise ValueError("overlap disposition references an unknown matched artifact")
+    matched_entry = registry.entries[matched_index]
+    matched_artifact = registry.artifacts[matched_index]
+    candidate_entry = build_exclusion_entry(candidate)
+    if _same_case_components(candidate_entry, matched_entry):
+        raise ValueError("same-case artifact components are not cross-case overlap findings")
+    exact_match = _exact_overlap_kind(
+        candidate_entry, matched_entry, candidate.text, matched_artifact.text
+    )
+    if exact_match is None:
+        raise ValueError("only a currently identified exact overlap may be adjudicated")
+    match_kind, overlap_fingerprint = exact_match
+    split_relation = _split_relation(candidate, matched_entry)
+    lineage_relation = _lineage_relation(candidate, matched_entry)
+    overlap_digest = _overlap_match_evidence_digest(
+        candidate_entry, matched_entry, match_kind, overlap_fingerprint
+    )
+    resolved_decision = OverlapDecision(decision)
+    evidence_digest = _disposition_evidence_digest(
+        overlap_digest,
+        rationale=rationale,
+        reviewer_id=reviewer_id,
+        reviewed_at=reviewed_at,
+    )
+    payload = {
+        "candidate_artifact_id": candidate.artifact_id,
+        "matched_artifact_id": matched_artifact_id,
+        "match_kind": match_kind,
+        "split_relation": split_relation,
+        "lineage_relation": lineage_relation,
+        "decision": resolved_decision,
+        "rationale": rationale,
+        "reviewer_id": reviewer_id,
+        "reviewed_at": reviewed_at,
+        "evidence_digest": evidence_digest,
+    }
+    return OverlapDispositionV1(
+        candidate_artifact_id=candidate.artifact_id,
+        matched_artifact_id=matched_artifact_id,
+        match_kind=match_kind,
+        split_relation=split_relation,
+        lineage_relation=lineage_relation,
+        decision=resolved_decision,
+        rationale=rationale,
+        reviewer_id=reviewer_id,
+        reviewed_at=reviewed_at,
+        evidence_digest=evidence_digest,
+        disposition_hash=canonical_hash(payload),
+    )
+
+
+def _validate_overlap_disposition(
+    disposition: OverlapDispositionV1,
+    candidate: ContaminationArtifact,
+    matched_entry: ExclusionEntry,
+    matched_artifact: ContaminationArtifact,
+    match_kind: OverlapMatchKind,
+    overlap_fingerprint: str,
+) -> None:
+    if overlap_disposition_hash(disposition) != disposition.disposition_hash:
+        raise ValueError("overlap disposition hash is stale or forged")
+    split_relation = _split_relation(candidate, matched_entry)
+    if disposition.candidate_artifact_id != candidate.artifact_id:
+        raise ValueError("overlap disposition candidate identity differs from the exact finding")
+    if disposition.matched_artifact_id != matched_entry.artifact_id:
+        raise ValueError("overlap disposition match identity differs from the exact finding")
+    if disposition.match_kind is not match_kind:
+        raise ValueError("overlap disposition match kind differs from the exact finding")
+    if disposition.split_relation is not split_relation:
+        raise ValueError("overlap disposition split relation differs from the exact finding")
+    lineage_relation = _lineage_relation(candidate, matched_entry)
+    if disposition.lineage_relation is not lineage_relation:
+        raise ValueError("overlap disposition lineage relation differs from the exact finding")
+    overlap_digest = _overlap_match_evidence_digest(
+        build_exclusion_entry(candidate), matched_entry, match_kind, overlap_fingerprint
+    )
+    expected_evidence_digest = _disposition_evidence_digest(
+        overlap_digest,
+        rationale=disposition.rationale,
+        reviewer_id=disposition.reviewer_id,
+        reviewed_at=disposition.reviewed_at,
+    )
+    if expected_evidence_digest != disposition.evidence_digest:
+        raise ValueError("overlap disposition reviewer evidence digest is stale or forged")
+    if (
+        disposition.decision is OverlapDecision.APPROVED
+        and split_relation is not OverlapSplitRelation.SAME_SPLIT
+    ):
+        raise ValueError("cross-split overlap cannot be overridden by approval")
+
+
 def audit_contamination(
     candidate: ContaminationArtifact,
     registry: ExclusionRegistry,
     *,
-    approved_overlap_artifact_ids: tuple[str, ...] = (),
+    dispositions: tuple[OverlapDispositionV1, ...] = (),
+    _match_index: _ContaminationMatchIndex | None = None,
 ) -> ContaminationAudit:
-    """Run mandatory exact, fuzzy, and source-family checks in frozen order."""
+    """Run exact, fuzzy, and source-family checks with reviewed exact dispositions."""
 
     if len(registry.entries) != len(registry.artifacts):
         return ContaminationAudit(
@@ -377,51 +819,83 @@ def audit_contamination(
             reason="private audit text index is unavailable for the mandatory fuzzy audit",
         )
 
-    approved = set(approved_overlap_artifact_ids)
-    approved_case_pairs = {
-        (case_id, case_hash)
-        for entry in registry.entries
-        if entry.artifact_id in approved
-        for case_id, case_hash in zip(
-            entry.benchmark_case_ids, entry.benchmark_case_hashes, strict=True
-        )
-    }
+    if any(item.candidate_artifact_id != candidate.artifact_id for item in dispositions):
+        raise ValueError("audit disposition candidate differs from the requested candidate")
+    candidate_dispositions = dispositions
+    if len(
+        {(item.candidate_artifact_id, item.matched_artifact_id) for item in candidate_dispositions}
+    ) != len(candidate_dispositions):
+        raise ValueError("duplicate dispositions for one candidate/matched artifact pair")
+    dispositions_by_match = {item.matched_artifact_id: item for item in candidate_dispositions}
     candidate_entry = build_exclusion_entry(candidate)
+    match_index = _match_index or _build_contamination_match_index(registry)
     exact_matches: list[str] = []
     fuzzy_matches: list[str] = []
     family_conflicts: list[str] = []
-    candidate_shingles = exact_13_token_shingles(candidate.text)
-    for entry, artifact in zip(registry.entries, registry.artifacts, strict=False):
-        entry_case_pairs = set(
-            zip(entry.benchmark_case_ids, entry.benchmark_case_hashes, strict=True)
-        )
-        if entry.artifact_id in approved or entry_case_pairs & approved_case_pairs:
-            continue
-        if entry.normalized_text_sha256 == candidate_entry.normalized_text_sha256:
-            exact_matches.append(entry.artifact_id)
-        if (
-            candidate_shingles
-            and entry.exact_shingle_digest == candidate_entry.exact_shingle_digest
+    consumed_dispositions: set[str] = set()
+    normalized_candidate_text = normalize_text(candidate.text)
+    for index in _candidate_match_indices(candidate, candidate_entry, match_index):
+        entry = registry.entries[index]
+        artifact = registry.artifacts[index]
+        if entry.artifact_id == candidate.artifact_id or _same_case_components(
+            candidate_entry, entry
         ):
+            continue
+        exact_match = _exact_overlap_kind(candidate_entry, entry, candidate.text, artifact.text)
+        if exact_match is not None:
+            match_kind, overlap_fingerprint = exact_match
+            disposition = dispositions_by_match.get(entry.artifact_id)
+            if disposition is not None:
+                _validate_overlap_disposition(
+                    disposition,
+                    candidate,
+                    entry,
+                    artifact,
+                    match_kind,
+                    overlap_fingerprint,
+                )
+                consumed_dispositions.add(entry.artifact_id)
             exact_matches.append(entry.artifact_id)
-        if artifact is not None:
-            if candidate_shingles & exact_13_token_shingles(artifact.text):
-                exact_matches.append(entry.artifact_id)
-            token_score = token_5gram_jaccard(candidate.text, artifact.text)
-            character_score = character_5gram_jaccard(candidate.text, artifact.text)
-            edit_score = normalized_edit_similarity(candidate.text, artifact.text)
-            if token_score >= 0.85 or character_score >= 0.85 or edit_score >= 0.90:
-                fuzzy_matches.append(entry.artifact_id)
-            if entry.source_family_id == candidate.source_family_id and entry.split_names:
-                if candidate.split_name not in entry.split_names:
-                    family_conflicts.append(entry.artifact_id)
-    exact_matches = sorted(set(exact_matches))
-    fuzzy_matches = sorted(set(fuzzy_matches))
-    family_conflicts = sorted(set(family_conflicts))
-    blocked = bool(exact_matches or fuzzy_matches or family_conflicts)
+            continue
+
+        token_score = token_5gram_jaccard(candidate.text, artifact.text)
+        character_score = character_5gram_jaccard(candidate.text, artifact.text)
+        normalized_matched_text = normalize_text(artifact.text)
+        edit_score = (
+            normalized_edit_similarity(candidate.text, artifact.text)
+            if max(len(normalized_candidate_text), len(normalized_matched_text)) >= 10
+            else 0.0
+        )
+        if token_score >= 0.85 or character_score >= 0.85 or edit_score >= 0.90:
+            fuzzy_matches.append(entry.artifact_id)
+        candidate_splits = set(candidate.benchmark_split_names or (candidate.split_name,))
+        if entry.source_family_id == candidate.source_family_id and candidate_splits.isdisjoint(
+            entry.split_names
+        ):
+            family_conflicts.append(entry.artifact_id)
+
+    unmatched_dispositions = set(dispositions_by_match) - consumed_dispositions
+    if unmatched_dispositions:
+        raise ValueError(
+            "overlap disposition has no exact identified scorer finding: "
+            + ", ".join(sorted(unmatched_dispositions))
+        )
+    exact_matches.sort(key=lambda item: item.encode("utf-8"))
+    fuzzy_matches.sort(key=lambda item: item.encode("utf-8"))
+    family_conflicts.sort(key=lambda item: item.encode("utf-8"))
+    approved_matches = {
+        matched_id
+        for matched_id in exact_matches
+        if (disposition := dispositions_by_match.get(matched_id)) is not None
+        and disposition.decision is OverlapDecision.APPROVED
+    }
+    unresolved_exact = set(exact_matches) - approved_matches
+    blocked = bool(unresolved_exact or fuzzy_matches or family_conflicts)
     reasons = []
-    if exact_matches:
-        reasons.append("mandatory exact overlap")
+    if unresolved_exact:
+        reasons.append("exact overlap is unresolved or rejected")
+    elif exact_matches:
+        reasons.append("exact overlap approved for the identified same-split pair")
     if fuzzy_matches:
         reasons.append("mandatory fuzzy overlap")
     if family_conflicts:
@@ -434,14 +908,25 @@ def audit_contamination(
         source_family_conflicts=tuple(family_conflicts),
         semantic_diagnostic="NOT_APPLICABLE",
         reason="; ".join(reasons) if reasons else "mandatory contamination checks passed",
+        overlap_dispositions=tuple(
+            sorted(
+                candidate_dispositions,
+                key=lambda item: (
+                    item.matched_artifact_id.encode("utf-8"),
+                    item.match_kind.value.encode("utf-8"),
+                ),
+            )
+        ),
     )
 
 
 def build_contamination_gate_evidence(
     bundle: object,
     registry: ExclusionRegistry,
+    *,
+    dispositions: tuple[OverlapDispositionV1, ...] = (),
 ) -> ContaminationGateEvidence:
-    """Compute mandatory deterministic audits bound to a manifest bundle."""
+    """Audit case artifacts and consume exact-pair reviewer dispositions."""
 
     from dynamislm.benchmark.contracts import ManifestBundleV1
 
@@ -454,13 +939,32 @@ def build_contamination_gate_evidence(
     case_artifacts = tuple(
         artifact for artifact in registry.artifacts if artifact.benchmark_case_ids
     )
+    match_index = _build_contamination_match_index(registry)
+    case_artifact_ids = {artifact.artifact_id for artifact in case_artifacts}
+    if any(item.candidate_artifact_id not in case_artifact_ids for item in dispositions):
+        raise ValueError("overlap disposition candidate is absent from the benchmark artifact set")
+    canonical_dispositions = tuple(
+        sorted(
+            dispositions,
+            key=lambda item: (
+                item.candidate_artifact_id.encode("utf-8"),
+                item.matched_artifact_id.encode("utf-8"),
+                item.match_kind.value.encode("utf-8"),
+            ),
+        )
+    )
     audits = tuple(
         sorted(
             (
                 audit_contamination(
                     artifact,
                     registry,
-                    approved_overlap_artifact_ids=(artifact.artifact_id,),
+                    dispositions=tuple(
+                        item
+                        for item in canonical_dispositions
+                        if item.candidate_artifact_id == artifact.artifact_id
+                    ),
+                    _match_index=match_index,
                 )
                 for artifact in case_artifacts
             ),
@@ -471,6 +975,7 @@ def build_contamination_gate_evidence(
         benchmark_manifest_hash=bundle.benchmark_manifest.benchmark_manifest_hash,
         exclusion_manifest_hash=bundle.exclusion_manifest.manifest_digest,
         audits=audits,
+        dispositions=canonical_dispositions,
     )
 
 
@@ -745,6 +1250,7 @@ __all__ = [
     "build_contamination_gate_evidence",
     "build_contamination_report",
     "build_exclusion_entry",
+    "build_overlap_disposition",
     "case_isolation_values",
     "character_5gram_jaccard",
     "exact_13_token_shingles",
@@ -754,6 +1260,7 @@ __all__ = [
     "normalize_text",
     "normalized_edit_similarity",
     "normalized_text_sha256",
+    "overlap_disposition_hash",
     "required_exclusion_artifact_ids",
     "token_5gram_jaccard",
     "tokenize",

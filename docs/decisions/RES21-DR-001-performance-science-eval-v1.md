@@ -972,12 +972,13 @@ The frozen contamination audit runs in this order:
    whitespace/line endings, and compute SHA-256 for full text, each paragraph,
    and each exact evidence span.
 2. **Exact text overlap:** compute SHA-256 hashes of contiguous normalized
-   13-token shingles and reject any unapproved overlap with the exclusion
+   13-token shingles and record exact pairwise overlap with the exclusion
    registry or a case in another split.
 3. **Normalized/fuzzy overlap:** compute the deterministic normalized token
    5-gram Jaccard and normalized character 5-gram Jaccard. A candidate with
    either score at or above `0.85`, or normalized edit similarity at or above
-   `0.90`, is a contamination review failure until explicitly adjudicated.
+   `0.90`, is a blocking fuzzy-only overlap. Fuzzy-only overlaps cannot be
+   overridden by a disposition.
 4. **Optional semantic-duplicate diagnostics:** V1 does not freeze a semantic-
    duplicate detector, version, dependency set, threshold, or runtime. An
    implementation may record a semantic-duplication diagnostic, but it is
@@ -1002,6 +1003,17 @@ Reporting is policy-bounded: a passing audit is named
 base model's pretraining corpus cannot be inspected, the report records
 `PRETRAINING_EXPOSURE=UNKNOWN`. These are reporting semantics for the frozen
 deterministic overlap policy, not a new detector or model claim.
+
+An exact identified overlap can be resolved only by an `OverlapDispositionV1`
+binding the candidate artifact ID, matched artifact ID, exact match kind, split
+relation, lineage relation, decision, rationale, reviewer ID, review time, and
+evidence digest. Its disposition hash binds every field. Approval is valid only
+for an exact pair within one split. Cross-split source, document, generator, or
+mutation overlap cannot be approved; rejected or unresolved exact overlaps
+block. The final contamination and freeze evidence retain the dispositions and
+their aggregate digest. Artifact pairs with the same complete case/hash
+association set are within-case components and are excluded from cross-case
+matching; differing associations remain auditable.
 
 ### 9.3 Generated-seed isolation
 
@@ -1324,3 +1336,15 @@ and stored-source-artifact digests. In exclusion records,
 `source_artifact_digest` binds the stored source bytes. Serialization V3 and
 the benchmark semantic version remain unchanged; no real source bytes or V1
 cases are introduced by this implementation fix.
+
+### 15.6 Reviewed contamination dispositions — implementation fix 003
+
+Exact overlap decisions use immutable `OverlapDispositionV1` records with
+canonical ordering, exact-pair evidence digests, and disposition hashes.
+`APPROVED` requires a same-split relation and a reviewer rationale, identity,
+timestamp, and evidence digest. Fuzzy-only or unresolved overlaps remain
+blocking. The gate recomputes exact findings from the private text index,
+consumes only matching dispositions, and carries each decision into
+contamination and freeze evidence. Parent/adversarial-mutation overlap is
+qualified as a same-split `PARENT_CHILD` exact relation; its cross-split form
+cannot be approved.

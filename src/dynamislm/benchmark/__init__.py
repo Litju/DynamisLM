@@ -14,6 +14,12 @@ from dynamislm.benchmark.authority import (
     validate_res71_runtime_binding,
 )
 from dynamislm.benchmark.constants import *  # noqa: F403
+from dynamislm.benchmark.constants import (
+    OverlapDecision,
+    OverlapLineageRelation,
+    OverlapMatchKind,
+    OverlapSplitRelation,
+)
 from dynamislm.benchmark.contamination import (
     PRETRAINING_EXPOSURE_UNKNOWN,
     PSE_V1_CONTAMINATION_AUDIT,
@@ -26,6 +32,7 @@ from dynamislm.benchmark.contamination import (
     build_contamination_gate_evidence,
     build_contamination_report,
     build_exclusion_entry,
+    build_overlap_disposition,
     character_5gram_jaccard,
     exact_13_token_shingles,
     exact_shingle_digest,
@@ -41,6 +48,7 @@ from dynamislm.benchmark.contamination import (
     validate_source_family_isolation,
 )
 from dynamislm.benchmark.contracts import *  # noqa: F403
+from dynamislm.benchmark.contracts import OverlapDispositionV1
 from dynamislm.benchmark.coverage import (
     COVERAGE_MATRIX,
     CoverageRow,
@@ -142,6 +150,11 @@ __all__ = [
     "HiddenAccessRequest",
     "HiddenPreflightResult",
     "HiddenStoreDescriptor",
+    "OverlapDecision",
+    "OverlapDispositionV1",
+    "OverlapLineageRelation",
+    "OverlapMatchKind",
+    "OverlapSplitRelation",
     "ScorerProfileDefinition",
     "SplitAllocationBlocked",
     "SplitAllocationResult",
@@ -168,6 +181,7 @@ __all__ = [
     "build_fixture_exclusion_registry",
     "build_fixture_manifest_bundle",
     "build_manifest_bundle",
+    "build_overlap_disposition",
     "build_res71_runtime_binding",
     "build_scorer_manifest",
     "build_split_manifests",

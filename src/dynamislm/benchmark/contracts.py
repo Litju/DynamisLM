@@ -33,6 +33,10 @@ from dynamislm.benchmark.constants import (
     ExpectedAnswerKind,
     FieldScoreStatus,
     InputModality,
+    OverlapDecision,
+    OverlapLineageRelation,
+    OverlapMatchKind,
+    OverlapSplitRelation,
     PractitionerQuestionClass,
     RefusalDecision,
     ScoringProfile,
@@ -831,6 +835,57 @@ class ContaminationBinding:
 
 @register_serializable_type
 @dataclass(frozen=True, slots=True)
+class OverlapDispositionV1:
+    """Reviewed disposition for one exact, identified artifact overlap."""
+
+    candidate_artifact_id: str
+    matched_artifact_id: str
+    match_kind: OverlapMatchKind
+    split_relation: OverlapSplitRelation
+    lineage_relation: OverlapLineageRelation
+    decision: OverlapDecision
+    rationale: str
+    reviewer_id: str
+    reviewed_at: datetime_module.datetime
+    evidence_digest: str
+    disposition_hash: str
+
+    def __post_init__(self) -> None:
+        for name in (
+            "candidate_artifact_id",
+            "matched_artifact_id",
+            "rationale",
+            "reviewer_id",
+        ):
+            _text(getattr(self, name), name)
+        if self.candidate_artifact_id == self.matched_artifact_id:
+            raise ValueError("overlap disposition must identify two distinct artifacts")
+        object.__setattr__(
+            self, "match_kind", _enum(self.match_kind, OverlapMatchKind, "match_kind")
+        )
+        object.__setattr__(
+            self,
+            "split_relation",
+            _enum(self.split_relation, OverlapSplitRelation, "split_relation"),
+        )
+        object.__setattr__(
+            self,
+            "lineage_relation",
+            _enum(self.lineage_relation, OverlapLineageRelation, "lineage_relation"),
+        )
+        object.__setattr__(self, "decision", _enum(self.decision, OverlapDecision, "decision"))
+        if (
+            self.decision is OverlapDecision.APPROVED
+            and self.split_relation is not OverlapSplitRelation.SAME_SPLIT
+        ):
+            raise ValueError("cross-split or unbound overlap can never be approved")
+        _aware_timestamp(self.reviewed_at, "reviewed_at")
+        _sha(self.evidence_digest, "evidence_digest")
+        _sha(self.disposition_hash, "disposition_hash")
+
+
+@register_serializable_type
+@dataclass(frozen=True, slots=True)
 class DifficultyBinding:
     level: DifficultyLevel
     rationale: str
@@ -1407,6 +1462,7 @@ __all__ = [
     "InputContract",
     "ManifestBundleV1",
     "ObservationView",
+    "OverlapDispositionV1",
     "ProvenanceEdge",
     "RES71OperationBinding",
     "RES71RefusalBinding",

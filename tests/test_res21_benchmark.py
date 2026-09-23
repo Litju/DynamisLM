@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import datetime as datetime_module
 from dataclasses import replace
 
 import pytest
@@ -25,6 +26,7 @@ from dynamislm.benchmark import (
     build_fixture_allocation,
     build_fixture_exclusion_registry,
     build_fixture_manifest_bundle,
+    build_overlap_disposition,
     build_res71_runtime_binding,
     build_synthetic_reference_fixture_cases,
     capability_family_lower_bound_case_count,
@@ -53,6 +55,7 @@ from dynamislm.benchmark import (
 from dynamislm.benchmark.constants import (
     AuthorityKind,
     CaseOrigin,
+    OverlapDecision,
     PreflightStatus,
     ScoringProfile,
 )
@@ -760,36 +763,192 @@ def test_split_isolation_enforces_all_recorded_generator_seed_keys() -> None:
 def test_contamination_registry_runs_exact_and_fuzzy_mandatory_checks() -> None:
     allocation = build_fixture_allocation()
     registry = build_fixture_exclusion_registry(allocation)
-    reference = registry.artifacts[0]
-    exact_candidate = replace(
-        reference, artifact_id="candidate-exact", source_family_id="new-family"
+    reference = replace(
+        registry.artifacts[0],
+        text="alpha bravo charlie delta echo foxtrot golf hotel",
     )
-    exact_audit = audit_contamination(exact_candidate, registry)
+    exact_candidate = replace(
+        reference,
+        artifact_id="candidate-exact",
+        source_family_id="new-family",
+        benchmark_case_ids=(),
+        benchmark_case_hashes=(),
+        membership_digests=(),
+        benchmark_split_names=(),
+    )
+    pair_registry = ExclusionRegistry.from_artifacts((reference,))
+    exact_audit = audit_contamination(exact_candidate, pair_registry)
     assert exact_audit.status == "BLOCKED"
     assert reference.artifact_id in exact_audit.exact_matches
 
     fuzzy_candidate = replace(
-        reference,
+        exact_candidate,
         artifact_id="candidate-fuzzy",
-        text=reference.text.replace("registered", "registered-variant"),
-        source_family_id="new-family",
+        text=reference.text.replace("hotel", "hotels"),
     )
-    fuzzy_audit = audit_contamination(fuzzy_candidate, registry)
+    fuzzy_audit = audit_contamination(fuzzy_candidate, pair_registry)
     assert fuzzy_audit.status == "BLOCKED"
     assert reference.artifact_id in fuzzy_audit.fuzzy_matches
+    with pytest.raises(ValueError, match="only a currently identified exact overlap"):
+        build_overlap_disposition(
+            fuzzy_candidate,
+            reference.artifact_id,
+            pair_registry,
+            decision=OverlapDecision.APPROVED,
+            rationale="Fuzzy-only evidence cannot be adjudicated.",
+            reviewer_id="reviewer-contamination-fuzzy",
+            reviewed_at=datetime_module.datetime(2026, 9, 23, tzinfo=datetime_module.UTC),
+        )
 
-    approved = audit_contamination(
+    review_time = datetime_module.datetime(2026, 9, 23, tzinfo=datetime_module.UTC)
+    approved_disposition = build_overlap_disposition(
         exact_candidate,
-        registry,
-        approved_overlap_artifact_ids=(reference.artifact_id,),
+        reference.artifact_id,
+        pair_registry,
+        decision=OverlapDecision.APPROVED,
+        rationale="Identical same-split source text is an expected synthetic qualification pair.",
+        reviewer_id="reviewer-contamination-001",
+        reviewed_at=review_time,
+    )
+    approved = audit_contamination(
+        exact_candidate, pair_registry, dispositions=(approved_disposition,)
     )
     assert approved.status == "PASS"
-    no_private_index = ExclusionRegistry(entries=registry.entries)
+    forged_review = replace(approved_disposition, rationale="altered after review")
+    with pytest.raises(ValueError, match="hash is stale or forged"):
+        audit_contamination(exact_candidate, pair_registry, dispositions=(forged_review,))
+    gate_evidence = ContaminationGateEvidence(
+        benchmark_manifest_hash="sha256:" + "1" * 64,
+        exclusion_manifest_hash="sha256:" + "2" * 64,
+        audits=(approved,),
+        dispositions=(approved_disposition,),
+    )
+    assert gate_evidence.resolved
+    assert gate_evidence.disposition_manifest_digest.startswith("sha256:")
+    rejected_disposition = build_overlap_disposition(
+        exact_candidate,
+        reference.artifact_id,
+        pair_registry,
+        decision=OverlapDecision.REJECTED,
+        rationale="Reject this exact overlap for the synthetic policy check.",
+        reviewer_id="reviewer-contamination-002",
+        reviewed_at=review_time,
+    )
+    rejected = audit_contamination(
+        exact_candidate, pair_registry, dispositions=(rejected_disposition,)
+    )
+    assert rejected.status == "BLOCKED"
+    no_private_index = ExclusionRegistry(entries=pair_registry.entries)
     blocked_without_private_text = audit_contamination(exact_candidate, no_private_index)
     assert blocked_without_private_text.status == "BLOCKED"
     report = build_contamination_report(approved)
     assert report.audit_label == "PSE_V1_CONTAMINATION_AUDIT=PASS"
     assert report.pretraining_exposure == "UNKNOWN"
+
+    other_split = next(split for split in SplitName if split is not reference.split_name)
+    cross_split_candidate = replace(
+        exact_candidate,
+        split_name=other_split,
+        benchmark_split_names=(other_split,),
+    )
+    with pytest.raises(ValueError, match="can never be approved"):
+        build_overlap_disposition(
+            cross_split_candidate,
+            reference.artifact_id,
+            pair_registry,
+            decision=OverlapDecision.APPROVED,
+            rationale="An exact cross-split match remains prohibited.",
+            reviewer_id="reviewer-contamination-003",
+            reviewed_at=review_time,
+        )
+
+
+def test_parent_adversarial_mutation_exact_overlap_requires_pair_review() -> None:
+    allocation = build_fixture_allocation()
+    registry = build_fixture_exclusion_registry(allocation)
+    mutation = next(
+        case
+        for case in allocation.cases
+        if case.provenance.origin_class is CaseOrigin.ADVERSARIAL_MUTATION
+    )
+    assert mutation.provenance.parent_case_hash is not None
+    parent = next(
+        case
+        for case in allocation.cases
+        if case.case_payload_hash == mutation.provenance.parent_case_hash
+    )
+    assert parent.split.split_name is mutation.split.split_name
+    parent_artifact = next(
+        artifact
+        for artifact in registry.artifacts
+        if artifact.artifact_id == f"case:{parent.case_id}"
+    )
+    mutation_parent_artifact = next(
+        artifact
+        for artifact in registry.artifacts
+        if artifact.artifact_id == f"mutation-parent:{parent.case_payload_hash}"
+    )
+    shared_parent_text = "Synthetic exact parent identity payload for lineage qualification."
+    reviewed_registry = ExclusionRegistry.from_artifacts(
+        (
+            replace(parent_artifact, text=shared_parent_text),
+            replace(mutation_parent_artifact, text=shared_parent_text),
+        )
+    )
+    review_time = datetime_module.datetime(2026, 9, 23, tzinfo=datetime_module.UTC)
+    parent_disposition = build_overlap_disposition(
+        replace(parent_artifact, text=shared_parent_text),
+        mutation_parent_artifact.artifact_id,
+        reviewed_registry,
+        decision=OverlapDecision.APPROVED,
+        rationale="The exact overlap identifies a parent-child mutation within one split.",
+        reviewer_id="reviewer-lineage-001",
+        reviewed_at=review_time,
+    )
+    mutation_disposition = build_overlap_disposition(
+        replace(mutation_parent_artifact, text=shared_parent_text),
+        parent_artifact.artifact_id,
+        reviewed_registry,
+        decision=OverlapDecision.APPROVED,
+        rationale="The exact overlap identifies a parent-child mutation within one split.",
+        reviewer_id="reviewer-lineage-001",
+        reviewed_at=review_time,
+    )
+    assert parent_disposition.lineage_relation.value == "PARENT_CHILD"
+    assert mutation_disposition.lineage_relation.value == "PARENT_CHILD"
+    parent_audit = audit_contamination(
+        replace(parent_artifact, text=shared_parent_text),
+        reviewed_registry,
+        dispositions=(parent_disposition,),
+    )
+    mutation_audit = audit_contamination(
+        replace(mutation_parent_artifact, text=shared_parent_text),
+        reviewed_registry,
+        dispositions=(mutation_disposition,),
+    )
+    assert parent_audit.status == "PASS"
+    assert mutation_audit.status == "PASS"
+    assert parent_disposition.split_relation.value == "SAME_SPLIT"
+    assert parent_disposition.match_kind.value == "RAW_CONTENT_SHA256"
+
+    cross_split_parent = replace(
+        parent_artifact,
+        text=shared_parent_text,
+        split_name=next(split for split in SplitName if split is not parent.split.split_name),
+        benchmark_split_names=(
+            next(split for split in SplitName if split is not parent.split.split_name),
+        ),
+    )
+    with pytest.raises(ValueError, match="can never be approved"):
+        build_overlap_disposition(
+            cross_split_parent,
+            mutation_parent_artifact.artifact_id,
+            reviewed_registry,
+            decision=OverlapDecision.APPROVED,
+            rationale="Cross-split lineage overlap cannot be approved.",
+            reviewer_id="reviewer-lineage-002",
+            reviewed_at=review_time,
+        )
 
 
 def test_shared_exclusion_artifacts_bind_many_cases_canonically() -> None:
@@ -1016,12 +1175,22 @@ def test_final_v1_freeze_rejects_infrastructure_fixture_bundle() -> None:
 
 
 def test_contamination_gate_rejects_pass_status_with_unresolved_findings() -> None:
+    with pytest.raises(ValueError, match="PASS contamination audit lacks resolved findings"):
+        ContaminationAudit(
+            "PASS",
+            "case:case-1",
+            ("prompt:other-case",),
+            (),
+            (),
+            "NOT_APPLICABLE",
+            "inconsistent pass receipt",
+        )
     gate = ContaminationGateEvidence(
         benchmark_manifest_hash="sha256:" + "1" * 64,
         exclusion_manifest_hash="sha256:" + "2" * 64,
         audits=(
             ContaminationAudit(
-                "PASS",
+                "BLOCKED",
                 "case:case-1",
                 ("prompt:other-case",),
                 (),
