@@ -614,12 +614,14 @@ V1 has exactly three mutually exclusive splits:
 1. `PUBLIC_DEVELOPMENT`: model-development and pipeline-debugging cases. The
    case payload and structured answer may be distributed, but all benchmark
    artifacts remain in the training-exclusion registry.
-2. `FROZEN_VALIDATION`: read-only validation cases. They are available to the
-   evaluation workflow after freeze but are not available to training or
-   corpus-construction workflows.
+2. `FROZEN_VALIDATION`: read-only validation cases. Payload and answer bytes
+   are held in an external private/gated store and separate credential
+   namespace. They are available to the evaluation workflow after freeze but
+   are not available to training or corpus-construction workflows.
 3. `HIDDEN_FINAL`: final cases and authoritative answers. Payload and answer
-   material are stored in an evaluation-only namespace and are not exposed to
-   training, data, or model-development principals.
+   material are held in an external private store and a credential namespace
+   distinct from `FROZEN_VALIDATION`; they are not exposed to training, data,
+   or model-development principals.
 
 The initial allocation target is `60% / 20% / 20%` by case count after
 stratified allocation. The exact counts are not guessed in this design; the
@@ -1292,11 +1294,15 @@ validator requires:
    artifact;
 4. exact split isolation across every frozen identity in Section 15.1;
 5. no fixture-only case marker or fixture population scope; and
-6. a hidden store bound to the exact benchmark manifest and complete hidden
-   case/hash set, held outside this public repository in an `EXTERNAL_PRIVATE`
-   store and separate credential namespace. Fresh live access-control evidence
-   must show no payload/answer read credentials for training, data-pipeline, or
-   model-development principals, and access only for the evaluation service.
+6. protected evaluation stores for both `FROZEN_VALIDATION` and `HIDDEN_FINAL`,
+   each bound to the exact benchmark manifest and complete split case/hash set,
+   held outside this public repository in an `EXTERNAL_PRIVATE` store and its
+   own credential namespace. Fresh live access-control evidence must show that
+   `EVALUATION_SERVICE` has a credential and read access to `PAYLOAD` and
+   `ANSWER`, while `TRAINING`, `DATA_PIPELINE`, and `MODEL_DEVELOPMENT` have
+   neither credentials nor read access. The two protected namespaces must not
+   alias. Model development may receive evaluation results through the
+   evaluation workflow; it has no direct protected-byte access.
 
 The full benchmark remains unmaterialized. The N=434 allocator qualification
 is deterministic, synthetic, and in-memory test material; it is not V1 data.
@@ -1368,3 +1374,37 @@ store, manifest, hidden case/hash set, and per-principal PAYLOAD/ANSWER grants.
 The receipt must be no more than five minutes old. This mission implements the
 contract and in-memory qualification only; it does not implement or populate a
 real hidden store.
+
+### 15.8 Protected evaluation stores — implementation fix 004
+
+This amendment supersedes the hidden-only store wording in Sections 15.3 and
+15.7 for both protected splits. Store availability booleans are internal
+preflight metadata and are not public output.
+
+The protected-byte policy applies to both `FROZEN_VALIDATION` and
+`HIDDEN_FINAL` through one protected evaluation-store contract. For each split,
+the descriptor and fresh live probe receipt bind the store ID/version, split,
+credential namespace, benchmark manifest digest, exact UTF-8 ordered case
+IDs and payload hashes, control-plane and probe IDs, timestamp, and evidence
+digest. Every principal is probed for both `PAYLOAD` and `ANSWER`. Evidence is
+valid for at most five minutes and must report a credential and successful
+read only for `EVALUATION_SERVICE`.
+
+`FROZEN_VALIDATION` payload and answer bytes remain in an external private,
+gated store and are unavailable to `TRAINING`, `DATA_PIPELINE`, and direct
+`MODEL_DEVELOPMENT` access. `HIDDEN_FINAL` remains at least as strict and uses
+a namespace distinct from validation. Model development can receive results
+through the evaluation workflow without receiving protected bytes. Both split
+stores bind their complete, exact case/hash inventories. `PUBLIC_DEVELOPMENT`
+payloads and answers remain distributable and are included in the
+training-exclusion registry.
+
+Public protected-split artifacts are limited to the registered case IDs,
+payload/answer hashes, approved fingerprints, store/split/namespace IDs, and
+manifest commitments. A deterministic repository guard checks tracked,
+staged, and untracked public-repository artifacts for protected payload or
+answer bytes and rejects records that combine a protected case ID with prompt,
+input, payload, or answer fields. The final freeze requires this guard and live
+evidence for both protected splits. Qualification remains synthetic and
+in-memory; this amendment does not materialize real benchmark cases, run a
+model, or change RES-59..71 science or Serialization V3.
