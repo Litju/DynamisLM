@@ -23,6 +23,7 @@ from dynamislm.benchmark.contracts import (
     ExpertReviewMetadata,
 )
 from dynamislm.benchmark.hashing import case_content_projection, validate_case_payload_hash
+from dynamislm.benchmark.scoring_paths import reachable_error_attributions, reachable_error_classes
 from dynamislm.refusal.models import RefusalClass
 
 
@@ -319,26 +320,44 @@ def _validate_answer_contract(case: BenchmarkCaseV1) -> None:
     ):
         raise ValueError("critical fields must be valid scored fields")
     attribution = dict(case.scoring_contract.error_attribution)
-    if any(
-        field_id not in attribution and "__default__" not in attribution
-        for field_id in case.scoring_contract.required_output_fields
-    ):
-        raise ValueError("every scored field requires explicit error attribution metadata")
-    if case.refusal_expectation.decision is not RefusalDecision.PROHIBITED:
-        if "__decision__" not in attribution:
-            raise ValueError(
-                "non-prohibited refusal semantics require explicit decision attribution"
-            )
+    reachable_paths = reachable_error_attributions(
+        case.scoring_contract,
+        refusal_decision=case.refusal_expectation.decision,
+        prohibited_claims=case.expected_answer.prohibited_claims,
+    )
+    if case.scoring_contract.profile_id is ScoringProfile.CALIBRATION_V1:
+        if case.scoring_contract.error_class_rules or attribution:
+            raise ValueError("NOT_SCORED calibration cases cannot declare scorer error classes")
     else:
-        if "__over_refusal__" not in attribution:
+        if any(
+            field_id not in attribution and "__default__" not in attribution
+            for field_id in case.scoring_contract.required_output_fields
+        ):
+            raise ValueError("every scored field requires explicit error attribution metadata")
+        reachable_keys = {key for key, _ in reachable_paths}
+        unreachable_keys = set(attribution) - (reachable_keys | {"__default__"})
+        if unreachable_keys:
             raise ValueError(
-                "prohibited refusal semantics require explicit over-refusal attribution"
+                "error attribution keys have no reachable scorer path: "
+                + ", ".join(sorted(unreachable_keys))
             )
-    if case.refusal_expectation.decision is RefusalDecision.REQUIRED:
-        if "__refusal__" not in attribution:
-            raise ValueError("required refusal semantics require explicit refusal attribution")
-    if case.expected_answer.prohibited_claims and "__prohibited_claim__" not in attribution:
-        raise ValueError("prohibited claims require explicit error attribution metadata")
+        if any(
+            key not in attribution and "__default__" not in attribution for key in reachable_keys
+        ):
+            raise ValueError("every reachable scorer event requires explicit error attribution")
+        reachable_classes = reachable_error_classes(
+            case.scoring_contract,
+            refusal_decision=case.refusal_expectation.decision,
+            prohibited_claims=case.expected_answer.prohibited_claims,
+        )
+        unreachable_classes = set(case.scoring_contract.error_class_rules) - set(reachable_classes)
+        if unreachable_classes:
+            raise ValueError(
+                "declared error classes have no reachable scorer path: "
+                + ", ".join(sorted(item.value for item in unreachable_classes))
+            )
+        if reachable_classes - set(case.scoring_contract.error_class_rules):
+            raise ValueError("reachable scorer path uses an undeclared error class")
     if (
         case.expected_answer.kind is ExpectedAnswerKind.REFUSAL
         and case.refusal_expectation.decision is RefusalDecision.PROHIBITED

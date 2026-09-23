@@ -26,6 +26,7 @@ from dynamislm.benchmark.contracts import (
     ScoreResult,
     ScoringContract,
 )
+from dynamislm.benchmark.scoring_paths import reachable_error_classes
 from dynamislm.benchmark.validation import validate_case
 from dynamislm.serialization import canonical_hash
 
@@ -125,6 +126,10 @@ def validate_scoring_contract(contract: ScoringContract) -> None:
     definition = scorer_profile_definition(contract.profile_id)
     if contract.profile_version != definition.version:
         raise ValueError("scoring contract profile version is stale")
+    if contract.profile_id is ScoringProfile.CALIBRATION_V1:
+        if contract.error_class_rules or contract.error_attribution:
+            raise ValueError("NOT_SCORED calibration profile cannot emit error classes")
+        return
     unknown = set(contract.error_class_rules) - set(ErrorClass)
     if unknown:
         raise ValueError(f"unknown scorer error class: {sorted(unknown)}")
@@ -589,7 +594,11 @@ def build_error_event_report(
     counts = Counter(event.error_class.value for result in results for event in result.error_events)
     denominators: Counter[str] = Counter()
     for case in cases or ():
-        for error_class in case.scoring_contract.error_class_rules:
+        for error_class in reachable_error_classes(
+            case.scoring_contract,
+            refusal_decision=case.refusal_expectation.decision,
+            prohibited_claims=case.expected_answer.prohibited_claims,
+        ):
             denominators[error_class.value] += 1
     for error_class in ErrorClass:
         denominators.setdefault(error_class.value, 0)

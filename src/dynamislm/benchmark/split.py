@@ -15,6 +15,7 @@ from dynamislm.benchmark.constants import (
 from dynamislm.benchmark.contracts import BenchmarkCaseV1
 from dynamislm.benchmark.coverage import CoverageRow
 from dynamislm.benchmark.hashing import case_payload_hash
+from dynamislm.benchmark.scoring_paths import reachable_error_classes
 from dynamislm.benchmark.validation import validate_case_set
 from dynamislm.serialization import canonical_hash
 
@@ -187,7 +188,14 @@ def _union_find_clusters(cases: tuple[BenchmarkCaseV1, ...]) -> tuple[_Cluster, 
 
 def _soft_cells(case: BenchmarkCaseV1) -> tuple[str, ...]:
     outcome = "REFUSAL" if case.refusal_expectation.decision.value == "REQUIRED" else "ANSWER"
-    errors = tuple(item.value for item in case.scoring_contract.error_class_rules)
+    errors = tuple(
+        item.value
+        for item in reachable_error_classes(
+            case.scoring_contract,
+            refusal_decision=case.refusal_expectation.decision,
+            prohibited_claims=case.expected_answer.prohibited_claims,
+        )
+    )
     cells = [
         f"capability:{case.capability_id}",
         f"family:{case.benchmark_family}",
@@ -252,7 +260,14 @@ def _cluster_has_obligation(
     return any(
         _row_eligible(cases[index], row, family)
         and bool(set(cases[index].adversarial_tags) & set(row.adversarial_tags))
-        and bool(set(cases[index].scoring_contract.error_class_rules) & set(row.error_classes))
+        and bool(
+            reachable_error_classes(
+                cases[index].scoring_contract,
+                refusal_decision=cases[index].refusal_expectation.decision,
+                prohibited_claims=cases[index].expected_answer.prohibited_claims,
+            )
+            & set(row.error_classes)
+        )
         for index in cluster.member_indices
     )
 
@@ -354,7 +369,13 @@ def _build_coverage_anchors(
                 )
                 represented_tags = {tag for case in relevant for tag in case.adversarial_tags}
                 represented_errors = {
-                    error for case in relevant for error in case.scoring_contract.error_class_rules
+                    error
+                    for case in relevant
+                    for error in reachable_error_classes(
+                        case.scoring_contract,
+                        refusal_decision=case.refusal_expectation.decision,
+                        prohibited_claims=case.expected_answer.prohibited_claims,
+                    )
                 }
                 missing_features = [
                     ("tag", tag) for tag in row.adversarial_tags if tag not in represented_tags
@@ -379,7 +400,12 @@ def _build_coverage_anchors(
                         and (
                             feature in cases[index].adversarial_tags
                             if feature_kind == "tag"
-                            else feature in cases[index].scoring_contract.error_class_rules
+                            else feature
+                            in reachable_error_classes(
+                                cases[index].scoring_contract,
+                                refusal_decision=cases[index].refusal_expectation.decision,
+                                prohibited_claims=cases[index].expected_answer.prohibited_claims,
+                            )
                         )
                         for index in cluster.member_indices
                     )

@@ -27,8 +27,10 @@ from dynamislm.benchmark import (
     build_fixture_manifest_bundle,
     build_res71_runtime_binding,
     build_synthetic_reference_fixture_cases,
+    capability_family_lower_bound_case_count,
     coverage_manifest_digest,
     coverage_obligation_count,
+    executable_full_coverage_minimum_case_count,
     make_authority_binding,
     minimum_full_coverage_case_count,
     preflight_hidden_access,
@@ -226,6 +228,31 @@ def test_ground_truth_and_mutation_contracts_reject_forged_metadata() -> None:
         )
 
 
+def test_declared_error_classes_need_a_reachable_scorer_path() -> None:
+    case = next(
+        item
+        for item in build_synthetic_reference_fixture_cases()
+        if item.case_id == "fixture-expert-refusal"
+    )
+    unreachable = ErrorClass.DIRECT_DERIVED_COLLAPSE
+    forged = bind_case_payload(
+        replace(
+            case,
+            scoring_contract=replace(
+                case.scoring_contract,
+                error_class_rules=(*case.scoring_contract.error_class_rules, unreachable),
+            ),
+            case_payload_hash="sha256:" + "0" * 64,
+        )
+    )
+    with pytest.raises(ValueError, match="no reachable scorer path"):
+        validate_case(forged)
+
+    report = build_error_event_report((), (forged,))
+    assert report.eligible_denominators[unreachable.value] == 0
+    assert report.eligible_denominators[ErrorClass.UNDER_SPECIFIED_REFUSAL.value] == 1
+
+
 def test_source_authority_must_bind_typed_source_and_exact_span_identity() -> None:
     source = next(
         case
@@ -329,15 +356,19 @@ def test_split_allocator_is_deterministic_exact_and_lineage_atomic() -> None:
 
 
 def test_split_allocator_qualifies_the_frozen_benchmark_scale() -> None:
-    """Exercise the actual full-coverage path at its first exact feasible scale."""
+    """Requalify reachable errors at the exact executable minimum."""
 
     from dataclasses import replace
 
     from dynamislm.benchmark.coverage import COVERAGE_MATRIX
     from dynamislm.benchmark.hashing import bind_case_payload
+    from dynamislm.benchmark.scoring_paths import reachable_error_classes
 
     assert coverage_obligation_count() == 87
+    assert capability_family_lower_bound_case_count() == 434
+    assert executable_full_coverage_minimum_case_count() == 434
     assert minimum_full_coverage_case_count() == 434
+    assert min(target_counts(433).values()) == 86
     assert target_counts(434) == {
         SplitName.PUBLIC_DEVELOPMENT: 260,
         SplitName.FROZEN_VALIDATION: 87,
@@ -356,11 +387,53 @@ def test_split_allocator_qualifies_the_frozen_benchmark_scale() -> None:
         if case.provenance.origin_class is CaseOrigin.DETERMINISTIC_ENGINE_DERIVED
     )
     scale_cases: list[BenchmarkCaseV1] = []
+
+    def reachable_attribution(
+        template: BenchmarkCaseV1, errors: tuple[ErrorClass, ...]
+    ) -> tuple[tuple[str, ErrorClass], ...]:
+        keys = list(template.scoring_contract.required_output_fields)
+        if template.refusal_expectation.decision.value == "REQUIRED":
+            keys.extend(("__decision__", "__refusal__"))
+        elif template.refusal_expectation.decision.value == "ALLOWED":
+            keys.append("__refusal__")
+        else:
+            keys.append("__over_refusal__")
+        if template.expected_answer.prohibited_claims:
+            keys.append("__prohibited_claim__")
+        assert len(errors) <= len(keys)
+        return tuple((key, errors[index % len(errors)]) for index, key in enumerate(keys))
+
     for row in COVERAGE_MATRIX:
         template = engine_template if row.capability_id in {"C08", "C16"} else expert_template
+        if row.capability_id == "C16":
+            c16_fields = ("value", "result_provenance", "claim_scope")
+            c16_answer = replace(
+                template.expected_answer,
+                required_field_ids=c16_fields,
+                expected_fields={
+                    **template.expected_answer.expected_fields,
+                    "result_provenance": "registered-result",
+                    "claim_scope": "descriptive",
+                },
+            )
+            template = bind_case_payload(
+                replace(
+                    template,
+                    expected_answer=c16_answer,
+                    scoring_contract=replace(
+                        template.scoring_contract,
+                        profile_id=ScoringProfile.STRUCTURED_FIELDS_V1,
+                        required_output_fields=c16_fields,
+                        critical_fields=c16_fields,
+                    ),
+                    case_payload_hash="sha256:" + "0" * 64,
+                )
+            )
         profile = (
             ScoringProfile.NUMERIC_TOLERANCE_V1
-            if template is engine_template
+            if row.capability_id == "C08"
+            else ScoringProfile.STRUCTURED_FIELDS_V1
+            if row.capability_id == "C16"
             else next(
                 item
                 for item in (
@@ -373,23 +446,19 @@ def test_split_allocator_qualifies_the_frozen_benchmark_scale() -> None:
         )
         assert profile in row.scorer_profiles
         for family in row.benchmark_families:
+            if row.capability_id == "C17":
+                family_index = row.benchmark_families.index(family)
+                errors = (
+                    tuple(row.error_classes[:8])
+                    if family_index % 2 == 0
+                    else tuple(row.error_classes[4:])
+                )
+            else:
+                errors = tuple(row.error_classes)
             for replica in range(3):
                 index = len(scale_cases)
                 case_id = f"scale-qualification-{row.capability_id}-{family}-{replica}"
-                errors = tuple(row.error_classes)
-                primary_error = errors[0]
-                attribution = [
-                    (field_id, primary_error)
-                    for field_id in template.scoring_contract.required_output_fields
-                ]
-                if template.refusal_expectation.decision.value == "REQUIRED":
-                    attribution.extend(
-                        (("__decision__", primary_error), ("__refusal__", primary_error))
-                    )
-                else:
-                    attribution.append(("__over_refusal__", primary_error))
-                if template.expected_answer.prohibited_claims:
-                    attribution.append(("__prohibited_claim__", primary_error))
+                attribution = reachable_attribution(template, errors)
                 question = f"In-memory scale qualification case {case_id}."
                 scale_cases.append(
                     bind_case_payload(
@@ -404,7 +473,7 @@ def test_split_allocator_qualifies_the_frozen_benchmark_scale() -> None:
                                 template.scoring_contract,
                                 profile_id=profile,
                                 error_class_rules=errors,
-                                error_attribution=tuple(attribution),
+                                error_attribution=attribution,
                             ),
                             adversarial_tags=tuple(row.adversarial_tags),
                             split=replace(
@@ -433,14 +502,7 @@ def test_split_allocator_qualifies_the_frozen_benchmark_scale() -> None:
         row = COVERAGE_MATRIX[0]
         template = expert_template
         errors = tuple(row.error_classes)
-        primary_error = errors[0]
-        attribution = [
-            (field_id, primary_error)
-            for field_id in template.scoring_contract.required_output_fields
-        ]
-        attribution.extend((("__decision__", primary_error), ("__refusal__", primary_error)))
-        if template.expected_answer.prohibited_claims:
-            attribution.append(("__prohibited_claim__", primary_error))
+        attribution = reachable_attribution(template, errors)
         index = len(scale_cases)
         case_id = f"scale-qualification-fill-{replica:03d}"
         question = f"In-memory scale qualification fill case {case_id}."
@@ -457,7 +519,7 @@ def test_split_allocator_qualifies_the_frozen_benchmark_scale() -> None:
                         template.scoring_contract,
                         profile_id=ScoringProfile.CLASSIFICATION_V1,
                         error_class_rules=errors,
-                        error_attribution=tuple(attribution),
+                        error_attribution=attribution,
                     ),
                     adversarial_tags=tuple(row.adversarial_tags),
                     split=replace(
@@ -482,6 +544,13 @@ def test_split_allocator_qualifies_the_frozen_benchmark_scale() -> None:
         )
     cases = tuple(scale_cases)
     assert len(cases) == 434
+    for case in cases:
+        reachable = reachable_error_classes(
+            case.scoring_contract,
+            refusal_decision=case.refusal_expectation.decision,
+            prohibited_claims=case.expected_answer.prohibited_claims,
+        )
+        assert reachable == set(case.scoring_contract.error_class_rules)
     first = allocate_splits(cases, require_full_coverage=True)
     second = allocate_splits(cases, require_full_coverage=True)
     assert first.cases == second.cases
@@ -911,10 +980,8 @@ def test_calibration_profile_is_explicitly_not_scored_until_runner_support() -> 
                 profile_id=ScoringProfile.CALIBRATION_V1,
                 required_output_fields=("probabilities",),
                 critical_fields=("probabilities",),
-                error_attribution=(
-                    ("probabilities", ErrorClass.INVENTED_NUMERICAL_SCIENCE),
-                    ("__over_refusal__", ErrorClass.OVER_REFUSAL),
-                ),
+                error_class_rules=(),
+                error_attribution=(),
             ),
             case_payload_hash="sha256:" + "0" * 64,
         )

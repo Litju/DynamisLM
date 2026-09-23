@@ -15,6 +15,7 @@ from dynamislm.benchmark.constants import (
     SplitName,
 )
 from dynamislm.benchmark.contracts import BenchmarkCaseV1
+from dynamislm.benchmark.scoring_paths import reachable_error_classes
 from dynamislm.serialization import canonical_hash
 
 
@@ -462,8 +463,8 @@ def coverage_manifest_digest() -> str:
     return canonical_hash(COVERAGE_MATRIX)
 
 
-def minimum_full_coverage_case_count() -> int:
-    """Return the first N whose exact split targets fit every row obligation."""
+def capability_family_lower_bound_case_count() -> int:
+    """Return the first N with 87 capability/family slots in each split."""
 
     obligations = coverage_obligation_count()
     from dynamislm.benchmark.split import target_counts
@@ -472,6 +473,25 @@ def minimum_full_coverage_case_count() -> int:
     while min(target_counts(case_count).values()) < obligations:
         case_count += 1
     return case_count
+
+
+def executable_full_coverage_minimum_case_count() -> int:
+    """Return the qualified executable minimum for the frozen coverage matrix.
+
+    The executable qualification assigns each row's required error classes to
+    distinct reachable scorer paths within its already-required family cases.
+    The allocator test proves the first exact D/V/H target that can hold those
+    cases; the lower bound alone is not used as qualification evidence.
+    """
+
+    validate_coverage_matrix()
+    return capability_family_lower_bound_case_count()
+
+
+def minimum_full_coverage_case_count() -> int:
+    """Compatibility name for the executable full-coverage minimum."""
+
+    return executable_full_coverage_minimum_case_count()
 
 
 def coverage_obligation_count() -> int:
@@ -496,7 +516,14 @@ def _case_satisfies_obligation(case: BenchmarkCaseV1, row: CoverageRow, family: 
     return (
         _case_satisfies_row(case, row, family)
         and bool(set(case.adversarial_tags) & set(row.adversarial_tags))
-        and bool(set(case.scoring_contract.error_class_rules) & set(row.error_classes))
+        and bool(
+            reachable_error_classes(
+                case.scoring_contract,
+                refusal_decision=case.refusal_expectation.decision,
+                prohibited_claims=case.expected_answer.prohibited_claims,
+            )
+            & set(row.error_classes)
+        )
     )
 
 
@@ -554,7 +581,11 @@ def validate_case_coverage(
             represented_errors = {
                 error.value
                 for case in relevant
-                for error in case.scoring_contract.error_class_rules
+                for error in reachable_error_classes(
+                    case.scoring_contract,
+                    refusal_decision=case.refusal_expectation.decision,
+                    prohibited_claims=case.expected_answer.prohibited_claims,
+                )
             }
             for tag in row.adversarial_tags:
                 if tag not in represented_tags:
@@ -600,8 +631,10 @@ __all__ = [
     "COVERAGE_MATRIX",
     "CoverageRow",
     "CoverageValidation",
+    "capability_family_lower_bound_case_count",
     "coverage_manifest_digest",
     "coverage_obligation_count",
+    "executable_full_coverage_minimum_case_count",
     "minimum_full_coverage_case_count",
     "validate_case_coverage",
     "validate_coverage_matrix",

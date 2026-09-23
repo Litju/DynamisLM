@@ -1220,11 +1220,18 @@ allocation.
 `ScoringContract.error_attribution` is the exact case-local mapping described
 in Section 8. Every scored field and each applicable reserved decision/refusal/
 prohibited-claim key resolves only through that mapping or `__default__`; the
-scorer does not infer error classes from field names. `TaskOutcome.NOT_SCORED`
-is the current unconditional `CALIBRATION_V1` outcome. It emits no field
-scores or error events and is not pass/fail; the current error-event report
-continues to form eligibility denominators from the supplied case contracts.
-No probability calibration metric is currently implemented.
+scorer does not infer error classes from field names. Reachability is determined
+from executable paths: required-field errors are reachable for every scored
+non-calibration case; `__decision__` is reachable only for `REQUIRED` refusal;
+`__refusal__` is reachable for `REQUIRED` or `ALLOWED`; `__over_refusal__` is
+reachable only for `PROHIBITED`; and `__prohibited_claim__` is reachable only
+when the answer contract declares prohibited claims. An `error_class_rule`
+must resolve from at least one such path, and coverage/eligible denominators
+count only reachable classes. Unreachable event-key mappings are invalid.
+`TaskOutcome.NOT_SCORED` is the current unconditional `CALIBRATION_V1`
+outcome. It emits no field scores or error events and must carry no error rules
+or attribution; it is not pass/fail. No probability calibration metric is
+currently implemented.
 
 `ExclusionEntry.membership_digests` is an optional ordered tuple positionally
 paired with `benchmark_case_ids` and hashes. If supplied, every digest must
@@ -1245,10 +1252,9 @@ validator requires:
 
 1. every manifest and its digest to validate against the current cases and
    live RES-71 runtime authority;
-2. at least the first feasible full-coverage scale (`N >= 434`), every
-   capability×family×split obligation, full row-level adversarial/error
-   coverage, and exact largest-remainder D/V/H counts for the registered
-   60/20/20 proportions;
+2. the actual executable full-coverage minimum, every capability×family×split
+   obligation, reachable row-level adversarial/error coverage, and exact
+   largest-remainder D/V/H counts for the registered 60/20/20 proportions;
 3. exclusion completeness and a private text index, plus resolved
    manifest-bound contamination decisions for every case-associated exclusion
    artifact;
@@ -1261,3 +1267,18 @@ validator requires:
 The full benchmark remains unmaterialized. The N=434 allocator qualification
 is deterministic, synthetic, and in-memory test material; it is not V1 data.
 No model inference, training, or RES-22/RES-23 work is part of this amendment.
+
+### 15.4 Executable error coverage and qualified split minimum — implementation fix 003
+
+Coverage distinguishes the capability/family lower bound from the executable
+full-coverage minimum. There are 87 capability×family obligations per split;
+the first exact 60/20/20 allocation that gives validation and hidden at least
+87 cases is `N=434`, with `D/V/H=260/87/87`. At `N=433`, hidden receives only
+86 cases, so no smaller total can satisfy the frozen split and family
+obligations. The executable allocator qualification also passes at `N=434`
+after every declared error class is assigned to a scorer path the case can
+actually emit, including all 12 C17 classes in every split. Therefore the
+qualified executable minimum is also `N=434`; this equality is established by
+the executable case construction and exact allocator result, not assumed from
+the family count alone. The qualification cases remain synthetic and
+in-memory, and are not V1 benchmark data.
