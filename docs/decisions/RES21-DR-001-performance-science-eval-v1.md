@@ -1293,8 +1293,10 @@ validator requires:
 4. exact split isolation across every frozen identity in Section 15.1;
 5. no fixture-only case marker or fixture population scope; and
 6. a hidden store bound to the exact benchmark manifest and complete hidden
-   case/hash set, with payload and answer access denied to training principals
-   and allowed through preflight only for the evaluation-service principal.
+   case/hash set, held outside this public repository in an `EXTERNAL_PRIVATE`
+   store and separate credential namespace. Fresh live access-control evidence
+   must show no payload/answer read credentials for training, data-pipeline, or
+   model-development principals, and access only for the evaluation service.
 
 The full benchmark remains unmaterialized. The N=434 allocator qualification
 is deterministic, synthetic, and in-memory test material; it is not V1 data.
@@ -1348,3 +1350,21 @@ consumes only matching dispositions, and carries each decision into
 contamination and freeze evidence. Parent/adversarial-mutation overlap is
 qualified as a same-split `PARENT_CHILD` exact relation; its cross-split form
 cannot be approved.
+
+### 15.7 Hidden-final materialization boundary — implementation fix 003
+
+Hidden prompts and answers never enter this public Git repository. Only the
+case IDs, payload/answer hashes, and registered fingerprints allowed by this
+decision may be public. Hidden bytes require an external private store and a
+credential namespace separate from training/data/model-development access.
+Those principals must have no read credential; the evaluation-service
+principal is the only hidden-byte reader.
+
+The public contract carries only store identity/version, namespace, manifest
+hash, hidden case IDs/hashes, and availability flags. A caller-set availability
+boolean is not access-control evidence. Final freeze must invoke a live
+`HiddenStoreAccessProbe` and validate its hash-bound receipt against the exact
+store, manifest, hidden case/hash set, and per-principal PAYLOAD/ANSWER grants.
+The receipt must be no more than five minutes old. This mission implements the
+contract and in-memory qualification only; it does not implement or populate a
+real hidden store.

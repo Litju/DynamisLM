@@ -702,10 +702,11 @@ def build_fixture_exclusion_registry(
     for artifact_id, unsorted_cases in associated_cases.items():
         cases = tuple(sorted(unsorted_cases, key=lambda item: item.case_id.encode("utf-8")))
         source_families = {case.contamination.source_family_id for case in cases}
-        if len(source_families) != 1:
-            raise ValueError(
-                f"shared fixture artifact has conflicting source families: {artifact_id}"
-            )
+        source_family_id = (
+            next(iter(source_families))
+            if len(source_families) == 1
+            else f"shared-fixture-artifact:{artifact_id}"
+        )
         split_names = tuple(
             split for split in SplitName if any(case.split.split_name is split for case in cases)
         )
@@ -765,7 +766,7 @@ def build_fixture_exclusion_registry(
                     + " ".join(f"{case.case_id} {case.case_payload_hash}" for case in cases)
                     + f" {artifact_id}"
                 ),
-                source_family_id=next(iter(source_families)),
+                source_family_id=source_family_id,
                 normalized_doi=normalized_doi,
                 split_name=split_names[0],
                 benchmark_case_ids=case_ids,

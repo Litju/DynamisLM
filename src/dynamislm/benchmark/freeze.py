@@ -8,16 +8,20 @@ from dynamislm.benchmark.constants import SPLIT_ORDER, PreflightStatus, Principa
 from dynamislm.benchmark.contamination import (
     ContaminationGateEvidence,
     ExclusionRegistry,
+    build_contamination_gate_evidence,
     validate_exclusion_completeness,
 )
-from dynamislm.benchmark.contracts import ManifestBundleV1
+from dynamislm.benchmark.contracts import ManifestBundleV1, OverlapDispositionV1
 from dynamislm.benchmark.coverage import minimum_full_coverage_case_count, validate_case_coverage
 from dynamislm.benchmark.hashing import validate_manifest_bundle
 from dynamislm.benchmark.hidden import (
     HiddenAccessRequest,
+    HiddenStoreAccessEvidenceV1,
+    HiddenStoreAccessProbe,
     HiddenStoreDescriptor,
     preflight_hidden_access,
     preflight_training_exclusion,
+    validate_hidden_access_evidence,
 )
 from dynamislm.benchmark.split import validate_split_assignment
 
@@ -28,7 +32,10 @@ class FinalV1FreezeValidation:
     split_counts: tuple[tuple[SplitName, int], ...]
     case_count: int
     contamination_audit_count: int
+    contamination_dispositions: tuple[OverlapDispositionV1, ...]
+    contamination_disposition_digest: str
     hidden_case_count: int
+    hidden_access_evidence: HiddenStoreAccessEvidenceV1
     status: str = "PASS"
 
 
@@ -38,6 +45,7 @@ def validate_final_v1_freeze(
     exclusion_registry: ExclusionRegistry,
     contamination_gate: ContaminationGateEvidence,
     hidden_store: HiddenStoreDescriptor,
+    hidden_access_probe: HiddenStoreAccessProbe | None = None,
 ) -> FinalV1FreezeValidation:
     """Require every benchmark freeze gate, including full coverage and hidden policy."""
 
@@ -81,6 +89,13 @@ def validate_final_v1_freeze(
         or not contamination_gate.resolved
     ):
         raise ValueError("FINAL V1 freeze has an unresolved or stale contamination gate")
+    recomputed_contamination_gate = build_contamination_gate_evidence(
+        bundle,
+        exclusion_registry,
+        dispositions=contamination_gate.dispositions,
+    )
+    if recomputed_contamination_gate != contamination_gate:
+        raise ValueError("FINAL V1 freeze contamination evidence does not recompute from artifacts")
 
     exclusion_preflight = preflight_training_exclusion(
         bundle.exclusion_manifest,
@@ -109,20 +124,43 @@ def validate_final_v1_freeze(
         or hidden_store.hidden_case_hashes != expected_hidden_hashes
         or not hidden_store.payloads_available
         or not hidden_store.answers_available
+        or hidden_store.storage_boundary != "EXTERNAL_PRIVATE"
+        or not hidden_store.credential_namespace
     ):
         raise ValueError("FINAL V1 freeze hidden-final store policy or binding is incomplete")
+    if hidden_access_probe is None:
+        raise ValueError("FINAL V1 freeze requires a live external hidden-store access probe")
+    access_evidence = hidden_access_probe.probe_access(
+        store=hidden_store,
+        benchmark_manifest=bundle.benchmark_manifest,
+        hidden_cases=hidden_cases,
+    )
+    validate_hidden_access_evidence(
+        access_evidence,
+        store=hidden_store,
+        benchmark_manifest=bundle.benchmark_manifest,
+        hidden_cases=hidden_cases,
+    )
     for case in hidden_cases:
         for artifact_kind in ("PAYLOAD", "ANSWER"):
-            training_access = preflight_hidden_access(
-                HiddenAccessRequest(
+            denied_access = tuple(
+                preflight_hidden_access(
+                    HiddenAccessRequest(
+                        principal,
+                        case.case_id,
+                        artifact_kind,
+                        "FINAL_V1_FREEZE_POLICY_CHECK",
+                    ),
+                    case=case,
+                    benchmark_manifest=bundle.benchmark_manifest,
+                    store=hidden_store,
+                    access_evidence=access_evidence,
+                )
+                for principal in (
                     Principal.TRAINING,
-                    case.case_id,
-                    artifact_kind,
-                    "FINAL_V1_FREEZE_POLICY_CHECK",
-                ),
-                case=case,
-                benchmark_manifest=bundle.benchmark_manifest,
-                store=hidden_store,
+                    Principal.DATA_PIPELINE,
+                    Principal.MODEL_DEVELOPMENT,
+                )
             )
             evaluation_access = preflight_hidden_access(
                 HiddenAccessRequest(
@@ -134,9 +172,10 @@ def validate_final_v1_freeze(
                 case=case,
                 benchmark_manifest=bundle.benchmark_manifest,
                 store=hidden_store,
+                access_evidence=access_evidence,
             )
             if (
-                training_access.status is not PreflightStatus.BLOCKED
+                any(item.status is not PreflightStatus.BLOCKED for item in denied_access)
                 or evaluation_access.status is not PreflightStatus.PASS
             ):
                 raise ValueError("FINAL V1 freeze hidden access policy is not enforced")
@@ -149,7 +188,10 @@ def validate_final_v1_freeze(
         split_counts=split_counts,
         case_count=len(cases),
         contamination_audit_count=len(contamination_gate.audits),
+        contamination_dispositions=contamination_gate.dispositions,
+        contamination_disposition_digest=contamination_gate.disposition_manifest_digest,
         hidden_case_count=len(hidden_cases),
+        hidden_access_evidence=access_evidence,
     )
 
 

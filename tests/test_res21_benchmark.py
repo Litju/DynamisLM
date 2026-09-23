@@ -11,6 +11,7 @@ from dynamislm.benchmark import (
     ContaminationGateEvidence,
     ErrorClass,
     ExclusionRegistry,
+    HiddenAccessGrantV1,
     HiddenAccessRequest,
     HiddenStoreDescriptor,
     Principal,
@@ -21,11 +22,14 @@ from dynamislm.benchmark import (
     bind_case_payload,
     bind_res71_operation,
     bind_res71_refusal,
+    build_contamination_gate_evidence,
     build_contamination_report,
     build_error_event_report,
     build_fixture_allocation,
     build_fixture_exclusion_registry,
     build_fixture_manifest_bundle,
+    build_hidden_access_evidence,
+    build_manifest_bundle,
     build_overlap_disposition,
     build_res71_runtime_binding,
     build_synthetic_reference_fixture_cases,
@@ -443,25 +447,11 @@ def test_split_allocator_is_deterministic_exact_and_lineage_atomic() -> None:
         validate_split_assignment(allocated)
 
 
-def test_split_allocator_qualifies_the_frozen_benchmark_scale() -> None:
-    """Requalify reachable errors at the exact executable minimum."""
-
-    from dataclasses import replace
-
+def _build_full_coverage_qualification_cases() -> tuple[BenchmarkCaseV1, ...]:
     from dynamislm.benchmark.coverage import COVERAGE_MATRIX
     from dynamislm.benchmark.hashing import bind_case_payload
     from dynamislm.benchmark.scoring_paths import reachable_error_classes
-
-    assert coverage_obligation_count() == 87
-    assert capability_family_lower_bound_case_count() == 434
-    assert executable_full_coverage_minimum_case_count() == 434
-    assert minimum_full_coverage_case_count() == 434
-    assert min(target_counts(433).values()) == 86
-    assert target_counts(434) == {
-        SplitName.PUBLIC_DEVELOPMENT: 260,
-        SplitName.FROZEN_VALIDATION: 87,
-        SplitName.HIDDEN_FINAL: 87,
-    }
+    from dynamislm.serialization import canonical_hash
 
     fixtures = build_synthetic_reference_fixture_cases()
     expert_template = next(
@@ -474,6 +464,83 @@ def test_split_allocator_qualifies_the_frozen_benchmark_scale() -> None:
         for case in fixtures
         if case.provenance.origin_class is CaseOrigin.DETERMINISTIC_ENGINE_DERIVED
     )
+
+    def non_v1_template(template: BenchmarkCaseV1) -> BenchmarkCaseV1:
+        context = {
+            key: value
+            for key, value in template.input.structured_context.items()
+            if key != "fixture"
+        }
+        review_digest = canonical_hash({"rubric": "non-v1-synthetic-qualification"})
+        review = replace(
+            template.provenance.review,
+            author_id="qualification-expert-author",
+            reviewer_id="qualification-independent-reviewer",
+            review_scope="synthetic in-memory qualification only",
+            rubric_digest=review_digest,
+        )
+        authority = tuple(
+            replace(
+                binding,
+                source_reference_id="qualification-expert-rubric-v1",
+                digest=review_digest,
+            )
+            if binding.authority_kind == "EXPERT_RUBRIC"
+            else binding
+            for binding in template.authority
+        )
+        result_id_map = {
+            result.result_reference_id: result.result_reference_id.replace(
+                "fixture-", "qualification-"
+            )
+            for result in template.input.deterministic_results
+        }
+        return bind_case_payload(
+            replace(
+                template,
+                input=replace(
+                    template.input,
+                    structured_context=context,
+                    deterministic_results=tuple(
+                        replace(
+                            result,
+                            result_reference_id=result_id_map[result.result_reference_id],
+                        )
+                        for result in template.input.deterministic_results
+                    ),
+                ),
+                authority=authority,
+                claim_contract=replace(
+                    template.claim_contract,
+                    requested_claim="synthetic qualification-only interpretation",
+                ),
+                provenance=replace(
+                    template.provenance,
+                    authority_lineage=(
+                        ("qualification-expert-rubric-v1", "RES-70")
+                        if template.provenance.origin_class is CaseOrigin.EXPERT_AUTHORED_SEMANTIC
+                        else template.provenance.authority_lineage
+                    ),
+                    derivation_edges=tuple(
+                        replace(
+                            edge,
+                            downstream_id=result_id_map.get(edge.downstream_id, edge.downstream_id),
+                        )
+                        for edge in template.provenance.derivation_edges
+                    ),
+                    population_scope="NON_V1_SYNTHETIC_QUALIFICATION",
+                    review=review,
+                ),
+                difficulty=replace(
+                    template.difficulty,
+                    rationale="Synthetic in-memory full-coverage qualification only.",
+                ),
+                case_payload_hash="sha256:" + "0" * 64,
+            )
+        )
+
+    expert_template = non_v1_template(expert_template)
+    engine_template = non_v1_template(engine_template)
     scale_cases: list[BenchmarkCaseV1] = []
 
     def reachable_attribution(
@@ -571,7 +638,7 @@ def test_split_allocator_qualifies_the_frozen_benchmark_scale() -> None:
                             contamination=replace(
                                 template.contamination,
                                 source_family_id=f"scale-source-{index:03d}",
-                                document_ids=(f"scale-document-{index:03d}",),
+                                document_ids=(),
                                 construct_test_identity_ids=(f"scale-construct-test-{index:03d}",),
                                 provider_export_id=f"scale-provider-{index:03d}",
                                 protocol_template_id=f"scale-template-{index:03d}",
@@ -617,7 +684,7 @@ def test_split_allocator_qualifies_the_frozen_benchmark_scale() -> None:
                     contamination=replace(
                         template.contamination,
                         source_family_id=f"scale-source-{index:03d}",
-                        document_ids=(f"scale-document-{index:03d}",),
+                        document_ids=(),
                         construct_test_identity_ids=(f"scale-construct-test-{index:03d}",),
                         provider_export_id=f"scale-provider-{index:03d}",
                         protocol_template_id=f"scale-template-{index:03d}",
@@ -639,6 +706,23 @@ def test_split_allocator_qualifies_the_frozen_benchmark_scale() -> None:
             prohibited_claims=case.expected_answer.prohibited_claims,
         )
         assert reachable == set(case.scoring_contract.error_class_rules)
+    return cases
+
+
+def test_split_allocator_qualifies_the_frozen_benchmark_scale() -> None:
+    """Requalify reachable errors at the exact executable minimum."""
+
+    assert coverage_obligation_count() == 87
+    assert capability_family_lower_bound_case_count() == 434
+    assert executable_full_coverage_minimum_case_count() == 434
+    assert minimum_full_coverage_case_count() == 434
+    assert min(target_counts(433).values()) == 86
+    assert target_counts(434) == {
+        SplitName.PUBLIC_DEVELOPMENT: 260,
+        SplitName.FROZEN_VALIDATION: 87,
+        SplitName.HIDDEN_FINAL: 87,
+    }
+    cases = _build_full_coverage_qualification_cases()
     first = allocate_splits(cases, require_full_coverage=True)
     second = allocate_splits(cases, require_full_coverage=True)
     assert first.cases == second.cases
@@ -1093,8 +1177,12 @@ def test_manifest_bundle_rejects_stale_bindings_and_hidden_training_access() -> 
         hidden_case_ids=(hidden_case.case_id,),
         payloads_available=True,
         answers_available=True,
+        storage_boundary="EXTERNAL_PRIVATE",
+        credential_namespace="pse-v1-evaluation-service-test",
         hidden_case_hashes=((hidden_case.case_id, hidden_case.case_payload_hash),),
     )
+    with pytest.raises(ValueError, match="EXTERNAL_PRIVATE"):
+        replace(store, storage_boundary="PUBLIC_REPOSITORY")
     request = HiddenAccessRequest(Principal.TRAINING, hidden_case.case_id, "PAYLOAD", "training")
     blocked = preflight_hidden_access(
         request,
@@ -1162,6 +1250,8 @@ def test_final_v1_freeze_rejects_infrastructure_fixture_bundle() -> None:
         hidden_case_ids=(hidden.case_id,),
         payloads_available=True,
         answers_available=True,
+        storage_boundary="EXTERNAL_PRIVATE",
+        credential_namespace="pse-v1-evaluation-service-test",
         hidden_case_hashes=((hidden.case_id, hidden.case_payload_hash),),
     )
 
@@ -1171,6 +1261,219 @@ def test_final_v1_freeze_rejects_infrastructure_fixture_bundle() -> None:
             exclusion_registry=registry,
             contamination_gate=gate,
             hidden_store=store,
+        )
+
+
+def test_final_v1_freeze_positive_non_v1_in_memory_qualification() -> None:
+    from dynamislm.benchmark.contracts import BenchmarkManifestV1
+    from dynamislm.benchmark.hashing import build_split_manifests
+    from dynamislm.benchmark.hidden import HiddenStoreAccessEvidenceV1
+
+    qualification_cases = _build_full_coverage_qualification_cases()
+    allocation = allocate_splits(qualification_cases, require_full_coverage=True)
+    assert allocation.target_counts == target_counts(434)
+    assert tuple(allocation.target_counts[split] for split in SplitName) == (260, 87, 87)
+    assert validate_case_coverage(allocation.cases, require_all_splits=True).status == "PASS"
+
+    bound_cases, _ = build_split_manifests(allocation.cases, allocation.target_counts)
+    bound_allocation = replace(allocation, cases=bound_cases)
+    base_registry = build_fixture_exclusion_registry(bound_allocation)
+    cases_by_split: dict[SplitName, list[str]] = {split: [] for split in SplitName}
+    for case in bound_cases:
+        if case.split.split_name is not None:
+            cases_by_split[case.split.split_name].append(case.case_id)
+    reviewed_case_ids = tuple(
+        sorted(
+            cases_by_split[SplitName.PUBLIC_DEVELOPMENT][:2],
+            key=lambda item: item.encode("utf-8"),
+        )
+    )
+    overlap_artifact_ids = tuple(f"case:{case_id}" for case_id in reviewed_case_ids)
+    overlap_text = "synthetic same-split exact overlap qualification"
+    registry_artifacts = tuple(
+        replace(
+            artifact,
+            text=(
+                overlap_text
+                if artifact.artifact_id in overlap_artifact_ids
+                else "".join(chr(0xE000 + index + offset) for offset in range(5))
+            ),
+        )
+        for index, artifact in enumerate(base_registry.artifacts)
+    )
+    registry = ExclusionRegistry.from_artifacts(registry_artifacts)
+    bundle = build_manifest_bundle(
+        bound_cases,
+        registry.entries,
+        build_res71_runtime_binding(),
+    )
+
+    review_time = datetime_module.datetime.now(datetime_module.UTC)
+    reviewed_artifacts = tuple(
+        next(artifact for artifact in registry.artifacts if artifact.artifact_id == artifact_id)
+        for artifact_id in overlap_artifact_ids
+    )
+    left_overlap = build_overlap_disposition(
+        reviewed_artifacts[0],
+        reviewed_artifacts[1].artifact_id,
+        registry,
+        decision=OverlapDecision.APPROVED,
+        rationale="Reviewed same-split exact overlap is synthetic qualification evidence.",
+        reviewer_id="qualification-contamination-reviewer",
+        reviewed_at=review_time,
+    )
+    right_overlap = build_overlap_disposition(
+        reviewed_artifacts[1],
+        reviewed_artifacts[0].artifact_id,
+        registry,
+        decision=OverlapDecision.APPROVED,
+        rationale="Reviewed same-split exact overlap is synthetic qualification evidence.",
+        reviewer_id="qualification-contamination-reviewer",
+        reviewed_at=review_time,
+    )
+    dispositions = (left_overlap, right_overlap)
+    unresolved_gate = build_contamination_gate_evidence(bundle, registry)
+    assert not unresolved_gate.resolved
+    gate = build_contamination_gate_evidence(
+        bundle,
+        registry,
+        dispositions=dispositions,
+    )
+    assert gate.resolved
+    assert len(gate.dispositions) == 2
+
+    hidden_cases = tuple(
+        sorted(
+            (case for case in bundle.cases if case.split.split_name is SplitName.HIDDEN_FINAL),
+            key=lambda case: case.case_id.encode("utf-8"),
+        )
+    )
+    hidden_case_ids = tuple(case.case_id for case in hidden_cases)
+    hidden_case_hashes = tuple((case.case_id, case.case_payload_hash) for case in hidden_cases)
+    store = HiddenStoreDescriptor(
+        store_id="qualification-private-hidden-store",
+        store_version="1.0.0",
+        benchmark_manifest_hash=bundle.benchmark_manifest.benchmark_manifest_hash,
+        hidden_case_ids=hidden_case_ids,
+        payloads_available=True,
+        answers_available=True,
+        storage_boundary="EXTERNAL_PRIVATE",
+        credential_namespace="qualification-evaluation-service-only",
+        hidden_case_hashes=hidden_case_hashes,
+    )
+
+    class InMemoryAccessProbe:
+        calls = 0
+        evidence: HiddenStoreAccessEvidenceV1 | None = None
+
+        def probe_access(
+            self,
+            *,
+            store: HiddenStoreDescriptor,
+            benchmark_manifest: BenchmarkManifestV1,
+            hidden_cases: tuple[BenchmarkCaseV1, ...],
+        ) -> HiddenStoreAccessEvidenceV1:
+            self.calls += 1
+            case_hashes = tuple(
+                sorted(
+                    ((case.case_id, case.case_payload_hash) for case in hidden_cases),
+                    key=lambda item: item[0].encode("utf-8"),
+                )
+            )
+            grants = tuple(
+                sorted(
+                    (
+                        HiddenAccessGrantV1(
+                            principal=principal,
+                            artifact_kind=artifact_kind,
+                            credential_present=principal is Principal.EVALUATION_SERVICE,
+                            read_allowed=principal is Principal.EVALUATION_SERVICE,
+                        )
+                        for principal in Principal
+                        for artifact_kind in ("PAYLOAD", "ANSWER")
+                    ),
+                    key=lambda grant: (
+                        Principal(grant.principal).value.encode("utf-8"),
+                        grant.artifact_kind.encode("utf-8"),
+                    ),
+                )
+            )
+            self.evidence = build_hidden_access_evidence(
+                store_id=store.store_id,
+                store_version=store.store_version,
+                credential_namespace=store.credential_namespace,
+                benchmark_manifest_hash=benchmark_manifest.benchmark_manifest_hash,
+                hidden_case_hashes=case_hashes,
+                control_plane_id="synthetic-in-memory-control-plane",
+                probe_id="qualification-live-access-probe",
+                checked_at=review_time,
+                grants=grants,
+            )
+            return self.evidence
+
+    with pytest.raises(ValueError, match="unresolved or stale contamination gate"):
+        validate_final_v1_freeze(
+            bundle,
+            exclusion_registry=registry,
+            contamination_gate=unresolved_gate,
+            hidden_store=store,
+        )
+    with pytest.raises(ValueError, match="requires a live external hidden-store access probe"):
+        validate_final_v1_freeze(
+            bundle,
+            exclusion_registry=registry,
+            contamination_gate=gate,
+            hidden_store=store,
+        )
+
+    access_probe = InMemoryAccessProbe()
+    result = validate_final_v1_freeze(
+        bundle,
+        exclusion_registry=registry,
+        contamination_gate=gate,
+        hidden_store=store,
+        hidden_access_probe=access_probe,
+    )
+    assert result.status == "PASS"
+    assert result.split_counts == tuple(zip(SplitName, (260, 87, 87), strict=True))
+    assert result.case_count == 434
+    assert result.contamination_dispositions == gate.dispositions
+    assert result.contamination_disposition_digest == gate.disposition_manifest_digest
+    assert result.hidden_access_evidence == access_probe.evidence
+    assert access_probe.calls == 1
+    assert access_probe.evidence is not None
+    from dynamislm.benchmark.hidden import validate_hidden_access_evidence
+
+    training_payload_grant = next(
+        grant
+        for grant in access_probe.evidence.grants
+        if Principal(grant.principal) is Principal.TRAINING and grant.artifact_kind == "PAYLOAD"
+    )
+    forged_grants = tuple(
+        replace(grant, credential_present=True, read_allowed=True)
+        if grant is training_payload_grant
+        else grant
+        for grant in access_probe.evidence.grants
+    )
+    with pytest.raises(ValueError, match="only EVALUATION_SERVICE"):
+        build_hidden_access_evidence(
+            store_id=store.store_id,
+            store_version=store.store_version,
+            credential_namespace=store.credential_namespace,
+            benchmark_manifest_hash=bundle.benchmark_manifest.benchmark_manifest_hash,
+            hidden_case_hashes=hidden_case_hashes,
+            control_plane_id="synthetic-in-memory-control-plane",
+            probe_id="qualification-forged-access-probe",
+            checked_at=review_time,
+            grants=forged_grants,
+        )
+    with pytest.raises(ValueError, match="stale or from the future"):
+        validate_hidden_access_evidence(
+            access_probe.evidence,
+            store=store,
+            benchmark_manifest=bundle.benchmark_manifest,
+            hidden_cases=hidden_cases,
+            now=review_time + datetime_module.timedelta(seconds=301),
         )
 
 
