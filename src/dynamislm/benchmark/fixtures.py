@@ -6,6 +6,7 @@ This module intentionally does not generate the complete V1 benchmark.
 from __future__ import annotations
 
 import datetime as datetime_module
+import hashlib
 from dataclasses import replace
 
 from dynamislm.benchmark.authority import (
@@ -43,8 +44,10 @@ from dynamislm.benchmark.contracts import (
     ContaminationBinding,
     DeterministicResultView,
     DifficultyBinding,
+    DocumentIdentity,
     EvidenceExcerpt,
     EvidenceReference,
+    EvidenceSpanIdentity,
     ExpectedStructuredAnswer,
     ExpertReviewMetadata,
     InputContract,
@@ -52,6 +55,7 @@ from dynamislm.benchmark.contracts import (
     ProvenanceEdge,
     RefusalExpectation,
     ScoringContract,
+    SourceArtifactIdentity,
     SplitBinding,
     ToleranceContract,
 )
@@ -78,7 +82,7 @@ def _review(label: str) -> ExpertReviewMetadata:
 
 def _contamination(case_id: str, question: str, family: str) -> ContaminationBinding:
     return ContaminationBinding(
-        source_ids=(),
+        source_artifact_ids=(),
         document_ids=(),
         source_family_id=family,
         provider_export_id=None,
@@ -376,45 +380,83 @@ def _source_case() -> BenchmarkCaseV1:
     question = (
         "Extract the exact supported population statement from the supplied evidence excerpt."
     )
-    source_digest = canonical_hash({"source": "fixture-source", "version": "1.0.0"})
+    document_id = "doi:10.0000/pse-v1-fixture-source"
+    artifact_id = "fixture-source-artifact-pdf-v1"
+    document_digest = canonical_hash({"document": document_id, "version": "1.0.0"})
+    artifact_digest = (
+        "sha256:" + hashlib.sha256(b"synthetic fixture stored source artifact bytes").hexdigest()
+    )
+    excerpt_text = "Synthetic evidence excerpt for infrastructure qualification."
+    excerpt_scope = "fixture-only"
+    excerpt_applicability = "fixture-only; not empirical evidence"
+    locator = "p.1;span:1-2"
+    document = DocumentIdentity(
+        document_id=document_id,
+        version="1.0.0",
+        content_digest=document_digest,
+        doi="10.0000/pse-v1-fixture-source",
+    )
+    source_artifact = SourceArtifactIdentity(
+        artifact_id=artifact_id,
+        document_id=document_id,
+        document_version="1.0.0",
+        artifact_version="pdf-v1",
+        content_digest=artifact_digest,
+    )
+    span = EvidenceSpanIdentity(
+        span_id="fixture-excerpt-population",
+        document_id=document_id,
+        document_version="1.0.0",
+        source_artifact_id=artifact_id,
+        source_artifact_digest=artifact_digest,
+        locator=locator,
+        span_digest="sha256:" + hashlib.sha256(excerpt_text.encode("utf-8")).hexdigest(),
+    )
     excerpt = EvidenceExcerpt(
-        excerpt_id="fixture-excerpt-population",
-        source_id="fixture-source",
-        content_digest=source_digest,
-        locator="p.1;span:1-2",
-        text="Synthetic evidence excerpt for infrastructure qualification.",
-        scope="fixture-only",
-        applicability="fixture-only; not empirical evidence",
+        document_identity=document,
+        source_artifact_identity=source_artifact,
+        span_identity=span,
+        text=excerpt_text,
+        scope=excerpt_scope,
+        applicability=excerpt_applicability,
     )
     source_ref = EvidenceReference(
         EvidenceKind.SOURCE,
-        "fixture-source",
+        document_id,
         "1.0.0",
-        source_digest,
+        document_digest,
         excerpt.locator,
         excerpt.scope,
         excerpt.applicability,
+        document_identity=document,
     )
     authorities = (
         AuthorityBinding(
             "SOURCE_EVIDENCE_SPAN",
             excerpt.excerpt_id,
             "1.0.0",
-            source_digest,
+            span.span_digest,
             ("input.evidence_excerpts", "expected_answer"),
+        ),
+        AuthorityBinding(
+            "SOURCE_DOCUMENT",
+            document.document_id,
+            document.version,
+            document.identity_digest,
+            ("expected_answer",),
         ),
     )
     provenance = CaseProvenance(
         origin_class=CaseOrigin.SOURCE_BACKED_EVIDENCE_EXTRACTION,
         review=_review("source"),
-        authority_lineage=("fixture-source", excerpt.excerpt_id),
+        authority_lineage=(document.document_id, excerpt.excerpt_id),
         population_scope="fixture-only; synthetic source-backed test material",
         derivation_status="SOURCE_SPAN_BOUND",
         derivation_edges=(
             ProvenanceEdge(excerpt.excerpt_id, "fixture-source-extraction", "EXACT_SPAN"),
         ),
-        source_artifact_ids=("fixture-source",),
-        source_content_digests=(source_digest,),
+        source_artifact_ids=(artifact_id,),
+        source_content_digests=(artifact_digest,),
         evidence_span_refs=(excerpt.excerpt_id,),
     )
     case = _base_case(
@@ -465,9 +507,9 @@ def _source_case() -> BenchmarkCaseV1:
         case,
         contamination=replace(
             case.contamination,
-            source_ids=("fixture-source",),
-            document_ids=("fixture-source",),
-            source_content_sha256=source_digest,
+            source_artifact_ids=(artifact_id,),
+            document_ids=(document_id,),
+            source_content_sha256=artifact_digest,
         ),
     )
     return bind_case_payload(case)
@@ -678,16 +720,53 @@ def build_fixture_exclusion_registry(
             if all(case.split.membership_digest is not None for case in cases)
             else ()
         )
+        document_id = (
+            artifact_id.removeprefix("document:") if artifact_id.startswith("document:") else None
+        )
+        source_artifact_id = (
+            artifact_id.removeprefix("source:") if artifact_id.startswith("source:") else None
+        )
+        document_content_digest = None
+        source_artifact_digest = None
+        identity_excerpts = tuple(
+            excerpt
+            for case in cases
+            for excerpt in case.input.evidence_excerpts
+            if excerpt.source_artifact_identity.artifact_id == source_artifact_id
+        )
+        if source_artifact_id is not None and identity_excerpts:
+            excerpt = identity_excerpts[0]
+            document_id = excerpt.document_identity.document_id
+            document_content_digest = excerpt.document_identity.content_digest
+            source_artifact_digest = excerpt.source_artifact_identity.content_digest
+            normalized_doi = excerpt.document_identity.doi
+        else:
+            document_excerpts = tuple(
+                excerpt
+                for case in cases
+                for excerpt in case.input.evidence_excerpts
+                if excerpt.document_identity.document_id == document_id
+            )
+            normalized_doi = (
+                document_excerpts[0].document_identity.doi if document_excerpts else None
+            )
+            document_content_digest = (
+                document_excerpts[0].document_identity.content_digest if document_excerpts else None
+            )
         artifacts.append(
             ContaminationArtifact(
                 artifact_id=artifact_id,
-                source_id=next(iter(source_families)),
+                document_id=document_id,
+                document_content_digest=document_content_digest,
+                source_artifact_id=source_artifact_id,
+                source_artifact_digest=source_artifact_digest,
                 text=(
                     f"{artifact_id} "
                     + " ".join(f"{case.case_id} {case.case_payload_hash}" for case in cases)
                     + f" {artifact_id}"
                 ),
                 source_family_id=next(iter(source_families)),
+                normalized_doi=normalized_doi,
                 split_name=split_names[0],
                 benchmark_case_ids=case_ids,
                 benchmark_case_hashes=case_hashes,
@@ -710,7 +789,10 @@ def build_fixture_exclusion_registry(
         artifacts.append(
             ContaminationArtifact(
                 artifact_id=artifact_id,
-                source_id="fixture-manifest",
+                document_id=None,
+                document_content_digest=None,
+                source_artifact_id=None,
+                source_artifact_digest=None,
                 text=f"{artifact_id}|PSE-V1 fixture manifest artifact",
                 source_family_id="fixture-manifest",
                 split_name=manifest_split,

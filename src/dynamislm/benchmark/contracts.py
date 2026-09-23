@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import datetime as datetime_module
 import enum
+import hashlib
 import math
 import re
 from collections.abc import Mapping
@@ -20,6 +21,7 @@ from dynamislm.benchmark.constants import (
     BENCHMARK_SEMANTIC_VERSION,
     CAPABILITY_IDS,
     CASE_SCHEMA_VERSION,
+    EXCLUSION_REGISTRY_VERSION,
     FAMILY_IDS,
     SERIALIZATION_V3,
     SPLIT_MANIFEST_VERSION,
@@ -40,7 +42,7 @@ from dynamislm.benchmark.constants import (
 from dynamislm.claims.models import MeasurementClaimLevel, RelationshipClaimLevel
 from dynamislm.comparability.models import ComparabilityState
 from dynamislm.refusal.models import RefusalClass
-from dynamislm.serialization import register_serializable_type
+from dynamislm.serialization import canonical_hash, register_serializable_type
 
 _SHA256_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 _HEX_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -96,6 +98,80 @@ def _aware_timestamp(value: datetime_module.datetime, field_name: str) -> None:
 
 @register_serializable_type
 @dataclass(frozen=True, slots=True)
+class DocumentIdentity:
+    """Bibliographic identity and version of a cited source document."""
+
+    document_id: str
+    version: str
+    content_digest: str
+    doi: str | None = None
+
+    def __post_init__(self) -> None:
+        _text(self.document_id, "document_id")
+        _text(self.version, "document version")
+        _sha(self.content_digest, "document content_digest")
+        if self.doi is not None:
+            _text(self.doi, "doi")
+
+    @property
+    def identity_digest(self) -> str:
+        """Hash the complete bibliographic and byte identity binding."""
+
+        return canonical_hash(
+            {
+                "document_id": self.document_id,
+                "version": self.version,
+                "content_digest": self.content_digest,
+                "doi": self.doi,
+            }
+        )
+
+
+@register_serializable_type
+@dataclass(frozen=True, slots=True)
+class SourceArtifactIdentity:
+    """Stored source bytes mapped to the cited document/version."""
+
+    artifact_id: str
+    document_id: str
+    document_version: str
+    artifact_version: str
+    content_digest: str
+
+    def __post_init__(self) -> None:
+        for name in ("artifact_id", "document_id", "document_version", "artifact_version"):
+            _text(getattr(self, name), name)
+        _sha(self.content_digest, "source artifact content_digest")
+
+
+@register_serializable_type
+@dataclass(frozen=True, slots=True)
+class EvidenceSpanIdentity:
+    """Exact span identity and its locator within one source artifact."""
+
+    span_id: str
+    document_id: str
+    document_version: str
+    source_artifact_id: str
+    source_artifact_digest: str
+    locator: str
+    span_digest: str
+
+    def __post_init__(self) -> None:
+        for name in (
+            "span_id",
+            "document_id",
+            "document_version",
+            "source_artifact_id",
+            "locator",
+        ):
+            _text(getattr(self, name), name)
+        _sha(self.source_artifact_digest, "source_artifact_digest")
+        _sha(self.span_digest, "span_digest")
+
+
+@register_serializable_type
+@dataclass(frozen=True, slots=True)
 class EvidenceReference:
     """A typed source, authority, engine, rubric, or span reference."""
 
@@ -106,6 +182,7 @@ class EvidenceReference:
     locator: str
     scope: str
     applicability: str
+    document_identity: DocumentIdentity | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(
@@ -114,6 +191,18 @@ class EvidenceReference:
         for name in ("source_reference_id", "version", "locator", "scope", "applicability"):
             _text(getattr(self, name), name)
         _sha(self.digest, "digest")
+        if self.reference_kind is EvidenceKind.SOURCE:
+            identity = self.document_identity
+            if not isinstance(identity, DocumentIdentity):
+                raise ValueError("SOURCE reference requires a typed DocumentIdentity")
+            if (
+                self.source_reference_id != identity.document_id
+                or self.version != identity.version
+                or self.digest != identity.content_digest
+            ):
+                raise ValueError("SOURCE reference must bind its exact document identity")
+        elif self.document_identity is not None:
+            raise ValueError("non-SOURCE reference cannot carry a DocumentIdentity")
 
 
 @register_serializable_type
@@ -219,20 +308,52 @@ class DeterministicResultView:
 @register_serializable_type
 @dataclass(frozen=True, slots=True)
 class EvidenceExcerpt:
-    """A source-backed excerpt whose bytes remain outside the repository."""
+    """An exact excerpt mapped through document, source artifact, and span IDs."""
 
-    excerpt_id: str
-    source_id: str
-    content_digest: str
-    locator: str
+    document_identity: DocumentIdentity
+    source_artifact_identity: SourceArtifactIdentity
+    span_identity: EvidenceSpanIdentity
     text: str
     scope: str
     applicability: str
 
     def __post_init__(self) -> None:
-        for name in ("excerpt_id", "source_id", "locator", "text", "scope", "applicability"):
+        if not isinstance(self.document_identity, DocumentIdentity):
+            raise ValueError("evidence excerpt requires DocumentIdentity")
+        if not isinstance(self.source_artifact_identity, SourceArtifactIdentity):
+            raise ValueError("evidence excerpt requires SourceArtifactIdentity")
+        if not isinstance(self.span_identity, EvidenceSpanIdentity):
+            raise ValueError("evidence excerpt requires EvidenceSpanIdentity")
+        for name in ("text", "scope", "applicability"):
             _text(getattr(self, name), name)
-        _sha(self.content_digest, "content_digest")
+        document = self.document_identity
+        artifact = self.source_artifact_identity
+        span = self.span_identity
+        if (artifact.document_id, artifact.document_version) != (
+            document.document_id,
+            document.version,
+        ):
+            raise ValueError("source artifact must map to its exact document version")
+        if (span.document_id, span.document_version) != (document.document_id, document.version):
+            raise ValueError("evidence span must map to its exact document version")
+        if (span.source_artifact_id, span.source_artifact_digest) != (
+            artifact.artifact_id,
+            artifact.content_digest,
+        ):
+            raise ValueError("evidence span must map to its exact source artifact bytes")
+        expected_span_digest = "sha256:" + hashlib.sha256(self.text.encode("utf-8")).hexdigest()
+        if span.span_digest != expected_span_digest:
+            raise ValueError("evidence span digest must hash the exact excerpt text bytes")
+
+    @property
+    def excerpt_id(self) -> str:
+        """Compatibility read-only alias for the exact span identity."""
+
+        return self.span_identity.span_id
+
+    @property
+    def locator(self) -> str:
+        return self.span_identity.locator
 
 
 @register_serializable_type
@@ -660,9 +781,9 @@ class SplitBinding:
 @register_serializable_type
 @dataclass(frozen=True, slots=True)
 class ContaminationBinding:
-    """Case-local fingerprints and isolation metadata."""
+    """Case-local fingerprints and typed source/document isolation identities."""
 
-    source_ids: tuple[str, ...]
+    source_artifact_ids: tuple[str, ...]
     document_ids: tuple[str, ...]
     source_family_id: str
     provider_export_id: str | None
@@ -682,7 +803,7 @@ class ContaminationBinding:
 
     def __post_init__(self) -> None:
         for name, values in (
-            ("source_ids", self.source_ids),
+            ("source_artifact_ids", self.source_artifact_ids),
             ("document_ids", self.document_ids),
             ("artifact_ids", self.artifact_ids),
             ("benchmark_artifact_ids", self.benchmark_artifact_ids),
@@ -1031,8 +1152,13 @@ class ScorerManifestV1:
 @register_serializable_type
 @dataclass(frozen=True, slots=True)
 class ExclusionEntry:
+    """Manifest record for one artifact plus its optional typed source mapping."""
+
     artifact_id: str
-    source_id: str
+    document_id: str | None
+    document_content_digest: str | None
+    source_artifact_id: str | None
+    source_artifact_digest: str | None
     normalized_doi: str | None
     canonical_url: str | None
     source_family_id: str
@@ -1048,12 +1174,36 @@ class ExclusionEntry:
     membership_digests: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
-        for name in ("artifact_id", "source_id", "source_family_id", "exclusion_reason"):
+        for name in ("artifact_id", "source_family_id", "exclusion_reason"):
             _text(getattr(self, name), name)
-        for name in ("normalized_doi", "canonical_url", "semantic_cluster_id"):
+        for name in (
+            "document_id",
+            "document_content_digest",
+            "source_artifact_id",
+            "source_artifact_digest",
+            "normalized_doi",
+            "canonical_url",
+            "semantic_cluster_id",
+        ):
             value = getattr(self, name)
             if value is not None:
                 _text(value, name)
+        _optional_sha(self.document_content_digest, "document_content_digest")
+        _optional_sha(self.source_artifact_digest, "source_artifact_digest")
+        if self.document_content_digest is not None and self.document_id is None:
+            raise ValueError("document digest requires a document identity")
+        if self.normalized_doi is not None and self.document_id is None:
+            raise ValueError("DOI requires a document identity")
+        if (self.source_artifact_id is None) != (self.source_artifact_digest is None):
+            raise ValueError("source artifact identity and stored-byte digest must align")
+        if self.artifact_id.startswith("document:"):
+            expected_document_id = self.artifact_id.removeprefix("document:")
+            if self.document_id != expected_document_id:
+                raise ValueError("document exclusion artifact ID must map to its document ID")
+        if self.artifact_id.startswith("source:"):
+            expected_source_artifact_id = self.artifact_id.removeprefix("source:")
+            if self.source_artifact_id != expected_source_artifact_id:
+                raise ValueError("source exclusion artifact ID must map to its source artifact ID")
         _optional_sha(self.source_content_sha256, "source_content_sha256")
         _optional_sha(self.normalized_text_sha256, "normalized_text_sha256")
         _sha(self.exact_shingle_digest, "exact_shingle_digest")
@@ -1093,7 +1243,7 @@ class ExclusionManifestV1:
     manifest_digest: str
 
     def __post_init__(self) -> None:
-        if self.registry_version != "PSE-V1-EXCLUSION-REGISTRY@1.0.0":
+        if self.registry_version != EXCLUSION_REGISTRY_VERSION:
             raise ValueError("unsupported exclusion registry version")
         _tuple_of(self.entries, "exclusion entries")
         if any(not isinstance(item, ExclusionEntry) for item in self.entries):
@@ -1244,9 +1394,11 @@ __all__ = [
     "ContaminationBinding",
     "DeterministicResultView",
     "DifficultyBinding",
+    "DocumentIdentity",
     "ErrorEvent",
     "EvidenceExcerpt",
     "EvidenceReference",
+    "EvidenceSpanIdentity",
     "ExclusionEntry",
     "ExclusionManifestV1",
     "ExpectedStructuredAnswer",
@@ -1264,6 +1416,7 @@ __all__ = [
     "ScorerManifestEntry",
     "ScorerManifestV1",
     "ScoringContract",
+    "SourceArtifactIdentity",
     "SplitBinding",
     "SplitManifestV1",
     "SplitMembershipRecordV1",

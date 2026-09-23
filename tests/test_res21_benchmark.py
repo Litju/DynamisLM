@@ -260,6 +260,42 @@ def test_source_authority_must_bind_typed_source_and_exact_span_identity() -> No
         if case.provenance.origin_class is CaseOrigin.SOURCE_BACKED_EVIDENCE_EXTRACTION
     )
     source_binding = source.authority[0]
+    source_reference = source.source_evidence_refs[0]
+    document = source_reference.document_identity
+    assert document is not None
+    span = source.input.evidence_excerpts[0].span_identity
+    assert source.provenance.source_artifact_ids == (
+        source.input.evidence_excerpts[0].source_artifact_identity.artifact_id,
+    )
+    assert source.provenance.source_artifact_ids[0] != document.document_id
+    assert document.content_digest != source.provenance.source_content_digests[0]
+    assert source.provenance.source_content_digests == (
+        source.input.evidence_excerpts[0].source_artifact_identity.content_digest,
+    )
+    assert source.contamination.source_artifact_ids == source.provenance.source_artifact_ids
+    assert source.contamination.document_ids == (document.document_id,)
+    assert source_binding.source_reference_id == span.span_id
+    assert source_binding.digest == span.span_digest
+    assert from_canonical_json(canonical_json(source), BenchmarkCaseV1) == source
+    with pytest.raises(ValueError, match="exact document identity"):
+        replace(
+            source_reference,
+            source_reference_id=source.provenance.source_artifact_ids[0],
+        )
+    with pytest.raises(ValueError, match="exact excerpt text bytes"):
+        replace(
+            source.input.evidence_excerpts[0],
+            span_identity=replace(span, span_digest="sha256:" + "0" * 64),
+        )
+    source_excerpt = source.input.evidence_excerpts[0]
+    with pytest.raises(ValueError, match="exact source artifact bytes"):
+        replace(
+            source_excerpt,
+            source_artifact_identity=replace(
+                source_excerpt.source_artifact_identity,
+                content_digest="sha256:" + "f" * 64,
+            ),
+        )
 
     wrong_span_identity = bind_case_payload(
         replace(
@@ -291,6 +327,19 @@ def test_source_authority_must_bind_typed_source_and_exact_span_identity() -> No
     with pytest.raises(ValueError, match="source artifact identity/digest"):
         validate_case(caller_minted_artifact)
 
+    caller_minted_artifact_digest = bind_case_payload(
+        replace(
+            source,
+            provenance=replace(
+                source.provenance,
+                source_content_digests=("sha256:" + "f" * 64,),
+            ),
+            case_payload_hash="sha256:" + "0" * 64,
+        )
+    )
+    with pytest.raises(ValueError, match="source artifact identity/digest"):
+        validate_case(caller_minted_artifact_digest)
+
     caller_minted_document = bind_case_payload(
         replace(
             source,
@@ -301,10 +350,25 @@ def test_source_authority_must_bind_typed_source_and_exact_span_identity() -> No
     with pytest.raises(ValueError, match="contamination document identity"):
         validate_case(caller_minted_document)
 
+    caller_minted_contamination_artifact = bind_case_payload(
+        replace(
+            source,
+            contamination=replace(
+                source.contamination,
+                source_artifact_ids=("caller-source-artifact",),
+            ),
+            case_payload_hash="sha256:" + "0" * 64,
+        )
+    )
+    with pytest.raises(ValueError, match="contamination source artifact IDs"):
+        validate_case(caller_minted_contamination_artifact)
+
     source_document_authority = replace(
         source_binding,
         authority_kind=AuthorityKind.SOURCE_DOCUMENT.value,
-        source_reference_id="fixture-source",
+        source_reference_id=document.document_id,
+        version=document.version,
+        digest=document.identity_digest,
         governed_field_ids=("expected_answer",),
     )
     document_bound = bind_case_payload(
@@ -316,12 +380,33 @@ def test_source_authority_must_bind_typed_source_and_exact_span_identity() -> No
     )
     validate_case(document_bound)
 
+    excerpt = document_bound.input.evidence_excerpts[0]
+    changed_document = replace(document, doi="10.0000/different-document")
+    changed_excerpt = replace(excerpt, document_identity=changed_document)
+    changed_source_reference = replace(
+        source_reference,
+        document_identity=changed_document,
+    )
+    changed_identity = bind_case_payload(
+        replace(
+            document_bound,
+            source_evidence_refs=(changed_source_reference,),
+            input=replace(document_bound.input, evidence_excerpts=(changed_excerpt,)),
+            case_payload_hash="sha256:" + "0" * 64,
+        )
+    )
+    with pytest.raises(ValueError, match="source-document authority identity"):
+        validate_case(changed_identity)
+
     wrong_document_identity = bind_case_payload(
         replace(
             document_bound,
             authority=(
                 source_binding,
-                replace(source_document_authority, source_reference_id="caller-source"),
+                replace(
+                    source_document_authority,
+                    source_reference_id=source.provenance.source_artifact_ids[0],
+                ),
             ),
             case_payload_hash="sha256:" + "0" * 64,
         )
@@ -562,6 +647,11 @@ def test_split_allocator_qualifies_the_frozen_benchmark_scale() -> None:
 @pytest.mark.parametrize(
     ("identity_field", "identity_value", "expected_kind"),
     (
+        (
+            "source_artifact_ids",
+            ("shared-source-artifact",),
+            "source-artifact-identity",
+        ),
         ("document_ids", ("shared-document",), "document-identity"),
         (
             "construct_test_identity_ids",
@@ -580,6 +670,9 @@ def test_split_isolation_clusters_and_rejects_shared_identity_attacks(
     if identity_field == "document_ids":
         engine_contamination = replace(engine.contamination, document_ids=identity_value)
         semantic_contamination = replace(semantic.contamination, document_ids=identity_value)
+    elif identity_field == "source_artifact_ids":
+        engine_contamination = replace(engine.contamination, source_artifact_ids=identity_value)
+        semantic_contamination = replace(semantic.contamination, source_artifact_ids=identity_value)
     else:
         engine_contamination = replace(
             engine.contamination, construct_test_identity_ids=identity_value
@@ -633,6 +726,9 @@ def test_split_isolation_enforces_all_recorded_generator_seed_keys() -> None:
                 contamination=replace(
                     template.contamination,
                     source_family_id=f"seed-source-family-{index}",
+                    artifact_ids=(f"artifact-seed-{index}",),
+                    benchmark_artifact_ids=(f"benchmark-seed-{index}",),
+                    training_exclusion_ids=(f"exclude-seed-{index}",),
                     protocol_template_id=f"seed-template-{index}",
                     expert_author_batch_id=f"seed-batch-{index}",
                     generator_namespace="shared-contamination-namespace",
@@ -766,6 +862,33 @@ def test_shared_exclusion_artifacts_bind_many_cases_canonically() -> None:
     assert shared.split_names == (SplitName.PUBLIC_DEVELOPMENT,)
     assert len(shared.membership_digests) == 2
     validate_exclusion_completeness(bound_cases, bundle.exclusion_manifest.entries)
+
+    source_artifact_entry = next(
+        entry
+        for entry in bundle.exclusion_manifest.entries
+        if entry.artifact_id == "source:fixture-source-artifact-pdf-v1"
+    )
+    source_bound_case = next(
+        case
+        for case in bundle.cases
+        if case.provenance.origin_class is CaseOrigin.SOURCE_BACKED_EVIDENCE_EXTRACTION
+    )
+    assert source_artifact_entry.source_artifact_id == "fixture-source-artifact-pdf-v1"
+    assert source_artifact_entry.document_id == "doi:10.0000/pse-v1-fixture-source"
+    assert (
+        source_artifact_entry.source_artifact_digest
+        == (source_bound_case.provenance.source_content_digests[0])
+    )
+    assert source_artifact_entry.document_content_digest == (
+        source_bound_case.input.evidence_excerpts[0].document_identity.content_digest
+    )
+    source_document_entry = next(
+        entry
+        for entry in bundle.exclusion_manifest.entries
+        if entry.artifact_id == "document:doi:10.0000/pse-v1-fixture-source"
+    )
+    assert source_document_entry.document_id == "doi:10.0000/pse-v1-fixture-source"
+    assert source_document_entry.source_artifact_id is None
 
     incomplete = tuple(
         replace(

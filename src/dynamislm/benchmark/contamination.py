@@ -7,7 +7,12 @@ import re
 import unicodedata
 from dataclasses import dataclass
 
-from dynamislm.benchmark.constants import SPLIT_ORDER, CaseOrigin, SplitName
+from dynamislm.benchmark.constants import (
+    EXCLUSION_REGISTRY_VERSION,
+    SPLIT_ORDER,
+    CaseOrigin,
+    SplitName,
+)
 from dynamislm.benchmark.contracts import (
     BenchmarkCaseV1,
     ExclusionEntry,
@@ -36,6 +41,11 @@ def tokenize(text: str) -> tuple[str, ...]:
 
 def _sha256_hex(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
+
+
+def _optional_sha(value: str | None, field_name: str) -> None:
+    if value is not None and re.fullmatch(r"sha256:[0-9a-f]{64}", value) is None:
+        raise ValueError(f"{field_name} must be a canonical SHA-256 digest")
 
 
 def normalized_text_sha256(text: str) -> str:
@@ -130,10 +140,13 @@ def fuzzy_fingerprint(text: str) -> str:
 
 @dataclass(frozen=True, slots=True)
 class ContaminationArtifact:
-    """Text-bearing input used only to construct an exclusion record/index."""
+    """Private audit text plus optional document and stored-artifact identity."""
 
     artifact_id: str
-    source_id: str
+    document_id: str | None
+    document_content_digest: str | None
+    source_artifact_id: str | None
+    source_artifact_digest: str | None
     text: str
     source_family_id: str
     split_name: SplitName
@@ -147,10 +160,30 @@ class ContaminationArtifact:
     benchmark_split_names: tuple[SplitName, ...] = ()
 
     def __post_init__(self) -> None:
-        for name in ("artifact_id", "source_id", "text", "source_family_id", "exclusion_reason"):
+        for name in ("artifact_id", "text", "source_family_id", "exclusion_reason"):
             value = getattr(self, name)
             if not isinstance(value, str) or not value.strip():
                 raise ValueError(f"{name} must be non-empty")
+        for name in ("document_id", "source_artifact_id"):
+            value = getattr(self, name)
+            if value is not None and (not isinstance(value, str) or not value.strip()):
+                raise ValueError(f"{name} must be non-empty when provided")
+        if self.document_content_digest is not None and self.document_id is None:
+            raise ValueError("document digest requires a document identity")
+        if self.normalized_doi is not None and self.document_id is None:
+            raise ValueError("DOI requires a document identity")
+        _optional_sha(self.document_content_digest, "document_content_digest")
+        _optional_sha(self.source_artifact_digest, "source_artifact_digest")
+        if (self.source_artifact_id is None) != (self.source_artifact_digest is None):
+            raise ValueError("source artifact identity and stored-byte digest must align")
+        if self.artifact_id.startswith("document:"):
+            expected_document_id = self.artifact_id.removeprefix("document:")
+            if self.document_id != expected_document_id:
+                raise ValueError("document exclusion artifact ID must map to its document ID")
+        if self.artifact_id.startswith("source:"):
+            expected_source_artifact_id = self.artifact_id.removeprefix("source:")
+            if self.source_artifact_id != expected_source_artifact_id:
+                raise ValueError("source exclusion artifact ID must map to its source artifact ID")
         object.__setattr__(self, "split_name", SplitName(self.split_name))
         split_names = tuple(SplitName(item) for item in self.benchmark_split_names)
         if len(set(split_names)) != len(split_names):
@@ -181,7 +214,10 @@ def build_exclusion_entry(artifact: ContaminationArtifact) -> ExclusionEntry:
 
     return ExclusionEntry(
         artifact_id=artifact.artifact_id,
-        source_id=artifact.source_id,
+        document_id=artifact.document_id,
+        document_content_digest=artifact.document_content_digest,
+        source_artifact_id=artifact.source_artifact_id,
+        source_artifact_digest=artifact.source_artifact_digest,
         normalized_doi=artifact.normalized_doi,
         canonical_url=artifact.canonical_url,
         source_family_id=artifact.source_family_id,
@@ -204,9 +240,11 @@ class ExclusionRegistry:
 
     entries: tuple[ExclusionEntry, ...]
     artifacts: tuple[ContaminationArtifact, ...] = ()
-    version: str = "PSE-V1-EXCLUSION-REGISTRY@1.0.0"
+    version: str = EXCLUSION_REGISTRY_VERSION
 
     def __post_init__(self) -> None:
+        if self.version != EXCLUSION_REGISTRY_VERSION:
+            raise ValueError("unsupported exclusion registry version")
         if not self.entries:
             raise ValueError("exclusion registry must not be empty")
         if any(not isinstance(item, ExclusionEntry) for item in self.entries):
@@ -443,7 +481,11 @@ def case_isolation_values(case: BenchmarkCaseV1) -> tuple[tuple[str, str], ...]:
     provenance = case.provenance
     values: set[tuple[str, str]] = {("source-family", contamination.source_family_id)}
     for kind, items in (
+        ("source-artifact-identity", contamination.source_artifact_ids),
         ("document-identity", contamination.document_ids),
+        ("artifact-identity", contamination.artifact_ids),
+        ("benchmark-artifact-identity", contamination.benchmark_artifact_ids),
+        ("training-exclusion-artifact", contamination.training_exclusion_ids),
         ("construct-test-identity", contamination.construct_test_identity_ids),
     ):
         values.update((kind, item) for item in items)
@@ -552,6 +594,58 @@ def validate_exclusion_completeness(
     for case in cases:
         for artifact_id in required_exclusion_artifact_ids(case):
             required_members.setdefault(artifact_id, {})[case.case_id] = case
+        for document_id in case.contamination.document_ids:
+            entry = by_artifact_id.get(f"document:{document_id}")
+            if entry is not None:
+                if entry.document_id != document_id:
+                    raise ValueError("document exclusion entry has a mismatched document identity")
+                typed_documents = tuple(
+                    excerpt.document_identity
+                    for excerpt in case.input.evidence_excerpts
+                    if excerpt.document_identity.document_id == document_id
+                )
+                if entry.document_content_digest is not None and not any(
+                    identity.content_digest == entry.document_content_digest
+                    for identity in typed_documents
+                ):
+                    raise ValueError(
+                        "document exclusion digest is absent from typed document identity"
+                    )
+                if entry.normalized_doi is not None and not any(
+                    identity.doi == entry.normalized_doi for identity in typed_documents
+                ):
+                    raise ValueError("document exclusion DOI differs from typed document identity")
+        source_artifacts = {
+            excerpt.source_artifact_identity.artifact_id: excerpt.source_artifact_identity
+            for excerpt in case.input.evidence_excerpts
+        }
+        source_documents = {
+            (excerpt.source_artifact_identity.artifact_id, excerpt.document_identity.document_id): (
+                excerpt.document_identity
+            )
+            for excerpt in case.input.evidence_excerpts
+        }
+        for source_artifact_id in case.provenance.source_artifact_ids:
+            entry = by_artifact_id.get(f"source:{source_artifact_id}")
+            source_artifact = source_artifacts.get(source_artifact_id)
+            if entry is None or source_artifact is None:
+                continue
+            matching_documents = tuple(
+                identity
+                for (artifact_id, _), identity in source_documents.items()
+                if artifact_id == source_artifact_id
+            )
+            if (
+                entry.source_artifact_id != source_artifact_id
+                or entry.source_artifact_digest != source_artifact.content_digest
+                or not any(
+                    entry.document_id == identity.document_id
+                    and entry.document_content_digest == identity.content_digest
+                    and (entry.normalized_doi is None or entry.normalized_doi == identity.doi)
+                    for identity in matching_documents
+                )
+            ):
+                raise ValueError("source artifact exclusion identity/digests are stale")
 
     observed_case_hashes: dict[str, str] = {}
     manifest_split_names: set[str] = set()

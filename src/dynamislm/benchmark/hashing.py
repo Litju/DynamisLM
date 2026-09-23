@@ -245,7 +245,10 @@ def _sort_exclusion_entries(entries: Iterable[ExclusionEntry]) -> tuple[Exclusio
             entries,
             key=lambda entry: (
                 _utf8_key(entry.artifact_id),
-                _utf8_key(entry.source_id),
+                _utf8_key(entry.document_id or ""),
+                _utf8_key(entry.document_content_digest or ""),
+                _utf8_key(entry.source_artifact_id or ""),
+                _utf8_key(entry.source_artifact_digest or ""),
                 _utf8_key(entry.source_content_sha256 or ""),
                 _utf8_key(entry.normalized_text_sha256 or ""),
                 _utf8_key(entry.exact_shingle_digest),

@@ -21,6 +21,7 @@ from dynamislm.benchmark.contracts import (
     AuthorityBinding,
     BenchmarkCaseV1,
     ExpertReviewMetadata,
+    SourceArtifactIdentity,
 )
 from dynamislm.benchmark.hashing import case_content_projection, validate_case_payload_hash
 from dynamislm.benchmark.scoring_paths import reachable_error_attributions, reachable_error_classes
@@ -178,45 +179,81 @@ def _validate_origin(case: BenchmarkCaseV1) -> None:
             raise ValueError("source-backed case evidence references must be SOURCE references")
         references = case.source_evidence_refs
         excerpts = case.input.evidence_excerpts
-        excerpts_by_id = {excerpt.excerpt_id: excerpt for excerpt in excerpts}
+        excerpts_by_id = {excerpt.span_identity.span_id: excerpt for excerpt in excerpts}
         if len(excerpts_by_id) != len(excerpts):
             raise ValueError("canonical source evidence contains duplicate span identities")
-        source_identity_digests = {
-            (reference.source_reference_id, reference.digest) for reference in references
-        } | {(excerpt.source_id, excerpt.content_digest) for excerpt in excerpts}
-        if len(provenance.source_artifact_ids) != len(provenance.source_content_digests):
-            raise ValueError("source artifact identities and content digests must align")
-        if any(
-            (source_id, source_digest) not in source_identity_digests
-            for source_id, source_digest in zip(
+        document_identities = {
+            (reference.document_identity.document_id, reference.document_identity.version): (
+                reference.document_identity
+            )
+            for reference in references
+            if reference.document_identity is not None
+        }
+        if len(document_identities) == 0:
+            raise ValueError("source-backed case requires typed document identities")
+        for excerpt in excerpts:
+            document_key = (
+                excerpt.document_identity.document_id,
+                excerpt.document_identity.version,
+            )
+            if document_identities.get(document_key) != excerpt.document_identity:
+                raise ValueError("evidence span document is absent from typed SOURCE references")
+
+        source_artifacts: dict[str, SourceArtifactIdentity] = {}
+        for excerpt in excerpts:
+            artifact = excerpt.source_artifact_identity
+            prior = source_artifacts.get(artifact.artifact_id)
+            if prior is not None and prior != artifact:
+                raise ValueError("source artifact ID maps to conflicting artifact identities")
+            source_artifacts[artifact.artifact_id] = artifact
+        expected_artifact_pairs = tuple(
+            sorted(
+                (
+                    (artifact.artifact_id, artifact.content_digest)
+                    for artifact in source_artifacts.values()
+                ),
+                key=lambda item: item[0].encode("utf-8"),
+            )
+        )
+        observed_artifact_pairs = tuple(
+            zip(
                 provenance.source_artifact_ids,
                 provenance.source_content_digests,
                 strict=True,
             )
-        ):
-            raise ValueError("source artifact identity/digest is not present in canonical evidence")
-        source_ids = {reference.source_reference_id for reference in references} | {
-            excerpt.source_id for excerpt in excerpts
-        }
-        if any(item not in source_ids for item in contamination.source_ids):
-            raise ValueError("contamination source identity is absent from canonical evidence")
-        if any(item not in source_ids for item in contamination.document_ids):
-            raise ValueError("contamination document identity is absent from canonical evidence")
+        )
+        if observed_artifact_pairs != expected_artifact_pairs:
+            raise ValueError(
+                "source artifact identity/digest provenance must bind exact artifact IDs "
+                "and stored-byte digests"
+            )
+        document_ids = {identity.document_id for identity in document_identities.values()}
+        artifact_ids = set(source_artifacts)
+        if set(contamination.source_artifact_ids) != artifact_ids:
+            raise ValueError(
+                "contamination source artifact IDs must equal the mapped source artifact identities"
+            )
+        if set(contamination.document_ids) != document_ids:
+            raise ValueError(
+                "contamination document identity IDs must equal the mapped bibliographic "
+                "document IDs"
+            )
         if (
             contamination.source_content_sha256 is not None
             and contamination.source_content_sha256 not in provenance.source_content_digests
         ):
             raise ValueError("contamination source digest is absent from source provenance")
         excerpt_ids = set(excerpts_by_id)
-        if any(item not in excerpt_ids for item in provenance.evidence_span_refs):
-            raise ValueError("evidence span identity is not present in the input evidence")
+        if set(provenance.evidence_span_refs) != excerpt_ids:
+            raise ValueError("source provenance must identify every exact evidence span")
         for reference in references:
+            document = reference.document_identity
+            assert document is not None
             matching_excerpts = tuple(
                 excerpt
                 for excerpt in excerpts
-                if excerpt.source_id == reference.source_reference_id
-                and excerpt.locator == reference.locator
-                and excerpt.content_digest == reference.digest
+                if excerpt.document_identity == document
+                and excerpt.span_identity.locator == reference.locator
                 and excerpt.scope == reference.scope
                 and excerpt.applicability == reference.applicability
             )
@@ -226,10 +263,12 @@ def _validate_origin(case: BenchmarkCaseV1) -> None:
                 )
         for excerpt_id in provenance.evidence_span_refs:
             excerpt = excerpts_by_id[excerpt_id]
+            span = excerpt.span_identity
             if not any(
-                excerpt.source_id == reference.source_reference_id
-                and excerpt.locator == reference.locator
-                and excerpt.content_digest == reference.digest
+                reference.document_identity == excerpt.document_identity
+                and span.locator == reference.locator
+                and excerpt.scope == reference.scope
+                and excerpt.applicability == reference.applicability
                 for reference in references
             ):
                 raise ValueError("source provenance span is not bound to a typed source reference")
@@ -246,32 +285,32 @@ def _validate_origin(case: BenchmarkCaseV1) -> None:
         for binding in source_authorities:
             if binding.authority_kind == AuthorityKind.SOURCE_DOCUMENT.value:
                 matches_document = any(
-                    reference.source_reference_id == binding.source_reference_id
-                    and reference.version == binding.version
-                    and reference.digest == binding.digest
+                    identity.document_id == binding.source_reference_id
+                    and identity.version == binding.version
+                    and identity.identity_digest == binding.digest
                     for reference in references
+                    if (identity := reference.document_identity) is not None
                 )
-                if (
-                    not matches_document
-                    or binding.source_reference_id not in provenance.source_artifact_ids
-                ):
+                if not matches_document:
                     raise ValueError(
                         "source-document authority identity/version/digest is not bound "
-                        "to canonical source provenance"
+                        "to a typed document identity"
                     )
             elif binding.authority_kind == AuthorityKind.SOURCE_EVIDENCE_SPAN.value:
                 span_excerpt = excerpts_by_id.get(binding.source_reference_id)
+                authority_span = span_excerpt.span_identity if span_excerpt is not None else None
                 matches_span_reference = span_excerpt is not None and any(
-                    reference.source_reference_id == span_excerpt.source_id
+                    reference.document_identity == span_excerpt.document_identity
                     and reference.version == binding.version
-                    and reference.digest == span_excerpt.content_digest
                     and reference.locator == span_excerpt.locator
                     for reference in references
                 )
                 if (
                     span_excerpt is None
+                    or authority_span is None
                     or binding.source_reference_id not in provenance.evidence_span_refs
-                    or binding.digest != span_excerpt.content_digest
+                    or binding.version != authority_span.document_version
+                    or binding.digest != authority_span.span_digest
                     or not matches_span_reference
                 ):
                     raise ValueError(
