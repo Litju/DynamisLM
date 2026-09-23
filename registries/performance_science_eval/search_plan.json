@@ -1,0 +1,161 @@
+{
+  "api_key_present": false,
+  "discovery_policy": "Metadata-only, targeted PubMed E-Utilities searches; top 150 relevance-ranked PMIDs per stratum; four batched PubMed EFetch metadata calls; no baseline download.",
+  "discovery_summary": {
+    "curated_candidate_pmc_articles": 121,
+    "fetched_pubmed_records": 1336,
+    "records_linked_to_pmc": 658,
+    "successful_efetch_requests": 4,
+    "successful_esearch_requests": 10,
+    "unique_pmids_across_query_results": 1336
+  },
+  "exact_request_timestamps_recorded": false,
+  "linear_issue": "RES-115",
+  "metadata_endpoints": [
+    "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi",
+    "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi"
+  ],
+  "mission": "RES-115-SOURCE-REGISTRY-001",
+  "registry_version": "PerformanceScience-Eval-source-registry@1.0.0",
+  "request_policy": {
+    "efetch_batch_size": 350,
+    "maximum_requests_per_second": 3,
+    "serial_requests": true,
+    "sleep_between_requests_seconds": 0.45
+  },
+  "retrieved_on_utc": "2026-09-23",
+  "schema_version": "performance-science-eval-source-search-plan@1.0.0",
+  "screening_contract": {
+    "accepted_bytes": "PMC OAI-PMH metadataPrefix=pmc JATS XML only; retained as deterministic gzip under durable external evidence root.",
+    "candidate_metadata_fields": [
+      "PMID",
+      "PMCID",
+      "DOI",
+      "title",
+      "authors",
+      "year",
+      "journal",
+      "article_type",
+      "population",
+      "sport",
+      "sex",
+      "performance_level",
+      "protocol_device_method",
+      "candidate_benchmark_families",
+      "candidate_capabilities",
+      "license",
+      "license_identifier_source",
+      "PMC_article_version_identity",
+      "retraction_correction_expression_of_concern_status",
+      "applicability_scope",
+      "source_family_identity",
+      "disposition",
+      "rejection_reason"
+    ],
+    "full_text_retrieval": "Only after candidate acceptance with article/version-specific CC0 or CC BY rights evidence from PMC OAI-PMH front matter.",
+    "nonaccepted_full_text": "Never retrieved. Metadata-only candidates rejected before JATS retrieval.",
+    "unretained_metadata": "PubMed abstracts and the broad query result IDs are transient and are not included in the public registry."
+  },
+  "search_strata": [
+    {
+      "id": "S01_CMJ_DJ_FORCE_TIME",
+      "query": "(\"countermovement jump\"[Title/Abstract] OR \"counter-movement jump\"[Title/Abstract] OR \"drop jump\"[Title/Abstract] OR \"force-time\"[Title/Abstract] OR \"force platform\"[Title/Abstract]) AND (sport*[Title/Abstract] OR athlet*[Title/Abstract] OR football[Title/Abstract])",
+      "query_translation": "(\"countermovement jump\"[Title/Abstract] OR \"counter-movement jump\"[Title/Abstract] OR \"drop jump\"[Title/Abstract] OR \"force-time\"[Title/Abstract] OR \"force platform\"[Title/Abstract]) AND (\"sport*\"[Title/Abstract] OR \"athlet*\"[Title/Abstract] OR \"football\"[Title/Abstract])",
+      "reported_hit_count": 3891,
+      "retmax": 150,
+      "returned_pmid_count": 150,
+      "returned_pmid_ids_sha256": "sha256:ad8f5acbff604d6476c99893c182ce693e8cb28699eeb55e796f102b84cbec8a",
+      "sort": "relevance"
+    },
+    {
+      "id": "S02_SPRINT_ACCELERATION",
+      "query": "(sprint[Title/Abstract] OR sprinting[Title/Abstract] OR acceleration[Title/Abstract] OR \"maximum sprint speed\"[Title/Abstract] OR \"maximal sprint speed\"[Title/Abstract]) AND (sport*[Title/Abstract] OR athlet*[Title/Abstract] OR football[Title/Abstract])",
+      "query_translation": "(\"sprint\"[Title/Abstract] OR \"sprinting\"[Title/Abstract] OR \"acceleration\"[Title/Abstract] OR \"maximum sprint speed\"[Title/Abstract] OR \"maximal sprint speed\"[Title/Abstract]) AND (\"sport*\"[Title/Abstract] OR \"athlet*\"[Title/Abstract] OR \"football\"[Title/Abstract])",
+      "reported_hit_count": 8629,
+      "retmax": 150,
+      "returned_pmid_count": 150,
+      "returned_pmid_ids_sha256": "sha256:5511a608a8f2615f12d831f12c96b97505e90d7f0ca612de321b1a843446a1c1",
+      "sort": "relevance"
+    },
+    {
+      "id": "S03_COD_RSA_30_15",
+      "query": "(\"change of direction\"[Title/Abstract] OR \"repeated sprint\"[Title/Abstract] OR \"30-15 intermittent fitness test\"[Title/Abstract] OR \"30-15 IFT\"[Title/Abstract]) AND (athlet*[Title/Abstract] OR sport*[Title/Abstract] OR football[Title/Abstract])",
+      "query_translation": "(\"change of direction\"[Title/Abstract] OR \"repeated sprint\"[Title/Abstract] OR \"30-15 intermittent fitness test\"[Title/Abstract] OR \"30-15 IFT\"[Title/Abstract]) AND (\"athlet*\"[Title/Abstract] OR \"sport*\"[Title/Abstract] OR \"football\"[Title/Abstract])",
+      "reported_hit_count": 2124,
+      "retmax": 150,
+      "returned_pmid_count": 150,
+      "returned_pmid_ids_sha256": "sha256:cae84c7b23f7f914c6c9f9565dd414fe8eea7c2f91fe6a7fa36584420a337321",
+      "sort": "relevance"
+    },
+    {
+      "id": "S04_STRENGTH_IMTP_VBT",
+      "query": "(\"isometric mid-thigh pull\"[Title/Abstract] OR IMTP[Title/Abstract] OR \"velocity-based\"[Title/Abstract] OR \"barbell velocity\"[Title/Abstract] OR \"strength testing\"[Title/Abstract]) AND (athlet*[Title/Abstract] OR sport*[Title/Abstract])",
+      "query_translation": "(\"isometric mid-thigh pull\"[Title/Abstract] OR \"IMTP\"[Title/Abstract] OR \"velocity-based\"[Title/Abstract] OR \"barbell velocity\"[Title/Abstract] OR \"strength testing\"[Title/Abstract]) AND (\"athlet*\"[Title/Abstract] OR \"sport*\"[Title/Abstract])",
+      "reported_hit_count": 862,
+      "retmax": 150,
+      "returned_pmid_count": 150,
+      "returned_pmid_ids_sha256": "sha256:a844dfc84bb6756131952ef35417af0698e5c3940a0924386e92b4ebb0c1b631",
+      "sort": "relevance"
+    },
+    {
+      "id": "S05_GNSS_GPS_EXTERNAL_LOAD",
+      "query": "(GNSS[Title/Abstract] OR GPS[Title/Abstract] OR \"external load\"[Title/Abstract] OR \"global positioning system\"[Title/Abstract]) AND (\"team sport\"[Title/Abstract] OR soccer[Title/Abstract] OR football[Title/Abstract] OR rugby[Title/Abstract])",
+      "query_translation": "(\"GNSS\"[Title/Abstract] OR \"GPS\"[Title/Abstract] OR \"external load\"[Title/Abstract] OR \"global positioning system\"[Title/Abstract]) AND (\"team sport\"[Title/Abstract] OR \"soccer\"[Title/Abstract] OR \"football\"[Title/Abstract] OR \"rugby\"[Title/Abstract])",
+      "reported_hit_count": 1717,
+      "retmax": 150,
+      "returned_pmid_count": 150,
+      "returned_pmid_ids_sha256": "sha256:be8348be918edd1a4088389391fac0edac49d8e3ed96f64c1aaecb4974868000",
+      "sort": "relevance"
+    },
+    {
+      "id": "S06_RELIABILITY_MEASUREMENT_ERROR",
+      "query": "(reliability[Title/Abstract] OR \"measurement error\"[Title/Abstract] OR \"standard error of measurement\"[Title/Abstract] OR \"smallest worthwhile change\"[Title/Abstract] OR \"coefficient of variation\"[Title/Abstract] OR ICC[Title/Abstract]) AND (athlet*[Title/Abstract] OR sport*[Title/Abstract]) AND (test[Title/Abstract] OR performance[Title/Abstract] OR force[Title/Abstract] OR sprint[Title/Abstract] OR jump[Title/Abstract])",
+      "query_translation": "(\"reliability\"[Title/Abstract] OR \"measurement error\"[Title/Abstract] OR \"standard error of measurement\"[Title/Abstract] OR \"smallest worthwhile change\"[Title/Abstract] OR \"coefficient of variation\"[Title/Abstract] OR \"ICC\"[Title/Abstract]) AND (\"athlet*\"[Title/Abstract] OR \"sport*\"[Title/Abstract]) AND (\"test\"[Title/Abstract] OR \"performance\"[Title/Abstract] OR \"force\"[Title/Abstract] OR \"sprint\"[Title/Abstract] OR \"jump\"[Title/Abstract])",
+      "reported_hit_count": 3975,
+      "retmax": 150,
+      "returned_pmid_count": 150,
+      "returned_pmid_ids_sha256": "sha256:c247f4de4c6c143898c36c35a73012b1fbbc2fc2d576d5ce29b67cc61c5d68be",
+      "sort": "relevance"
+    },
+    {
+      "id": "S07_VALIDITY_AGREEMENT",
+      "query": "(validity[Title/Abstract] OR agreement[Title/Abstract] OR \"method comparison\"[Title/Abstract] OR \"limits of agreement\"[Title/Abstract]) AND (athlet*[Title/Abstract] OR sport*[Title/Abstract]) AND (test[Title/Abstract] OR performance[Title/Abstract] OR force[Title/Abstract] OR sprint[Title/Abstract] OR jump[Title/Abstract] OR GPS[Title/Abstract])",
+      "query_translation": "(\"validity\"[Title/Abstract] OR \"agreement\"[Title/Abstract] OR \"method comparison\"[Title/Abstract] OR \"limits of agreement\"[Title/Abstract]) AND (\"athlet*\"[Title/Abstract] OR \"sport*\"[Title/Abstract]) AND (\"test\"[Title/Abstract] OR \"performance\"[Title/Abstract] OR \"force\"[Title/Abstract] OR \"sprint\"[Title/Abstract] OR \"jump\"[Title/Abstract] OR \"GPS\"[Title/Abstract])",
+      "reported_hit_count": 4009,
+      "retmax": 150,
+      "returned_pmid_count": 150,
+      "returned_pmid_ids_sha256": "sha256:db69ba421a14af2b66ec597a08a40b5b79417680a45a08959ebfa168b8f325da",
+      "sort": "relevance"
+    },
+    {
+      "id": "S08_LONGITUDINAL_MONITORING",
+      "query": "(longitudinal[Title/Abstract] OR \"within-athlete\"[Title/Abstract] OR \"within athlete\"[Title/Abstract] OR \"athlete monitoring\"[Title/Abstract] OR \"in-season\"[Title/Abstract]) AND (athlet*[Title/Abstract] OR sport*[Title/Abstract]) AND (performance[Title/Abstract] OR monitoring[Title/Abstract] OR reliability[Title/Abstract])",
+      "query_translation": "(\"longitudinal\"[Title/Abstract] OR \"within-athlete\"[Title/Abstract] OR \"within-athlete\"[Title/Abstract] OR \"athlete monitoring\"[Title/Abstract] OR \"in-season\"[Title/Abstract]) AND (\"athlet*\"[Title/Abstract] OR \"sport*\"[Title/Abstract]) AND (\"performance\"[Title/Abstract] OR \"monitoring\"[Title/Abstract] OR \"reliability\"[Title/Abstract])",
+      "reported_hit_count": 2500,
+      "retmax": 150,
+      "returned_pmid_count": 150,
+      "returned_pmid_ids_sha256": "sha256:613271fe68a3235bc63e1f776b739ba1797ed594f171b01e3968f3500bc673b2",
+      "sort": "relevance"
+    },
+    {
+      "id": "S09_POPULATION_APPLICABILITY",
+      "query": "(\"elite athletes\"[Title/Abstract] OR \"professional athletes\"[Title/Abstract] OR \"elite soccer\"[Title/Abstract] OR \"professional football\"[Title/Abstract] OR \"team sport athletes\"[Title/Abstract]) AND (measurement[Title/Abstract] OR test[Title/Abstract] OR assessment[Title/Abstract] OR validity[Title/Abstract] OR reliability[Title/Abstract])",
+      "query_translation": "(\"elite athletes\"[Title/Abstract] OR \"professional athletes\"[Title/Abstract] OR \"elite soccer\"[Title/Abstract] OR \"professional football\"[Title/Abstract] OR \"team sport athletes\"[Title/Abstract]) AND (\"measurement\"[Title/Abstract] OR \"test\"[Title/Abstract] OR \"assessment\"[Title/Abstract] OR \"validity\"[Title/Abstract] OR \"reliability\"[Title/Abstract])",
+      "reported_hit_count": 2987,
+      "retmax": 150,
+      "returned_pmid_count": 150,
+      "returned_pmid_ids_sha256": "sha256:9baa38d3c03b61e1d650db27574c05df7198967f45b204f9733e1565152b07c7",
+      "sort": "relevance"
+    },
+    {
+      "id": "S10_CAUSAL_ASSOCIATION_PREDICTION",
+      "query": "(association[Title/Abstract] OR causal[Title/Abstract] OR prediction[Title/Abstract] OR predictive[Title/Abstract] OR observational[Title/Abstract]) AND (sport*[Title/Abstract] OR athlet*[Title/Abstract] OR football[Title/Abstract]) AND (performance[Title/Abstract] OR monitoring[Title/Abstract] OR training[Title/Abstract])",
+      "query_translation": "(\"association\"[Title/Abstract] OR \"causal\"[Title/Abstract] OR \"prediction\"[Title/Abstract] OR \"predictive\"[Title/Abstract] OR \"observational\"[Title/Abstract]) AND (\"sport*\"[Title/Abstract] OR \"athlet*\"[Title/Abstract] OR \"football\"[Title/Abstract]) AND (\"performance\"[Title/Abstract] OR \"monitoring\"[Title/Abstract] OR \"training\"[Title/Abstract])",
+      "reported_hit_count": 10106,
+      "retmax": 150,
+      "returned_pmid_count": 150,
+      "returned_pmid_ids_sha256": "sha256:17fab3433bd79f78a71f222cc2410996e68c692da1f95f6852a09565463200b0",
+      "sort": "relevance"
+    }
+  ]
+}

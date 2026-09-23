@@ -1,0 +1,43 @@
+{
+  "schema_version": "performance-science-eval-source-record@1.0.0",
+  "mission": "RES-115-SOURCE-REGISTRY-001",
+  "source_authority": "RES-115; PMC article-level metadata and JATS for article/version-specific rights and identity",
+  "benchmark_taxonomy_authority": {
+    "families": "docs/decisions/RES21-DR-001-performance-science-eval-v1.md#3.2",
+    "capabilities": "docs/decisions/RES21-DR-001-performance-science-eval-v1.md#3.1"
+  },
+  "required_record_fields": {
+    "pmid": "string|null",
+    "pmcid": "string|null",
+    "doi": "string|null",
+    "title": "string",
+    "authors": "array[string]",
+    "year": "integer|null",
+    "journal": "string|null",
+    "article_type": "array[string]",
+    "population": "structured reported cohort summary; unknown values remain explicit",
+    "sport": "array of reported sport identities",
+    "sex": "MALE|FEMALE|MIXED|NOT_REPORTED|NOT_APPLICABLE",
+    "performance_level": "array of reported level descriptors; no inference from elite/professional alone",
+    "protocol_device_method": "reported protocol/device/method facts with source locators",
+    "candidate_benchmark_families": "array of frozen RES-21 family IDs F01-F14",
+    "candidate_capabilities": "array of frozen RES-21 capability IDs C01-C18",
+    "license": "article/version-specific license label or explicit unknown/unverified",
+    "license_identifier_source": "PMC OAI front matter locator or explicit reason not checked",
+    "pmc_article_version_identity": "PMCID, PMCID version identifier, OAI identifier and datestamp",
+    "retraction_correction_expression_of_concern_status": "status and source-bound related notice identifiers",
+    "applicability_scope": "CANONICAL_EMPIRICAL_TARGET|DIRECT_TARGET_POPULATION_EVIDENCE|INDIRECT_MEASUREMENT_EVIDENCE|NONCANONICAL_CONTEXT_ONLY|REJECTED_OR_UNRESOLVED",
+    "source_family_identity": "stable source-family ID with clustering basis and unresolved cross-document links explicit",
+    "disposition": "ACCEPTED|REJECTED",
+    "rejection_reason": "string|null"
+  },
+  "full_text_acceptance_licenses": [
+    "CC0",
+    "CC BY"
+  ],
+  "prohibitions": [
+    "No retained JATS, PDF, media, supplement, abstract text, or protected benchmark bytes in Git",
+    "No full-text request before article-level reusable-rights, retraction, relevance, and version checks pass",
+    "No inference of canonical target population from a vague elite/professional label"
+  ]
+}
