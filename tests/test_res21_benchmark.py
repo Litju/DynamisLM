@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import datetime as datetime_module
+import subprocess
 from dataclasses import replace
+from pathlib import Path
 
 import pytest
 
@@ -11,10 +13,13 @@ from dynamislm.benchmark import (
     ContaminationGateEvidence,
     ErrorClass,
     ExclusionRegistry,
-    HiddenAccessGrantV1,
     HiddenAccessRequest,
     HiddenStoreDescriptor,
     Principal,
+    ProtectedEvaluationStoreDescriptor,
+    ProtectedStoreAccessEvidenceV1,
+    ProtectedStoreAccessGrantV1,
+    ProtectedStoreAccessRequest,
     SplitName,
     TaskOutcome,
     allocate_splits,
@@ -31,6 +36,7 @@ from dynamislm.benchmark import (
     build_hidden_access_evidence,
     build_manifest_bundle,
     build_overlap_disposition,
+    build_protected_access_evidence,
     build_res71_runtime_binding,
     build_synthetic_reference_fixture_cases,
     capability_family_lower_bound_case_count,
@@ -40,7 +46,10 @@ from dynamislm.benchmark import (
     make_authority_binding,
     minimum_full_coverage_case_count,
     preflight_hidden_access,
+    preflight_protected_store_access,
+    preflight_public_development_distribution,
     preflight_training_exclusion,
+    public_protected_case_commitments,
     score_case,
     target_counts,
     validate_authority_binding,
@@ -51,6 +60,9 @@ from dynamislm.benchmark import (
     validate_coverage_matrix,
     validate_final_v1_freeze,
     validate_manifest_bundle,
+    validate_protected_access_evidence,
+    validate_protected_repository_boundary,
+    validate_protected_store_namespace_isolation,
     validate_res71_operation_binding,
     validate_res71_refusal_binding,
     validate_res71_runtime_binding,
@@ -65,6 +77,31 @@ from dynamislm.benchmark.constants import (
 )
 from dynamislm.benchmark.contracts import BenchmarkCaseV1
 from dynamislm.serialization import canonical_json, from_canonical_json
+
+
+def _protected_grants(
+    *,
+    credential_principal: Principal = Principal.EVALUATION_SERVICE,
+    read_principal: Principal = Principal.EVALUATION_SERVICE,
+) -> tuple[ProtectedStoreAccessGrantV1, ...]:
+    return tuple(
+        sorted(
+            (
+                ProtectedStoreAccessGrantV1(
+                    principal=principal,
+                    artifact_kind=artifact_kind,
+                    credential_present=principal is credential_principal,
+                    read_allowed=principal is read_principal,
+                )
+                for principal in Principal
+                for artifact_kind in ("PAYLOAD", "ANSWER")
+            ),
+            key=lambda grant: (
+                Principal(grant.principal).value.encode("utf-8"),
+                grant.artifact_kind.encode("utf-8"),
+            ),
+        )
+    )
 
 
 def test_frozen_coverage_matrix_proves_all_capabilities_and_families() -> None:
@@ -1184,11 +1221,23 @@ def test_manifest_bundle_rejects_stale_bindings_and_hidden_training_access() -> 
     with pytest.raises(ValueError, match="EXTERNAL_PRIVATE"):
         replace(store, storage_boundary="PUBLIC_REPOSITORY")
     request = HiddenAccessRequest(Principal.TRAINING, hidden_case.case_id, "PAYLOAD", "training")
+    access_evidence = build_hidden_access_evidence(
+        store_id=store.store_id,
+        store_version=store.store_version,
+        credential_namespace=store.credential_namespace,
+        benchmark_manifest_hash=bundle.benchmark_manifest.benchmark_manifest_hash,
+        hidden_case_hashes=store.hidden_case_hashes,
+        control_plane_id="synthetic-hidden-control-plane",
+        probe_id="synthetic-hidden-access-probe",
+        checked_at=datetime_module.datetime.now(datetime_module.UTC),
+        grants=_protected_grants(),
+    )
     blocked = preflight_hidden_access(
         request,
         case=hidden_case,
         benchmark_manifest=bundle.benchmark_manifest,
         store=store,
+        access_evidence=access_evidence,
     )
     assert blocked.status is PreflightStatus.BLOCKED
     allowed = preflight_hidden_access(
@@ -1196,8 +1245,72 @@ def test_manifest_bundle_rejects_stale_bindings_and_hidden_training_access() -> 
         case=hidden_case,
         benchmark_manifest=bundle.benchmark_manifest,
         store=store,
+        access_evidence=access_evidence,
     )
     assert allowed.status is PreflightStatus.PASS
+
+    validation_case = next(
+        case for case in bundle.cases if case.split.split_name is SplitName.FROZEN_VALIDATION
+    )
+    validation_store = ProtectedEvaluationStoreDescriptor(
+        store_id="fixture-validation-store",
+        store_version="1.0.0",
+        protected_split=SplitName.FROZEN_VALIDATION,
+        benchmark_manifest_hash=bundle.benchmark_manifest.benchmark_manifest_hash,
+        case_ids=(validation_case.case_id,),
+        case_hashes=((validation_case.case_id, validation_case.case_payload_hash),),
+        payloads_available=True,
+        answers_available=True,
+        storage_boundary="EXTERNAL_PRIVATE",
+        credential_namespace="pse-v1-validation-test",
+    )
+    validation_evidence = build_protected_access_evidence(
+        protected_split=SplitName.FROZEN_VALIDATION,
+        store_id=validation_store.store_id,
+        store_version=validation_store.store_version,
+        credential_namespace=validation_store.credential_namespace,
+        benchmark_manifest_hash=bundle.benchmark_manifest.benchmark_manifest_hash,
+        case_hashes=validation_store.case_hashes,
+        control_plane_id="synthetic-validation-control-plane",
+        probe_id="synthetic-validation-access-probe",
+        checked_at=datetime_module.datetime.now(datetime_module.UTC),
+        grants=_protected_grants(),
+    )
+    assert (
+        preflight_protected_store_access(
+            ProtectedStoreAccessRequest(
+                Principal.EVALUATION_SERVICE, validation_case.case_id, "PAYLOAD", "evaluation"
+            ),
+            case=validation_case,
+            benchmark_manifest=bundle.benchmark_manifest,
+            store=validation_store,
+            access_evidence=validation_evidence,
+        ).status
+        is PreflightStatus.PASS
+    )
+    assert (
+        preflight_protected_store_access(
+            ProtectedStoreAccessRequest(
+                Principal.MODEL_DEVELOPMENT, validation_case.case_id, "ANSWER", "model-dev"
+            ),
+            case=validation_case,
+            benchmark_manifest=bundle.benchmark_manifest,
+            store=validation_store,
+            access_evidence=validation_evidence,
+        ).status
+        is PreflightStatus.BLOCKED
+    )
+    assert (
+        preflight_public_development_distribution(
+            next(
+                case
+                for case in bundle.cases
+                if case.split.split_name is SplitName.PUBLIC_DEVELOPMENT
+            ),
+            "PAYLOAD",
+        ).status
+        is PreflightStatus.PASS
+    )
 
     assert (
         preflight_training_exclusion(
@@ -1210,6 +1323,43 @@ def test_manifest_bundle_rejects_stale_bindings_and_hidden_training_access() -> 
         preflight_training_exclusion(None, expected_manifest_hash=None).status
         is PreflightStatus.BLOCKED
     )
+
+
+@pytest.mark.parametrize(
+    "principal", (Principal.TRAINING, Principal.DATA_PIPELINE, Principal.MODEL_DEVELOPMENT)
+)
+def test_protected_acl_rejects_direct_credential_for_non_evaluation_principals(
+    principal: Principal,
+) -> None:
+    bundle = build_fixture_manifest_bundle()
+    validation_case = next(
+        case for case in bundle.cases if case.split.split_name is SplitName.FROZEN_VALIDATION
+    )
+    store = ProtectedEvaluationStoreDescriptor(
+        store_id="fixture-validation-acl-store",
+        store_version="1.0.0",
+        protected_split=SplitName.FROZEN_VALIDATION,
+        benchmark_manifest_hash=bundle.benchmark_manifest.benchmark_manifest_hash,
+        case_ids=(validation_case.case_id,),
+        case_hashes=((validation_case.case_id, validation_case.case_payload_hash),),
+        payloads_available=True,
+        answers_available=True,
+        storage_boundary="EXTERNAL_PRIVATE",
+        credential_namespace="fixture-validation-acl-namespace",
+    )
+    with pytest.raises(ValueError, match="only EVALUATION_SERVICE"):
+        build_protected_access_evidence(
+            protected_split=SplitName.FROZEN_VALIDATION,
+            store_id=store.store_id,
+            store_version=store.store_version,
+            credential_namespace=store.credential_namespace,
+            benchmark_manifest_hash=bundle.benchmark_manifest.benchmark_manifest_hash,
+            case_hashes=store.case_hashes,
+            control_plane_id="synthetic-acl-test-control-plane",
+            probe_id=f"synthetic-{principal.value.casefold()}-acl-probe",
+            checked_at=datetime_module.datetime.now(datetime_module.UTC),
+            grants=_protected_grants(credential_principal=principal, read_principal=principal),
+        )
 
 
 def test_final_v1_freeze_rejects_infrastructure_fixture_bundle() -> None:
@@ -1242,32 +1392,50 @@ def test_final_v1_freeze_rejects_infrastructure_fixture_bundle() -> None:
             for artifact_id in audit_ids
         ),
     )
-    hidden = next(case for case in bundle.cases if case.split.split_name is SplitName.HIDDEN_FINAL)
-    store = HiddenStoreDescriptor(
-        store_id="fixture-hidden-store",
-        store_version="1.0.0",
-        benchmark_manifest_hash=bundle.benchmark_manifest.benchmark_manifest_hash,
-        hidden_case_ids=(hidden.case_id,),
-        payloads_available=True,
-        answers_available=True,
-        storage_boundary="EXTERNAL_PRIVATE",
-        credential_namespace="pse-v1-evaluation-service-test",
-        hidden_case_hashes=((hidden.case_id, hidden.case_payload_hash),),
-    )
+    protected_stores = {
+        split: ProtectedEvaluationStoreDescriptor(
+            store_id=f"fixture-{split.value.casefold()}-store",
+            store_version="1.0.0",
+            protected_split=split,
+            benchmark_manifest_hash=bundle.benchmark_manifest.benchmark_manifest_hash,
+            case_ids=tuple(
+                sorted(
+                    (case.case_id for case in bundle.cases if case.split.split_name is split),
+                    key=lambda item: item.encode("utf-8"),
+                )
+            ),
+            payloads_available=True,
+            answers_available=True,
+            storage_boundary="EXTERNAL_PRIVATE",
+            credential_namespace=f"fixture-{split.value.casefold()}-namespace",
+            case_hashes=tuple(
+                sorted(
+                    (
+                        (case.case_id, case.case_payload_hash)
+                        for case in bundle.cases
+                        if case.split.split_name is split
+                    ),
+                    key=lambda item: item[0].encode("utf-8"),
+                )
+            ),
+        )
+        for split in (SplitName.FROZEN_VALIDATION, SplitName.HIDDEN_FINAL)
+    }
 
     with pytest.raises(ValueError, match="fixture-only cases"):
         validate_final_v1_freeze(
             bundle,
             exclusion_registry=registry,
             contamination_gate=gate,
-            hidden_store=store,
+            protected_stores=protected_stores,
+            protected_access_probe=None,
+            repository_root=Path(__file__).resolve().parents[1],
         )
 
 
 def test_final_v1_freeze_positive_non_v1_in_memory_qualification() -> None:
     from dynamislm.benchmark.contracts import BenchmarkManifestV1
     from dynamislm.benchmark.hashing import build_split_manifests
-    from dynamislm.benchmark.hidden import HiddenStoreAccessEvidenceV1
 
     qualification_cases = _build_full_coverage_qualification_cases()
     allocation = allocate_splits(qualification_cases, require_full_coverage=True)
@@ -1342,88 +1510,88 @@ def test_final_v1_freeze_positive_non_v1_in_memory_qualification() -> None:
     assert gate.resolved
     assert len(gate.dispositions) == 2
 
-    hidden_cases = tuple(
-        sorted(
-            (case for case in bundle.cases if case.split.split_name is SplitName.HIDDEN_FINAL),
-            key=lambda case: case.case_id.encode("utf-8"),
+    protected_splits = (SplitName.FROZEN_VALIDATION, SplitName.HIDDEN_FINAL)
+    protected_cases_by_split = {
+        split: tuple(
+            sorted(
+                (case for case in bundle.cases if case.split.split_name is split),
+                key=lambda case: case.case_id.encode("utf-8"),
+            )
         )
-    )
-    hidden_case_ids = tuple(case.case_id for case in hidden_cases)
-    hidden_case_hashes = tuple((case.case_id, case.case_payload_hash) for case in hidden_cases)
-    store = HiddenStoreDescriptor(
-        store_id="qualification-private-hidden-store",
-        store_version="1.0.0",
-        benchmark_manifest_hash=bundle.benchmark_manifest.benchmark_manifest_hash,
-        hidden_case_ids=hidden_case_ids,
-        payloads_available=True,
-        answers_available=True,
-        storage_boundary="EXTERNAL_PRIVATE",
-        credential_namespace="qualification-evaluation-service-only",
-        hidden_case_hashes=hidden_case_hashes,
-    )
+        for split in protected_splits
+    }
+    protected_stores = {
+        split: ProtectedEvaluationStoreDescriptor(
+            store_id=f"qualification-private-{split.value.casefold()}-store",
+            store_version="1.0.0",
+            protected_split=split,
+            benchmark_manifest_hash=bundle.benchmark_manifest.benchmark_manifest_hash,
+            case_ids=tuple(case.case_id for case in protected_cases_by_split[split]),
+            case_hashes=tuple(
+                (case.case_id, case.case_payload_hash) for case in protected_cases_by_split[split]
+            ),
+            payloads_available=True,
+            answers_available=True,
+            storage_boundary="EXTERNAL_PRIVATE",
+            credential_namespace=f"qualification-{split.value.casefold()}-namespace",
+        )
+        for split in protected_splits
+    }
+    hidden_cases = protected_cases_by_split[SplitName.HIDDEN_FINAL]
+    validation_store = protected_stores[SplitName.FROZEN_VALIDATION]
+    hidden_store = protected_stores[SplitName.HIDDEN_FINAL]
 
     class InMemoryAccessProbe:
-        calls = 0
-        evidence: HiddenStoreAccessEvidenceV1 | None = None
+        def __init__(self) -> None:
+            self.calls = 0
+            self.evidence_by_split: dict[SplitName, ProtectedStoreAccessEvidenceV1] = {}
 
         def probe_access(
             self,
             *,
-            store: HiddenStoreDescriptor,
+            store: ProtectedEvaluationStoreDescriptor,
             benchmark_manifest: BenchmarkManifestV1,
-            hidden_cases: tuple[BenchmarkCaseV1, ...],
-        ) -> HiddenStoreAccessEvidenceV1:
+            protected_cases: tuple[BenchmarkCaseV1, ...],
+        ) -> ProtectedStoreAccessEvidenceV1:
             self.calls += 1
             case_hashes = tuple(
                 sorted(
-                    ((case.case_id, case.case_payload_hash) for case in hidden_cases),
+                    ((case.case_id, case.case_payload_hash) for case in protected_cases),
                     key=lambda item: item[0].encode("utf-8"),
                 )
             )
-            grants = tuple(
-                sorted(
-                    (
-                        HiddenAccessGrantV1(
-                            principal=principal,
-                            artifact_kind=artifact_kind,
-                            credential_present=principal is Principal.EVALUATION_SERVICE,
-                            read_allowed=principal is Principal.EVALUATION_SERVICE,
-                        )
-                        for principal in Principal
-                        for artifact_kind in ("PAYLOAD", "ANSWER")
-                    ),
-                    key=lambda grant: (
-                        Principal(grant.principal).value.encode("utf-8"),
-                        grant.artifact_kind.encode("utf-8"),
-                    ),
-                )
-            )
-            self.evidence = build_hidden_access_evidence(
+            evidence = build_protected_access_evidence(
+                protected_split=store.protected_split,
                 store_id=store.store_id,
                 store_version=store.store_version,
                 credential_namespace=store.credential_namespace,
                 benchmark_manifest_hash=benchmark_manifest.benchmark_manifest_hash,
-                hidden_case_hashes=case_hashes,
+                case_hashes=case_hashes,
                 control_plane_id="synthetic-in-memory-control-plane",
-                probe_id="qualification-live-access-probe",
+                probe_id=f"qualification-live-{store.protected_split.value.casefold()}-probe",
                 checked_at=review_time,
-                grants=grants,
+                grants=_protected_grants(),
             )
-            return self.evidence
+            self.evidence_by_split[store.protected_split] = evidence
+            return evidence
 
     with pytest.raises(ValueError, match="unresolved or stale contamination gate"):
         validate_final_v1_freeze(
             bundle,
             exclusion_registry=registry,
             contamination_gate=unresolved_gate,
-            hidden_store=store,
+            protected_stores=protected_stores,
+            protected_access_probe=None,
+            repository_root=Path(__file__).resolve().parents[1],
         )
-    with pytest.raises(ValueError, match="requires a live external hidden-store access probe"):
+    with pytest.raises(ValueError, match="requires live protected-store access probes"):
         validate_final_v1_freeze(
             bundle,
             exclusion_registry=registry,
             contamination_gate=gate,
-            hidden_store=store,
+            protected_stores=protected_stores,
+            protected_access_probe=None,
+            repository_root=Path(__file__).resolve().parents[1],
         )
 
     access_probe = InMemoryAccessProbe()
@@ -1431,50 +1599,175 @@ def test_final_v1_freeze_positive_non_v1_in_memory_qualification() -> None:
         bundle,
         exclusion_registry=registry,
         contamination_gate=gate,
-        hidden_store=store,
-        hidden_access_probe=access_probe,
+        protected_stores=protected_stores,
+        protected_access_probe=access_probe,
+        repository_root=Path(__file__).resolve().parents[1],
     )
     assert result.status == "PASS"
     assert result.split_counts == tuple(zip(SplitName, (260, 87, 87), strict=True))
     assert result.case_count == 434
     assert result.contamination_dispositions == gate.dispositions
     assert result.contamination_disposition_digest == gate.disposition_manifest_digest
-    assert result.hidden_access_evidence == access_probe.evidence
-    assert access_probe.calls == 1
-    assert access_probe.evidence is not None
-    from dynamislm.benchmark.hidden import validate_hidden_access_evidence
+    assert result.protected_access_evidence == tuple(
+        (split, access_probe.evidence_by_split[split]) for split in protected_splits
+    )
+    assert result.public_repository_guard.status == "PASS"
+    assert result.public_repository_guard.protected_case_hashes == tuple(
+        sorted(
+            (
+                (case.case_id, case.case_payload_hash)
+                for split in protected_splits
+                for case in protected_cases_by_split[split]
+            ),
+            key=lambda item: item[0].encode("utf-8"),
+        )
+    )
+    assert access_probe.calls == 2
+    assert set(access_probe.evidence_by_split) == set(protected_splits)
+    for split in protected_splits:
+        access_evidence = access_probe.evidence_by_split[split]
+        assert access_evidence is not None
+        training_payload_grant = next(
+            grant
+            for grant in access_evidence.grants
+            if Principal(grant.principal) is Principal.TRAINING and grant.artifact_kind == "PAYLOAD"
+        )
+        forged_grants = tuple(
+            replace(grant, credential_present=True, read_allowed=True)
+            if grant is training_payload_grant
+            else grant
+            for grant in access_evidence.grants
+        )
+        store = protected_stores[split]
+        with pytest.raises(ValueError, match="only EVALUATION_SERVICE"):
+            build_protected_access_evidence(
+                protected_split=split,
+                store_id=store.store_id,
+                store_version=store.store_version,
+                credential_namespace=store.credential_namespace,
+                benchmark_manifest_hash=bundle.benchmark_manifest.benchmark_manifest_hash,
+                case_hashes=store.case_hashes,
+                control_plane_id="synthetic-in-memory-control-plane",
+                probe_id=f"qualification-forged-{split.value.casefold()}-probe",
+                checked_at=review_time,
+                grants=forged_grants,
+            )
+        with pytest.raises(ValueError, match="stale or from the future"):
+            validate_protected_access_evidence(
+                access_evidence,
+                store=store,
+                benchmark_manifest=bundle.benchmark_manifest,
+                protected_cases=protected_cases_by_split[split],
+                now=review_time + datetime_module.timedelta(seconds=301),
+            )
 
-    training_payload_grant = next(
-        grant
-        for grant in access_probe.evidence.grants
-        if Principal(grant.principal) is Principal.TRAINING and grant.artifact_kind == "PAYLOAD"
+    assert all(
+        preflight_public_development_distribution(case, artifact_kind).status
+        is PreflightStatus.PASS
+        for case in bundle.cases
+        if case.split.split_name is SplitName.PUBLIC_DEVELOPMENT
+        for artifact_kind in ("PAYLOAD", "ANSWER")
     )
-    forged_grants = tuple(
-        replace(grant, credential_present=True, read_allowed=True)
-        if grant is training_payload_grant
-        else grant
-        for grant in access_probe.evidence.grants
+    public_commitments = public_protected_case_commitments(bundle.cases, bundle.benchmark_manifest)
+    assert len(public_commitments) == 174
+    assert all(
+        commitment.protected_split in protected_splits
+        and commitment.case_payload_hash.startswith("sha256:")
+        and commitment.payload_hash.startswith("sha256:")
+        and commitment.answer_hash.startswith("sha256:")
+        and commitment.benchmark_manifest_hash == bundle.benchmark_manifest.benchmark_manifest_hash
+        for commitment in public_commitments
     )
-    with pytest.raises(ValueError, match="only EVALUATION_SERVICE"):
-        build_hidden_access_evidence(
-            store_id=store.store_id,
-            store_version=store.store_version,
-            credential_namespace=store.credential_namespace,
-            benchmark_manifest_hash=bundle.benchmark_manifest.benchmark_manifest_hash,
-            hidden_case_hashes=hidden_case_hashes,
-            control_plane_id="synthetic-in-memory-control-plane",
-            probe_id="qualification-forged-access-probe",
-            checked_at=review_time,
-            grants=forged_grants,
-        )
-    with pytest.raises(ValueError, match="stale or from the future"):
-        validate_hidden_access_evidence(
-            access_probe.evidence,
-            store=store,
+    assert (
+        preflight_training_exclusion(
+            bundle.exclusion_manifest,
+            expected_manifest_hash=bundle.exclusion_manifest.manifest_digest,
+            cases=bundle.cases,
             benchmark_manifest=bundle.benchmark_manifest,
-            hidden_cases=hidden_cases,
-            now=review_time + datetime_module.timedelta(seconds=301),
+            private_audit_index=registry,
+            private_text_material_required=True,
+        ).status
+        is PreflightStatus.PASS
+    )
+    validate_protected_store_namespace_isolation(protected_stores)
+    assert (
+        validation_store.credential_namespace.casefold()
+        != hidden_store.credential_namespace.casefold()
+    )
+    reused_namespace_stores = {
+        **protected_stores,
+        SplitName.HIDDEN_FINAL: replace(
+            hidden_store,
+            credential_namespace=validation_store.credential_namespace.upper(),
+        ),
+    }
+    with pytest.raises(ValueError, match="namespaces must be distinct"):
+        validate_protected_store_namespace_isolation(reused_namespace_stores)
+
+    hidden_example = hidden_cases[0]
+    hidden_store = protected_stores[SplitName.HIDDEN_FINAL]
+    stale_hashes = (
+        (hidden_example.case_id, "sha256:" + "0" * 64),
+        *hidden_store.case_hashes[1:],
+    )
+    stale_store = replace(hidden_store, case_hashes=stale_hashes)
+    with pytest.raises(ValueError, match="bound to different cases"):
+        validate_protected_access_evidence(
+            access_probe.evidence_by_split[SplitName.HIDDEN_FINAL],
+            store=stale_store,
+            benchmark_manifest=bundle.benchmark_manifest,
+            protected_cases=hidden_cases,
         )
+
+
+def _temporary_git_repository(root: Path) -> Path:
+    root.mkdir(parents=True)
+    subprocess.run(["git", "init", "-q", str(root)], check=True)
+    subprocess.run(["git", "-C", str(root), "config", "user.name", "PSE test"], check=True)
+    subprocess.run(
+        ["git", "-C", str(root), "config", "user.email", "pse-test@example.invalid"], check=True
+    )
+    (root / "README.md").write_text("Synthetic protected-store leak test.\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(root), "add", "README.md"], check=True)
+    subprocess.run(["git", "-C", str(root), "commit", "-qm", "fixture"], check=True)
+    return root
+
+
+@pytest.mark.parametrize(
+    ("split", "artifact_kind"),
+    [
+        (SplitName.FROZEN_VALIDATION, "prompt"),
+        (SplitName.FROZEN_VALIDATION, "answer"),
+        (SplitName.HIDDEN_FINAL, "prompt"),
+        (SplitName.HIDDEN_FINAL, "answer"),
+    ],
+)
+def test_public_repository_leak_guard_rejects_protected_prompt_or_answer_commit(
+    tmp_path: Path, split: SplitName, artifact_kind: str
+) -> None:
+    source_case = build_synthetic_reference_fixture_cases()[0]
+    case = replace(
+        source_case,
+        split=replace(
+            source_case.split,
+            split_name=split,
+            split_manifest_version=None,
+            split_manifest_hash=None,
+            membership_digest=None,
+        ),
+    )
+    repository = _temporary_git_repository(tmp_path / f"{split.value.lower()}-{artifact_kind}")
+    artifact = repository / "materialized" / f"{case.case_id}-{artifact_kind}.json"
+    artifact.parent.mkdir()
+    content = case.question if artifact_kind == "prompt" else canonical_json(case.expected_answer)
+    artifact.write_text(content, encoding="utf-8")
+    subprocess.run(["git", "-C", str(repository), "add", str(artifact)], check=True)
+    subprocess.run(
+        ["git", "-C", str(repository), "commit", "-qm", "protected artifact"], check=True
+    )
+
+    with pytest.raises(ValueError, match="protected"):
+        validate_protected_repository_boundary((case,), repository_root=repository)
 
 
 def test_contamination_gate_rejects_pass_status_with_unresolved_findings() -> None:
