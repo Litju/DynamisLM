@@ -1,4 +1,7 @@
 {
+  "additive_record_fields": {
+    "population_clause_evidence": "When V2 target applicability is assessed, record a status/value for each material clause (SEX, AGE_CLASS, SPORT, PROFESSIONAL_STATUS, SQUAD_LEVEL, COMPETITION_TIER), with article-version JATS locator and span digest. Direct target classification requires all six clauses established; unresolved clauses remain indirect."
+  },
   "benchmark_taxonomy_authority": {
     "capabilities": "docs/decisions/RES21-DR-001-performance-science-eval-v1.md#3.1",
     "families": "docs/decisions/RES21-DR-001-performance-science-eval-v1.md#3.2"
@@ -19,6 +22,7 @@
     "authors": "array[string]",
     "candidate_benchmark_families": "array of frozen RES-21 family IDs F01-F14",
     "candidate_capabilities": "array of frozen RES-21 capability IDs C01-C18",
+    "candidate_tag_basis": "Taxonomy family/capability tags remain proposals. Every retained proposal carries a versioned JATS title/Methods locator and evidence span digest; F13/C17 are not forced by this source-registry mission.",
     "disposition": "ACCEPTED|REJECTED",
     "doi": "string|null",
     "journal": "string|null",
@@ -34,7 +38,7 @@
     "rejection_reason": "string|null",
     "retraction_correction_expression_of_concern_status": "status and source-bound related notice identifiers",
     "sex": "MALE|FEMALE|MIXED|NOT_REPORTED|NOT_APPLICABLE",
-    "source_family_identity": "stable source-family ID with clustering basis and unresolved cross-document links explicit",
+    "source_family_identity": "Stable family ID, digest, adjudication status, evidence scope and future single-split rule; unresolved plausible links block allocation.",
     "sport": "array of reported sport identities",
     "title": "string",
     "year": "integer|null"
@@ -53,6 +57,6 @@
       "pmc_front_matter_retrieved_at_utc"
     ]
   },
-  "schema_version": "performance-science-eval-source-record@1.1.0",
+  "schema_version": "performance-science-eval-source-record@1.2.0",
   "source_authority": "RES-115; PMC article-level metadata and JATS for article/version-specific rights and identity"
 }
