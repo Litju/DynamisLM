@@ -1,0 +1,37 @@
+{
+  "accepted_source_count": 97,
+  "canonical_cc_by_identifier_count": 97,
+  "canonical_identifier": "https://creativecommons.org/licenses/by/4.0/",
+  "classification_rule_id": "PSE-LICENSE-AUTHORITY-001@1.0.0",
+  "durable_metadata_count": 97,
+  "fresh_article_version_rechecks": 97,
+  "fresh_recheck_evidence_path": "outside_git:manifests/license_rechecks_001.jsonl",
+  "fresh_recheck_evidence_sha256": "sha256:1f927c68225be119795e33a844572cb378dcba41eef082498f35d580d3060f82",
+  "historical_phase_a_order_and_source_artifacts_changed": false,
+  "identity_and_rights_reproof": "PASS",
+  "license_distribution": {
+    "CC0": 0,
+    "CC_BY_4_0": 97,
+    "OTHER": 0
+  },
+  "malformed_accepted_identifier_count_after": 0,
+  "malformed_accepted_identifier_count_before": 85,
+  "malformed_historical_identifier_distribution": {
+    "https://creativecommons.org/licenses/by/4.0/Licensee": 46,
+    "https://creativecommons.org/licenses/by/4.0/Open": 11,
+    "https://creativecommons.org/licenses/by/4.0/This": 28
+  },
+  "mission": "RES-115-SOURCE-REGISTRY-FIX-001",
+  "raw_license_ref_exact_canonical_count": 97,
+  "raw_license_text_retained_count": 97,
+  "raw_previous_registry_identifier_preserved_count": 97,
+  "raw_source_href_distribution": {
+    "NULL": 85,
+    "http://creativecommons.org/licenses/by/4.0/": 11,
+    "https://creativecommons.org/licenses/by/4.0/": 1
+  },
+  "result": "PASS",
+  "retained_jats_artifact_sha256_changed_count": 0,
+  "rights_records_validated": 97,
+  "schema_version": "performance-science-eval-license-authority-audit@1.0.0"
+}

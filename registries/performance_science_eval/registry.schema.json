@@ -1,44 +1,58 @@
 {
-  "schema_version": "performance-science-eval-source-record@1.0.0",
-  "mission": "RES-115-SOURCE-REGISTRY-001",
-  "source_authority": "RES-115; PMC article-level metadata and JATS for article/version-specific rights and identity",
   "benchmark_taxonomy_authority": {
-    "families": "docs/decisions/RES21-DR-001-performance-science-eval-v1.md#3.2",
-    "capabilities": "docs/decisions/RES21-DR-001-performance-science-eval-v1.md#3.1"
-  },
-  "required_record_fields": {
-    "pmid": "string|null",
-    "pmcid": "string|null",
-    "doi": "string|null",
-    "title": "string",
-    "authors": "array[string]",
-    "year": "integer|null",
-    "journal": "string|null",
-    "article_type": "array[string] PubMed publication types",
-    "pmc_jats_article_type": "string|null; article/@article-type from PMC front matter/JATS",
-    "population": "structured reported cohort summary; unknown values remain explicit",
-    "sport": "array of reported sport identities",
-    "sex": "MALE|FEMALE|MIXED|NOT_REPORTED|NOT_APPLICABLE",
-    "performance_level": "array of reported level descriptors; no inference from elite/professional alone",
-    "protocol_device_method": "reported protocol/device/method facts with source locators",
-    "candidate_benchmark_families": "array of frozen RES-21 family IDs F01-F14",
-    "candidate_capabilities": "array of frozen RES-21 capability IDs C01-C18",
-    "license": "article/version-specific license label or explicit unknown/unverified",
-    "license_identifier_source": "PMC OAI front matter locator or explicit reason not checked",
-    "pmc_article_version_identity": "PMCID, PMCID version identifier, OAI identifier and datestamp",
-    "retraction_correction_expression_of_concern_status": "status and source-bound related notice identifiers",
-    "applicability_scope": "CANONICAL_EMPIRICAL_TARGET|DIRECT_TARGET_POPULATION_EVIDENCE|INDIRECT_MEASUREMENT_EVIDENCE|NONCANONICAL_CONTEXT_ONLY|REJECTED_OR_UNRESOLVED",
-    "source_family_identity": "stable source-family ID with clustering basis and unresolved cross-document links explicit",
-    "disposition": "ACCEPTED|REJECTED",
-    "rejection_reason": "string|null"
+    "capabilities": "docs/decisions/RES21-DR-001-performance-science-eval-v1.md#3.1",
+    "families": "docs/decisions/RES21-DR-001-performance-science-eval-v1.md#3.2"
   },
   "full_text_acceptance_licenses": [
     "CC0",
     "CC BY"
   ],
+  "mission": "RES-115-SOURCE-REGISTRY-001",
   "prohibitions": [
     "No retained JATS, PDF, media, supplement, abstract text, or protected benchmark bytes in Git",
     "No full-text request before article-level reusable-rights, retraction, relevance, and version checks pass",
     "No inference of canonical target population from a vague elite/professional label"
-  ]
+  ],
+  "required_record_fields": {
+    "applicability_scope": "CANONICAL_EMPIRICAL_TARGET|DIRECT_TARGET_POPULATION_EVIDENCE|INDIRECT_MEASUREMENT_EVIDENCE|NONCANONICAL_CONTEXT_ONLY|REJECTED_OR_UNRESOLVED",
+    "article_type": "array[string] PubMed publication types",
+    "authors": "array[string]",
+    "candidate_benchmark_families": "array of frozen RES-21 family IDs F01-F14",
+    "candidate_capabilities": "array of frozen RES-21 capability IDs C01-C18",
+    "disposition": "ACCEPTED|REJECTED",
+    "doi": "string|null",
+    "journal": "string|null",
+    "license": "article/version-specific deterministic license classification, canonical identifier, exact PMC front-matter raw href/ref/text, request/response evidence digests, and preserved historical registry value.",
+    "license_identifier_source": "PMC OAI front matter locator or explicit reason not checked",
+    "performance_level": "array of reported level descriptors; no inference from elite/professional alone",
+    "pmc_article_version_identity": "PMCID, PMCID version identifier, OAI identifier and datestamp",
+    "pmc_jats_article_type": "string|null; article/@article-type from PMC front matter/JATS",
+    "pmcid": "string|null",
+    "pmid": "string|null",
+    "population": "structured reported cohort summary; unknown values remain explicit",
+    "protocol_device_method": "reported protocol/device/method facts with source locators",
+    "rejection_reason": "string|null",
+    "retraction_correction_expression_of_concern_status": "status and source-bound related notice identifiers",
+    "sex": "MALE|FEMALE|MIXED|NOT_REPORTED|NOT_APPLICABLE",
+    "source_family_identity": "stable source-family ID with clustering basis and unresolved cross-document links explicit",
+    "sport": "array of reported sport identities",
+    "title": "string",
+    "year": "integer|null"
+  },
+  "rights_authority": {
+    "cc_by_4_0_canonical_identifier": "https://creativecommons.org/licenses/by/4.0/",
+    "classification_rule_id": "PSE-LICENSE-AUTHORITY-001@1.0.0",
+    "required_evidence": "Exact full CC BY 4.0 URI equality in PMC article-version license/@xlink:href or ali:license_ref; explicit attribution wording; no restrictive terms; exact PMCID/version/PMID and case-insensitive DOI identity match. Prefix matching is prohibited.",
+    "required_raw_evidence_fields": [
+      "historical_registry_identifier",
+      "raw_license_href",
+      "raw_license_ref_texts",
+      "raw_license_p_texts",
+      "pmc_front_matter_response_sha256",
+      "pmc_front_matter_request_sha256",
+      "pmc_front_matter_retrieved_at_utc"
+    ]
+  },
+  "schema_version": "performance-science-eval-source-record@1.1.0",
+  "source_authority": "RES-115; PMC article-level metadata and JATS for article/version-specific rights and identity"
 }
