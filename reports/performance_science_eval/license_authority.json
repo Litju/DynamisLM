@@ -5,11 +5,35 @@
   "classification_rule_id": "PSE-LICENSE-AUTHORITY-001@1.0.0",
   "direct_target_candidate_pubmed_metadata_sha256": "sha256:eb970ae73118c359f984965a671660e33eeebdd4fa48b9e3146701efde886728",
   "direct_target_coverage": "PASS",
-  "durable_metadata_count": 97,
+  "durable_metadata_count": 104,
   "fresh_article_version_rechecks": 104,
   "fresh_direct_target_candidate_rights_checks": 13,
   "fresh_recheck_evidence_path": "outside_git:manifests/license_rechecks_001.jsonl",
   "fresh_recheck_evidence_sha256": "sha256:1f927c68225be119795e33a844572cb378dcba41eef082498f35d580d3060f82",
+  "fresh_recheck_evidence_sources": {
+    "direct_target_rights_probes": [
+      {
+        "path": "outside_git:manifests/direct_target_rights_probe_001.jsonl",
+        "records": 9,
+        "sha256": "sha256:ca1754a8e921856990304871d84c2acfca6e6ac4ea6468e557c75f1b3be735e0"
+      },
+      {
+        "path": "outside_git:manifests/direct_target_rights_probe_002.jsonl",
+        "records": 3,
+        "sha256": "sha256:c67ec175b69a93386c26fdefdaabe639fc2b98657e74f945234e4a6d140c3b75"
+      },
+      {
+        "path": "outside_git:manifests/direct_target_rights_probe_003.jsonl",
+        "records": 1,
+        "sha256": "sha256:191c3f0c4f0a7ca10cf241f41033993a518f75afeec708981a9dd897736884ee"
+      }
+    ],
+    "phase_a_97_article_rechecks": {
+      "path": "outside_git:manifests/license_rechecks_001.jsonl",
+      "records": 97,
+      "sha256": "sha256:1f927c68225be119795e33a844572cb378dcba41eef082498f35d580d3060f82"
+    }
+  },
   "historical_phase_a_order_and_source_artifacts_changed": false,
   "identity_and_rights_reproof": "PASS",
   "license_distribution": {
@@ -25,11 +49,11 @@
     "https://creativecommons.org/licenses/by/4.0/This": 28
   },
   "mission": "RES-115-SOURCE-REGISTRY-FIX-001",
-  "raw_license_ref_exact_canonical_count": 97,
-  "raw_license_text_retained_count": 97,
+  "raw_license_ref_exact_canonical_count": 104,
+  "raw_license_text_retained_count": 104,
   "raw_previous_registry_identifier_preserved_count": 97,
   "raw_source_href_distribution": {
-    "NULL": 85,
+    "NULL": 92,
     "http://creativecommons.org/licenses/by/4.0/": 11,
     "https://creativecommons.org/licenses/by/4.0/": 1
   },

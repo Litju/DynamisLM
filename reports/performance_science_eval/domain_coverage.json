@@ -1,7 +1,12 @@
 {
-  "accepted_documents": 97,
+  "accepted_documents": 104,
+  "applicability_scope_counts": {
+    "DIRECT_TARGET_POPULATION_EVIDENCE": 5,
+    "INDIRECT_MEASUREMENT_EVIDENCE": 95,
+    "NONCANONICAL_CONTEXT_ONLY": 4
+  },
   "benchmark_cases_created": 0,
-  "candidate_documents": 142,
+  "candidate_documents": 155,
   "coverage_by_search_stratum": {
     "S01_CMJ_DJ_FORCE_TIME": {
       "accepted_documents": 12,
@@ -64,9 +69,24 @@
       "status": "PASS"
     }
   },
+  "direct_target_supplement": {
+    "accepted_canonical_empirical_target_documents": 0,
+    "accepted_direct_target_documents": 5,
+    "accepted_indirect_near_target_documents": 2,
+    "candidate_documents_screened": 13,
+    "competition_distribution": {
+      "ENGLISH_PREMIER_LEAGUE": 5,
+      "LALIGA_OR_SPANISH_FIRST_DIVISION": 0
+    },
+    "coverage_status": "PASS",
+    "la_liga_direct_target_limitation": "No accepted direct LaLiga/Spanish First Division source: the screened LaLiga candidate did not establish the senior/adult age class or first-team subgroup in Methods."
+  },
   "domain_coverage_status": "PASS",
-  "mission": "RES-115-SOURCE-REGISTRY-001",
-  "rejected_documents": 45,
+  "evidence_strata_nonempty": true,
+  "mission": "RES-115-SOURCE-REGISTRY-FIX-001",
+  "phase_a_source_pool_status": "PASS",
+  "phase_a_stratum_counts_unchanged_by_supplement": true,
+  "rejected_documents": 51,
   "represented_candidate_capabilities": [
     "C01",
     "C02",
@@ -83,7 +103,6 @@
     "C13",
     "C14",
     "C15",
-    "C16",
     "C18"
   ],
   "represented_candidate_families": [
@@ -103,16 +122,31 @@
   ],
   "required_strata": 10,
   "schema_version": "performance-science-eval-domain-coverage@1.0.0",
+  "source_family_resolution": {
+    "confirmed_shared_data_links": 2,
+    "conservative_isolation_links": 9,
+    "family_count": 94,
+    "plausible_dependency_links": 11,
+    "status": "PASS",
+    "unresolved_plausible_links": 0
+  },
   "source_identity_dedup_details": {
-    "candidate_documents": 142,
+    "candidate_documents": 155,
     "duplicate_doi_count": 0,
     "duplicate_pmcid_count": 0,
     "duplicate_pmid_count": 0,
     "missing_doi_count": 3,
-    "reported_doi_count": 139,
+    "reported_doi_count": 152,
     "status": "PASS",
-    "unique_pmcid_count": 142,
-    "unique_pmid_count": 142,
-    "unique_reported_doi_count": 139
+    "unique_pmcid_count": 155,
+    "unique_pmid_count": 155,
+    "unique_reported_doi_count": 152
+  },
+  "source_tag_taxonomy": {
+    "C17_forced": 0,
+    "F13_forced": 0,
+    "retained_tags_have_textual_support": true,
+    "status": "PASS",
+    "unsupported_proposals_removed": true
   }
 }
