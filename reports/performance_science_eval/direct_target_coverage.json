@@ -1,0 +1,660 @@
+{
+  "abstract_or_fulltext_text_copied_to_report": false,
+  "accepted_canonical_empirical_target_documents": 0,
+  "accepted_direct_by_competition": {
+    "ENGLISH_PREMIER_LEAGUE": 5,
+    "LALIGA_OR_SPANISH_FIRST_DIVISION": 0
+  },
+  "accepted_direct_clause_established_counts": {
+    "AGE_CLASS": 5,
+    "COMPETITION_TIER": 5,
+    "PROFESSIONAL_STATUS": 5,
+    "SEX": 5,
+    "SPORT": 5,
+    "SQUAD_LEVEL": 5
+  },
+  "accepted_direct_sources": [
+    {
+      "age_class": "SENIOR",
+      "doi": "10.5114/biolsport.2024.133001",
+      "pmcid": "PMC12244382",
+      "pmid": "40656996",
+      "population_clause_evidence": [
+        {
+          "clause": "SEX",
+          "evidence_basis": "DIRECT_METHODS_POPULATION_WORDING",
+          "locator": "JATS:body/sec[title='MATERIALS AND METHODS',occurrence=1]/p[2]",
+          "section_heading": "MATERIALS AND METHODS",
+          "span_sha256": "sha256:bd54350427f1260bd3e5ef45b01ab5aed26ae9dc448e463bcb449643720ff543",
+          "status": "ESTABLISHED",
+          "value": "MALE"
+        },
+        {
+          "clause": "AGE_CLASS",
+          "evidence_basis": {
+            "AGE_CLASS": "FIRST_TEAM_SENIOR_SQUAD_CLASSIFICATION"
+          },
+          "locator": "JATS:body/sec[title='MATERIALS AND METHODS',occurrence=1]/p[2]",
+          "section_heading": "MATERIALS AND METHODS",
+          "span_sha256": "sha256:bd54350427f1260bd3e5ef45b01ab5aed26ae9dc448e463bcb449643720ff543",
+          "status": "ESTABLISHED",
+          "value": "SENIOR"
+        },
+        {
+          "clause": "SPORT",
+          "evidence_basis": "DIRECT_METHODS_POPULATION_WORDING",
+          "locator": "JATS:body/sec[title='MATERIALS AND METHODS',occurrence=1]/p[5]",
+          "section_heading": "MATERIALS AND METHODS",
+          "span_sha256": "sha256:ba160a38ae1319aa00f5b8d1a4705a98fd996e30af2b2639787a93df8f913536",
+          "status": "ESTABLISHED",
+          "value": "ASSOCIATION_FOOTBALL"
+        },
+        {
+          "clause": "PROFESSIONAL_STATUS",
+          "evidence_basis": "DIRECT_METHODS_POPULATION_WORDING",
+          "locator": "JATS:body/sec[title='MATERIALS AND METHODS',occurrence=1]/p[2]",
+          "section_heading": "MATERIALS AND METHODS",
+          "span_sha256": "sha256:bd54350427f1260bd3e5ef45b01ab5aed26ae9dc448e463bcb449643720ff543",
+          "status": "ESTABLISHED",
+          "value": "PROFESSIONAL"
+        },
+        {
+          "clause": "SQUAD_LEVEL",
+          "evidence_basis": "DIRECT_METHODS_POPULATION_WORDING",
+          "locator": "JATS:body/sec[title='MATERIALS AND METHODS',occurrence=1]/p[2]",
+          "section_heading": "MATERIALS AND METHODS",
+          "span_sha256": "sha256:bd54350427f1260bd3e5ef45b01ab5aed26ae9dc448e463bcb449643720ff543",
+          "status": "ESTABLISHED",
+          "value": "FIRST_TEAM"
+        },
+        {
+          "clause": "COMPETITION_TIER",
+          "evidence_basis": "DIRECT_METHODS_POPULATION_WORDING",
+          "locator": "JATS:body/sec[title='MATERIALS AND METHODS',occurrence=1]/p[2]",
+          "section_heading": "MATERIALS AND METHODS",
+          "span_sha256": "sha256:bd54350427f1260bd3e5ef45b01ab5aed26ae9dc448e463bcb449643720ff543",
+          "status": "ESTABLISHED",
+          "value": "TOP_DOMESTIC_DIVISION"
+        }
+      ],
+      "reported_sample_size": 21,
+      "source_metadata_relative_path": "sources/accepted/PMC12244382/metadata.json",
+      "title": "Analysis of mental and physical fatigue over the course of a professional English Premier League season in outfield players."
+    },
+    {
+      "age_class": "SENIOR",
+      "doi": "10.5114/biolsport.2025.147011",
+      "pmcid": "PMC12244393",
+      "pmid": "40657003",
+      "population_clause_evidence": [
+        {
+          "clause": "SEX",
+          "evidence_basis": "DIRECT_METHODS_POPULATION_WORDING",
+          "locator": "JATS:body/sec[title='Study Design',occurrence=1]/p[1]",
+          "section_heading": "Study Design",
+          "span_sha256": "sha256:bc5e2f8fdc5744cc9a9b6e4a37eef1501863401f323dba8b4bc63ff9a3d4b32a",
+          "status": "ESTABLISHED",
+          "value": "MALE"
+        },
+        {
+          "clause": "AGE_CLASS",
+          "evidence_basis": {
+            "AGE_CLASS": "FIRST_TEAM_SENIOR_SQUAD_CLASSIFICATION"
+          },
+          "locator": "JATS:body/sec[title='Participants',occurrence=1]/p[1]",
+          "section_heading": "Participants",
+          "span_sha256": "sha256:55e45cd2822f000c75a918d7f8274e08dd84e0f439c9e9278e32c3eedfa936eb",
+          "status": "ESTABLISHED",
+          "value": "SENIOR"
+        },
+        {
+          "clause": "SPORT",
+          "evidence_basis": "DIRECT_METHODS_POPULATION_WORDING",
+          "locator": "JATS:body/sec[title='Participants',occurrence=1]/p[1]",
+          "section_heading": "Participants",
+          "span_sha256": "sha256:55e45cd2822f000c75a918d7f8274e08dd84e0f439c9e9278e32c3eedfa936eb",
+          "status": "ESTABLISHED",
+          "value": "ASSOCIATION_FOOTBALL"
+        },
+        {
+          "clause": "PROFESSIONAL_STATUS",
+          "evidence_basis": "DIRECT_METHODS_POPULATION_WORDING",
+          "locator": "JATS:body/sec[title='Participants',occurrence=1]/p[1]",
+          "section_heading": "Participants",
+          "span_sha256": "sha256:55e45cd2822f000c75a918d7f8274e08dd84e0f439c9e9278e32c3eedfa936eb",
+          "status": "ESTABLISHED",
+          "value": "PROFESSIONAL"
+        },
+        {
+          "clause": "SQUAD_LEVEL",
+          "evidence_basis": "DIRECT_METHODS_POPULATION_WORDING",
+          "locator": "JATS:body/sec[title='Participants',occurrence=1]/p[1]",
+          "section_heading": "Participants",
+          "span_sha256": "sha256:55e45cd2822f000c75a918d7f8274e08dd84e0f439c9e9278e32c3eedfa936eb",
+          "status": "ESTABLISHED",
+          "value": "FIRST_TEAM"
+        },
+        {
+          "clause": "COMPETITION_TIER",
+          "evidence_basis": "DIRECT_METHODS_POPULATION_WORDING",
+          "locator": "JATS:body/sec[title='Participants',occurrence=1]/p[1]",
+          "section_heading": "Participants",
+          "span_sha256": "sha256:55e45cd2822f000c75a918d7f8274e08dd84e0f439c9e9278e32c3eedfa936eb",
+          "status": "ESTABLISHED",
+          "value": "TOP_DOMESTIC_DIVISION"
+        }
+      ],
+      "reported_sample_size": 31,
+      "source_metadata_relative_path": "sources/accepted/PMC12244393/metadata.json",
+      "title": "Contextualized high-speed running and sprinting during English Premier League match-play with reference to possession, positional demands and opponent ranking."
+    },
+    {
+      "age_class": "SENIOR",
+      "doi": "10.5114/biolsport.2025.148540",
+      "pmcid": "PMC12490298",
+      "pmid": "41048232",
+      "population_clause_evidence": [
+        {
+          "clause": "SEX",
+          "evidence_basis": "DIRECT_METHODS_POPULATION_WORDING",
+          "locator": "JATS:body/sec[title='Study Design',occurrence=1]/p[1]",
+          "section_heading": "Study Design",
+          "span_sha256": "sha256:6dbcda8ebe8d1b1fb0dbedacd82d6dd491a08b32d43f8b13e45acfe8f8d86d9b",
+          "status": "ESTABLISHED",
+          "value": "MALE"
+        },
+        {
+          "clause": "AGE_CLASS",
+          "evidence_basis": {
+            "AGE_CLASS": "FIRST_TEAM_SENIOR_SQUAD_CLASSIFICATION"
+          },
+          "locator": "JATS:body/sec[title='Participants',occurrence=1]/p[1]",
+          "section_heading": "Participants",
+          "span_sha256": "sha256:1f658e03e147c97464c71e5581233d86cb15311993770fb8926b7356eeb7a3b5",
+          "status": "ESTABLISHED",
+          "value": "SENIOR"
+        },
+        {
+          "clause": "SPORT",
+          "evidence_basis": "DIRECT_METHODS_POPULATION_WORDING",
+          "locator": "JATS:body/sec[title='Participants',occurrence=1]/p[1]",
+          "section_heading": "Participants",
+          "span_sha256": "sha256:1f658e03e147c97464c71e5581233d86cb15311993770fb8926b7356eeb7a3b5",
+          "status": "ESTABLISHED",
+          "value": "ASSOCIATION_FOOTBALL"
+        },
+        {
+          "clause": "PROFESSIONAL_STATUS",
+          "evidence_basis": "DIRECT_METHODS_POPULATION_WORDING",
+          "locator": "JATS:body/sec[title='Participants',occurrence=1]/p[1]",
+          "section_heading": "Participants",
+          "span_sha256": "sha256:1f658e03e147c97464c71e5581233d86cb15311993770fb8926b7356eeb7a3b5",
+          "status": "ESTABLISHED",
+          "value": "PROFESSIONAL"
+        },
+        {
+          "clause": "SQUAD_LEVEL",
+          "evidence_basis": "DIRECT_METHODS_POPULATION_WORDING",
+          "locator": "JATS:body/sec[title='Participants',occurrence=1]/p[1]",
+          "section_heading": "Participants",
+          "span_sha256": "sha256:1f658e03e147c97464c71e5581233d86cb15311993770fb8926b7356eeb7a3b5",
+          "status": "ESTABLISHED",
+          "value": "FIRST_TEAM"
+        },
+        {
+          "clause": "COMPETITION_TIER",
+          "evidence_basis": "DIRECT_METHODS_POPULATION_WORDING",
+          "locator": "JATS:body/sec[title='Participants',occurrence=1]/p[1]",
+          "section_heading": "Participants",
+          "span_sha256": "sha256:1f658e03e147c97464c71e5581233d86cb15311993770fb8926b7356eeb7a3b5",
+          "status": "ESTABLISHED",
+          "value": "TOP_DOMESTIC_DIVISION"
+        }
+      ],
+      "reported_sample_size": 31,
+      "source_metadata_relative_path": "sources/accepted/PMC12490298/metadata.json",
+      "title": "Contextualized acceleration and deceleration profiles of elite soccer players during English Premier League match-play. The effect of possession, positional demands and opponent ranking."
+    },
+    {
+      "age_class": "SENIOR_OR_ADULT",
+      "doi": "10.3389/fspor.2022.939676",
+      "pmcid": "PMC9397540",
+      "pmid": "36016922",
+      "population_clause_evidence": [
+        {
+          "clause": "SEX",
+          "evidence_basis": "DIRECT_METHODS_POPULATION_WORDING",
+          "locator": "JATS:body/sec[title='Participants',occurrence=1]/p[1]",
+          "section_heading": "Participants",
+          "span_sha256": "sha256:cbc7c34e443ffe57566411d68b5cffa2d1300d20e010320424b2f4dec1f3352c",
+          "status": "ESTABLISHED",
+          "value": "MALE"
+        },
+        {
+          "clause": "AGE_CLASS",
+          "evidence_basis": {
+            "AGE_CLASS": "EXPLICIT_OVER_18",
+            "SQUAD_LEVEL": "EPL_MATCH_PARTICIPATION_AND_SINGLE_EPL_CLUB"
+          },
+          "locator": "JATS:body/sec[title='Research approval',occurrence=1]/p[1]",
+          "section_heading": "Research approval",
+          "span_sha256": "sha256:77abbc0d26b4546396a165c8f506bdd6058cda6b6b546be100f6bdc73e52cd5e",
+          "status": "ESTABLISHED",
+          "value": "ADULT"
+        },
+        {
+          "clause": "SPORT",
+          "evidence_basis": "DIRECT_METHODS_POPULATION_WORDING",
+          "locator": "JATS:body/sec[title='Participants',occurrence=1]/p[1]",
+          "section_heading": "Participants",
+          "span_sha256": "sha256:cbc7c34e443ffe57566411d68b5cffa2d1300d20e010320424b2f4dec1f3352c",
+          "status": "ESTABLISHED",
+          "value": "ASSOCIATION_FOOTBALL"
+        },
+        {
+          "clause": "PROFESSIONAL_STATUS",
+          "evidence_basis": "DIRECT_METHODS_POPULATION_WORDING",
+          "locator": "JATS:body/sec[title='Participants',occurrence=1]/p[1]",
+          "section_heading": "Participants",
+          "span_sha256": "sha256:cbc7c34e443ffe57566411d68b5cffa2d1300d20e010320424b2f4dec1f3352c",
+          "status": "ESTABLISHED",
+          "value": "PROFESSIONAL"
+        },
+        {
+          "clause": "SQUAD_LEVEL",
+          "evidence_basis": {
+            "AGE_CLASS": "EXPLICIT_OVER_18",
+            "SQUAD_LEVEL": "EPL_MATCH_PARTICIPATION_AND_SINGLE_EPL_CLUB"
+          },
+          "locator": "JATS:body/sec[title='Participants',occurrence=1]/p[1]",
+          "section_heading": "Participants",
+          "span_sha256": "sha256:cbc7c34e443ffe57566411d68b5cffa2d1300d20e010320424b2f4dec1f3352c",
+          "status": "ESTABLISHED",
+          "value": "FIRST_TEAM"
+        },
+        {
+          "clause": "COMPETITION_TIER",
+          "evidence_basis": "DIRECT_METHODS_POPULATION_WORDING",
+          "locator": "JATS:body/sec[title='Participants',occurrence=1]/p[1]",
+          "section_heading": "Participants",
+          "span_sha256": "sha256:cbc7c34e443ffe57566411d68b5cffa2d1300d20e010320424b2f4dec1f3352c",
+          "status": "ESTABLISHED",
+          "value": "TOP_DOMESTIC_DIVISION"
+        }
+      ],
+      "reported_sample_size": 25,
+      "source_metadata_relative_path": "sources/accepted/PMC9397540/metadata.json",
+      "title": "Grizzlies and gazelles: Duty factor is an effective measure for categorizing running style in English Premier League soccer players."
+    },
+    {
+      "age_class": "SENIOR",
+      "doi": "10.5114/biolsport.2026.153305",
+      "pmcid": "PMC12884896",
+      "pmid": "41668934",
+      "population_clause_evidence": [
+        {
+          "clause": "SEX",
+          "evidence_basis": "DIRECT_METHODS_POPULATION_WORDING",
+          "locator": "JATS:body/sec[title='INTRODUCTION',occurrence=1]/p[1]",
+          "section_heading": "INTRODUCTION",
+          "span_sha256": "sha256:edc74a4fa22c9cf3e62fb5522b161f768640ea72b61f15181ac4d3552351882a",
+          "status": "ESTABLISHED",
+          "value": "MALE"
+        },
+        {
+          "clause": "AGE_CLASS",
+          "evidence_basis": {
+            "AGE_CLASS": "FIRST_TEAM_SENIOR_SQUAD_CLASSIFICATION"
+          },
+          "locator": "JATS:body/sec[title='Participants',occurrence=1]/p[1]",
+          "section_heading": "Participants",
+          "span_sha256": "sha256:94de5e12dce11448023adf2932d3f5d4e0e33f343904ed388e04ed071b115c00",
+          "status": "ESTABLISHED",
+          "value": "SENIOR"
+        },
+        {
+          "clause": "SPORT",
+          "evidence_basis": "DIRECT_METHODS_POPULATION_WORDING",
+          "locator": "JATS:body/sec[title='MATERIALS AND METHODS',occurrence=1]/p[1]",
+          "section_heading": "MATERIALS AND METHODS",
+          "span_sha256": "sha256:92cd989b68f3c8b0ebe74c7d3c5b2503597bc0e5df5bca8e9adc36253d3fe93e",
+          "status": "ESTABLISHED",
+          "value": "ASSOCIATION_FOOTBALL"
+        },
+        {
+          "clause": "PROFESSIONAL_STATUS",
+          "evidence_basis": "DIRECT_METHODS_POPULATION_WORDING",
+          "locator": "JATS:body/sec[title='Participants',occurrence=1]/p[1]",
+          "section_heading": "Participants",
+          "span_sha256": "sha256:94de5e12dce11448023adf2932d3f5d4e0e33f343904ed388e04ed071b115c00",
+          "status": "ESTABLISHED",
+          "value": "PROFESSIONAL"
+        },
+        {
+          "clause": "SQUAD_LEVEL",
+          "evidence_basis": "DIRECT_METHODS_POPULATION_WORDING",
+          "locator": "JATS:body/sec[title='Participants',occurrence=1]/p[1]",
+          "section_heading": "Participants",
+          "span_sha256": "sha256:94de5e12dce11448023adf2932d3f5d4e0e33f343904ed388e04ed071b115c00",
+          "status": "ESTABLISHED",
+          "value": "FIRST_TEAM"
+        },
+        {
+          "clause": "COMPETITION_TIER",
+          "evidence_basis": "DIRECT_METHODS_POPULATION_WORDING",
+          "locator": "JATS:body/sec[title='MATERIALS AND METHODS',occurrence=1]/p[1]",
+          "section_heading": "MATERIALS AND METHODS",
+          "span_sha256": "sha256:92cd989b68f3c8b0ebe74c7d3c5b2503597bc0e5df5bca8e9adc36253d3fe93e",
+          "status": "ESTABLISHED",
+          "value": "TOP_DOMESTIC_DIVISION"
+        }
+      ],
+      "reported_sample_size": 30,
+      "source_metadata_relative_path": "sources/accepted/PMC12884896/metadata.json",
+      "title": "The loading impact of training and match-play on non-contact muscle injuries in elite male soccer players. A seasonal analysis."
+    }
+  ],
+  "accepted_direct_target_documents": 5,
+  "accepted_indirect_near_target_documents": 2,
+  "accepted_indirect_near_target_sources": [
+    {
+      "doi": "10.3389/fspor.2022.982796",
+      "pmcid": "PMC9428458",
+      "pmid": "36060629",
+      "title": "Inter-limb asymmetries and kicking limb preference in English premier league soccer players.",
+      "unresolved_clauses": [
+        "AGE_CLASS"
+      ]
+    },
+    {
+      "doi": "10.3389/fspor.2021.803130",
+      "pmcid": "PMC8710515",
+      "pmid": "34966896",
+      "title": "The Impact of COVID-19 on Physical Performance and Mental Health-A Retrospective Case Series of Belgian Male Professional Football Players.",
+      "unresolved_clauses": [
+        "AGE_CLASS",
+        "COMPETITION_TIER"
+      ]
+    }
+  ],
+  "accepted_total_after_supplement": 104,
+  "canonical_clauses": [
+    "SEX=MALE",
+    "AGE_CLASS=SENIOR",
+    "SPORT=ASSOCIATION_FOOTBALL",
+    "PROFESSIONAL_STATUS=PROFESSIONAL",
+    "SQUAD_LEVEL=FIRST_TEAM",
+    "COMPETITION_TIER=TOP_DOMESTIC_DIVISION"
+  ],
+  "canonical_population_authority": "docs/decisions/RES60-DR-001-canonical-population-and-source-gate.md",
+  "coverage_status": "PASS",
+  "la_liga_candidate_disposition": {
+    "pmcid": "PMC10880309",
+    "reason": "Methods identify male professional Spanish First Division players but do not establish a senior/adult age category or separable first-team subgroup; the outcome is hip morphology rather than a registered PSE performance construct.",
+    "status": "REJECTED_FROM_DIRECT_SUPPLEMENT",
+    "unresolved_clauses": [
+      "AGE_CLASS_SENIOR_OR_ADULT",
+      "SQUAD_LEVEL_FIRST_TEAM"
+    ]
+  },
+  "mission": "RES-115-SOURCE-REGISTRY-FIX-001",
+  "noncanonical_competition_candidate": {
+    "pmcid": "PMC8710515",
+    "reason": "Methods identify male professional footballers in a named Belgian club but do not establish the age class or domestic competition tier.",
+    "status": "ACCEPTED_AS_INDIRECT",
+    "unresolved_clauses": [
+      "AGE_CLASS_SENIOR_OR_ADULT",
+      "COMPETITION_TIER_TOP_DOMESTIC_DIVISION"
+    ]
+  },
+  "population_inference_from_generic_elite_or_professional": "PROHIBITED",
+  "schema_version": "performance-science-eval-direct-target-population-screen@1.0.0",
+  "screened_candidates": [
+    {
+      "abstract_retained": false,
+      "applicability_scope": "REJECTED_OR_UNRESOLVED",
+      "doi": "10.1186/s12891-024-07247-x",
+      "fulltext_requested": true,
+      "fulltext_retained": false,
+      "fulltext_text_retained_in_public_git": false,
+      "license_class": "CC_BY",
+      "license_status": "REUSABLE",
+      "pmcid": "PMC10880309",
+      "pmid": "38383359",
+      "pubmed_integrity_status": "NO_NOTICE_IDENTIFIED_IN_PUBMED_METADATA",
+      "rejection_reason": "V2_TARGET_SCOPE_NOT_ESTABLISHED_FOR_AGE_OR_FIRST_TEAM; HIP_MORPHOLOGY_OUTSIDE_REGISTERED_PERFORMANCE_CONSTRUCTS",
+      "search_event_ids": [
+        "D02_LALIGA_SPANISH_FIRST_DIVISION",
+        "D04_SENIOR_ADULT_EPL_LALIGA_MEN"
+      ],
+      "target_screen_disposition": "REJECTED"
+    },
+    {
+      "abstract_retained": false,
+      "applicability_scope": "REJECTED_OR_UNRESOLVED",
+      "doi": "10.5114/biolsport.2024.135416",
+      "fulltext_requested": false,
+      "fulltext_retained": false,
+      "fulltext_text_retained_in_public_git": false,
+      "license_class": "OTHER_OR_UNCLEAR",
+      "license_status": "CONDITIONAL_NOT_APPROVED",
+      "pmcid": "PMC11474994",
+      "pmid": "39416492",
+      "pubmed_integrity_status": "NO_NOTICE_IDENTIFIED_IN_PUBMED_METADATA",
+      "rejection_reason": "CONDITIONAL_CC_BY_SA_LICENSE_NOT_APPROVED_FOR_PHASE_A",
+      "search_event_ids": [
+        "D01_EPL_FIRST_TEAM_PROFESSIONAL_MALE"
+      ],
+      "target_screen_disposition": "REJECTED"
+    },
+    {
+      "abstract_retained": false,
+      "applicability_scope": "DIRECT_TARGET_POPULATION_EVIDENCE",
+      "doi": "10.5114/biolsport.2024.133001",
+      "fulltext_requested": true,
+      "fulltext_retained": true,
+      "fulltext_text_retained_in_public_git": false,
+      "license_class": "CC_BY",
+      "license_status": "REUSABLE",
+      "pmcid": "PMC12244382",
+      "pmid": "40656996",
+      "pubmed_integrity_status": "NO_NOTICE_IDENTIFIED_IN_PUBMED_METADATA",
+      "rejection_reason": null,
+      "search_event_ids": [
+        "D01_EPL_FIRST_TEAM_PROFESSIONAL_MALE",
+        "D03_FIRST_TEAM_PROFESSIONAL_FOOTBALL"
+      ],
+      "target_screen_disposition": "ACCEPTED"
+    },
+    {
+      "abstract_retained": false,
+      "applicability_scope": "DIRECT_TARGET_POPULATION_EVIDENCE",
+      "doi": "10.5114/biolsport.2025.147011",
+      "fulltext_requested": true,
+      "fulltext_retained": true,
+      "fulltext_text_retained_in_public_git": false,
+      "license_class": "CC_BY",
+      "license_status": "REUSABLE",
+      "pmcid": "PMC12244393",
+      "pmid": "40657003",
+      "pubmed_integrity_status": "NO_NOTICE_IDENTIFIED_IN_PUBMED_METADATA",
+      "rejection_reason": null,
+      "search_event_ids": [
+        "D01_EPL_FIRST_TEAM_PROFESSIONAL_MALE"
+      ],
+      "target_screen_disposition": "ACCEPTED"
+    },
+    {
+      "abstract_retained": false,
+      "applicability_scope": "DIRECT_TARGET_POPULATION_EVIDENCE",
+      "doi": "10.5114/biolsport.2025.148540",
+      "fulltext_requested": true,
+      "fulltext_retained": true,
+      "fulltext_text_retained_in_public_git": false,
+      "license_class": "CC_BY",
+      "license_status": "REUSABLE",
+      "pmcid": "PMC12490298",
+      "pmid": "41048232",
+      "pubmed_integrity_status": "NO_NOTICE_IDENTIFIED_IN_PUBMED_METADATA",
+      "rejection_reason": null,
+      "search_event_ids": [
+        "D01_EPL_FIRST_TEAM_PROFESSIONAL_MALE"
+      ],
+      "target_screen_disposition": "ACCEPTED"
+    },
+    {
+      "abstract_retained": false,
+      "applicability_scope": "REJECTED_OR_UNRESOLVED",
+      "doi": "10.1136/bjsports-2025-110804",
+      "fulltext_requested": false,
+      "fulltext_retained": false,
+      "fulltext_text_retained_in_public_git": false,
+      "license_class": "OTHER_OR_UNCLEAR",
+      "license_status": "NOT_ACCEPTED_BY_DEFAULT",
+      "pmcid": "PMC12772602",
+      "pmid": "41443751",
+      "pubmed_integrity_status": "NO_NOTICE_IDENTIFIED_IN_PUBMED_METADATA",
+      "rejection_reason": "LICENSE_NOT_ALLOWED_CC_BY_NC_4_0",
+      "search_event_ids": [
+        "D03_FIRST_TEAM_PROFESSIONAL_FOOTBALL",
+        "D04_SENIOR_ADULT_EPL_LALIGA_MEN",
+        "D05_FIRST_TEAM_SENIOR_TOP_DIVISION_MEN"
+      ],
+      "target_screen_disposition": "REJECTED"
+    },
+    {
+      "abstract_retained": false,
+      "applicability_scope": "DIRECT_TARGET_POPULATION_EVIDENCE",
+      "doi": "10.5114/biolsport.2026.153305",
+      "fulltext_requested": true,
+      "fulltext_retained": true,
+      "fulltext_text_retained_in_public_git": false,
+      "license_class": "CC_BY",
+      "license_status": "REUSABLE",
+      "pmcid": "PMC12884896",
+      "pmid": "41668934",
+      "pubmed_integrity_status": "NO_NOTICE_IDENTIFIED_IN_PUBMED_METADATA",
+      "rejection_reason": null,
+      "search_event_ids": [
+        "D04_SENIOR_ADULT_EPL_LALIGA_MEN"
+      ],
+      "target_screen_disposition": "ACCEPTED"
+    },
+    {
+      "abstract_retained": false,
+      "applicability_scope": "REJECTED_OR_UNRESOLVED",
+      "doi": "10.5812/asjsm.34837",
+      "fulltext_requested": false,
+      "fulltext_retained": false,
+      "fulltext_text_retained_in_public_git": false,
+      "license_class": "OTHER_OR_UNCLEAR",
+      "license_status": "NOT_ACCEPTED_BY_DEFAULT",
+      "pmcid": "PMC3289186",
+      "pmid": "22375208",
+      "pubmed_integrity_status": "NO_NOTICE_IDENTIFIED_IN_PUBMED_METADATA",
+      "rejection_reason": "LICENSE_NOT_ALLOWED_CC_BY_NC_3_0",
+      "search_event_ids": [
+        "D04_SENIOR_ADULT_EPL_LALIGA_MEN"
+      ],
+      "target_screen_disposition": "REJECTED"
+    },
+    {
+      "abstract_retained": false,
+      "applicability_scope": "INDIRECT_MEASUREMENT_EVIDENCE",
+      "doi": "10.3389/fspor.2021.803130",
+      "fulltext_requested": true,
+      "fulltext_retained": true,
+      "fulltext_text_retained_in_public_git": false,
+      "license_class": "CC_BY",
+      "license_status": "REUSABLE",
+      "pmcid": "PMC8710515",
+      "pmid": "34966896",
+      "pubmed_integrity_status": "NO_NOTICE_IDENTIFIED_IN_PUBMED_METADATA",
+      "rejection_reason": null,
+      "search_event_ids": [
+        "D03_FIRST_TEAM_PROFESSIONAL_FOOTBALL"
+      ],
+      "target_screen_disposition": "ACCEPTED"
+    },
+    {
+      "abstract_retained": false,
+      "applicability_scope": "REJECTED_OR_UNRESOLVED",
+      "doi": "10.5114/biolsport.2021.102931",
+      "fulltext_requested": false,
+      "fulltext_retained": false,
+      "fulltext_text_retained_in_public_git": false,
+      "license_class": "OTHER_OR_UNCLEAR",
+      "license_status": "NOT_ACCEPTED_BY_DEFAULT",
+      "pmcid": "PMC8805367",
+      "pmid": "35173360",
+      "pubmed_integrity_status": "NO_NOTICE_IDENTIFIED_IN_PUBMED_METADATA",
+      "rejection_reason": "LICENSE_NOT_ALLOWED_CC_BY_NC_ND_3_0",
+      "search_event_ids": [
+        "D04_SENIOR_ADULT_EPL_LALIGA_MEN"
+      ],
+      "target_screen_disposition": "REJECTED"
+    },
+    {
+      "abstract_retained": false,
+      "applicability_scope": "REJECTED_OR_UNRESOLVED",
+      "doi": "10.1136/bmjsem-2021-001193",
+      "fulltext_requested": false,
+      "fulltext_retained": false,
+      "fulltext_text_retained_in_public_git": false,
+      "license_class": "OTHER_OR_UNCLEAR",
+      "license_status": "NOT_ACCEPTED_BY_DEFAULT",
+      "pmcid": "PMC9134165",
+      "pmid": "35692439",
+      "pubmed_integrity_status": "NO_NOTICE_IDENTIFIED_IN_PUBMED_METADATA",
+      "rejection_reason": "LICENSE_NOT_ALLOWED_CC_BY_NC_4_0",
+      "search_event_ids": [
+        "D01_EPL_FIRST_TEAM_PROFESSIONAL_MALE",
+        "D03_FIRST_TEAM_PROFESSIONAL_FOOTBALL",
+        "D04_SENIOR_ADULT_EPL_LALIGA_MEN",
+        "D05_FIRST_TEAM_SENIOR_TOP_DIVISION_MEN"
+      ],
+      "target_screen_disposition": "REJECTED"
+    },
+    {
+      "abstract_retained": false,
+      "applicability_scope": "DIRECT_TARGET_POPULATION_EVIDENCE",
+      "doi": "10.3389/fspor.2022.939676",
+      "fulltext_requested": true,
+      "fulltext_retained": true,
+      "fulltext_text_retained_in_public_git": false,
+      "license_class": "CC_BY",
+      "license_status": "REUSABLE",
+      "pmcid": "PMC9397540",
+      "pmid": "36016922",
+      "pubmed_integrity_status": "NO_NOTICE_IDENTIFIED_IN_PUBMED_METADATA",
+      "rejection_reason": null,
+      "search_event_ids": [
+        "D01_EPL_FIRST_TEAM_PROFESSIONAL_MALE"
+      ],
+      "target_screen_disposition": "ACCEPTED"
+    },
+    {
+      "abstract_retained": false,
+      "applicability_scope": "INDIRECT_MEASUREMENT_EVIDENCE",
+      "doi": "10.3389/fspor.2022.982796",
+      "fulltext_requested": true,
+      "fulltext_retained": true,
+      "fulltext_text_retained_in_public_git": false,
+      "license_class": "CC_BY",
+      "license_status": "REUSABLE",
+      "pmcid": "PMC9428458",
+      "pmid": "36060629",
+      "pubmed_integrity_status": "NO_NOTICE_IDENTIFIED_IN_PUBMED_METADATA",
+      "rejection_reason": null,
+      "search_event_ids": [
+        "D01_EPL_FIRST_TEAM_PROFESSIONAL_MALE"
+      ],
+      "target_screen_disposition": "ACCEPTED"
+    }
+  ],
+  "search_registry": "registries/performance_science_eval/direct_target_searches.json",
+  "search_registry_sha256": "sha256:785813295bcb154f55956d44d5d98a9d4bc6a4847789c22343296ee2f268773a",
+  "supplement_candidates_screened": 13,
+  "target_maximum_documents": 15,
+  "target_minimum_documents": 5
+}

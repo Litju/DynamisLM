@@ -1,12 +1,12 @@
 {
-  "accepted_documents": 97,
+  "accepted_documents": 104,
   "accepted_embargoed_documents": 0,
   "accepted_integrity_notices": 0,
   "accepted_license_counts": {
-    "CC_BY": 97
+    "CC_BY": 104
   },
   "accepted_non_cc0_non_cc_by_documents": 0,
-  "candidates_with_article_version_license_check": 142,
+  "candidates_with_article_version_license_check": 155,
   "canonical_cc_by_4_0_identifier": "https://creativecommons.org/licenses/by/4.0/",
   "classification_rule_id": "PSE-LICENSE-AUTHORITY-001@1.0.0",
   "default_full_text_licenses": [
@@ -14,14 +14,15 @@
     "CC BY"
   ],
   "fresh_pmc_article_version_recheck_status": "PASS",
-  "fresh_pmc_article_version_rechecks": 97,
+  "fresh_pmc_article_version_rechecks": 104,
+  "full_text_retained_documents": 104,
   "full_text_retrieved_only_after_acceptance": true,
-  "fulltext_requests_for_preaccepted_candidates": 97,
+  "fulltext_requests_for_preaccepted_candidates": 105,
   "fulltext_retained_documents": 97,
   "license_authority_status": "PASS",
   "mission": "RES-115-SOURCE-REGISTRY-001",
   "other_accepted": 0,
-  "raw_license_evidence_retained_for_accepted_documents": 97,
+  "raw_license_evidence_retained_for_accepted_documents": 104,
   "rejected_full_text_persisted": false,
   "retraction_screen_status": "PASS",
   "rights_audit_status": "PASS",

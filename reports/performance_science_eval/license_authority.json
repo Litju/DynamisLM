@@ -1,17 +1,20 @@
 {
-  "accepted_source_count": 97,
-  "canonical_cc_by_identifier_count": 97,
+  "accepted_source_count": 104,
+  "canonical_cc_by_identifier_count": 104,
   "canonical_identifier": "https://creativecommons.org/licenses/by/4.0/",
   "classification_rule_id": "PSE-LICENSE-AUTHORITY-001@1.0.0",
+  "direct_target_candidate_pubmed_metadata_sha256": "sha256:eb970ae73118c359f984965a671660e33eeebdd4fa48b9e3146701efde886728",
+  "direct_target_coverage": "PASS",
   "durable_metadata_count": 97,
-  "fresh_article_version_rechecks": 97,
+  "fresh_article_version_rechecks": 104,
+  "fresh_direct_target_candidate_rights_checks": 13,
   "fresh_recheck_evidence_path": "outside_git:manifests/license_rechecks_001.jsonl",
   "fresh_recheck_evidence_sha256": "sha256:1f927c68225be119795e33a844572cb378dcba41eef082498f35d580d3060f82",
   "historical_phase_a_order_and_source_artifacts_changed": false,
   "identity_and_rights_reproof": "PASS",
   "license_distribution": {
     "CC0": 0,
-    "CC_BY_4_0": 97,
+    "CC_BY_4_0": 104,
     "OTHER": 0
   },
   "malformed_accepted_identifier_count_after": 0,
@@ -32,6 +35,6 @@
   },
   "result": "PASS",
   "retained_jats_artifact_sha256_changed_count": 0,
-  "rights_records_validated": 97,
+  "rights_records_validated": 104,
   "schema_version": "performance-science-eval-license-authority-audit@1.0.0"
 }
