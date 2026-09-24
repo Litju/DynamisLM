@@ -2,7 +2,7 @@
   "api_key_present": false,
   "discovery_policy": "Metadata-only, targeted PubMed E-Utilities searches; top 150 relevance-ranked PMIDs per stratum; four batched PubMed EFetch metadata calls; no baseline download.",
   "discovery_summary": {
-    "curated_candidate_pmc_articles": 121,
+    "curated_candidate_pmc_articles": 142,
     "fetched_pubmed_records": 1336,
     "records_linked_to_pmc": 658,
     "successful_efetch_requests": 4,
