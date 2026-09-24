@@ -1,0 +1,23 @@
+{
+  "accepted_documents": 97,
+  "accepted_embargoed_documents": 0,
+  "accepted_integrity_notices": 0,
+  "accepted_license_counts": {
+    "CC_BY": 97
+  },
+  "accepted_non_cc0_non_cc_by_documents": 0,
+  "candidates_with_article_version_license_check": 142,
+  "default_full_text_licenses": [
+    "CC0",
+    "CC BY"
+  ],
+  "full_text_retrieved_only_after_acceptance": true,
+  "fulltext_requests_for_preaccepted_candidates": 97,
+  "fulltext_retained_documents": 97,
+  "mission": "RES-115-SOURCE-REGISTRY-001",
+  "other_accepted": 0,
+  "rejected_full_text_persisted": false,
+  "retraction_screen_status": "PASS",
+  "rights_audit_status": "PASS",
+  "schema_version": "performance-science-eval-rights-audit@1.0.0"
+}

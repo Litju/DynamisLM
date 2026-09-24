@@ -1,0 +1,118 @@
+{
+  "accepted_documents": 97,
+  "benchmark_cases_created": 0,
+  "candidate_documents": 142,
+  "coverage_by_search_stratum": {
+    "S01_CMJ_DJ_FORCE_TIME": {
+      "accepted_documents": 12,
+      "candidate_documents": 17,
+      "label": "CMJ, DJ, force-time, and force-platform methodology",
+      "status": "PASS"
+    },
+    "S02_SPRINT_ACCELERATION": {
+      "accepted_documents": 14,
+      "candidate_documents": 20,
+      "label": "Sprint, acceleration, and maximal-speed measurement",
+      "status": "PASS"
+    },
+    "S03_COD_RSA_30_15": {
+      "accepted_documents": 10,
+      "candidate_documents": 15,
+      "label": "Change-of-direction, repeated-sprint, and 30-15 IFT evidence",
+      "status": "PASS"
+    },
+    "S04_STRENGTH_IMTP_VBT": {
+      "accepted_documents": 16,
+      "candidate_documents": 20,
+      "label": "Strength, IMTP, velocity-based training, and power testing",
+      "status": "PASS"
+    },
+    "S05_GNSS_GPS_EXTERNAL_LOAD": {
+      "accepted_documents": 23,
+      "candidate_documents": 33,
+      "label": "GNSS/GPS, external load, and tracking systems",
+      "status": "PASS"
+    },
+    "S06_RELIABILITY_MEASUREMENT_ERROR": {
+      "accepted_documents": 20,
+      "candidate_documents": 23,
+      "label": "Reliability, measurement error, SEM/MDC, CV, and ICC",
+      "status": "PASS"
+    },
+    "S07_VALIDITY_AGREEMENT": {
+      "accepted_documents": 17,
+      "candidate_documents": 25,
+      "label": "Validity, agreement, and method comparison",
+      "status": "PASS"
+    },
+    "S08_LONGITUDINAL_MONITORING": {
+      "accepted_documents": 5,
+      "candidate_documents": 12,
+      "label": "Longitudinal and within-athlete monitoring",
+      "status": "PASS"
+    },
+    "S09_POPULATION_APPLICABILITY": {
+      "accepted_documents": 6,
+      "candidate_documents": 12,
+      "label": "Population applicability and evidence transfer",
+      "status": "PASS"
+    },
+    "S10_CAUSAL_ASSOCIATION_PREDICTION": {
+      "accepted_documents": 5,
+      "candidate_documents": 9,
+      "label": "Causal, association, and prediction discipline",
+      "status": "PASS"
+    }
+  },
+  "domain_coverage_status": "PASS",
+  "mission": "RES-115-SOURCE-REGISTRY-001",
+  "rejected_documents": 45,
+  "represented_candidate_capabilities": [
+    "C01",
+    "C02",
+    "C03",
+    "C04",
+    "C05",
+    "C06",
+    "C07",
+    "C08",
+    "C09",
+    "C10",
+    "C11",
+    "C12",
+    "C13",
+    "C14",
+    "C15",
+    "C16",
+    "C18"
+  ],
+  "represented_candidate_families": [
+    "F01",
+    "F02",
+    "F03",
+    "F04",
+    "F05",
+    "F06",
+    "F07",
+    "F08",
+    "F09",
+    "F10",
+    "F11",
+    "F12",
+    "F14"
+  ],
+  "required_strata": 10,
+  "schema_version": "performance-science-eval-domain-coverage@1.0.0",
+  "source_identity_dedup_details": {
+    "candidate_documents": 142,
+    "duplicate_doi_count": 0,
+    "duplicate_pmcid_count": 0,
+    "duplicate_pmid_count": 0,
+    "missing_doi_count": 3,
+    "reported_doi_count": 139,
+    "status": "PASS",
+    "unique_pmcid_count": 142,
+    "unique_pmid_count": 142,
+    "unique_reported_doi_count": 139
+  }
+}

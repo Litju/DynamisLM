@@ -1,0 +1,11 @@
+{
+  "accepted_documents": 97,
+  "compressed_source_xml_bytes": 2344372,
+  "durable_receipt": "outside_git:receipts/storage.json",
+  "durable_store_nonreceipt_bytes": 5591392,
+  "public_repository_artifact_bytes": 2294503,
+  "schema_version": "performance-science-eval-public-storage-summary@1.0.0",
+  "source_cache_limit_500mb": "PASS",
+  "transient_limit_2gb": "PASS",
+  "transient_peak_bytes": 4814582
+}
