@@ -10,8 +10,8 @@ scientific authorities.
 ```text
 CandidateReviewPacket (PENDING_HUMAN_REVIEW)
     -> HumanApprovalRecord (separate, immutable decision)
-    -> promote_to_benchmark_case(...)
-    -> BenchmarkCaseV1 (unallocated split)
+    -> promote_with_receipt(...)
+    -> PromotionResult { BenchmarkCaseV1, CasePromotionReceipt }
 ```
 
 `CandidateReviewPacket` is a distinct serializable type. It contains the
@@ -27,25 +27,54 @@ contamination/isolation, difficulty, and adversarial tags. The proposed
 approval digest binds that payload hash to the pending status and frozen
 checklist. Approval records must carry both exact digests.
 
-`HumanApprovalRecord` is supplied as a separate immutable decision. Promotion
-requires its digest to validate, an `APPROVED` decision, a reviewer identity
-distinct from the packet author, non-empty expertise metadata, a timezone-aware
-decision timestamp, candidate ID/version/hash equality, and equality with the
-packet's proposed approval digest. Promotion then writes the validated
-approval values into the existing `ExpertReviewMetadata`, creates only an
-unallocated `SplitBinding`, binds the final V1 case hash, and runs unchanged
-`validate_case()`.
+`HumanApprovalRecord` is supplied as a separate immutable decision record.
+Promotion requires its digest to validate, an `APPROVED` decision, a reviewer
+identity distinct from the packet author, non-empty expertise metadata, a
+timezone-aware decision timestamp, candidate ID/version/hash equality, and
+equality with the packet's proposed approval digest. A valid record digest
+proves record integrity only; it does not prove that the named reviewer
+performed the review. `review_event_reference` is reserved for a Phase-C
+ingestor to preserve the identifier of an event received from a
+human-controlled trust boundary. Supplying that field alone does not
+authenticate an event, and the external review workflow is not defined here.
+
+Promotion returns the final case and a canonical immutable
+`CasePromotionReceipt`. The receipt binds the exact candidate payload hash and
+reviewed-packet digest, approval-record ID and digest, and resulting final-case
+payload hash, along with reviewer and timestamp fields. Validation rechecks
+every link. The receipt contains no protected source text and assigns no final
+split. Promotion writes the validated decision fields into existing
+`ExpertReviewMetadata`, creates only an unallocated `SplitBinding`, binds the
+final V1 case hash, and runs unchanged `validate_case()`.
 
 ## Deterministic checks
 
 Candidate validation resolves RES-60/62/69/70 and RES-71 bindings against the
 live registries. RES-71 numeric candidates must preserve the exact registered
-reference outputs, units, and tolerance. Source-backed candidates must resolve
-their document and stored-artifact identity/digest through the accepted
-Phase-A source registry and checksum manifest. Every excerpt must bind its
-document version, artifact ID/digest, exact excerpt digest, typed source
-reference, provenance, and source-family isolation identity. Human review still
-checks that the excerpt text supports the claim at its locator.
+reference outputs, units, and tolerance. Core validation takes an explicit
+`SourceArtifactResolver` dependency for source evidence. The RES-115 authoring
+adapter binds that resolver to the accepted Phase-A registry, checksum
+manifest, and canonical retained source store at
+`/mnt/e/Data/Datasets/DynamisLM/PerformanceScienceEval/sources/accepted`.
+
+For each source-backed candidate, the resolver must find one exact accepted
+registry row and checksum entry, read the corresponding retained
+`article.xml.gz`, verify its compressed SHA-256, decompress it, verify the
+uncompressed JATS SHA-256 and byte count, and derive excerpt text from the
+declared locator. The supported extraction rule is `JATS_TEXT_CONTENT_V1`.
+Its structural locator form is
+`jats-text-v1:/article[1]/body[1]/sec[2]/p[1]`: each one-based index selects
+among direct children with that local tag name, and the first segment must
+identify the article root. The extracted value is the exact concatenation of the
+selected element's XML text nodes, with no whitespace normalization or
+document-wide text search. Candidate excerpt UTF-8 bytes and span digest must
+equal that derived value. The Phase-B packet must also include typed source
+references and excerpts, artifact/content/span provenance, both document and
+span authority bindings, and the registry-bound source-family identity.
+
+The final case validator does not resolve external JATS; that source check is
+performed before promotion at the candidate boundary. Final `BenchmarkCaseV1`
+validation remains unchanged.
 
 Scoring paths and error attribution reuse the existing final-case validator's
 answer contract checks. Candidate packets never receive a final split, and a
@@ -54,3 +83,8 @@ candidate cannot be passed to `validate_case()` as a `BenchmarkCaseV1`.
 This is a lifecycle foundation only. It does not materialize the Phase-B case
 corpus, create any human approval, allocate splits, execute model inference, or
 change scientific-engine behavior.
+
+No production human approvals are created by this lifecycle foundation.
+Phase C must ingest approval evidence through a human-controlled trust
+boundary. An agent-created `HumanApprovalRecord` is not production approval
+evidence merely because its record digest validates.

@@ -10,12 +10,10 @@ from __future__ import annotations
 
 import datetime as datetime_module
 import hashlib
-import json
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass, fields, replace
 from enum import StrEnum
-from pathlib import Path
 from types import SimpleNamespace
 from typing import cast
 
@@ -55,6 +53,9 @@ from dynamislm.benchmark.contracts import (
     ToleranceContract,
 )
 from dynamislm.benchmark.coverage import COVERAGE_MATRIX
+from dynamislm.benchmark.source_artifacts import (
+    SourceArtifactResolver,
+)
 from dynamislm.benchmark.validation import (
     _validate_answer_contract,
     _validate_finite_expected_answer,
@@ -70,11 +71,6 @@ _SHA256_PATTERN = re.compile(r"sha256:[0-9a-f]{64}\Z")
 _SEMVER_PATTERN = re.compile(
     r"(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?\Z"
 )
-_SOURCE_REGISTRY_VERSION = "performance-science-eval-source-record@1.2.0"
-_REPO_ROOT = Path(__file__).resolve().parents[3]
-_ACCEPTED_SOURCE_REGISTRY = _REPO_ROOT / "registries/performance_science_eval/accepted.jsonl"
-_SOURCE_CHECKSUM_REGISTRY = _REPO_ROOT / "registries/performance_science_eval/checksums.jsonl"
-_SOURCE_REGISTRY_SCHEMA = _REPO_ROOT / "registries/performance_science_eval/registry.schema.json"
 _REGISTERED_ADVERSARIAL_TAGS = frozenset(
     tag for row in COVERAGE_MATRIX for tag in row.adversarial_tags
 )
@@ -466,7 +462,7 @@ class CandidateReviewPacket:
 @register_serializable_type
 @dataclass(frozen=True, slots=True)
 class HumanApprovalRecord:
-    """Immutable human decision bound to one exact candidate review packet."""
+    """Immutable review-decision record; its digest proves integrity, not authenticity."""
 
     approval_record_id: str
     candidate_id: str
@@ -477,6 +473,7 @@ class HumanApprovalRecord:
     reviewer_id: str
     reviewer_expertise: tuple[str, ...]
     approval_timestamp: datetime_module.datetime
+    review_event_reference: str | None = None
     approval_record_digest: str = _ZERO_SHA256
 
     def __post_init__(self) -> None:
@@ -506,7 +503,67 @@ class HumanApprovalRecord:
         )
         _require_strings(self.reviewer_expertise, "reviewer_expertise")
         _require_aware_timestamp(self.approval_timestamp, "approval_timestamp")
+        if self.review_event_reference is not None:
+            _require_text(self.review_event_reference, "review_event_reference")
         _require_sha256(self.approval_record_digest, "approval_record_digest")
+
+
+@register_serializable_type
+@dataclass(frozen=True, slots=True)
+class CasePromotionReceipt:
+    """Canonical receipt binding one candidate, decision record, and final case."""
+
+    candidate_id: str
+    candidate_version: str
+    candidate_payload_hash: str
+    reviewed_packet_digest: str
+    approval_record_id: str
+    approval_record_digest: str
+    final_case_id: str
+    final_case_version: str
+    final_case_payload_hash: str
+    reviewer_id: str
+    approval_timestamp: datetime_module.datetime
+    receipt_digest: str = _ZERO_SHA256
+
+    def __post_init__(self) -> None:
+        for name in (
+            "candidate_id",
+            "candidate_version",
+            "approval_record_id",
+            "final_case_id",
+            "final_case_version",
+            "reviewer_id",
+        ):
+            _require_text(getattr(self, name), name)
+        if _SEMVER_PATTERN.fullmatch(self.candidate_version) is None:
+            raise ValueError("receipt candidate_version must be a semantic version")
+        if _SEMVER_PATTERN.fullmatch(self.final_case_version) is None:
+            raise ValueError("receipt final_case_version must be a semantic version")
+        for name in (
+            "candidate_payload_hash",
+            "reviewed_packet_digest",
+            "approval_record_digest",
+            "final_case_payload_hash",
+            "receipt_digest",
+        ):
+            _require_sha256(getattr(self, name), name)
+        _require_aware_timestamp(self.approval_timestamp, "approval_timestamp")
+
+
+@register_serializable_type
+@dataclass(frozen=True, slots=True)
+class PromotionResult:
+    """Durable promotion output; the final case and its hash-chain receipt travel together."""
+
+    case: BenchmarkCaseV1
+    receipt: CasePromotionReceipt
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.case, BenchmarkCaseV1):
+            raise ValueError("promotion result case must be BenchmarkCaseV1")
+        if not isinstance(self.receipt, CasePromotionReceipt):
+            raise ValueError("promotion result receipt must be CasePromotionReceipt")
 
 
 def _reject_final_state_in_context(value: object) -> None:
@@ -603,136 +660,15 @@ def bind_candidate_review_packet(packet: CandidateReviewPacket) -> CandidateRevi
     return replace(packet, proposed_approval_digest=proposed_approval_digest(packet))
 
 
-def _read_jsonl(path: Path) -> tuple[dict[str, object], ...]:
-    try:
-        lines = path.read_text(encoding="utf-8").splitlines()
-    except OSError as exc:
-        raise ValueError(f"required source registry is unavailable: {path}") from exc
-    records: list[dict[str, object]] = []
-    for line_number, line in enumerate(lines, start=1):
-        if not line.strip():
-            continue
-        try:
-            value = json.loads(line)
-        except json.JSONDecodeError as exc:
-            raise ValueError(f"invalid source registry JSON at {path}:{line_number}") from exc
-        if not isinstance(value, dict):
-            raise ValueError(f"source registry row at {path}:{line_number} must be an object")
-        records.append(value)
-    return tuple(records)
-
-
-def _mapping(value: object, field_name: str) -> Mapping[str, object]:
-    if not isinstance(value, Mapping):
-        raise ValueError(f"source registry {field_name} must be an object")
-    return value
-
-
-def _resolve_registered_source(excerpt: EvidenceExcerpt) -> tuple[str, str]:
-    """Resolve exact document/artifact identities against the repaired Phase-A registry."""
-
-    try:
-        schema = json.loads(_SOURCE_REGISTRY_SCHEMA.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        raise ValueError("Phase-A source registry schema is unavailable or invalid") from exc
-    if not isinstance(schema, dict) or schema.get("schema_version") != _SOURCE_REGISTRY_VERSION:
-        raise ValueError("Phase-A source registry schema version is not the repaired authority")
-    documents = _read_jsonl(_ACCEPTED_SOURCE_REGISTRY)
-    checksums = _read_jsonl(_SOURCE_CHECKSUM_REGISTRY)
-    matches: list[dict[str, object]] = []
-    for row in documents:
-        artifact = row.get("retained_source_artifact")
-        if not isinstance(artifact, dict):
-            continue
-        if artifact.get("document_identity_id") == excerpt.document_identity.document_id:
-            matches.append(row)
-    if len(matches) != 1:
-        raise ValueError("source document identity does not resolve uniquely in Phase-A registry")
-    row = matches[0]
-    artifact_record = _mapping(row.get("retained_source_artifact"), "retained_source_artifact")
-    version_identity = _mapping(
-        row.get("pmc_article_version_identity"), "pmc_article_version_identity"
-    )
-    family = _mapping(row.get("source_family_identity"), "source_family_identity")
-    pmcid = row.get("pmcid")
-    versions = version_identity.get("pmcid_version_ids")
-    if not isinstance(versions, list) or len(versions) != 1 or not isinstance(versions[0], str):
-        raise ValueError("Phase-A document version identity is missing or ambiguous")
-    version = versions[0]
-    expected_document = (
-        artifact_record.get("document_identity_id"),
-        version,
-        row.get("document_content_sha256"),
-        row.get("doi"),
-    )
-    observed_document = (
-        excerpt.document_identity.document_id,
-        excerpt.document_identity.version,
-        excerpt.document_identity.content_digest,
-        excerpt.document_identity.doi,
-    )
-    if observed_document != expected_document:
-        raise ValueError("document identity/version/digest does not match Phase-A source registry")
-    expected_artifact = (
-        artifact_record.get("source_artifact_id"),
-        artifact_record.get("document_identity_id"),
-        version,
-        version,
-        artifact_record.get("compressed_sha256"),
-    )
-    observed_artifact = (
-        excerpt.source_artifact_identity.artifact_id,
-        excerpt.source_artifact_identity.document_id,
-        excerpt.source_artifact_identity.document_version,
-        excerpt.source_artifact_identity.artifact_version,
-        excerpt.source_artifact_identity.content_digest,
-    )
-    if observed_artifact != expected_artifact:
-        raise ValueError("source artifact identity/digest does not match Phase-A registry")
-    checksum_matches = tuple(
-        record
-        for record in checksums
-        if record.get("pmcid") == pmcid
-        and record.get("relative_path") == artifact_record.get("relative_path")
-    )
-    if len(checksum_matches) != 1:
-        raise ValueError("source artifact does not resolve uniquely in checksum registry")
-    checksum = checksum_matches[0]
-    identity_binding = _mapping(checksum.get("identity_binding"), "checksum.identity_binding")
-    if (
-        row.get("disposition") != "ACCEPTED"
-        or row.get("schema_version") != _SOURCE_REGISTRY_VERSION
-        or row.get("source_artifact_sha256") != checksum.get("sha256")
-        or row.get("document_content_sha256") != checksum.get("uncompressed_jats_sha256")
-        or row.get("source_metadata_sha256") != checksum.get("metadata_sha256")
-        or identity_binding.get("pmcid") != pmcid
-        or identity_binding.get("pmcid_version_ids") != versions
-        or not isinstance(family.get("future_split_rule"), str)
-        or not family.get("future_split_rule")
-    ):
-        raise ValueError("Phase-A source registry and checksum/family identities disagree")
-    family_id = family.get("source_family_id")
-    family_digest = family.get("family_digest")
-    family_status = family.get("family_resolution_status")
-    if (
-        not isinstance(family_id, str)
-        or not family_id
-        or not isinstance(family_digest, str)
-        or _SHA256_PATTERN.fullmatch(family_digest) is None
-        or not isinstance(family_status, str)
-        or family_status in {"UNRESOLVED", "AMBIGUOUS", "UNKNOWN"}
-    ):
-        raise ValueError("Phase-A source family identity is unresolved")
-    return family_id, family_digest
-
-
-def _validate_source_evidence(packet: CandidateReviewPacket) -> None:
+def _validate_source_evidence(
+    packet: CandidateReviewPacket, source_resolver: SourceArtifactResolver | None
+) -> None:
     excerpts = packet.input.evidence_excerpts
     references = packet.source_evidence_refs
-    if not excerpts and not references:
-        return
     if not excerpts or not references:
         raise ValueError("source evidence requires both exact excerpts and typed references")
+    if source_resolver is None:
+        raise ValueError("source-backed candidate validation requires an explicit source resolver")
     if any(reference.reference_kind is not EvidenceKind.SOURCE for reference in references):
         raise ValueError("source-backed candidate references must be SOURCE references")
     if len({excerpt.span_identity.span_id for excerpt in excerpts}) != len(excerpts):
@@ -776,7 +712,15 @@ def _validate_source_evidence(packet: CandidateReviewPacket) -> None:
         )
         if not matching_references:
             raise ValueError("source reference does not bind the exact evidence span")
-        family_id, family_digest = _resolve_registered_source(excerpt)
+        resolved = source_resolver.resolve(excerpt)
+        if resolved.extracted_text.encode("utf-8") != excerpt.text.encode("utf-8"):
+            raise ValueError("evidence excerpt text differs from the exact JATS locator extraction")
+        derived_span_digest = (
+            "sha256:" + hashlib.sha256(resolved.extracted_text.encode("utf-8")).hexdigest()
+        )
+        if span.span_digest != derived_span_digest:
+            raise ValueError("evidence span digest does not match the exact JATS-derived text")
+        family_id, family_digest = resolved.source_family_id, resolved.source_family_digest
         source_families.add((family_id, family_digest))
         artifact_pairs.add((artifact.artifact_id, artifact.content_digest))
         span_ids.add(span.span_id)
@@ -826,8 +770,14 @@ def _validate_source_evidence(packet: CandidateReviewPacket) -> None:
         if binding.authority_kind
         in {AuthorityKind.SOURCE_DOCUMENT.value, AuthorityKind.SOURCE_EVIDENCE_SPAN.value}
     )
-    if not source_authorities:
-        raise ValueError("source-backed candidate requires source identity authority")
+    authority_kinds = {binding.authority_kind for binding in source_authorities}
+    if authority_kinds != {
+        AuthorityKind.SOURCE_DOCUMENT.value,
+        AuthorityKind.SOURCE_EVIDENCE_SPAN.value,
+    }:
+        raise ValueError(
+            "source-backed candidate requires SOURCE_DOCUMENT and SOURCE_EVIDENCE_SPAN authority"
+        )
     for binding in source_authorities:
         if binding.authority_kind == AuthorityKind.SOURCE_DOCUMENT.value:
             matched = any(
@@ -855,15 +805,53 @@ def _validate_source_evidence(packet: CandidateReviewPacket) -> None:
             for item in excerpts
         ):
             raise ValueError("source reference has no matching exact evidence span")
+        if reference.document_identity is None or not any(
+            binding.authority_kind == AuthorityKind.SOURCE_DOCUMENT.value
+            and binding.source_reference_id == reference.document_identity.document_id
+            and binding.version == reference.document_identity.version
+            and binding.digest == reference.document_identity.identity_digest
+            for binding in source_authorities
+        ):
+            raise ValueError("SOURCE_DOCUMENT authority must cover every cited source document")
+    for excerpt in excerpts:
+        span = excerpt.span_identity
+        if not any(
+            binding.authority_kind == AuthorityKind.SOURCE_EVIDENCE_SPAN.value
+            and binding.source_reference_id == span.span_id
+            and binding.version == span.document_version
+            and binding.digest == span.span_digest
+            for binding in source_authorities
+        ):
+            raise ValueError("SOURCE_EVIDENCE_SPAN authority must cover every exact evidence span")
+        if reference.document_identity is None or not any(
+            binding.authority_kind == AuthorityKind.SOURCE_DOCUMENT.value
+            and binding.source_reference_id == reference.document_identity.document_id
+            and binding.version == reference.document_identity.version
+            and binding.digest == reference.document_identity.identity_digest
+            for binding in source_authorities
+        ):
+            raise ValueError("SOURCE_DOCUMENT authority must cover every cited source document")
+    for excerpt in excerpts:
+        span = excerpt.span_identity
+        if not any(
+            binding.authority_kind == AuthorityKind.SOURCE_EVIDENCE_SPAN.value
+            and binding.source_reference_id == span.span_id
+            and binding.version == span.document_version
+            and binding.digest == span.span_digest
+            for binding in source_authorities
+        ):
+            raise ValueError("SOURCE_EVIDENCE_SPAN authority must cover every exact evidence span")
 
 
-def _validate_candidate_origin(packet: CandidateReviewPacket) -> None:
+def _validate_candidate_origin(
+    packet: CandidateReviewPacket, source_resolver: SourceArtifactResolver | None
+) -> None:
     provenance = packet.proposed_provenance
     contamination = packet.contamination
     origin = provenance.origin_class
     source_present = bool(packet.source_evidence_refs or packet.input.evidence_excerpts)
     if source_present:
-        _validate_source_evidence(packet)
+        _validate_source_evidence(packet, source_resolver)
     if origin is CaseOrigin.DETERMINISTIC_SYNTHETIC:
         required = (
             provenance.generator_id,
@@ -958,6 +946,14 @@ def _validate_candidate_origin(packet: CandidateReviewPacket) -> None:
         ):
             raise ValueError("expert semantic candidate requires its exact rubric authority")
     elif origin is CaseOrigin.SOURCE_BACKED_EVIDENCE_EXTRACTION:
+        if not packet.source_evidence_refs or not packet.input.evidence_excerpts:
+            raise ValueError(
+                "source-backed candidate requires source evidence references and exact excerpts"
+            )
+        if source_resolver is None:
+            raise ValueError(
+                "source-backed candidate validation requires an explicit source resolver"
+            )
         if not provenance.source_artifact_ids or not provenance.evidence_span_refs:
             raise ValueError(
                 "source-backed candidate requires artifact and evidence-span provenance"
@@ -1153,7 +1149,11 @@ def _validate_claim_vocabularies(contract: ClaimContract) -> None:
             raise ValueError("prediction status is outside the registered vocabulary") from exc
 
 
-def validate_candidate_review_packet(packet: CandidateReviewPacket) -> None:
+def validate_candidate_review_packet(
+    packet: CandidateReviewPacket,
+    *,
+    source_resolver: SourceArtifactResolver | None = None,
+) -> None:
     """Prove candidate schema, live authority, content hashes, and pre-review state."""
 
     if not isinstance(packet, CandidateReviewPacket):
@@ -1168,7 +1168,7 @@ def validate_candidate_review_packet(packet: CandidateReviewPacket) -> None:
         raise ValueError("candidate source-family/isolation metadata is inconsistent")
     _validate_claim_vocabularies(packet.claim_contract)
     validate_authority_bindings(packet.authority)
-    _validate_candidate_origin(packet)
+    _validate_candidate_origin(packet, source_resolver)
     _validate_candidate_contamination(packet)
     _validate_res71_numeric_expectations(packet)
     view = cast(BenchmarkCaseV1, _candidate_validation_view(packet))
@@ -1199,7 +1199,7 @@ def bind_human_approval_record(record: HumanApprovalRecord) -> HumanApprovalReco
 
 
 def validate_human_approval_record(record: HumanApprovalRecord) -> None:
-    """Validate record integrity and required human decision metadata."""
+    """Validate record integrity and required metadata, not the reviewer's authenticity."""
 
     if not isinstance(record, HumanApprovalRecord):
         raise TypeError("record must be HumanApprovalRecord")
@@ -1219,12 +1219,27 @@ def validate_human_approval_record(record: HumanApprovalRecord) -> None:
         raise ValueError("human approval record digest mismatch")
 
 
-def promote_to_benchmark_case(
-    packet: CandidateReviewPacket, approval: HumanApprovalRecord
-) -> BenchmarkCaseV1:
-    """Promote an unchanged, explicitly approved candidate to final V1."""
+def promotion_receipt_digest(receipt: CasePromotionReceipt) -> str:
+    """Hash every receipt link except the stored receipt digest."""
 
-    validate_candidate_review_packet(packet)
+    if not isinstance(receipt, CasePromotionReceipt):
+        raise TypeError("receipt must be CasePromotionReceipt")
+    return canonical_hash(
+        {
+            item.name: getattr(receipt, item.name)
+            for item in fields(receipt)
+            if item.name != "receipt_digest"
+        }
+    )
+
+
+def _bind_promotion_receipt(receipt: CasePromotionReceipt) -> CasePromotionReceipt:
+    return replace(receipt, receipt_digest=promotion_receipt_digest(receipt))
+
+
+def _validate_approval_binding(
+    packet: CandidateReviewPacket, approval: HumanApprovalRecord
+) -> None:
     validate_human_approval_record(approval)
     if approval.decision is not HumanReviewDecision.APPROVED:
         raise ValueError("candidate promotion requires an APPROVED human decision")
@@ -1239,6 +1254,11 @@ def promote_to_benchmark_case(
         raise ValueError("human approval record did not review this exact packet digest")
     if approval.reviewer_id == packet.proposed_provenance.author_id:
         raise ValueError("reviewer must be independent of the candidate author")
+
+
+def _build_final_case(
+    packet: CandidateReviewPacket, approval: HumanApprovalRecord
+) -> BenchmarkCaseV1:
     review = ExpertReviewMetadata(
         author_id=packet.proposed_provenance.author_id,
         reviewer_id=approval.reviewer_id,
@@ -1287,13 +1307,105 @@ def promote_to_benchmark_case(
     return case
 
 
+def validate_promotion_result(
+    packet: CandidateReviewPacket,
+    approval: HumanApprovalRecord,
+    result: PromotionResult,
+    *,
+    source_resolver: SourceArtifactResolver | None = None,
+) -> None:
+    """Validate every link from candidate packet through approval to final case."""
+
+    if not isinstance(result, PromotionResult):
+        raise TypeError("result must be PromotionResult")
+    validate_candidate_review_packet(packet, source_resolver=source_resolver)
+    _validate_approval_binding(packet, approval)
+    validate_case(result.case)
+    expected_case = _build_final_case(packet, approval)
+    if result.case != expected_case:
+        raise ValueError("final case payload is not the exact promoted candidate and approval")
+    receipt = result.receipt
+    if receipt.receipt_digest != promotion_receipt_digest(receipt):
+        raise ValueError("promotion receipt digest mismatch")
+    expected_links = {
+        "candidate_id": packet.candidate_id,
+        "candidate_version": packet.candidate_version,
+        "candidate_payload_hash": packet.candidate_payload_hash,
+        "reviewed_packet_digest": packet.proposed_approval_digest,
+        "approval_record_id": approval.approval_record_id,
+        "approval_record_digest": approval.approval_record_digest,
+        "final_case_id": result.case.case_id,
+        "final_case_version": result.case.case_version,
+        "final_case_payload_hash": result.case.case_payload_hash,
+        "reviewer_id": approval.reviewer_id,
+        "approval_timestamp": approval.approval_timestamp,
+    }
+    if any(getattr(receipt, name) != value for name, value in expected_links.items()):
+        raise ValueError("promotion receipt does not bind the exact candidate, approval, and case")
+    if (
+        result.case.case_id != packet.candidate_id
+        or result.case.case_version != packet.candidate_version
+        or result.case.provenance.review.reviewer_id != approval.reviewer_id
+        or result.case.provenance.review.approved_at != approval.approval_timestamp
+    ):
+        raise ValueError("final case does not preserve the candidate and approval identity links")
+
+
+def promote_with_receipt(
+    packet: CandidateReviewPacket,
+    approval: HumanApprovalRecord,
+    *,
+    source_resolver: SourceArtifactResolver | None = None,
+) -> PromotionResult:
+    """Promote a candidate and return its canonical immutable hash-chain receipt.
+
+    The approval record's hash proves only record integrity. This boundary does
+    not authenticate the reviewer or attest that a human performed the review.
+    """
+
+    validate_candidate_review_packet(packet, source_resolver=source_resolver)
+    _validate_approval_binding(packet, approval)
+    case = _build_final_case(packet, approval)
+    receipt = _bind_promotion_receipt(
+        CasePromotionReceipt(
+            candidate_id=packet.candidate_id,
+            candidate_version=packet.candidate_version,
+            candidate_payload_hash=packet.candidate_payload_hash,
+            reviewed_packet_digest=packet.proposed_approval_digest,
+            approval_record_id=approval.approval_record_id,
+            approval_record_digest=approval.approval_record_digest,
+            final_case_id=case.case_id,
+            final_case_version=case.case_version,
+            final_case_payload_hash=case.case_payload_hash,
+            reviewer_id=approval.reviewer_id,
+            approval_timestamp=approval.approval_timestamp,
+        )
+    )
+    result = PromotionResult(case=case, receipt=receipt)
+    validate_promotion_result(packet, approval, result, source_resolver=source_resolver)
+    return result
+
+
+def promote_to_benchmark_case(
+    packet: CandidateReviewPacket,
+    approval: HumanApprovalRecord,
+    *,
+    source_resolver: SourceArtifactResolver | None = None,
+) -> PromotionResult:
+    """Compatibility-named boundary returning both the case and receipt."""
+
+    return promote_with_receipt(packet, approval, source_resolver=source_resolver)
+
+
 __all__ = [
     "CandidateIsolationMetadata",
     "CandidateReviewChecklistItem",
     "CandidateReviewPacket",
     "CandidateReviewStatus",
+    "CasePromotionReceipt",
     "HumanApprovalRecord",
     "HumanReviewDecision",
+    "PromotionResult",
     "ProposedCaseProvenance",
     "bind_candidate_review_packet",
     "bind_human_approval_record",
@@ -1301,7 +1413,10 @@ __all__ = [
     "candidate_payload_projection",
     "human_approval_record_digest",
     "promote_to_benchmark_case",
+    "promote_with_receipt",
+    "promotion_receipt_digest",
     "proposed_approval_digest",
     "validate_candidate_review_packet",
     "validate_human_approval_record",
+    "validate_promotion_result",
 ]

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import datetime as datetime_module
+import gzip
+import hashlib
 import json
 from dataclasses import fields, replace
 from pathlib import Path
@@ -10,14 +12,20 @@ import pytest
 from dynamislm.benchmark import (
     CandidateIsolationMetadata,
     CandidateReviewPacket,
+    CasePromotionReceipt,
     HumanApprovalRecord,
     HumanReviewDecision,
+    PhaseASourceArtifactResolver,
+    PromotionResult,
     ProposedCaseProvenance,
     bind_candidate_review_packet,
     bind_human_approval_record,
     promote_to_benchmark_case,
+    promote_with_receipt,
+    promotion_receipt_digest,
     validate_candidate_review_packet,
     validate_case,
+    validate_promotion_result,
 )
 from dynamislm.benchmark.constants import AuthorityKind, CaseOrigin
 from dynamislm.benchmark.contracts import (
@@ -122,49 +130,124 @@ def _semantic_candidate() -> CandidateReviewPacket:
     return _candidate_from_case(case)
 
 
-def _registered_source_candidate() -> CandidateReviewPacket:
+def _digest(data: bytes) -> str:
+    return "sha256:" + hashlib.sha256(data).hexdigest()
+
+
+def _controlled_source_candidate(
+    tmp_path: Path,
+) -> tuple[CandidateReviewPacket, PhaseASourceArtifactResolver, Path]:
     source_case = next(
         item
         for item in build_synthetic_reference_fixture_cases()
         if item.provenance.origin_class is CaseOrigin.SOURCE_BACKED_EVIDENCE_EXTRACTION
     )
-    repo_root = Path(__file__).resolve().parents[1]
-    source = json.loads(
-        (repo_root / "registries/performance_science_eval/accepted.jsonl")
-        .read_text(encoding="utf-8")
-        .splitlines()[0]
+    source_text = "We enrolled trained adult team-sport athletes."
+    jats_bytes = (
+        b'<?xml version="1.0" encoding="UTF-8"?>'
+        b'<article><body><sec id="population"><title>Population</title>'
+        b"<p>We enrolled trained adult team-sport athletes.</p>"
+        b"</sec></body></article>"
     )
-    artifact_record = source["retained_source_artifact"]
-    family_record = source["source_family_identity"]
-    document_version = source["pmc_article_version_identity"]["pmcid_version_ids"][0]
+    compressed_bytes = gzip.compress(jats_bytes, mtime=0)
+    document_version = "PMC9000001.1"
+    document_id = "PSE-DOCUMENT:PMC9000001"
+    artifact_id = "PSE-JATS-GZIP:PMC9000001"
+    pmcid = "PMC9000001"
+    doi = "10.0000/synthetic-res115-source"
+    relative_path = f"sources/accepted/{pmcid}/article.xml.gz"
+    family_id = "PSE-SOURCE-FAMILY:fixture-9000001"
+    family_digest = _digest(b"synthetic fixture source-family identity")
+    metadata_digest = _digest(b"synthetic fixture metadata")
+    compressed_digest = _digest(compressed_bytes)
+    document_digest = _digest(jats_bytes)
+    registry_version = "performance-science-eval-source-record@1.2.0"
+    store_root = tmp_path / "source-store"
+    artifact_path = store_root / pmcid / "article.xml.gz"
+    artifact_path.parent.mkdir(parents=True)
+    artifact_path.write_bytes(compressed_bytes)
+    registry_root = tmp_path / "registry"
+    registry_root.mkdir()
+    source_row = {
+        "schema_version": registry_version,
+        "disposition": "ACCEPTED",
+        "pmcid": pmcid,
+        "doi": doi,
+        "document_content_sha256": document_digest,
+        "source_artifact_sha256": compressed_digest,
+        "source_metadata_sha256": metadata_digest,
+        "retained_source_artifact": {
+            "document_identity_id": document_id,
+            "source_artifact_id": artifact_id,
+            "relative_path": relative_path,
+            "format": "JATS XML",
+            "compression": "gzip",
+            "compressed_byte_count": len(compressed_bytes),
+            "compressed_sha256": compressed_digest,
+            "uncompressed_jats_byte_count": len(jats_bytes),
+            "uncompressed_jats_sha256": document_digest,
+        },
+        "pmc_article_version_identity": {"pmcid_version_ids": [document_version]},
+        "source_family_identity": {
+            "source_family_id": family_id,
+            "family_digest": family_digest,
+            "family_resolution_status": "SINGLE_DOCUMENT_FAMILY",
+            "future_split_rule": "Synthetic fixture source family remains one isolation unit.",
+        },
+    }
+    checksum_row = {
+        "artifact_role": "RETAINED_JATS_GZIP",
+        "pmcid": pmcid,
+        "relative_path": relative_path,
+        "byte_count": len(compressed_bytes),
+        "sha256": compressed_digest,
+        "uncompressed_jats_byte_count": len(jats_bytes),
+        "uncompressed_jats_sha256": document_digest,
+        "metadata_sha256": metadata_digest,
+        "identity_binding": {"pmcid": pmcid, "pmcid_version_ids": [document_version]},
+    }
+    accepted_registry = registry_root / "accepted.jsonl"
+    accepted_registry.write_text(json.dumps(source_row) + "\n", encoding="utf-8")
+    checksum_registry = registry_root / "checksums.jsonl"
+    checksum_registry.write_text(json.dumps(checksum_row) + "\n", encoding="utf-8")
+    schema_path = registry_root / "registry.schema.json"
+    schema_path.write_text(json.dumps({"schema_version": registry_version}), encoding="utf-8")
+    resolver = PhaseASourceArtifactResolver(
+        accepted_registry_path=accepted_registry,
+        checksum_registry_path=checksum_registry,
+        registry_schema_path=schema_path,
+        retained_source_root=store_root,
+    )
+
     document = DocumentIdentity(
-        document_id=artifact_record["document_identity_id"],
+        document_id=document_id,
         version=document_version,
-        content_digest=source["document_content_sha256"],
-        doi=source["doi"],
+        content_digest=document_digest,
+        doi=doi,
     )
     artifact = SourceArtifactIdentity(
-        artifact_id=artifact_record["source_artifact_id"],
+        artifact_id=artifact_id,
         document_id=document.document_id,
         document_version=document_version,
         artifact_version=document_version,
-        content_digest=artifact_record["compressed_sha256"],
+        content_digest=compressed_digest,
     )
     fixture_excerpt = source_case.input.evidence_excerpts[0]
+    locator = "jats-text-v1:/article[1]/body[1]/sec[1]/p[1]"
     span = EvidenceSpanIdentity(
         span_id="proposed-source-span-fixture-001",
         document_id=document.document_id,
         document_version=document_version,
         source_artifact_id=artifact.artifact_id,
         source_artifact_digest=artifact.content_digest,
-        locator=fixture_excerpt.locator,
-        span_digest=fixture_excerpt.span_identity.span_digest,
+        locator=locator,
+        span_digest=_digest(source_text.encode("utf-8")),
     )
     excerpt = EvidenceExcerpt(
         document_identity=document,
         source_artifact_identity=artifact,
         span_identity=span,
-        text=fixture_excerpt.text,
+        text=source_text,
         scope=fixture_excerpt.scope,
         applicability=fixture_excerpt.applicability,
     )
@@ -173,6 +256,7 @@ def _registered_source_candidate() -> CandidateReviewPacket:
         source_reference_id=document.document_id,
         version=document.version,
         digest=document.content_digest,
+        locator=locator,
         document_identity=document,
     )
     authorities = tuple(
@@ -204,7 +288,7 @@ def _registered_source_candidate() -> CandidateReviewPacket:
         source_case.contamination,
         source_artifact_ids=(artifact.artifact_id,),
         document_ids=(document.document_id,),
-        source_family_id=family_record["source_family_id"],
+        source_family_id=family_id,
         source_content_sha256=artifact.content_digest,
     )
     source_case = replace(
@@ -216,25 +300,23 @@ def _registered_source_candidate() -> CandidateReviewPacket:
         contamination=contamination,
         split=replace(
             source_case.split,
-            isolation_cluster_id=family_record["source_family_id"],
+            isolation_cluster_id=family_id,
         ),
     )
     packet = _candidate_from_case(source_case)
-    return bind_candidate_review_packet(
+    packet = bind_candidate_review_packet(
         replace(
             packet,
             isolation=replace(
                 packet.isolation,
-                source_family_id=family_record["source_family_id"],
-                isolation_cluster_id=family_record["source_family_id"],
-                source_family_digest=family_record["family_digest"],
+                source_family_id=family_id,
+                isolation_cluster_id=family_id,
+                source_family_digest=family_digest,
             ),
-            contamination=replace(
-                packet.contamination,
-                source_family_id=family_record["source_family_id"],
-            ),
+            contamination=replace(packet.contamination, source_family_id=family_id),
         )
     )
+    return packet, resolver, artifact_path
 
 
 def test_candidate_packet_is_immutable_hash_bound_and_distinct_from_final_case() -> None:
@@ -286,14 +368,73 @@ def test_promotion_requires_independent_hashed_human_approval() -> None:
     packet = _semantic_candidate()
     approval = _approved_record(packet)
 
-    case = promote_to_benchmark_case(packet, approval)
+    result = promote_to_benchmark_case(packet, approval)
 
+    assert isinstance(result, PromotionResult)
+    case = result.case
+    assert isinstance(result.receipt, CasePromotionReceipt)
     assert isinstance(case, BenchmarkCaseV1)
     assert case.provenance.review.reviewer_id == approval.reviewer_id
     assert case.provenance.review.approval_status == "APPROVED"
     assert case.provenance.review.approved_at == _TIME
     assert case.split.split_name is None
     validate_case(case)
+    validate_promotion_result(packet, approval, result)
+
+
+def test_promotion_receipt_is_canonical_and_binds_all_three_artifacts() -> None:
+    packet = _semantic_candidate()
+    approval = _approved_record(packet)
+
+    result = promote_with_receipt(packet, approval)
+    receipt = result.receipt
+
+    assert receipt.candidate_payload_hash == packet.candidate_payload_hash
+    assert receipt.reviewed_packet_digest == packet.proposed_approval_digest
+    assert receipt.approval_record_id == approval.approval_record_id
+    assert receipt.approval_record_digest == approval.approval_record_digest
+    assert receipt.final_case_payload_hash == result.case.case_payload_hash
+    assert receipt.receipt_digest == promotion_receipt_digest(receipt)
+    assert result.case.split.split_name is None
+    restored = from_canonical_json(canonical_json(result), PromotionResult)
+    assert restored == result
+
+
+def test_mutating_any_promotion_chain_link_invalidates_receipt() -> None:
+    packet = _semantic_candidate()
+    approval = _approved_record(packet)
+    result = promote_with_receipt(packet, approval)
+
+    changed_candidate_question = "Mutated candidate question."
+    mutated_packet = bind_candidate_review_packet(
+        replace(
+            packet,
+            question=changed_candidate_question,
+            input=replace(packet.input, question_text=changed_candidate_question),
+        )
+    )
+    with pytest.raises(ValueError):
+        validate_promotion_result(mutated_packet, approval, result)
+
+    mutated_approval = bind_human_approval_record(
+        replace(approval, reviewer_expertise=("different expertise",))
+    )
+    with pytest.raises(ValueError, match="promotion receipt|final case payload"):
+        validate_promotion_result(packet, mutated_approval, result)
+
+    from dynamislm.benchmark.hashing import bind_case_payload
+
+    changed_question = "Mutated final case question."
+    changed_case = bind_case_payload(
+        replace(
+            result.case,
+            question=changed_question,
+            input=replace(result.case.input, question_text=changed_question),
+        )
+    )
+    validate_case(changed_case)
+    with pytest.raises(ValueError, match="promotion receipt|final case payload"):
+        validate_promotion_result(packet, approval, replace(result, case=changed_case))
 
 
 def test_promotion_rejects_reviewer_equal_to_author() -> None:
@@ -342,7 +483,17 @@ def test_human_record_requires_timestamp_identity_expertise_and_approval_decisio
         promote_to_benchmark_case(packet, rejected)
 
 
-def test_forged_res71_binding_and_source_identity_are_rejected() -> None:
+def test_review_event_reference_is_included_in_approval_hash() -> None:
+    packet = _semantic_candidate()
+    approval = _approved_record(packet)
+    event_referenced = bind_human_approval_record(
+        replace(approval, review_event_reference="opaque-test-event-reference")
+    )
+
+    assert event_referenced.approval_record_digest != approval.approval_record_digest
+
+
+def test_forged_res71_binding_and_source_identity_are_rejected(tmp_path: Path) -> None:
     packet = _semantic_candidate()
     rubric_binding = next(
         item
@@ -442,8 +593,8 @@ def test_forged_res71_binding_and_source_identity_are_rejected() -> None:
     with pytest.raises(ValueError, match="error attribution keys have no reachable scorer path"):
         validate_candidate_review_packet(forged_scoring)
 
-    registered_source = _registered_source_candidate()
-    validate_candidate_review_packet(registered_source)
+    registered_source, source_resolver, _ = _controlled_source_candidate(tmp_path)
+    validate_candidate_review_packet(registered_source, source_resolver=source_resolver)
 
     excerpt = registered_source.input.evidence_excerpts[0]
     fake_document = replace(excerpt.document_identity, content_digest=_ZERO_SHA)
@@ -468,4 +619,130 @@ def test_forged_res71_binding_and_source_identity_are_rejected() -> None:
         )
     )
     with pytest.raises(ValueError, match="document identity/version/digest"):
-        validate_candidate_review_packet(forged_identity)
+        validate_candidate_review_packet(forged_identity, source_resolver=source_resolver)
+
+
+def test_exact_jats_derived_source_span_passes(tmp_path: Path) -> None:
+    packet, source_resolver, _ = _controlled_source_candidate(tmp_path)
+
+    validate_candidate_review_packet(packet, source_resolver=source_resolver)
+
+
+def test_source_backed_candidate_requires_an_explicit_resolver(tmp_path: Path) -> None:
+    packet, _, _ = _controlled_source_candidate(tmp_path)
+
+    with pytest.raises(ValueError, match="requires an explicit source resolver"):
+        validate_candidate_review_packet(packet)
+
+
+def test_accepted_registry_identity_with_fabricated_excerpt_is_rejected(tmp_path: Path) -> None:
+    packet, source_resolver, _ = _controlled_source_candidate(tmp_path)
+    excerpt = packet.input.evidence_excerpts[0]
+    fabricated_text = "Fabricated text with a self-consistent excerpt digest."
+    fabricated_span = replace(
+        excerpt.span_identity,
+        span_digest=_digest(fabricated_text.encode("utf-8")),
+    )
+    fabricated_excerpt = replace(excerpt, text=fabricated_text, span_identity=fabricated_span)
+    authority = tuple(
+        replace(binding, digest=fabricated_span.span_digest)
+        if binding.authority_kind == AuthorityKind.SOURCE_EVIDENCE_SPAN.value
+        else binding
+        for binding in packet.authority
+    )
+    fabricated_packet = bind_candidate_review_packet(
+        replace(
+            packet,
+            input=replace(packet.input, evidence_excerpts=(fabricated_excerpt,)),
+            authority=authority,
+        )
+    )
+
+    with pytest.raises(ValueError, match="differs from the exact JATS locator extraction"):
+        validate_candidate_review_packet(fabricated_packet, source_resolver=source_resolver)
+
+
+def test_wrong_structural_jats_locator_is_rejected(tmp_path: Path) -> None:
+    packet, source_resolver, _ = _controlled_source_candidate(tmp_path)
+    excerpt = packet.input.evidence_excerpts[0]
+    wrong_locator = "jats-text-v1:/article[1]/body[1]/sec[9]/p[1]"
+    wrong_span = replace(excerpt.span_identity, locator=wrong_locator)
+    wrong_excerpt = replace(excerpt, span_identity=wrong_span)
+    wrong_reference = replace(packet.source_evidence_refs[0], locator=wrong_locator)
+    wrong_packet = bind_candidate_review_packet(
+        replace(
+            packet,
+            input=replace(packet.input, evidence_excerpts=(wrong_excerpt,)),
+            source_evidence_refs=(wrong_reference,),
+        )
+    )
+
+    with pytest.raises(ValueError, match="does not resolve in retained article"):
+        validate_candidate_review_packet(wrong_packet, source_resolver=source_resolver)
+
+
+def test_retained_artifact_hash_mismatch_is_rejected(tmp_path: Path) -> None:
+    packet, source_resolver, artifact_path = _controlled_source_candidate(tmp_path)
+    wrong_bytes = gzip.compress(b"<article><body>wrong bytes</body></article>", mtime=0)
+    artifact_path.write_bytes(wrong_bytes)
+
+    with pytest.raises(ValueError, match="do not match the Phase-A SHA-256"):
+        validate_candidate_review_packet(packet, source_resolver=source_resolver)
+
+
+def test_source_backed_candidate_without_source_references_is_rejected(tmp_path: Path) -> None:
+    packet, source_resolver, _ = _controlled_source_candidate(tmp_path)
+    no_refs = bind_candidate_review_packet(replace(packet, source_evidence_refs=()))
+
+    with pytest.raises(ValueError, match="both exact excerpts and typed references"):
+        validate_candidate_review_packet(no_refs, source_resolver=source_resolver)
+
+
+def test_source_backed_candidate_without_evidence_excerpts_is_rejected(tmp_path: Path) -> None:
+    packet, source_resolver, _ = _controlled_source_candidate(tmp_path)
+    no_excerpts = bind_candidate_review_packet(
+        replace(packet, input=replace(packet.input, evidence_excerpts=()))
+    )
+
+    with pytest.raises(ValueError, match="both exact excerpts and typed references"):
+        validate_candidate_review_packet(no_excerpts, source_resolver=source_resolver)
+
+
+def test_source_backed_fake_provenance_only_span_ids_are_rejected(tmp_path: Path) -> None:
+    packet, source_resolver, _ = _controlled_source_candidate(tmp_path)
+    no_evidence = bind_candidate_review_packet(
+        replace(
+            packet,
+            source_evidence_refs=(),
+            input=replace(packet.input, evidence_excerpts=()),
+        )
+    )
+
+    with pytest.raises(ValueError, match="requires source evidence references and exact excerpts"):
+        validate_candidate_review_packet(no_evidence, source_resolver=source_resolver)
+
+
+@pytest.mark.parametrize(
+    "missing_authority_kind",
+    (AuthorityKind.SOURCE_DOCUMENT.value, AuthorityKind.SOURCE_EVIDENCE_SPAN.value),
+)
+def test_source_backed_candidate_requires_both_source_authorities(
+    tmp_path: Path, missing_authority_kind: str
+) -> None:
+    packet, source_resolver, _ = _controlled_source_candidate(tmp_path)
+    without_document_authority = bind_candidate_review_packet(
+        replace(
+            packet,
+            authority=tuple(
+                binding
+                for binding in packet.authority
+                if binding.authority_kind != missing_authority_kind
+            ),
+        )
+    )
+
+    with pytest.raises(ValueError, match="SOURCE_DOCUMENT and SOURCE_EVIDENCE_SPAN"):
+        validate_candidate_review_packet(
+            without_document_authority,
+            source_resolver=source_resolver,
+        )
