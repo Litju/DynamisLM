@@ -20,6 +20,15 @@ difficulty and adversarial metadata, and a complete reviewer checklist. It has
 no reviewer identity, approval timestamp, or final split field. Its status has
 one valid value: `PENDING_HUMAN_REVIEW`.
 
+An `ADVERSARIAL_MUTATION` packet carries a typed immutable
+`CandidateParentBinding` with the exact parent candidate ID, version, payload
+hash, origin class, and mutation lineage ID. That binding is part of the child
+candidate hash. `validate_candidate_set()` resolves the exact parent candidate,
+checks the declared scientific-field delta and preserved primary authority,
+rejects cycles or missing parents, and requires matching lineage isolation
+metadata. `topological_candidate_promotion_order()` returns a deterministic
+parent-before-child order; it does not allocate a split.
+
 The candidate payload hash binds the benchmark/schema target, candidate
 identity/version, question/input, expected answer, authorities, refusal/claim/
 comparability/scoring/tolerance contracts, proposed provenance,
@@ -45,7 +54,14 @@ payload hash, along with reviewer and timestamp fields. Validation rechecks
 every link. The receipt contains no protected source text and assigns no final
 split. Promotion writes the validated decision fields into existing
 `ExpertReviewMetadata`, creates only an unallocated `SplitBinding`, binds the
-final V1 case hash, and runs unchanged `validate_case()`.
+final V1 case hash, and runs `validate_case()`.
+
+Mutation promotion additionally requires recursively validated
+`ParentPromotionEvidence` for the already promoted parent. Promotion
+deterministically substitutes the parent's final case payload hash into
+`parent_case_hash`, the `MUTATION_PARENT` authority digest, and the final
+`MUTATION` derivation edge. The child receipt binds the exact parent candidate
+commitment, parent final case hash, and parent promotion-receipt digest.
 
 ## Deterministic checks
 
@@ -73,8 +89,9 @@ references and excerpts, artifact/content/span provenance, both document and
 span authority bindings, and the registry-bound source-family identity.
 
 The final case validator does not resolve external JATS; that source check is
-performed before promotion at the candidate boundary. Final `BenchmarkCaseV1`
-validation remains unchanged.
+performed before promotion at the candidate boundary. Final
+`BenchmarkCaseV1` scientific semantics remain unchanged; mutation validation
+also requires the frozen parent authority to bind the exact final parent hash.
 
 Scoring paths and error attribution reuse the existing final-case validator's
 answer contract checks. Candidate packets never receive a final split, and a

@@ -334,6 +334,19 @@ def _validate_origin(case: BenchmarkCaseV1) -> None:
             raise ValueError("adversarial mutation requires seed and changed fields")
         if provenance.parent_origin_class is None:
             raise ValueError("adversarial mutation must preserve parent origin class")
+        mutation_parent_authorities = tuple(
+            binding
+            for binding in case.authority
+            if binding.authority_kind == AuthorityKind.MUTATION_PARENT.value
+        )
+        if (
+            len(mutation_parent_authorities) != 1
+            or mutation_parent_authorities[0].digest != provenance.parent_case_hash
+        ):
+            raise ValueError(
+                "adversarial mutation requires one MUTATION_PARENT authority bound to "
+                "the exact parent case hash"
+            )
     else:  # pragma: no cover - enum construction is exhaustive
         raise ValueError("unsupported case origin")
 
@@ -558,6 +571,19 @@ def validate_case_set(cases: tuple[BenchmarkCaseV1, ...], *, validate_hash: bool
             parent = by_hash[provenance.parent_case_hash]
             if provenance.parent_origin_class is not parent.provenance.origin_class:
                 raise ValueError("mutation parent origin class is not preserved")
+            mutation_parent_authority = next(
+                binding
+                for binding in case.authority
+                if binding.authority_kind == AuthorityKind.MUTATION_PARENT.value
+            )
+            if (
+                mutation_parent_authority.source_reference_id != parent.case_id
+                or mutation_parent_authority.version != parent.case_version
+                or mutation_parent_authority.digest != parent.case_payload_hash
+            ):
+                raise ValueError(
+                    "MUTATION_PARENT authority does not bind the exact final parent case"
+                )
             parent_projection = case_content_projection(parent)
             child_projection = case_content_projection(case)
             changed_projection_fields = tuple(

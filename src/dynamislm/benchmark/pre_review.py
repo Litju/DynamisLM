@@ -332,6 +332,32 @@ class CandidateIsolationMetadata:
 
 @register_serializable_type
 @dataclass(frozen=True, slots=True)
+class CandidateParentBinding:
+    """Exact pre-review commitment to the candidate being mutated."""
+
+    parent_candidate_id: str
+    parent_candidate_version: str
+    parent_candidate_payload_hash: str
+    parent_origin_class: CaseOrigin
+    mutation_lineage_id: str
+
+    def __post_init__(self) -> None:
+        _require_text(self.parent_candidate_id, "parent_candidate_id")
+        if self.parent_candidate_id.startswith("sha256:"):
+            raise ValueError("parent_candidate_id is an identity, not a content hash")
+        if _SEMVER_PATTERN.fullmatch(self.parent_candidate_version) is None:
+            raise ValueError("parent_candidate_version must be a semantic version")
+        _require_sha256(self.parent_candidate_payload_hash, "parent_candidate_payload_hash")
+        object.__setattr__(
+            self,
+            "parent_origin_class",
+            _require_enum(self.parent_origin_class, CaseOrigin, "parent_origin_class"),
+        )
+        _require_text(self.mutation_lineage_id, "mutation_lineage_id")
+
+
+@register_serializable_type
+@dataclass(frozen=True, slots=True)
 class CandidateReviewPacket:
     """Immutable Phase-B candidate; it cannot represent final approval/split."""
 
@@ -357,6 +383,7 @@ class CandidateReviewPacket:
     isolation: CandidateIsolationMetadata
     difficulty: DifficultyBinding
     adversarial_tags: tuple[str, ...]
+    parent_candidate_binding: CandidateParentBinding | None = None
     review_status: CandidateReviewStatus = CandidateReviewStatus.PENDING_HUMAN_REVIEW
     reviewer_checklist: tuple[CandidateReviewChecklistItem, ...] = tuple(
         CandidateReviewChecklistItem(item) for item in _REQUIRED_REVIEW_CHECKLIST
@@ -414,6 +441,10 @@ class CandidateReviewPacket:
             raise ValueError("isolation must be CandidateIsolationMetadata")
         if not isinstance(self.difficulty, DifficultyBinding):
             raise ValueError("difficulty must be DifficultyBinding")
+        if self.parent_candidate_binding is not None and not isinstance(
+            self.parent_candidate_binding, CandidateParentBinding
+        ):
+            raise ValueError("parent_candidate_binding must be CandidateParentBinding or None")
         refs = _require_tuple(self.source_evidence_refs, "source_evidence_refs")
         if any(not isinstance(item, EvidenceReference) for item in refs):
             raise ValueError("source_evidence_refs must contain EvidenceReference values")
@@ -510,6 +541,22 @@ class HumanApprovalRecord:
 
 @register_serializable_type
 @dataclass(frozen=True, slots=True)
+class MutationPromotionLink:
+    """Identity substitution from a reviewed parent candidate to its promoted case."""
+
+    parent_candidate_binding: CandidateParentBinding
+    parent_case_payload_hash: str
+    parent_promotion_receipt_digest: str
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.parent_candidate_binding, CandidateParentBinding):
+            raise ValueError("parent_candidate_binding must be CandidateParentBinding")
+        _require_sha256(self.parent_case_payload_hash, "parent_case_payload_hash")
+        _require_sha256(self.parent_promotion_receipt_digest, "parent_promotion_receipt_digest")
+
+
+@register_serializable_type
+@dataclass(frozen=True, slots=True)
 class CasePromotionReceipt:
     """Canonical receipt binding one candidate, decision record, and final case."""
 
@@ -524,6 +571,7 @@ class CasePromotionReceipt:
     final_case_payload_hash: str
     reviewer_id: str
     approval_timestamp: datetime_module.datetime
+    mutation_promotion_link: MutationPromotionLink | None = None
     receipt_digest: str = _ZERO_SHA256
 
     def __post_init__(self) -> None:
@@ -549,6 +597,10 @@ class CasePromotionReceipt:
         ):
             _require_sha256(getattr(self, name), name)
         _require_aware_timestamp(self.approval_timestamp, "approval_timestamp")
+        if self.mutation_promotion_link is not None and not isinstance(
+            self.mutation_promotion_link, MutationPromotionLink
+        ):
+            raise ValueError("mutation_promotion_link must be MutationPromotionLink or None")
 
 
 @register_serializable_type
@@ -564,6 +616,29 @@ class PromotionResult:
             raise ValueError("promotion result case must be BenchmarkCaseV1")
         if not isinstance(self.receipt, CasePromotionReceipt):
             raise ValueError("promotion result receipt must be CasePromotionReceipt")
+
+
+@register_serializable_type
+@dataclass(frozen=True, slots=True)
+class ParentPromotionEvidence:
+    """Immutable reviewed packet, approval, and promotion evidence for a mutation parent."""
+
+    packet: CandidateReviewPacket
+    approval: HumanApprovalRecord
+    result: PromotionResult
+    parent_promotion_evidence: ParentPromotionEvidence | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.packet, CandidateReviewPacket):
+            raise ValueError("parent evidence packet must be CandidateReviewPacket")
+        if not isinstance(self.approval, HumanApprovalRecord):
+            raise ValueError("parent evidence approval must be HumanApprovalRecord")
+        if not isinstance(self.result, PromotionResult):
+            raise ValueError("parent evidence result must be PromotionResult")
+        if self.parent_promotion_evidence is not None and not isinstance(
+            self.parent_promotion_evidence, ParentPromotionEvidence
+        ):
+            raise ValueError("parent_promotion_evidence must be ParentPromotionEvidence or None")
 
 
 def _reject_final_state_in_context(value: object) -> None:
@@ -626,7 +701,55 @@ def candidate_payload_projection(packet: CandidateReviewPacket) -> dict[str, obj
         "isolation": packet.isolation,
         "difficulty": packet.difficulty,
         "adversarial_tags": packet.adversarial_tags,
+        "parent_candidate_binding": packet.parent_candidate_binding,
     }
+
+
+def candidate_scientific_projection(packet: CandidateReviewPacket) -> dict[str, object]:
+    """Map candidate meaning to final V1 content keys for mutation comparisons."""
+
+    if not isinstance(packet, CandidateReviewPacket):
+        raise TypeError("packet must be CandidateReviewPacket")
+    return {
+        "benchmark_version": packet.benchmark_version,
+        "schema_version": packet.schema_version,
+        "case_id": packet.candidate_id,
+        "case_version": packet.candidate_version,
+        "capability_id": packet.capability_id,
+        "benchmark_family": packet.benchmark_family,
+        "practitioner_question_class": packet.practitioner_question_class,
+        "question": packet.question,
+        "input": packet.input,
+        "source_evidence_refs": packet.source_evidence_refs,
+        "expected_answer": packet.proposed_expected_answer,
+        "authority": packet.authority,
+        "refusal_expectation": packet.refusal_contract,
+        "claim_contract": packet.claim_contract,
+        "comparability_contract": packet.comparability_contract,
+        "scoring_contract": packet.scoring_contract,
+        "tolerance_contract": packet.tolerance_contract,
+        "provenance": packet.proposed_provenance,
+        "contamination": packet.contamination,
+        "difficulty": packet.difficulty,
+        "adversarial_tags": packet.adversarial_tags,
+    }
+
+
+def _changed_candidate_projection_fields(
+    parent: CandidateReviewPacket, child: CandidateReviewPacket
+) -> tuple[str, ...]:
+    parent_projection = candidate_scientific_projection(parent)
+    child_projection = candidate_scientific_projection(child)
+    return tuple(
+        sorted(
+            (
+                field_name
+                for field_name in parent_projection
+                if parent_projection[field_name] != child_projection[field_name]
+            ),
+            key=lambda item: item.encode("utf-8"),
+        )
+    )
 
 
 def candidate_payload_hash(packet: CandidateReviewPacket) -> str:
@@ -823,24 +946,6 @@ def _validate_source_evidence(
             for binding in source_authorities
         ):
             raise ValueError("SOURCE_EVIDENCE_SPAN authority must cover every exact evidence span")
-        if reference.document_identity is None or not any(
-            binding.authority_kind == AuthorityKind.SOURCE_DOCUMENT.value
-            and binding.source_reference_id == reference.document_identity.document_id
-            and binding.version == reference.document_identity.version
-            and binding.digest == reference.document_identity.identity_digest
-            for binding in source_authorities
-        ):
-            raise ValueError("SOURCE_DOCUMENT authority must cover every cited source document")
-    for excerpt in excerpts:
-        span = excerpt.span_identity
-        if not any(
-            binding.authority_kind == AuthorityKind.SOURCE_EVIDENCE_SPAN.value
-            and binding.source_reference_id == span.span_id
-            and binding.version == span.document_version
-            and binding.digest == span.span_digest
-            for binding in source_authorities
-        ):
-            raise ValueError("SOURCE_EVIDENCE_SPAN authority must cover every exact evidence span")
 
 
 def _validate_candidate_origin(
@@ -967,22 +1072,55 @@ def _validate_candidate_origin(
         if packet.proposed_expected_answer.kind is not ExpectedAnswerKind.EVIDENCE_EXTRACTION:
             raise ValueError("source-backed candidate must use EVIDENCE_EXTRACTION answer form")
     elif origin is CaseOrigin.ADVERSARIAL_MUTATION:
+        parent_binding = packet.parent_candidate_binding
         if (
-            provenance.parent_case_hash is None
+            provenance.parent_case_hash is not None
+            or parent_binding is None
             or provenance.mutation_operator is None
             or provenance.mutation_version is None
             or provenance.mutation_seed is None
             or not provenance.changed_fields
             or provenance.parent_origin_class is None
+            or provenance.mutation_lineage_id is None
         ):
-            raise ValueError("adversarial candidate requires complete parent/mutation provenance")
+            raise ValueError(
+                "adversarial candidate requires a parent-candidate binding and complete "
+                "pre-review mutation provenance"
+            )
+        if _SEMVER_PATTERN.fullmatch(provenance.mutation_version) is None:
+            raise ValueError("mutation_version must be a semantic version")
+        if (parent_binding.parent_candidate_id, parent_binding.parent_candidate_version) == (
+            packet.candidate_id,
+            packet.candidate_version,
+        ):
+            raise ValueError("mutation candidate cannot self-parent")
+        if (
+            parent_binding.parent_origin_class is not provenance.parent_origin_class
+            or parent_binding.mutation_lineage_id != provenance.mutation_lineage_id
+        ):
+            raise ValueError("mutation parent origin and lineage metadata must agree")
+        if any(edge.relation == "MUTATION" for edge in provenance.derivation_edges):
+            raise ValueError(
+                "pre-review mutation cannot contain a final parent-case derivation edge"
+            )
         parent_bindings = tuple(
             binding
             for binding in packet.authority
             if binding.authority_kind == AuthorityKind.MUTATION_PARENT.value
         )
-        if not any(binding.digest == provenance.parent_case_hash for binding in parent_bindings):
-            raise ValueError("mutation parent hash requires an exact mutation authority binding")
+        if len(parent_bindings) != 1:
+            raise ValueError("mutation candidate requires exactly one MUTATION_PARENT authority")
+        parent_authority = parent_bindings[0]
+        if (
+            parent_authority.source_reference_id != parent_binding.parent_candidate_id
+            or parent_authority.version != parent_binding.parent_candidate_version
+            or parent_authority.digest != parent_binding.parent_candidate_payload_hash
+        ):
+            raise ValueError(
+                "MUTATION_PARENT authority must bind the exact parent candidate identity and hash"
+            )
+    elif packet.parent_candidate_binding is not None:
+        raise ValueError("only ADVERSARIAL_MUTATION candidates may bind a parent candidate")
 
 
 def _candidate_validation_view(packet: CandidateReviewPacket) -> SimpleNamespace:
@@ -1176,6 +1314,165 @@ def validate_candidate_review_packet(
     _validate_finite_expected_answer(view)
 
 
+def _candidate_identity(packet: CandidateReviewPacket) -> tuple[str, str]:
+    return packet.candidate_id, packet.candidate_version
+
+
+def _primary_candidate_authority(packet: CandidateReviewPacket) -> tuple[AuthorityBinding, ...]:
+    return tuple(
+        binding
+        for binding in packet.authority
+        if any(
+            governed in {"expected_answer", "refusal_expectation", "claim_contract"}
+            or governed.startswith("expected_answer.")
+            for governed in binding.governed_field_ids
+        )
+    )
+
+
+def _candidate_parent_graph(
+    packets: tuple[CandidateReviewPacket, ...],
+) -> tuple[
+    dict[tuple[str, str], CandidateReviewPacket],
+    dict[tuple[str, str], tuple[str, str]],
+]:
+    if not packets:
+        raise ValueError("candidate set must be non-empty")
+    if any(not isinstance(packet, CandidateReviewPacket) for packet in packets):
+        raise TypeError("candidate set must contain CandidateReviewPacket values")
+    identities = tuple(_candidate_identity(packet) for packet in packets)
+    if len(set(identities)) != len(identities):
+        raise ValueError("candidate IDs and versions must be unique in a candidate set")
+    if len({packet.candidate_id for packet in packets}) != len(packets):
+        raise ValueError("candidate IDs must be unique in a candidate set")
+    by_identity = {_candidate_identity(packet): packet for packet in packets}
+    parents: dict[tuple[str, str], tuple[str, str]] = {}
+    for packet in packets:
+        binding = packet.parent_candidate_binding
+        is_mutation = packet.proposed_provenance.origin_class is CaseOrigin.ADVERSARIAL_MUTATION
+        if is_mutation and binding is None:
+            raise ValueError("adversarial mutation candidate is missing its parent candidate")
+        if not is_mutation and binding is not None:
+            raise ValueError("only mutation candidates may declare a parent candidate")
+        if binding is None:
+            continue
+        identity = _candidate_identity(packet)
+        parent_identity = (binding.parent_candidate_id, binding.parent_candidate_version)
+        if identity == parent_identity:
+            raise ValueError("mutation candidate cannot self-parent")
+        if parent_identity not in by_identity:
+            raise ValueError("mutation parent candidate is not present in the candidate set")
+        parents[identity] = parent_identity
+
+    # Detect graph cycles before hash resolution, so a forged cyclic declaration fails as
+    # a cycle even though mutually committed candidate hashes cannot form a valid DAG.
+    state: dict[tuple[str, str], int] = {}
+
+    def visit(identity: tuple[str, str]) -> None:
+        status = state.get(identity, 0)
+        if status == 1:
+            raise ValueError("mutation candidate cycle is not allowed")
+        if status == 2:
+            return
+        state[identity] = 1
+        parent = parents.get(identity)
+        if parent is not None:
+            visit(parent)
+        state[identity] = 2
+
+    for identity in sorted(by_identity, key=lambda value: (value[0].encode("utf-8"), value[1])):
+        visit(identity)
+    return by_identity, parents
+
+
+def validate_candidate_set(
+    packets: tuple[CandidateReviewPacket, ...],
+    *,
+    source_resolver: SourceArtifactResolver | None = None,
+) -> None:
+    """Validate exact mutation parent commitments, scientific deltas, and isolation."""
+
+    by_identity, parents = _candidate_parent_graph(packets)
+    for packet in packets:
+        validate_candidate_review_packet(packet, source_resolver=source_resolver)
+
+    lineage_clusters: dict[str, str] = {}
+    for identity, parent_identity in parents.items():
+        child = by_identity[identity]
+        parent = by_identity[parent_identity]
+        binding = child.parent_candidate_binding
+        assert binding is not None
+        provenance = child.proposed_provenance
+        if (
+            binding.parent_candidate_id != parent.candidate_id
+            or binding.parent_candidate_version != parent.candidate_version
+            or binding.parent_candidate_payload_hash != parent.candidate_payload_hash
+        ):
+            raise ValueError("mutation parent candidate ID/version/hash does not match exactly")
+        if binding.parent_origin_class is not parent.proposed_provenance.origin_class:
+            raise ValueError("mutation parent origin class is not preserved")
+        if provenance.parent_origin_class is not parent.proposed_provenance.origin_class:
+            raise ValueError("mutation provenance does not preserve the parent origin class")
+        if provenance.mutation_lineage_id != binding.mutation_lineage_id:
+            raise ValueError("mutation lineage ID disagrees with its parent-candidate binding")
+        if parent.proposed_provenance.origin_class is CaseOrigin.ADVERSARIAL_MUTATION:
+            if provenance.mutation_lineage_id != parent.proposed_provenance.mutation_lineage_id:
+                raise ValueError("mutation descendants must preserve their parent's lineage ID")
+        if (
+            child.isolation != parent.isolation
+            or child.contamination.source_family_id != parent.contamination.source_family_id
+        ):
+            raise ValueError("mutation lineage must preserve parent isolation metadata")
+        prior_cluster = lineage_clusters.setdefault(
+            provenance.mutation_lineage_id or "", child.isolation.isolation_cluster_id
+        )
+        if prior_cluster != child.isolation.isolation_cluster_id:
+            raise ValueError("one mutation lineage cannot cross isolation clusters")
+
+        parent_primary_authority = _primary_candidate_authority(parent)
+        if not parent_primary_authority:
+            raise ValueError("mutation parent has no primary scientific authority")
+        if any(binding not in child.authority for binding in parent_primary_authority):
+            raise ValueError("mutation candidate dropped parent primary scientific authority")
+        validate_authority_bindings(parent.authority)
+
+        actual_changed_fields = _changed_candidate_projection_fields(parent, child)
+        declared_changed_fields = tuple(
+            sorted(provenance.changed_fields, key=lambda item: item.encode("utf-8"))
+        )
+        if declared_changed_fields != actual_changed_fields:
+            raise ValueError(
+                "mutation changed_fields do not match the canonical parent-to-child "
+                "candidate scientific projection"
+            )
+
+
+def topological_candidate_promotion_order(
+    packets: tuple[CandidateReviewPacket, ...],
+    *,
+    source_resolver: SourceArtifactResolver | None = None,
+) -> tuple[CandidateReviewPacket, ...]:
+    """Return a deterministic parent-before-child order for validated candidates."""
+
+    validate_candidate_set(packets, source_resolver=source_resolver)
+    by_identity, parents = _candidate_parent_graph(packets)
+    ordered: list[CandidateReviewPacket] = []
+    emitted: set[tuple[str, str]] = set()
+
+    def emit(identity: tuple[str, str]) -> None:
+        if identity in emitted:
+            return
+        parent = parents.get(identity)
+        if parent is not None:
+            emit(parent)
+        emitted.add(identity)
+        ordered.append(by_identity[identity])
+
+    for identity in sorted(by_identity, key=lambda value: (value[0].encode("utf-8"), value[1])):
+        emit(identity)
+    return tuple(ordered)
+
+
 def human_approval_record_digest(record: HumanApprovalRecord) -> str:
     """Hash every human-decision field, excluding only its stored digest."""
 
@@ -1256,8 +1553,66 @@ def _validate_approval_binding(
         raise ValueError("reviewer must be independent of the candidate author")
 
 
+def _promotion_evidence_chain(
+    evidence: ParentPromotionEvidence,
+) -> tuple[ParentPromotionEvidence, ...]:
+    chain: list[ParentPromotionEvidence] = []
+    current: ParentPromotionEvidence | None = evidence
+    while current is not None:
+        chain.append(current)
+        current = current.parent_promotion_evidence
+    return tuple(reversed(chain))
+
+
+def _validated_mutation_promotion_link(
+    packet: CandidateReviewPacket,
+    evidence: ParentPromotionEvidence | None,
+    *,
+    source_resolver: SourceArtifactResolver | None = None,
+) -> MutationPromotionLink | None:
+    is_mutation = packet.proposed_provenance.origin_class is CaseOrigin.ADVERSARIAL_MUTATION
+    if not is_mutation:
+        if evidence is not None:
+            raise ValueError("non-mutation promotion cannot receive parent-promotion evidence")
+        return None
+    if evidence is None:
+        raise ValueError("mutation promotion requires an already promoted parent candidate")
+    binding = packet.parent_candidate_binding
+    if binding is None:
+        raise ValueError("mutation candidate is missing its exact parent-candidate binding")
+    validate_promotion_result(
+        evidence.packet,
+        evidence.approval,
+        evidence.result,
+        parent_promotion_evidence=evidence.parent_promotion_evidence,
+        source_resolver=source_resolver,
+    )
+    parent_packet = evidence.packet
+    parent_case = evidence.result.case
+    if (
+        binding.parent_candidate_id != parent_packet.candidate_id
+        or binding.parent_candidate_version != parent_packet.candidate_version
+        or binding.parent_candidate_payload_hash != parent_packet.candidate_payload_hash
+        or binding.parent_origin_class is not parent_packet.proposed_provenance.origin_class
+        or binding.parent_origin_class is not parent_case.provenance.origin_class
+    ):
+        raise ValueError("parent promotion does not match the exact reviewed parent candidate")
+    lineage_packets = tuple(item.packet for item in _promotion_evidence_chain(evidence))
+    validate_candidate_set((*lineage_packets, packet), source_resolver=source_resolver)
+    if evidence.result.receipt.final_case_payload_hash != parent_case.case_payload_hash:
+        raise ValueError("parent promotion receipt hash does not match its final parent case")
+    return MutationPromotionLink(
+        parent_candidate_binding=binding,
+        parent_case_payload_hash=parent_case.case_payload_hash,
+        parent_promotion_receipt_digest=evidence.result.receipt.receipt_digest,
+    )
+
+
 def _build_final_case(
-    packet: CandidateReviewPacket, approval: HumanApprovalRecord
+    packet: CandidateReviewPacket,
+    approval: HumanApprovalRecord,
+    *,
+    mutation_promotion_link: MutationPromotionLink | None = None,
 ) -> BenchmarkCaseV1:
     review = ExpertReviewMetadata(
         author_id=packet.proposed_provenance.author_id,
@@ -1268,6 +1623,32 @@ def _build_final_case(
         rubric_digest=packet.proposed_provenance.rubric_digest,
         review_scope=packet.proposed_provenance.review_scope,
     )
+    provenance = packet.proposed_provenance._to_case_provenance(review)
+    authority = packet.authority
+    if packet.proposed_provenance.origin_class is CaseOrigin.ADVERSARIAL_MUTATION:
+        if mutation_promotion_link is None:
+            raise ValueError("mutation promotion requires an exact final parent-case identity")
+        parent_hash = mutation_promotion_link.parent_case_payload_hash
+        parent_binding = mutation_promotion_link.parent_candidate_binding
+        provenance = replace(
+            provenance,
+            parent_case_hash=parent_hash,
+            parent_origin_class=parent_binding.parent_origin_class,
+            derivation_edges=(
+                *provenance.derivation_edges,
+                ProvenanceEdge(parent_hash, packet.candidate_id, "MUTATION"),
+            ),
+        )
+        authority = tuple(
+            replace(
+                binding,
+                version=parent_binding.parent_candidate_version,
+                digest=parent_hash,
+            )
+            if binding.authority_kind == AuthorityKind.MUTATION_PARENT.value
+            else binding
+            for binding in authority
+        )
     case = BenchmarkCaseV1(
         benchmark_version=packet.benchmark_version,
         schema_version=packet.schema_version,
@@ -1280,13 +1661,13 @@ def _build_final_case(
         input=packet.input,
         source_evidence_refs=packet.source_evidence_refs,
         expected_answer=packet.proposed_expected_answer,
-        authority=packet.authority,
+        authority=authority,
         refusal_expectation=packet.refusal_contract,
         claim_contract=packet.claim_contract,
         comparability_contract=packet.comparability_contract,
         scoring_contract=packet.scoring_contract,
         tolerance_contract=packet.tolerance_contract,
-        provenance=packet.proposed_provenance._to_case_provenance(review),
+        provenance=provenance,
         split=SplitBinding(
             split_name=None,
             split_manifest_version=None,
@@ -1312,6 +1693,7 @@ def validate_promotion_result(
     approval: HumanApprovalRecord,
     result: PromotionResult,
     *,
+    parent_promotion_evidence: ParentPromotionEvidence | None = None,
     source_resolver: SourceArtifactResolver | None = None,
 ) -> None:
     """Validate every link from candidate packet through approval to final case."""
@@ -1320,8 +1702,13 @@ def validate_promotion_result(
         raise TypeError("result must be PromotionResult")
     validate_candidate_review_packet(packet, source_resolver=source_resolver)
     _validate_approval_binding(packet, approval)
+    mutation_link = _validated_mutation_promotion_link(
+        packet,
+        parent_promotion_evidence,
+        source_resolver=source_resolver,
+    )
     validate_case(result.case)
-    expected_case = _build_final_case(packet, approval)
+    expected_case = _build_final_case(packet, approval, mutation_promotion_link=mutation_link)
     if result.case != expected_case:
         raise ValueError("final case payload is not the exact promoted candidate and approval")
     receipt = result.receipt
@@ -1339,6 +1726,7 @@ def validate_promotion_result(
         "final_case_payload_hash": result.case.case_payload_hash,
         "reviewer_id": approval.reviewer_id,
         "approval_timestamp": approval.approval_timestamp,
+        "mutation_promotion_link": mutation_link,
     }
     if any(getattr(receipt, name) != value for name, value in expected_links.items()):
         raise ValueError("promotion receipt does not bind the exact candidate, approval, and case")
@@ -1355,6 +1743,7 @@ def promote_with_receipt(
     packet: CandidateReviewPacket,
     approval: HumanApprovalRecord,
     *,
+    parent_promotion_evidence: ParentPromotionEvidence | None = None,
     source_resolver: SourceArtifactResolver | None = None,
 ) -> PromotionResult:
     """Promote a candidate and return its canonical immutable hash-chain receipt.
@@ -1365,7 +1754,12 @@ def promote_with_receipt(
 
     validate_candidate_review_packet(packet, source_resolver=source_resolver)
     _validate_approval_binding(packet, approval)
-    case = _build_final_case(packet, approval)
+    mutation_link = _validated_mutation_promotion_link(
+        packet,
+        parent_promotion_evidence,
+        source_resolver=source_resolver,
+    )
+    case = _build_final_case(packet, approval, mutation_promotion_link=mutation_link)
     receipt = _bind_promotion_receipt(
         CasePromotionReceipt(
             candidate_id=packet.candidate_id,
@@ -1379,10 +1773,17 @@ def promote_with_receipt(
             final_case_payload_hash=case.case_payload_hash,
             reviewer_id=approval.reviewer_id,
             approval_timestamp=approval.approval_timestamp,
+            mutation_promotion_link=mutation_link,
         )
     )
     result = PromotionResult(case=case, receipt=receipt)
-    validate_promotion_result(packet, approval, result, source_resolver=source_resolver)
+    validate_promotion_result(
+        packet,
+        approval,
+        result,
+        parent_promotion_evidence=parent_promotion_evidence,
+        source_resolver=source_resolver,
+    )
     return result
 
 
@@ -1390,33 +1791,45 @@ def promote_to_benchmark_case(
     packet: CandidateReviewPacket,
     approval: HumanApprovalRecord,
     *,
+    parent_promotion_evidence: ParentPromotionEvidence | None = None,
     source_resolver: SourceArtifactResolver | None = None,
 ) -> PromotionResult:
     """Compatibility-named boundary returning both the case and receipt."""
 
-    return promote_with_receipt(packet, approval, source_resolver=source_resolver)
+    return promote_with_receipt(
+        packet,
+        approval,
+        parent_promotion_evidence=parent_promotion_evidence,
+        source_resolver=source_resolver,
+    )
 
 
 __all__ = [
     "CandidateIsolationMetadata",
+    "CandidateParentBinding",
     "CandidateReviewChecklistItem",
     "CandidateReviewPacket",
     "CandidateReviewStatus",
     "CasePromotionReceipt",
     "HumanApprovalRecord",
     "HumanReviewDecision",
+    "MutationPromotionLink",
+    "ParentPromotionEvidence",
     "PromotionResult",
     "ProposedCaseProvenance",
     "bind_candidate_review_packet",
     "bind_human_approval_record",
     "candidate_payload_hash",
     "candidate_payload_projection",
+    "candidate_scientific_projection",
     "human_approval_record_digest",
     "promote_to_benchmark_case",
     "promote_with_receipt",
     "promotion_receipt_digest",
     "proposed_approval_digest",
+    "topological_candidate_promotion_order",
     "validate_candidate_review_packet",
+    "validate_candidate_set",
     "validate_human_approval_record",
     "validate_promotion_result",
 ]

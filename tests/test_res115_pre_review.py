@@ -11,24 +11,31 @@ import pytest
 
 from dynamislm.benchmark import (
     CandidateIsolationMetadata,
+    CandidateParentBinding,
     CandidateReviewPacket,
     CasePromotionReceipt,
     HumanApprovalRecord,
     HumanReviewDecision,
+    ParentPromotionEvidence,
     PhaseASourceArtifactResolver,
     PromotionResult,
     ProposedCaseProvenance,
     bind_candidate_review_packet,
     bind_human_approval_record,
+    candidate_payload_hash,
+    candidate_scientific_projection,
     promote_to_benchmark_case,
     promote_with_receipt,
     promotion_receipt_digest,
+    topological_candidate_promotion_order,
     validate_candidate_review_packet,
+    validate_candidate_set,
     validate_case,
     validate_promotion_result,
 )
 from dynamislm.benchmark.constants import AuthorityKind, CaseOrigin
 from dynamislm.benchmark.contracts import (
+    AuthorityBinding,
     BenchmarkCaseV1,
     DocumentIdentity,
     EvidenceExcerpt,
@@ -130,86 +137,207 @@ def _semantic_candidate() -> CandidateReviewPacket:
     return _candidate_from_case(case)
 
 
+def _mutation_candidate(parent: CandidateReviewPacket) -> CandidateReviewPacket:
+    from dynamislm.benchmark.contamination import (
+        exact_shingle_digest,
+        fuzzy_fingerprint,
+        normalized_text_sha256,
+    )
+
+    child_id = f"{parent.candidate_id}-mutation"
+    question = f"MUTATED: {parent.question}"
+    lineage_id = "fixture-mutation-lineage-res115"
+    parent_binding = CandidateParentBinding(
+        parent_candidate_id=parent.candidate_id,
+        parent_candidate_version=parent.candidate_version,
+        parent_candidate_payload_hash=parent.candidate_payload_hash,
+        parent_origin_class=parent.proposed_provenance.origin_class,
+        mutation_lineage_id=lineage_id,
+    )
+    mutation_authority = AuthorityBinding(
+        authority_kind=AuthorityKind.MUTATION_PARENT.value,
+        source_reference_id=parent.candidate_id,
+        version=parent.candidate_version,
+        digest=parent.candidate_payload_hash,
+        governed_field_ids=("provenance.parent_case_hash",),
+    )
+    contamination = replace(
+        parent.contamination,
+        normalized_text_sha256=normalized_text_sha256(question),
+        exact_shingle_digest=exact_shingle_digest(question),
+        fuzzy_fingerprint=fuzzy_fingerprint(question),
+    )
+    provenance = replace(
+        parent.proposed_provenance,
+        origin_class=CaseOrigin.ADVERSARIAL_MUTATION,
+        derivation_status="ADVERSARIAL_MUTATION_REVALIDATED",
+        mutation_lineage_id=lineage_id,
+        parent_case_hash=None,
+        mutation_operator="prepend-marker",
+        mutation_version="1.0.0",
+        mutation_seed=1701,
+        changed_fields=("provenance",),
+        parent_origin_class=parent.proposed_provenance.origin_class,
+        derivation_edges=tuple(
+            edge
+            for edge in parent.proposed_provenance.derivation_edges
+            if edge.relation != "MUTATION"
+        ),
+    )
+    child = replace(
+        parent,
+        candidate_id=child_id,
+        question=question,
+        input=replace(parent.input, question_text=question),
+        authority=(*parent.authority, mutation_authority),
+        proposed_provenance=provenance,
+        contamination=contamination,
+        parent_candidate_binding=parent_binding,
+    )
+    child = replace(
+        child,
+        proposed_provenance=replace(
+            child.proposed_provenance,
+            changed_fields=tuple(
+                sorted(
+                    (
+                        field_name
+                        for field_name, value in candidate_scientific_projection(parent).items()
+                        if value != candidate_scientific_projection(child)[field_name]
+                    ),
+                    key=lambda item: item.encode("utf-8"),
+                )
+            ),
+        ),
+    )
+    return bind_candidate_review_packet(child)
+
+
 def _digest(data: bytes) -> str:
     return "sha256:" + hashlib.sha256(data).hexdigest()
 
 
 def _controlled_source_candidate(
     tmp_path: Path,
+    *,
+    multi_reference: bool = False,
 ) -> tuple[CandidateReviewPacket, PhaseASourceArtifactResolver, Path]:
     source_case = next(
         item
         for item in build_synthetic_reference_fixture_cases()
         if item.provenance.origin_class is CaseOrigin.SOURCE_BACKED_EVIDENCE_EXTRACTION
     )
-    source_text = "We enrolled trained adult team-sport athletes."
-    jats_bytes = (
-        b'<?xml version="1.0" encoding="UTF-8"?>'
-        b'<article><body><sec id="population"><title>Population</title>'
-        b"<p>We enrolled trained adult team-sport athletes.</p>"
-        b"</sec></body></article>"
-    )
-    compressed_bytes = gzip.compress(jats_bytes, mtime=0)
-    document_version = "PMC9000001.1"
-    document_id = "PSE-DOCUMENT:PMC9000001"
-    artifact_id = "PSE-JATS-GZIP:PMC9000001"
-    pmcid = "PMC9000001"
-    doi = "10.0000/synthetic-res115-source"
-    relative_path = f"sources/accepted/{pmcid}/article.xml.gz"
     family_id = "PSE-SOURCE-FAMILY:fixture-9000001"
     family_digest = _digest(b"synthetic fixture source-family identity")
-    metadata_digest = _digest(b"synthetic fixture metadata")
-    compressed_digest = _digest(compressed_bytes)
-    document_digest = _digest(jats_bytes)
     registry_version = "performance-science-eval-source-record@1.2.0"
     store_root = tmp_path / "source-store"
-    artifact_path = store_root / pmcid / "article.xml.gz"
-    artifact_path.parent.mkdir(parents=True)
-    artifact_path.write_bytes(compressed_bytes)
     registry_root = tmp_path / "registry"
     registry_root.mkdir()
-    source_row = {
-        "schema_version": registry_version,
-        "disposition": "ACCEPTED",
-        "pmcid": pmcid,
-        "doi": doi,
-        "document_content_sha256": document_digest,
-        "source_artifact_sha256": compressed_digest,
-        "source_metadata_sha256": metadata_digest,
-        "retained_source_artifact": {
-            "document_identity_id": document_id,
-            "source_artifact_id": artifact_id,
-            "relative_path": relative_path,
-            "format": "JATS XML",
-            "compression": "gzip",
-            "compressed_byte_count": len(compressed_bytes),
-            "compressed_sha256": compressed_digest,
-            "uncompressed_jats_byte_count": len(jats_bytes),
-            "uncompressed_jats_sha256": document_digest,
-        },
-        "pmc_article_version_identity": {"pmcid_version_ids": [document_version]},
-        "source_family_identity": {
-            "source_family_id": family_id,
-            "family_digest": family_digest,
-            "family_resolution_status": "SINGLE_DOCUMENT_FAMILY",
-            "future_split_rule": "Synthetic fixture source family remains one isolation unit.",
-        },
-    }
-    checksum_row = {
-        "artifact_role": "RETAINED_JATS_GZIP",
-        "pmcid": pmcid,
-        "relative_path": relative_path,
-        "byte_count": len(compressed_bytes),
-        "sha256": compressed_digest,
-        "uncompressed_jats_byte_count": len(jats_bytes),
-        "uncompressed_jats_sha256": document_digest,
-        "metadata_sha256": metadata_digest,
-        "identity_binding": {"pmcid": pmcid, "pmcid_version_ids": [document_version]},
-    }
+    document_inputs = [
+        ("PMC9000001", "We enrolled trained adult team-sport athletes."),
+    ]
+    if multi_reference:
+        document_inputs.append(("PMC9000002", "Participants completed supervised field testing."))
+    source_rows: list[dict[str, object]] = []
+    checksum_rows: list[dict[str, object]] = []
+    evidence_records: list[tuple[DocumentIdentity, SourceArtifactIdentity, str, str, str]] = []
+    artifact_paths: list[Path] = []
+    for index, (pmcid, source_text) in enumerate(document_inputs, start=1):
+        jats_bytes = (
+            b'<?xml version="1.0" encoding="UTF-8"?>'
+            b'<article><body><sec id="population"><title>Population</title><p>'
+            + source_text.encode("utf-8")
+            + b"</p></sec></body></article>"
+        )
+        compressed_bytes = gzip.compress(jats_bytes, mtime=0)
+        document_version = f"{pmcid}.1"
+        document_id = f"PSE-DOCUMENT:{pmcid}"
+        artifact_id = f"PSE-JATS-GZIP:{pmcid}"
+        doi = f"10.0000/synthetic-res115-source-{index}"
+        relative_path = f"sources/accepted/{pmcid}/article.xml.gz"
+        metadata_digest = _digest(f"synthetic fixture metadata {pmcid}".encode())
+        compressed_digest = _digest(compressed_bytes)
+        document_digest = _digest(jats_bytes)
+        artifact_path = store_root / pmcid / "article.xml.gz"
+        artifact_path.parent.mkdir(parents=True)
+        artifact_path.write_bytes(compressed_bytes)
+        artifact_paths.append(artifact_path)
+        source_rows.append(
+            {
+                "schema_version": registry_version,
+                "disposition": "ACCEPTED",
+                "pmcid": pmcid,
+                "doi": doi,
+                "document_content_sha256": document_digest,
+                "source_artifact_sha256": compressed_digest,
+                "source_metadata_sha256": metadata_digest,
+                "retained_source_artifact": {
+                    "document_identity_id": document_id,
+                    "source_artifact_id": artifact_id,
+                    "relative_path": relative_path,
+                    "format": "JATS XML",
+                    "compression": "gzip",
+                    "compressed_byte_count": len(compressed_bytes),
+                    "compressed_sha256": compressed_digest,
+                    "uncompressed_jats_byte_count": len(jats_bytes),
+                    "uncompressed_jats_sha256": document_digest,
+                },
+                "pmc_article_version_identity": {"pmcid_version_ids": [document_version]},
+                "source_family_identity": {
+                    "source_family_id": family_id,
+                    "family_digest": family_digest,
+                    "family_resolution_status": "MULTI_DOCUMENT_FAMILY"
+                    if multi_reference
+                    else "SINGLE_DOCUMENT_FAMILY",
+                    "future_split_rule": (
+                        "Synthetic fixture source family remains one isolation unit."
+                    ),
+                },
+            }
+        )
+        checksum_rows.append(
+            {
+                "artifact_role": "RETAINED_JATS_GZIP",
+                "pmcid": pmcid,
+                "relative_path": relative_path,
+                "byte_count": len(compressed_bytes),
+                "sha256": compressed_digest,
+                "uncompressed_jats_byte_count": len(jats_bytes),
+                "uncompressed_jats_sha256": document_digest,
+                "metadata_sha256": metadata_digest,
+                "identity_binding": {"pmcid": pmcid, "pmcid_version_ids": [document_version]},
+            }
+        )
+        document = DocumentIdentity(
+            document_id=document_id,
+            version=document_version,
+            content_digest=document_digest,
+            doi=doi,
+        )
+        artifact = SourceArtifactIdentity(
+            artifact_id=artifact_id,
+            document_id=document_id,
+            document_version=document_version,
+            artifact_version=document_version,
+            content_digest=compressed_digest,
+        )
+        evidence_records.append(
+            (
+                document,
+                artifact,
+                source_text,
+                document_id,
+                f"proposed-source-span-fixture-{index:03d}",
+            )
+        )
     accepted_registry = registry_root / "accepted.jsonl"
-    accepted_registry.write_text(json.dumps(source_row) + "\n", encoding="utf-8")
+    accepted_registry.write_text(
+        "".join(json.dumps(row) + "\n" for row in source_rows), encoding="utf-8"
+    )
     checksum_registry = registry_root / "checksums.jsonl"
-    checksum_registry.write_text(json.dumps(checksum_row) + "\n", encoding="utf-8")
+    checksum_registry.write_text(
+        "".join(json.dumps(row) + "\n" for row in checksum_rows), encoding="utf-8"
+    )
     schema_path = registry_root / "registry.schema.json"
     schema_path.write_text(json.dumps({"schema_version": registry_version}), encoding="utf-8")
     resolver = PhaseASourceArtifactResolver(
@@ -219,82 +347,107 @@ def _controlled_source_candidate(
         retained_source_root=store_root,
     )
 
-    document = DocumentIdentity(
-        document_id=document_id,
-        version=document_version,
-        content_digest=document_digest,
-        doi=doi,
-    )
-    artifact = SourceArtifactIdentity(
-        artifact_id=artifact_id,
-        document_id=document.document_id,
-        document_version=document_version,
-        artifact_version=document_version,
-        content_digest=compressed_digest,
-    )
     fixture_excerpt = source_case.input.evidence_excerpts[0]
     locator = "jats-text-v1:/article[1]/body[1]/sec[1]/p[1]"
-    span = EvidenceSpanIdentity(
-        span_id="proposed-source-span-fixture-001",
-        document_id=document.document_id,
-        document_version=document_version,
-        source_artifact_id=artifact.artifact_id,
-        source_artifact_digest=artifact.content_digest,
-        locator=locator,
-        span_digest=_digest(source_text.encode("utf-8")),
-    )
-    excerpt = EvidenceExcerpt(
-        document_identity=document,
-        source_artifact_identity=artifact,
-        span_identity=span,
-        text=source_text,
-        scope=fixture_excerpt.scope,
-        applicability=fixture_excerpt.applicability,
-    )
-    reference = replace(
-        source_case.source_evidence_refs[0],
-        source_reference_id=document.document_id,
-        version=document.version,
-        digest=document.content_digest,
-        locator=locator,
-        document_identity=document,
-    )
-    authorities = tuple(
-        replace(
-            binding,
-            source_reference_id=document.document_id,
-            version=document.version,
-            digest=document.identity_digest,
+    excerpts: list[EvidenceExcerpt] = []
+    references = []
+    document_authorities = []
+    span_authorities = []
+    for document, artifact, source_text, _, span_id in evidence_records:
+        span = EvidenceSpanIdentity(
+            span_id=span_id,
+            document_id=document.document_id,
+            document_version=document.version,
+            source_artifact_id=artifact.artifact_id,
+            source_artifact_digest=artifact.content_digest,
+            locator=locator,
+            span_digest=_digest(source_text.encode("utf-8")),
         )
-        if binding.authority_kind == AuthorityKind.SOURCE_DOCUMENT.value
-        else replace(
-            binding,
-            source_reference_id=span.span_id,
-            version=span.document_version,
-            digest=span.span_digest,
+        excerpts.append(
+            EvidenceExcerpt(
+                document_identity=document,
+                source_artifact_identity=artifact,
+                span_identity=span,
+                text=source_text,
+                scope=fixture_excerpt.scope,
+                applicability=fixture_excerpt.applicability,
+            )
         )
-        if binding.authority_kind == AuthorityKind.SOURCE_EVIDENCE_SPAN.value
-        else binding
-        for binding in source_case.authority
+        references.append(
+            replace(
+                source_case.source_evidence_refs[0],
+                source_reference_id=document.document_id,
+                version=document.version,
+                digest=document.content_digest,
+                locator=locator,
+                document_identity=document,
+            )
+        )
+        document_authorities.append(
+            AuthorityBinding(
+                authority_kind=AuthorityKind.SOURCE_DOCUMENT.value,
+                source_reference_id=document.document_id,
+                version=document.version,
+                digest=document.identity_digest,
+                governed_field_ids=("expected_answer",),
+            )
+        )
+        span_authorities.append(
+            AuthorityBinding(
+                authority_kind=AuthorityKind.SOURCE_EVIDENCE_SPAN.value,
+                source_reference_id=span.span_id,
+                version=span.document_version,
+                digest=span.span_digest,
+                governed_field_ids=("input.evidence_excerpts", "expected_answer"),
+            )
+        )
+    excerpts_tuple = tuple(excerpts)
+    references_tuple = tuple(references)
+    artifacts = tuple(record[1] for record in evidence_records)
+    spans = tuple(excerpt.span_identity for excerpt in excerpts_tuple)
+    artifact_ids = tuple(
+        sorted(
+            (item.artifact_id for item in artifacts),
+            key=lambda value: value.encode("utf-8"),
+        )
+    )
+    artifact_digests = tuple(
+        digest
+        for _, digest in sorted(
+            ((item.artifact_id, item.content_digest) for item in artifacts),
+            key=lambda item: item[0].encode("utf-8"),
+        )
+    )
+    document_ids = tuple(sorted(item.document_identity.document_id for item in excerpts_tuple))
+    span_ids = tuple(item.span_id for item in spans)
+    authorities = (
+        tuple(
+            binding
+            for binding in source_case.authority
+            if binding.authority_kind
+            not in {AuthorityKind.SOURCE_DOCUMENT.value, AuthorityKind.SOURCE_EVIDENCE_SPAN.value}
+        )
+        + tuple(document_authorities)
+        + tuple(span_authorities)
     )
     provenance = replace(
         source_case.provenance,
-        authority_lineage=(document.document_id, span.span_id),
-        source_artifact_ids=(artifact.artifact_id,),
-        source_content_digests=(artifact.content_digest,),
-        evidence_span_refs=(span.span_id,),
+        authority_lineage=(*document_ids, *span_ids),
+        source_artifact_ids=artifact_ids,
+        source_content_digests=artifact_digests,
+        evidence_span_refs=span_ids,
     )
     contamination = replace(
         source_case.contamination,
-        source_artifact_ids=(artifact.artifact_id,),
-        document_ids=(document.document_id,),
+        source_artifact_ids=artifact_ids,
+        document_ids=document_ids,
         source_family_id=family_id,
-        source_content_sha256=artifact.content_digest,
+        source_content_sha256=artifact_digests[0],
     )
     source_case = replace(
         source_case,
-        input=replace(source_case.input, evidence_excerpts=(excerpt,)),
-        source_evidence_refs=(reference,),
+        input=replace(source_case.input, evidence_excerpts=excerpts_tuple),
+        source_evidence_refs=references_tuple,
         authority=authorities,
         provenance=provenance,
         contamination=contamination,
@@ -316,7 +469,7 @@ def _controlled_source_candidate(
             contamination=replace(packet.contamination, source_family_id=family_id),
         )
     )
-    return packet, resolver, artifact_path
+    return packet, resolver, artifact_paths[0]
 
 
 def test_candidate_packet_is_immutable_hash_bound_and_distinct_from_final_case() -> None:
@@ -465,6 +618,364 @@ def test_promotion_rejects_candidate_mutated_after_review() -> None:
         promote_to_benchmark_case(mutated, approval)
     with pytest.raises(ValueError, match="candidate payload hash mismatch"):
         validate_candidate_review_packet(replace(packet, benchmark_family="F01"))
+
+
+def test_mutation_candidate_binds_exact_parent_candidate_and_orders_parent_first() -> None:
+    parent = _semantic_candidate()
+    child = _mutation_candidate(parent)
+
+    validate_candidate_review_packet(child)
+    validate_candidate_set((child, parent))
+    order = topological_candidate_promotion_order((child, parent))
+
+    assert tuple(item.candidate_id for item in order) == (parent.candidate_id, child.candidate_id)
+    assert child.parent_candidate_binding is not None
+    assert (
+        child.parent_candidate_binding.parent_candidate_payload_hash
+        == parent.candidate_payload_hash
+    )
+    assert (
+        candidate_payload_hash(
+            replace(
+                child,
+                parent_candidate_binding=replace(
+                    child.parent_candidate_binding,
+                    mutation_lineage_id="different-lineage",
+                ),
+            )
+        )
+        != child.candidate_payload_hash
+    )
+    assert from_canonical_json(canonical_json(child), CandidateReviewPacket) == child
+
+
+def test_mutation_candidate_rejects_forged_parent_candidate_hash() -> None:
+    parent = _semantic_candidate()
+    child = _mutation_candidate(parent)
+    assert child.parent_candidate_binding is not None
+    forged_hash = "sha256:" + "f" * 64
+    mutation_authority = next(
+        item
+        for item in child.authority
+        if item.authority_kind == AuthorityKind.MUTATION_PARENT.value
+    )
+    forged = bind_candidate_review_packet(
+        replace(
+            child,
+            parent_candidate_binding=replace(
+                child.parent_candidate_binding,
+                parent_candidate_payload_hash=forged_hash,
+            ),
+            authority=tuple(
+                replace(item, digest=forged_hash) if item == mutation_authority else item
+                for item in child.authority
+            ),
+        )
+    )
+
+    with pytest.raises(ValueError, match="ID/version/hash does not match exactly"):
+        validate_candidate_set((parent, forged))
+
+
+def test_mutation_candidate_rejects_missing_parent_candidate() -> None:
+    child = _mutation_candidate(_semantic_candidate())
+
+    with pytest.raises(ValueError, match="parent candidate is not present"):
+        validate_candidate_set((child,))
+
+
+def test_mutation_candidate_rejects_self_parent() -> None:
+    parent = _semantic_candidate()
+    child = _mutation_candidate(parent)
+    assert child.parent_candidate_binding is not None
+    mutation_authority = next(
+        item
+        for item in child.authority
+        if item.authority_kind == AuthorityKind.MUTATION_PARENT.value
+    )
+    self_parent = bind_candidate_review_packet(
+        replace(
+            child,
+            parent_candidate_binding=replace(
+                child.parent_candidate_binding,
+                parent_candidate_id=child.candidate_id,
+                parent_candidate_version=child.candidate_version,
+            ),
+            authority=tuple(
+                replace(
+                    item,
+                    source_reference_id=child.candidate_id,
+                    version=child.candidate_version,
+                )
+                if item == mutation_authority
+                else item
+                for item in child.authority
+            ),
+        )
+    )
+
+    with pytest.raises(ValueError, match="self-parent"):
+        validate_candidate_set((parent, self_parent))
+
+
+def test_mutation_candidate_cycle_is_rejected_before_hash_resolution() -> None:
+    parent = _semantic_candidate()
+    first = _mutation_candidate(parent)
+    second = replace(_mutation_candidate(parent), candidate_id="other-mutation")
+    second = bind_candidate_review_packet(second)
+
+    def point_to(
+        child: CandidateReviewPacket, target: CandidateReviewPacket
+    ) -> CandidateReviewPacket:
+        assert child.parent_candidate_binding is not None
+        parent_authority = next(
+            item
+            for item in child.authority
+            if item.authority_kind == AuthorityKind.MUTATION_PARENT.value
+        )
+        return bind_candidate_review_packet(
+            replace(
+                child,
+                parent_candidate_binding=replace(
+                    child.parent_candidate_binding,
+                    parent_candidate_id=target.candidate_id,
+                    parent_candidate_version=target.candidate_version,
+                    parent_candidate_payload_hash=target.candidate_payload_hash,
+                    parent_origin_class=CaseOrigin.ADVERSARIAL_MUTATION,
+                ),
+                authority=tuple(
+                    replace(
+                        item,
+                        source_reference_id=target.candidate_id,
+                        version=target.candidate_version,
+                        digest=target.candidate_payload_hash,
+                    )
+                    if item == parent_authority
+                    else item
+                    for item in child.authority
+                ),
+                proposed_provenance=replace(
+                    child.proposed_provenance,
+                    parent_origin_class=CaseOrigin.ADVERSARIAL_MUTATION,
+                ),
+            )
+        )
+
+    first_cycle = point_to(first, second)
+    second_cycle = point_to(second, first)
+    with pytest.raises(ValueError, match="cycle"):
+        validate_candidate_set((first_cycle, second_cycle))
+
+
+@pytest.mark.parametrize("declared", [("provenance",), None])
+def test_mutation_changed_fields_must_match_candidate_scientific_projection(
+    declared: tuple[str, ...] | None,
+) -> None:
+    parent = _semantic_candidate()
+    child = _mutation_candidate(parent)
+    changed = list(child.proposed_provenance.changed_fields)
+    if declared is not None:
+        changed = list(declared)
+    else:
+        changed.append("difficulty")
+    invalid = bind_candidate_review_packet(
+        replace(
+            child,
+            proposed_provenance=replace(
+                child.proposed_provenance,
+                changed_fields=tuple(sorted(set(changed), key=lambda item: item.encode("utf-8"))),
+            ),
+        )
+    )
+
+    with pytest.raises(ValueError, match="changed_fields"):
+        validate_candidate_set((parent, invalid))
+
+
+def test_mutation_candidate_cannot_drop_parent_primary_authority() -> None:
+    parent = _semantic_candidate()
+    child = _mutation_candidate(parent)
+    child_without_primary = bind_candidate_review_packet(
+        replace(
+            child,
+            authority=tuple(
+                item
+                for item in child.authority
+                if item.authority_kind != AuthorityKind.EXPERT_RUBRIC.value
+            ),
+        )
+    )
+
+    with pytest.raises(ValueError):
+        validate_candidate_set((parent, child_without_primary))
+
+
+def test_mutation_candidate_must_preserve_parent_isolation_metadata() -> None:
+    parent = _semantic_candidate()
+    child = _mutation_candidate(parent)
+    isolated_child = bind_candidate_review_packet(
+        replace(
+            child,
+            isolation=replace(child.isolation, isolation_cluster_id="different-cluster"),
+        )
+    )
+
+    with pytest.raises(ValueError, match="preserve parent isolation metadata"):
+        validate_candidate_set((parent, isolated_child))
+
+
+def test_mutation_candidate_requires_explicit_operator_version_and_seed() -> None:
+    parent = _semantic_candidate()
+    child = _mutation_candidate(parent)
+    invalid = bind_candidate_review_packet(
+        replace(
+            child,
+            proposed_provenance=replace(
+                child.proposed_provenance,
+                mutation_operator=None,
+            ),
+        )
+    )
+
+    with pytest.raises(ValueError, match="complete pre-review mutation provenance"):
+        validate_candidate_review_packet(invalid)
+
+
+def test_mutation_promotion_requires_parent_and_rebinds_final_parent_identity() -> None:
+    parent_packet = _semantic_candidate()
+    child_packet = _mutation_candidate(parent_packet)
+    parent_approval = _approved_record(parent_packet)
+    child_approval = _approved_record(
+        child_packet,
+        approval_record_id="linear-review:issue-approval-child",
+        reviewer_id="linear-user:reviewer-child-0001",
+        approval_timestamp=_TIME.replace(minute=1),
+    )
+
+    with pytest.raises(ValueError, match="already promoted parent candidate"):
+        promote_with_receipt(child_packet, child_approval)
+
+    parent_result = promote_with_receipt(parent_packet, parent_approval)
+    parent_evidence = ParentPromotionEvidence(
+        packet=parent_packet,
+        approval=parent_approval,
+        result=parent_result,
+    )
+    child_result = promote_with_receipt(
+        child_packet,
+        child_approval,
+        parent_promotion_evidence=parent_evidence,
+    )
+    child_case = child_result.case
+    mutation_authority = next(
+        item
+        for item in child_case.authority
+        if item.authority_kind == AuthorityKind.MUTATION_PARENT.value
+    )
+
+    assert child_case.provenance.parent_case_hash == parent_result.case.case_payload_hash
+    assert mutation_authority.digest == parent_result.case.case_payload_hash
+    assert any(
+        edge.upstream_id == parent_result.case.case_payload_hash
+        and edge.downstream_id == child_case.case_id
+        and edge.relation == "MUTATION"
+        for edge in child_case.provenance.derivation_edges
+    )
+    assert child_result.receipt.mutation_promotion_link is not None
+    assert (
+        child_result.receipt.mutation_promotion_link.parent_promotion_receipt_digest
+        == parent_result.receipt.receipt_digest
+    )
+    validate_case(parent_result.case)
+    validate_case(child_case)
+    from dynamislm.benchmark import validate_case_set
+
+    validate_case_set((parent_result.case, child_case))
+    from dynamislm.benchmark.hashing import bind_case_payload
+
+    bad_parent_authority_case = bind_case_payload(
+        replace(
+            child_case,
+            authority=tuple(
+                replace(item, digest="sha256:" + "b" * 64)
+                if item.authority_kind == AuthorityKind.MUTATION_PARENT.value
+                else item
+                for item in child_case.authority
+            ),
+        )
+    )
+    with pytest.raises(ValueError, match="exact parent case hash"):
+        validate_case(bad_parent_authority_case)
+    validate_promotion_result(
+        child_packet,
+        child_approval,
+        child_result,
+        parent_promotion_evidence=parent_evidence,
+    )
+    assert from_canonical_json(canonical_json(child_result), PromotionResult) == child_result
+
+
+def test_mutation_promotion_rejects_parent_promotion_identity_mismatch() -> None:
+    parent_packet = _semantic_candidate()
+    other_parent_packet = _candidate_from_case(
+        next(
+            item
+            for item in build_synthetic_reference_fixture_cases()
+            if item.provenance.origin_class is CaseOrigin.DETERMINISTIC_ENGINE_DERIVED
+        )
+    )
+    child_packet = _mutation_candidate(parent_packet)
+    other_approval = _approved_record(other_parent_packet)
+    child_approval = _approved_record(
+        child_packet,
+        approval_record_id="linear-review:issue-approval-mismatch-child",
+        reviewer_id="linear-user:reviewer-mismatch-0001",
+    )
+    other_result = promote_with_receipt(other_parent_packet, other_approval)
+
+    with pytest.raises(ValueError, match="exact reviewed parent candidate"):
+        promote_with_receipt(
+            child_packet,
+            child_approval,
+            parent_promotion_evidence=ParentPromotionEvidence(
+                packet=other_parent_packet,
+                approval=other_approval,
+                result=other_result,
+            ),
+        )
+
+
+def test_mutation_promotion_rejects_parent_receipt_case_hash_mismatch() -> None:
+    parent_packet = _semantic_candidate()
+    child_packet = _mutation_candidate(parent_packet)
+    parent_approval = _approved_record(parent_packet)
+    child_approval = _approved_record(
+        child_packet,
+        approval_record_id="linear-review:issue-approval-hash-mismatch-child",
+        reviewer_id="linear-user:reviewer-hash-mismatch-0001",
+    )
+    parent_result = promote_with_receipt(parent_packet, parent_approval)
+    wrong_receipt = replace(
+        parent_result.receipt,
+        final_case_payload_hash="sha256:" + "a" * 64,
+    )
+    from dynamislm.benchmark.pre_review import _bind_promotion_receipt
+
+    forged_parent = replace(
+        parent_result,
+        receipt=_bind_promotion_receipt(wrong_receipt),
+    )
+
+    with pytest.raises(ValueError, match="promotion receipt"):
+        promote_with_receipt(
+            child_packet,
+            child_approval,
+            parent_promotion_evidence=ParentPromotionEvidence(
+                packet=parent_packet,
+                approval=parent_approval,
+                result=forged_parent,
+            ),
+        )
 
 
 def test_human_record_requires_timestamp_identity_expertise_and_approval_decision() -> None:
@@ -626,6 +1137,37 @@ def test_exact_jats_derived_source_span_passes(tmp_path: Path) -> None:
     packet, source_resolver, _ = _controlled_source_candidate(tmp_path)
 
     validate_candidate_review_packet(packet, source_resolver=source_resolver)
+
+
+def test_multi_reference_same_family_checks_each_document_and_span_authority(
+    tmp_path: Path,
+) -> None:
+    packet, source_resolver, _ = _controlled_source_candidate(tmp_path, multi_reference=True)
+
+    assert len(packet.source_evidence_refs) == 2
+    assert len(packet.input.evidence_excerpts) == 2
+    validate_candidate_review_packet(packet, source_resolver=source_resolver)
+
+    for binding in tuple(packet.authority):
+        if binding.authority_kind not in {
+            AuthorityKind.SOURCE_DOCUMENT.value,
+            AuthorityKind.SOURCE_EVIDENCE_SPAN.value,
+        }:
+            continue
+        candidate_without_one_binding = bind_candidate_review_packet(
+            replace(
+                packet,
+                authority=tuple(item for item in packet.authority if item != binding),
+            )
+        )
+        with pytest.raises(
+            ValueError,
+            match="SOURCE_DOCUMENT authority|SOURCE_EVIDENCE_SPAN authority",
+        ):
+            validate_candidate_review_packet(
+                candidate_without_one_binding,
+                source_resolver=source_resolver,
+            )
 
 
 def test_source_backed_candidate_requires_an_explicit_resolver(tmp_path: Path) -> None:

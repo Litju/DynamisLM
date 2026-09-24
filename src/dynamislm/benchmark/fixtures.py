@@ -608,7 +608,14 @@ def _mutation_case(parent: BenchmarkCaseV1) -> BenchmarkCaseV1:
         mutation_operator="prepend-marker",
         mutation_version="1.0.0",
         mutation_seed=17,
-        changed_fields=("case_id", "input", "question", "provenance", "contamination"),
+        changed_fields=(
+            "authority",
+            "case_id",
+            "input",
+            "question",
+            "provenance",
+            "contamination",
+        ),
         parent_origin_class=parent.provenance.origin_class,
         derivation_edges=(
             ProvenanceEdge(
@@ -622,6 +629,16 @@ def _mutation_case(parent: BenchmarkCaseV1) -> BenchmarkCaseV1:
         question=question,
         input=replace(parent.input, question_text=question),
         provenance=provenance,
+        authority=(
+            *parent.authority,
+            AuthorityBinding(
+                authority_kind="MUTATION_PARENT",
+                source_reference_id=parent.case_id,
+                version=parent.case_version,
+                digest=parent.case_payload_hash,
+                governed_field_ids=("provenance.parent_case_hash",),
+            ),
+        ),
         split=replace(parent.split, isolation_cluster_id="cluster-fixture-mutation"),
         contamination=replace(
             _contamination(
