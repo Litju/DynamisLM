@@ -46,8 +46,7 @@
               "span_sha256": "sha256:5617350ff51c08fe70af1ecb6cbf705277741a5b9fed9419cdca1af81984e1d0"
             }
           ],
-          "pmcid": "PMC10110967",
-          "source_metadata_sha256": "sha256:5f2ddee3f628cb8765ce106c344052afb5f8d5c76c63e643b5ddbf652f7623fa"
+          "pmcid": "PMC10110967"
         },
         {
           "document_content_sha256": "sha256:6cf066ea046dcc9725637e00ed6e2856e9410790ff0de4f9ab644525b7c7f905",
@@ -57,8 +56,7 @@
               "span_sha256": "sha256:24bf32fc38781f87dd8b252d948b4ec5f68d3bb6e9d27c6434f086fc5245ea6e"
             }
           ],
-          "pmcid": "PMC10196496",
-          "source_metadata_sha256": "sha256:e30b7fb073295c704104f72b927729f7f7c4f1612b5bd8c78f294d848690a6e9"
+          "pmcid": "PMC10196496"
         }
       ],
       "link_id": "PSE-SOURCE-LINK:ea48fd098433adc3",
@@ -106,8 +104,7 @@
               "span_sha256": "sha256:5617350ff51c08fe70af1ecb6cbf705277741a5b9fed9419cdca1af81984e1d0"
             }
           ],
-          "pmcid": "PMC10110967",
-          "source_metadata_sha256": "sha256:5f2ddee3f628cb8765ce106c344052afb5f8d5c76c63e643b5ddbf652f7623fa"
+          "pmcid": "PMC10110967"
         },
         {
           "document_content_sha256": "sha256:945ac35522478a1f8b8fc0c6c55f6718066c124ed9befbf39198a772fe2cdfc2",
@@ -125,8 +122,7 @@
               "span_sha256": "sha256:e7a88155479cc50109248ef5501a21dd9199729292e852ebc12976c42b574846"
             }
           ],
-          "pmcid": "PMC11467003",
-          "source_metadata_sha256": "sha256:49c509ccad471e1bf2eb8371b14551160e1bc03abf0b8ca598fd40ddc05c420f"
+          "pmcid": "PMC11467003"
         }
       ],
       "link_id": "PSE-SOURCE-LINK:c8880083bc2c2ea4",
@@ -168,8 +164,7 @@
               "span_sha256": "sha256:5617350ff51c08fe70af1ecb6cbf705277741a5b9fed9419cdca1af81984e1d0"
             }
           ],
-          "pmcid": "PMC10110967",
-          "source_metadata_sha256": "sha256:5f2ddee3f628cb8765ce106c344052afb5f8d5c76c63e643b5ddbf652f7623fa"
+          "pmcid": "PMC10110967"
         },
         {
           "document_content_sha256": "sha256:048475935394619494f2a456c53c4d8975b0198285a2cfee256d5352daf17ed4",
@@ -183,8 +178,7 @@
               "span_sha256": "sha256:c17cf2b1e47f62031d59dd628fb35536831441e44e2930ee1005fb0bb12aec0c"
             }
           ],
-          "pmcid": "PMC12106594",
-          "source_metadata_sha256": "sha256:d945cbb059e4caaf1b66cd504bf55b48e69e73e62e412b2eb094dccbfdc25470"
+          "pmcid": "PMC12106594"
         }
       ],
       "link_id": "PSE-SOURCE-LINK:a4aca2b05012edc5",
@@ -225,8 +219,7 @@
               "span_sha256": "sha256:5617350ff51c08fe70af1ecb6cbf705277741a5b9fed9419cdca1af81984e1d0"
             }
           ],
-          "pmcid": "PMC10110967",
-          "source_metadata_sha256": "sha256:5f2ddee3f628cb8765ce106c344052afb5f8d5c76c63e643b5ddbf652f7623fa"
+          "pmcid": "PMC10110967"
         },
         {
           "document_content_sha256": "sha256:2862c716d2f99143840af98d9cda4edbd246dc24888a6ce1a7963322ac0c22f1",
@@ -248,8 +241,7 @@
               "span_sha256": "sha256:4f039141e01bc272bf997257ab6f86c09e365a363a6554fb16b052b168aa39c8"
             }
           ],
-          "pmcid": "PMC12244393",
-          "source_metadata_sha256": "sha256:29d8a3af8848337daad91d41df0a56c880cedc7f01af2084603e8736069c85c9"
+          "pmcid": "PMC12244393"
         }
       ],
       "link_id": "PSE-SOURCE-LINK:2d91a880557a7625",
@@ -290,8 +282,7 @@
               "span_sha256": "sha256:5617350ff51c08fe70af1ecb6cbf705277741a5b9fed9419cdca1af81984e1d0"
             }
           ],
-          "pmcid": "PMC10110967",
-          "source_metadata_sha256": "sha256:5f2ddee3f628cb8765ce106c344052afb5f8d5c76c63e643b5ddbf652f7623fa"
+          "pmcid": "PMC10110967"
         },
         {
           "document_content_sha256": "sha256:5e71ceee29336f15c508b74ed4adac6aa916e8a2557d5edfb23e5384d6147a87",
@@ -313,8 +304,7 @@
               "span_sha256": "sha256:f3f17a46bda30c610305732069bba7e065f6ff90ffff6c85db258a85b00199f8"
             }
           ],
-          "pmcid": "PMC9968809",
-          "source_metadata_sha256": "sha256:6cda885159221c8710af7c6214a114c86984072b0ca93035a560ab2f968fd6ba"
+          "pmcid": "PMC9968809"
         }
       ],
       "link_id": "PSE-SOURCE-LINK:c64e17934cad63b0",
@@ -363,8 +353,7 @@
               "span_sha256": "sha256:963c165b68cedbd9b6331a78dd276e121c846a696197837133608ed069555a05"
             }
           ],
-          "pmcid": "PMC10115716",
-          "source_metadata_sha256": "sha256:232a122bbdbebffcfd3bc82ca69aa1cf8503a32f9616399ef33c73ce71e3d86f"
+          "pmcid": "PMC10115716"
         },
         {
           "document_content_sha256": "sha256:55e4b6d215ebcc683b1dc62d074bb30c441d6644a23776338e191c6735861e85",
@@ -374,8 +363,7 @@
               "span_sha256": "sha256:cdf8475f4502e04aeb15ca2be3a11db481b7d64b84166b80b13d6f6b59cb7c0b"
             }
           ],
-          "pmcid": "PMC10224001",
-          "source_metadata_sha256": "sha256:ee7ffcfdfc2c90be9f6e89a78e99b3dde75633ba8ae9cbbb52bdf31214d0a162"
+          "pmcid": "PMC10224001"
         }
       ],
       "link_id": "PSE-SOURCE-LINK:7c6a9836e80c7565",
@@ -425,8 +413,7 @@
               "span_sha256": "sha256:963c165b68cedbd9b6331a78dd276e121c846a696197837133608ed069555a05"
             }
           ],
-          "pmcid": "PMC10115716",
-          "source_metadata_sha256": "sha256:232a122bbdbebffcfd3bc82ca69aa1cf8503a32f9616399ef33c73ce71e3d86f"
+          "pmcid": "PMC10115716"
         },
         {
           "document_content_sha256": "sha256:945ac35522478a1f8b8fc0c6c55f6718066c124ed9befbf39198a772fe2cdfc2",
@@ -444,8 +431,7 @@
               "span_sha256": "sha256:e7a88155479cc50109248ef5501a21dd9199729292e852ebc12976c42b574846"
             }
           ],
-          "pmcid": "PMC11467003",
-          "source_metadata_sha256": "sha256:49c509ccad471e1bf2eb8371b14551160e1bc03abf0b8ca598fd40ddc05c420f"
+          "pmcid": "PMC11467003"
         }
       ],
       "link_id": "PSE-SOURCE-LINK:a892a38c4ecce31a",
@@ -495,8 +481,7 @@
               "span_sha256": "sha256:963c165b68cedbd9b6331a78dd276e121c846a696197837133608ed069555a05"
             }
           ],
-          "pmcid": "PMC10115716",
-          "source_metadata_sha256": "sha256:232a122bbdbebffcfd3bc82ca69aa1cf8503a32f9616399ef33c73ce71e3d86f"
+          "pmcid": "PMC10115716"
         },
         {
           "document_content_sha256": "sha256:048475935394619494f2a456c53c4d8975b0198285a2cfee256d5352daf17ed4",
@@ -510,8 +495,7 @@
               "span_sha256": "sha256:c17cf2b1e47f62031d59dd628fb35536831441e44e2930ee1005fb0bb12aec0c"
             }
           ],
-          "pmcid": "PMC12106594",
-          "source_metadata_sha256": "sha256:d945cbb059e4caaf1b66cd504bf55b48e69e73e62e412b2eb094dccbfdc25470"
+          "pmcid": "PMC12106594"
         }
       ],
       "link_id": "PSE-SOURCE-LINK:0ba5450a8a637bf1",
@@ -560,8 +544,7 @@
               "span_sha256": "sha256:963c165b68cedbd9b6331a78dd276e121c846a696197837133608ed069555a05"
             }
           ],
-          "pmcid": "PMC10115716",
-          "source_metadata_sha256": "sha256:232a122bbdbebffcfd3bc82ca69aa1cf8503a32f9616399ef33c73ce71e3d86f"
+          "pmcid": "PMC10115716"
         },
         {
           "document_content_sha256": "sha256:357346028250dabff8ed357f5ea6a1edf16bf91ca4fb9d96d2c6a2b3f55ba05a",
@@ -571,8 +554,7 @@
               "span_sha256": "sha256:cf4350059afb81975abcbc362b03309385c806725bfec8ea629cb686b9662099"
             }
           ],
-          "pmcid": "PMC5969001",
-          "source_metadata_sha256": "sha256:88fe298e867b19173d7f79b3b5b843bf4b71fb050a258ef513fb60c78d4686ff"
+          "pmcid": "PMC5969001"
         }
       ],
       "link_id": "PSE-SOURCE-LINK:67fd5e4a2128d01a",
@@ -621,8 +603,7 @@
               "span_sha256": "sha256:963c165b68cedbd9b6331a78dd276e121c846a696197837133608ed069555a05"
             }
           ],
-          "pmcid": "PMC10115716",
-          "source_metadata_sha256": "sha256:232a122bbdbebffcfd3bc82ca69aa1cf8503a32f9616399ef33c73ce71e3d86f"
+          "pmcid": "PMC10115716"
         },
         {
           "document_content_sha256": "sha256:90a4282a1992528febe5c09bb6b95bdc86cce7dcfa766bf13a0edba34150b2f8",
@@ -636,8 +617,7 @@
               "span_sha256": "sha256:14912e72b2c3a5c157d8d230559a9483a92eb94b07b1d2f0dc2cfc20f9d95a62"
             }
           ],
-          "pmcid": "PMC6162366",
-          "source_metadata_sha256": "sha256:624178697bf06557cfbf27f921711d724924e602708762f58f0d741b4a59315c"
+          "pmcid": "PMC6162366"
         }
       ],
       "link_id": "PSE-SOURCE-LINK:5bcc2a39cfd5488a",
@@ -687,8 +667,7 @@
               "span_sha256": "sha256:963c165b68cedbd9b6331a78dd276e121c846a696197837133608ed069555a05"
             }
           ],
-          "pmcid": "PMC10115716",
-          "source_metadata_sha256": "sha256:232a122bbdbebffcfd3bc82ca69aa1cf8503a32f9616399ef33c73ce71e3d86f"
+          "pmcid": "PMC10115716"
         },
         {
           "document_content_sha256": "sha256:b0bea03ecd22939dadce8b629b8d047698dcb76f507e41df2b237ba0dce7ee87",
@@ -710,8 +689,7 @@
               "span_sha256": "sha256:26f5d165ba6843f2af20ad11eb5664e2673a62b178f560f129b12460d8d02362"
             }
           ],
-          "pmcid": "PMC8956158",
-          "source_metadata_sha256": "sha256:9689d018b83b60f7ee311ffd1b66122679b02e823789ebe6b79b43bd5e1f7dbd"
+          "pmcid": "PMC8956158"
         }
       ],
       "link_id": "PSE-SOURCE-LINK:a6c08a5010f3a6c8",
@@ -749,8 +727,7 @@
               "span_sha256": "sha256:24bf32fc38781f87dd8b252d948b4ec5f68d3bb6e9d27c6434f086fc5245ea6e"
             }
           ],
-          "pmcid": "PMC10196496",
-          "source_metadata_sha256": "sha256:e30b7fb073295c704104f72b927729f7f7c4f1612b5bd8c78f294d848690a6e9"
+          "pmcid": "PMC10196496"
         },
         {
           "document_content_sha256": "sha256:945ac35522478a1f8b8fc0c6c55f6718066c124ed9befbf39198a772fe2cdfc2",
@@ -768,8 +745,7 @@
               "span_sha256": "sha256:e7a88155479cc50109248ef5501a21dd9199729292e852ebc12976c42b574846"
             }
           ],
-          "pmcid": "PMC11467003",
-          "source_metadata_sha256": "sha256:49c509ccad471e1bf2eb8371b14551160e1bc03abf0b8ca598fd40ddc05c420f"
+          "pmcid": "PMC11467003"
         }
       ],
       "link_id": "PSE-SOURCE-LINK:7c972982c17ba9a0",
@@ -807,8 +783,7 @@
               "span_sha256": "sha256:24bf32fc38781f87dd8b252d948b4ec5f68d3bb6e9d27c6434f086fc5245ea6e"
             }
           ],
-          "pmcid": "PMC10196496",
-          "source_metadata_sha256": "sha256:e30b7fb073295c704104f72b927729f7f7c4f1612b5bd8c78f294d848690a6e9"
+          "pmcid": "PMC10196496"
         },
         {
           "document_content_sha256": "sha256:048475935394619494f2a456c53c4d8975b0198285a2cfee256d5352daf17ed4",
@@ -822,8 +797,7 @@
               "span_sha256": "sha256:c17cf2b1e47f62031d59dd628fb35536831441e44e2930ee1005fb0bb12aec0c"
             }
           ],
-          "pmcid": "PMC12106594",
-          "source_metadata_sha256": "sha256:d945cbb059e4caaf1b66cd504bf55b48e69e73e62e412b2eb094dccbfdc25470"
+          "pmcid": "PMC12106594"
         }
       ],
       "link_id": "PSE-SOURCE-LINK:ab77d2e2408e6918",
@@ -860,8 +834,7 @@
               "span_sha256": "sha256:24bf32fc38781f87dd8b252d948b4ec5f68d3bb6e9d27c6434f086fc5245ea6e"
             }
           ],
-          "pmcid": "PMC10196496",
-          "source_metadata_sha256": "sha256:e30b7fb073295c704104f72b927729f7f7c4f1612b5bd8c78f294d848690a6e9"
+          "pmcid": "PMC10196496"
         },
         {
           "document_content_sha256": "sha256:2862c716d2f99143840af98d9cda4edbd246dc24888a6ce1a7963322ac0c22f1",
@@ -883,8 +856,7 @@
               "span_sha256": "sha256:4f039141e01bc272bf997257ab6f86c09e365a363a6554fb16b052b168aa39c8"
             }
           ],
-          "pmcid": "PMC12244393",
-          "source_metadata_sha256": "sha256:29d8a3af8848337daad91d41df0a56c880cedc7f01af2084603e8736069c85c9"
+          "pmcid": "PMC12244393"
         }
       ],
       "link_id": "PSE-SOURCE-LINK:25c91c937c41bdae",
@@ -921,8 +893,7 @@
               "span_sha256": "sha256:24bf32fc38781f87dd8b252d948b4ec5f68d3bb6e9d27c6434f086fc5245ea6e"
             }
           ],
-          "pmcid": "PMC10196496",
-          "source_metadata_sha256": "sha256:e30b7fb073295c704104f72b927729f7f7c4f1612b5bd8c78f294d848690a6e9"
+          "pmcid": "PMC10196496"
         },
         {
           "document_content_sha256": "sha256:5e71ceee29336f15c508b74ed4adac6aa916e8a2557d5edfb23e5384d6147a87",
@@ -944,8 +915,7 @@
               "span_sha256": "sha256:f3f17a46bda30c610305732069bba7e065f6ff90ffff6c85db258a85b00199f8"
             }
           ],
-          "pmcid": "PMC9968809",
-          "source_metadata_sha256": "sha256:6cda885159221c8710af7c6214a114c86984072b0ca93035a560ab2f968fd6ba"
+          "pmcid": "PMC9968809"
         }
       ],
       "link_id": "PSE-SOURCE-LINK:6fd376aebef7de43",
@@ -982,8 +952,7 @@
               "span_sha256": "sha256:cdf8475f4502e04aeb15ca2be3a11db481b7d64b84166b80b13d6f6b59cb7c0b"
             }
           ],
-          "pmcid": "PMC10224001",
-          "source_metadata_sha256": "sha256:ee7ffcfdfc2c90be9f6e89a78e99b3dde75633ba8ae9cbbb52bdf31214d0a162"
+          "pmcid": "PMC10224001"
         },
         {
           "document_content_sha256": "sha256:357346028250dabff8ed357f5ea6a1edf16bf91ca4fb9d96d2c6a2b3f55ba05a",
@@ -993,8 +962,7 @@
               "span_sha256": "sha256:cf4350059afb81975abcbc362b03309385c806725bfec8ea629cb686b9662099"
             }
           ],
-          "pmcid": "PMC5969001",
-          "source_metadata_sha256": "sha256:88fe298e867b19173d7f79b3b5b843bf4b71fb050a258ef513fb60c78d4686ff"
+          "pmcid": "PMC5969001"
         }
       ],
       "link_id": "PSE-SOURCE-LINK:43021b4c846588f2",
@@ -1031,8 +999,7 @@
               "span_sha256": "sha256:cdf8475f4502e04aeb15ca2be3a11db481b7d64b84166b80b13d6f6b59cb7c0b"
             }
           ],
-          "pmcid": "PMC10224001",
-          "source_metadata_sha256": "sha256:ee7ffcfdfc2c90be9f6e89a78e99b3dde75633ba8ae9cbbb52bdf31214d0a162"
+          "pmcid": "PMC10224001"
         },
         {
           "document_content_sha256": "sha256:90a4282a1992528febe5c09bb6b95bdc86cce7dcfa766bf13a0edba34150b2f8",
@@ -1046,8 +1013,7 @@
               "span_sha256": "sha256:14912e72b2c3a5c157d8d230559a9483a92eb94b07b1d2f0dc2cfc20f9d95a62"
             }
           ],
-          "pmcid": "PMC6162366",
-          "source_metadata_sha256": "sha256:624178697bf06557cfbf27f921711d724924e602708762f58f0d741b4a59315c"
+          "pmcid": "PMC6162366"
         }
       ],
       "link_id": "PSE-SOURCE-LINK:8ddbc4ca090c53eb",
@@ -1086,8 +1052,7 @@
               "span_sha256": "sha256:cdf8475f4502e04aeb15ca2be3a11db481b7d64b84166b80b13d6f6b59cb7c0b"
             }
           ],
-          "pmcid": "PMC10224001",
-          "source_metadata_sha256": "sha256:ee7ffcfdfc2c90be9f6e89a78e99b3dde75633ba8ae9cbbb52bdf31214d0a162"
+          "pmcid": "PMC10224001"
         },
         {
           "document_content_sha256": "sha256:b0bea03ecd22939dadce8b629b8d047698dcb76f507e41df2b237ba0dce7ee87",
@@ -1109,8 +1074,7 @@
               "span_sha256": "sha256:26f5d165ba6843f2af20ad11eb5664e2673a62b178f560f129b12460d8d02362"
             }
           ],
-          "pmcid": "PMC8956158",
-          "source_metadata_sha256": "sha256:9689d018b83b60f7ee311ffd1b66122679b02e823789ebe6b79b43bd5e1f7dbd"
+          "pmcid": "PMC8956158"
         }
       ],
       "link_id": "PSE-SOURCE-LINK:6c7f24aa8d1ef08a",
@@ -1149,8 +1113,7 @@
               "span_sha256": "sha256:c5e67c164f3954209b0d440461aa7b6472b7b819c49137e3b691e0eedf365fa2"
             }
           ],
-          "pmcid": "PMC10289087",
-          "source_metadata_sha256": "sha256:b6448e1aaa73204e915cdfcf58b089ee43b64047f32bd2c46353088e48579ee6"
+          "pmcid": "PMC10289087"
         },
         {
           "document_content_sha256": "sha256:4c2e3358ead4f775e3a834a64fb87d9f9039889d198a35f1b11b42ad871f90b7",
@@ -1168,8 +1131,7 @@
               "span_sha256": "sha256:bd735873f621aabfaa598b6d11482560a98032b98b52909cc97cfd57886f12f3"
             }
           ],
-          "pmcid": "PMC7761544",
-          "source_metadata_sha256": "sha256:c12252f731cecde1f8d2349da4ac55bf7b4574e275a84c6c44ff2239fb8a42dd"
+          "pmcid": "PMC7761544"
         }
       ],
       "link_id": "PSE-SOURCE-LINK:3bbbf712fcc15948",
@@ -1206,8 +1168,7 @@
               "span_sha256": "sha256:a28b2bfea4d485359a67d78ae41a1b5b33857994d16d7f42536ddf5536a3591d"
             }
           ],
-          "pmcid": "PMC10346244",
-          "source_metadata_sha256": "sha256:4b7b6023ce062d8b5b6e3135a6b7e545e5dcf90ebda23496b012cee70bd9e4a7"
+          "pmcid": "PMC10346244"
         },
         {
           "document_content_sha256": "sha256:319b9e4f7d1833c9eb5ded2089c1591a7def7d9e975b51e71ad47d8029c8164a",
@@ -1217,8 +1178,7 @@
               "span_sha256": "sha256:65d54c3730ce3ceda62d45fb1265862e773c1a94511663a94e8c0a5a375d048c"
             }
           ],
-          "pmcid": "PMC9620392",
-          "source_metadata_sha256": "sha256:fc218c3a3bd718f675a1dc386a4bae595630e04805ce87576040a4bdecd3e3a7"
+          "pmcid": "PMC9620392"
         }
       ],
       "link_id": "PSE-SOURCE-LINK:261d6dda85d5dae0",
@@ -1256,8 +1216,7 @@
               "span_sha256": "sha256:ae5bb8f64c1544955366dd645bad93aa92680426d71fa97877724b30f99a1f9d"
             }
           ],
-          "pmcid": "PMC10529540",
-          "source_metadata_sha256": "sha256:879aaa6d3eaedae817d791f3e3d5874ff5163af28fb4681663e1cce819df2348"
+          "pmcid": "PMC10529540"
         },
         {
           "document_content_sha256": "sha256:b74811b00631e1689ad6cccd399c91be5358713f20114e7e9417e1b94079750f",
@@ -1267,8 +1226,7 @@
               "span_sha256": "sha256:3544842e99c30237a6111c919e5db6ed62a21d0a3e8ed3425e2f1ba7919f3480"
             }
           ],
-          "pmcid": "PMC11086264",
-          "source_metadata_sha256": "sha256:e6d16a2b4d75ba03750e610de55b69c81a72057eda7e9bb662ada214bf192bcd"
+          "pmcid": "PMC11086264"
         }
       ],
       "link_id": "PSE-SOURCE-LINK:f987a5b37a3b0bf8",
@@ -1305,8 +1263,7 @@
               "span_sha256": "sha256:ae5bb8f64c1544955366dd645bad93aa92680426d71fa97877724b30f99a1f9d"
             }
           ],
-          "pmcid": "PMC10529540",
-          "source_metadata_sha256": "sha256:879aaa6d3eaedae817d791f3e3d5874ff5163af28fb4681663e1cce819df2348"
+          "pmcid": "PMC10529540"
         },
         {
           "document_content_sha256": "sha256:2328a7e03394729fa31074134383d66b0706d8834bc24cd6f3ec07f4721bc74c",
@@ -1316,8 +1273,7 @@
               "span_sha256": "sha256:b755512fb2bda8d864e09ae51472e123af5da6b3a91338db361b54bd38969af3"
             }
           ],
-          "pmcid": "PMC11478346",
-          "source_metadata_sha256": "sha256:73b1fc1751447dc3a35f293349b86b852bd78304cee68f34ccfb9d1601a1bd29"
+          "pmcid": "PMC11478346"
         }
       ],
       "link_id": "PSE-SOURCE-LINK:7d68896ea7f8e437",
@@ -1355,8 +1311,7 @@
               "span_sha256": "sha256:ae5bb8f64c1544955366dd645bad93aa92680426d71fa97877724b30f99a1f9d"
             }
           ],
-          "pmcid": "PMC10529540",
-          "source_metadata_sha256": "sha256:879aaa6d3eaedae817d791f3e3d5874ff5163af28fb4681663e1cce819df2348"
+          "pmcid": "PMC10529540"
         },
         {
           "document_content_sha256": "sha256:2795cad0424847e560c5c922bc813a182e2a456cf13f104013ff64a28badff70",
@@ -1366,8 +1321,7 @@
               "span_sha256": "sha256:83c205b8f3ebd6d8804b9b1e26124397b5a0ac0082b7dc238119d31ded75ae21"
             }
           ],
-          "pmcid": "PMC9865236",
-          "source_metadata_sha256": "sha256:0b28349522c86067495fa736ef427cea6cbed033f80f9ae9e5a360120bb56904"
+          "pmcid": "PMC9865236"
         }
       ],
       "link_id": "PSE-SOURCE-LINK:4ba0ded34f4a1c0d",
@@ -1404,8 +1358,7 @@
               "span_sha256": "sha256:8f6d6032e48986887be931248d7e0029fe0dc87757655462c46de873103296a2"
             }
           ],
-          "pmcid": "PMC10575115",
-          "source_metadata_sha256": "sha256:5f56a6eb52a4fe089a0379df35e8ac2572d4cf085c75c2ea3f5ee1391206d164"
+          "pmcid": "PMC10575115"
         },
         {
           "document_content_sha256": "sha256:6128acb7cc36d2df491a7d7435f2fe55ebc162665a741d4c3de6d28a310deb69",
@@ -1415,8 +1368,7 @@
               "span_sha256": "sha256:926044ffc48d59df0473bcc4e5d8309f8001e03b6151cc6eef93dcc82b17c179"
             }
           ],
-          "pmcid": "PMC7747683",
-          "source_metadata_sha256": "sha256:c98b5b15c1ca16b27bdba1983c3cf7ca50fe65515c0c24a7abf27223557cedca"
+          "pmcid": "PMC7747683"
         }
       ],
       "link_id": "PSE-SOURCE-LINK:512541e560180311",
@@ -1453,8 +1405,7 @@
               "span_sha256": "sha256:8f6d6032e48986887be931248d7e0029fe0dc87757655462c46de873103296a2"
             }
           ],
-          "pmcid": "PMC10575115",
-          "source_metadata_sha256": "sha256:5f56a6eb52a4fe089a0379df35e8ac2572d4cf085c75c2ea3f5ee1391206d164"
+          "pmcid": "PMC10575115"
         },
         {
           "document_content_sha256": "sha256:762c74d0a02bbbe98504c2ff9e562f56a83001faae6c8e6c4924278585a8be2a",
@@ -1464,8 +1415,7 @@
               "span_sha256": "sha256:69cf5608673a54836a80527c02ebc958cea28e3d9b14af5512a54b19580ced58"
             }
           ],
-          "pmcid": "PMC9691012",
-          "source_metadata_sha256": "sha256:91e68bc4a8c7403310ad4f6292f9dcdc71d655c0576e9bf84b06989766c80914"
+          "pmcid": "PMC9691012"
         }
       ],
       "link_id": "PSE-SOURCE-LINK:d8935c42f1931dee",
@@ -1502,8 +1452,7 @@
               "span_sha256": "sha256:d9815f9cbceeabf7e5b3bb7832204fcfdb241c023ec9059e828e771e716cd50b"
             }
           ],
-          "pmcid": "PMC10703208",
-          "source_metadata_sha256": "sha256:13698dc31215697c4be2c57d48a879c67ce4aa428a082b14a1d53768a4a68e3b"
+          "pmcid": "PMC10703208"
         },
         {
           "document_content_sha256": "sha256:43c3f30e7b40158127b9dfb33dc1f338d3cea0a4f64eb085c678b72cadb92adf",
@@ -1513,8 +1462,7 @@
               "span_sha256": "sha256:73a614c28dfde4074efcbcae57e1c9f0be5e73a6aaa19909e12a29c22ee9bdd6"
             }
           ],
-          "pmcid": "PMC5968972",
-          "source_metadata_sha256": "sha256:cc2d258e5c0c92afccda44217db7b51e58e0f2351193099bf45994d43eb8f331"
+          "pmcid": "PMC5968972"
         }
       ],
       "link_id": "PSE-SOURCE-LINK:58eb0fa8f262597c",
@@ -1551,8 +1499,7 @@
               "span_sha256": "sha256:d9815f9cbceeabf7e5b3bb7832204fcfdb241c023ec9059e828e771e716cd50b"
             }
           ],
-          "pmcid": "PMC10703208",
-          "source_metadata_sha256": "sha256:13698dc31215697c4be2c57d48a879c67ce4aa428a082b14a1d53768a4a68e3b"
+          "pmcid": "PMC10703208"
         },
         {
           "document_content_sha256": "sha256:357346028250dabff8ed357f5ea6a1edf16bf91ca4fb9d96d2c6a2b3f55ba05a",
@@ -1562,8 +1509,7 @@
               "span_sha256": "sha256:cf4350059afb81975abcbc362b03309385c806725bfec8ea629cb686b9662099"
             }
           ],
-          "pmcid": "PMC5969001",
-          "source_metadata_sha256": "sha256:88fe298e867b19173d7f79b3b5b843bf4b71fb050a258ef513fb60c78d4686ff"
+          "pmcid": "PMC5969001"
         }
       ],
       "link_id": "PSE-SOURCE-LINK:d20bed1eb94eb1b3",
@@ -1603,8 +1549,7 @@
               "span_sha256": "sha256:3544842e99c30237a6111c919e5db6ed62a21d0a3e8ed3425e2f1ba7919f3480"
             }
           ],
-          "pmcid": "PMC11086264",
-          "source_metadata_sha256": "sha256:e6d16a2b4d75ba03750e610de55b69c81a72057eda7e9bb662ada214bf192bcd"
+          "pmcid": "PMC11086264"
         },
         {
           "document_content_sha256": "sha256:2328a7e03394729fa31074134383d66b0706d8834bc24cd6f3ec07f4721bc74c",
@@ -1614,8 +1559,7 @@
               "span_sha256": "sha256:b755512fb2bda8d864e09ae51472e123af5da6b3a91338db361b54bd38969af3"
             }
           ],
-          "pmcid": "PMC11478346",
-          "source_metadata_sha256": "sha256:73b1fc1751447dc3a35f293349b86b852bd78304cee68f34ccfb9d1601a1bd29"
+          "pmcid": "PMC11478346"
         }
       ],
       "link_id": "PSE-SOURCE-LINK:ea5abfc22afdfc6c",
@@ -1662,8 +1606,7 @@
               "span_sha256": "sha256:3544842e99c30237a6111c919e5db6ed62a21d0a3e8ed3425e2f1ba7919f3480"
             }
           ],
-          "pmcid": "PMC11086264",
-          "source_metadata_sha256": "sha256:e6d16a2b4d75ba03750e610de55b69c81a72057eda7e9bb662ada214bf192bcd"
+          "pmcid": "PMC11086264"
         },
         {
           "document_content_sha256": "sha256:2795cad0424847e560c5c922bc813a182e2a456cf13f104013ff64a28badff70",
@@ -1673,8 +1616,7 @@
               "span_sha256": "sha256:83c205b8f3ebd6d8804b9b1e26124397b5a0ac0082b7dc238119d31ded75ae21"
             }
           ],
-          "pmcid": "PMC9865236",
-          "source_metadata_sha256": "sha256:0b28349522c86067495fa736ef427cea6cbed033f80f9ae9e5a360120bb56904"
+          "pmcid": "PMC9865236"
         }
       ],
       "link_id": "PSE-SOURCE-LINK:ba6bc9568558ea7d",
@@ -1720,8 +1662,7 @@
               "span_sha256": "sha256:ac941f34847b936c2cd0a0653c37762b5802aafc9b97880ab93bc8f15443267c"
             }
           ],
-          "pmcid": "PMC11209073",
-          "source_metadata_sha256": "sha256:36ee0c9734e8f486159b16b951a95d77dea376a7c57ba9a098a3a7f7cf18ed48"
+          "pmcid": "PMC11209073"
         },
         {
           "document_content_sha256": "sha256:2862c716d2f99143840af98d9cda4edbd246dc24888a6ce1a7963322ac0c22f1",
@@ -1743,8 +1684,7 @@
               "span_sha256": "sha256:4f039141e01bc272bf997257ab6f86c09e365a363a6554fb16b052b168aa39c8"
             }
           ],
-          "pmcid": "PMC12244393",
-          "source_metadata_sha256": "sha256:29d8a3af8848337daad91d41df0a56c880cedc7f01af2084603e8736069c85c9"
+          "pmcid": "PMC12244393"
         }
       ],
       "link_id": "PSE-SOURCE-LINK:ef04e06a5100844b",
@@ -1790,8 +1730,7 @@
               "span_sha256": "sha256:ac941f34847b936c2cd0a0653c37762b5802aafc9b97880ab93bc8f15443267c"
             }
           ],
-          "pmcid": "PMC11209073",
-          "source_metadata_sha256": "sha256:36ee0c9734e8f486159b16b951a95d77dea376a7c57ba9a098a3a7f7cf18ed48"
+          "pmcid": "PMC11209073"
         },
         {
           "document_content_sha256": "sha256:1e970c1171d6aad14ece02a625a6f665f546b502aaa8441c8f6a540faef1d666",
@@ -1813,8 +1752,7 @@
               "span_sha256": "sha256:33e91da2b14348c6f93cc35633f52e7bb5ae54da6064b452e15a4644ba3cd70d"
             }
           ],
-          "pmcid": "PMC12490298",
-          "source_metadata_sha256": "sha256:c1a3de7bd93995905c498a1e9293d9ce3ffacb400bfb903526231893e71dd183"
+          "pmcid": "PMC12490298"
         }
       ],
       "link_id": "PSE-SOURCE-LINK:df10914f4a52d309",
@@ -1859,8 +1797,7 @@
               "span_sha256": "sha256:ac941f34847b936c2cd0a0653c37762b5802aafc9b97880ab93bc8f15443267c"
             }
           ],
-          "pmcid": "PMC11209073",
-          "source_metadata_sha256": "sha256:36ee0c9734e8f486159b16b951a95d77dea376a7c57ba9a098a3a7f7cf18ed48"
+          "pmcid": "PMC11209073"
         },
         {
           "document_content_sha256": "sha256:f82a7c18e810e58bddf38dc6b632facb1cd2eee62f587e27afddbaf25bf0d393",
@@ -1882,8 +1819,7 @@
               "span_sha256": "sha256:0bd7fdcd835eebcbeece55721b9db94e329a608ffd54189bbf9ebb5742f997d9"
             }
           ],
-          "pmcid": "PMC12884896",
-          "source_metadata_sha256": "sha256:652f55f1935c6c00dfa3174f84e395159dd87f4ccfc4addb42f05bfae4fdfb06"
+          "pmcid": "PMC12884896"
         }
       ],
       "link_id": "PSE-SOURCE-LINK:1635968c04dea245",
@@ -1930,8 +1866,7 @@
               "span_sha256": "sha256:e7a88155479cc50109248ef5501a21dd9199729292e852ebc12976c42b574846"
             }
           ],
-          "pmcid": "PMC11467003",
-          "source_metadata_sha256": "sha256:49c509ccad471e1bf2eb8371b14551160e1bc03abf0b8ca598fd40ddc05c420f"
+          "pmcid": "PMC11467003"
         },
         {
           "document_content_sha256": "sha256:048475935394619494f2a456c53c4d8975b0198285a2cfee256d5352daf17ed4",
@@ -1945,8 +1880,7 @@
               "span_sha256": "sha256:c17cf2b1e47f62031d59dd628fb35536831441e44e2930ee1005fb0bb12aec0c"
             }
           ],
-          "pmcid": "PMC12106594",
-          "source_metadata_sha256": "sha256:d945cbb059e4caaf1b66cd504bf55b48e69e73e62e412b2eb094dccbfdc25470"
+          "pmcid": "PMC12106594"
         }
       ],
       "link_id": "PSE-SOURCE-LINK:2face7805a9e1410",
@@ -1997,8 +1931,7 @@
               "span_sha256": "sha256:e7a88155479cc50109248ef5501a21dd9199729292e852ebc12976c42b574846"
             }
           ],
-          "pmcid": "PMC11467003",
-          "source_metadata_sha256": "sha256:49c509ccad471e1bf2eb8371b14551160e1bc03abf0b8ca598fd40ddc05c420f"
+          "pmcid": "PMC11467003"
         },
         {
           "document_content_sha256": "sha256:2862c716d2f99143840af98d9cda4edbd246dc24888a6ce1a7963322ac0c22f1",
@@ -2020,8 +1953,7 @@
               "span_sha256": "sha256:4f039141e01bc272bf997257ab6f86c09e365a363a6554fb16b052b168aa39c8"
             }
           ],
-          "pmcid": "PMC12244393",
-          "source_metadata_sha256": "sha256:29d8a3af8848337daad91d41df0a56c880cedc7f01af2084603e8736069c85c9"
+          "pmcid": "PMC12244393"
         }
       ],
       "link_id": "PSE-SOURCE-LINK:a5d79f86b93f996b",
@@ -2066,8 +1998,7 @@
               "span_sha256": "sha256:e7a88155479cc50109248ef5501a21dd9199729292e852ebc12976c42b574846"
             }
           ],
-          "pmcid": "PMC11467003",
-          "source_metadata_sha256": "sha256:49c509ccad471e1bf2eb8371b14551160e1bc03abf0b8ca598fd40ddc05c420f"
+          "pmcid": "PMC11467003"
         },
         {
           "document_content_sha256": "sha256:5e71ceee29336f15c508b74ed4adac6aa916e8a2557d5edfb23e5384d6147a87",
@@ -2089,8 +2020,7 @@
               "span_sha256": "sha256:f3f17a46bda30c610305732069bba7e065f6ff90ffff6c85db258a85b00199f8"
             }
           ],
-          "pmcid": "PMC9968809",
-          "source_metadata_sha256": "sha256:6cda885159221c8710af7c6214a114c86984072b0ca93035a560ab2f968fd6ba"
+          "pmcid": "PMC9968809"
         }
       ],
       "link_id": "PSE-SOURCE-LINK:858d4b3b6b8e3bf2",
@@ -2128,8 +2058,7 @@
               "span_sha256": "sha256:b755512fb2bda8d864e09ae51472e123af5da6b3a91338db361b54bd38969af3"
             }
           ],
-          "pmcid": "PMC11478346",
-          "source_metadata_sha256": "sha256:73b1fc1751447dc3a35f293349b86b852bd78304cee68f34ccfb9d1601a1bd29"
+          "pmcid": "PMC11478346"
         },
         {
           "document_content_sha256": "sha256:2795cad0424847e560c5c922bc813a182e2a456cf13f104013ff64a28badff70",
@@ -2139,8 +2068,7 @@
               "span_sha256": "sha256:83c205b8f3ebd6d8804b9b1e26124397b5a0ac0082b7dc238119d31ded75ae21"
             }
           ],
-          "pmcid": "PMC9865236",
-          "source_metadata_sha256": "sha256:0b28349522c86067495fa736ef427cea6cbed033f80f9ae9e5a360120bb56904"
+          "pmcid": "PMC9865236"
         }
       ],
       "link_id": "PSE-SOURCE-LINK:13b2e636e62e7877",
@@ -2178,8 +2106,7 @@
               "span_sha256": "sha256:0c2d8367e576b192191df234b657fa9346547beb987e34106c2c794edecea61f"
             }
           ],
-          "pmcid": "PMC11552493",
-          "source_metadata_sha256": "sha256:59be336af5b53a49509b478511255e243e72d27bf3f101c3b587b2dd037f1463"
+          "pmcid": "PMC11552493"
         },
         {
           "document_content_sha256": "sha256:3e4687d1326f82af047da085bc9c1c56b8701f61b33944d01f9a2eeef476d714",
@@ -2197,8 +2124,7 @@
               "span_sha256": "sha256:50baa52ee080ac5e2f08794c98d3f057a392e32d57315347d26e449637df5312"
             }
           ],
-          "pmcid": "PMC4840326",
-          "source_metadata_sha256": "sha256:483a332c1ce75e8432a9d73d117de258619ec00fc3865ece7f53289af0595957"
+          "pmcid": "PMC4840326"
         }
       ],
       "link_id": "PSE-SOURCE-LINK:e25da05dac342192",
@@ -2239,8 +2165,7 @@
               "span_sha256": "sha256:06204b4ffe8857c121e7062b9b4d497b0040ad53bc7e4f63ae65b9378d403f99"
             }
           ],
-          "pmcid": "PMC11644249",
-          "source_metadata_sha256": "sha256:eef1ba3edbc44ba2234b3132236cf25aa044babf0cc1d86deefa2f11d38d6d43"
+          "pmcid": "PMC11644249"
         },
         {
           "document_content_sha256": "sha256:2ffa0b9f1e0e746d3a05f0c9a9188c907a0a34f82f68023896468dc6b048a915",
@@ -2250,8 +2175,7 @@
               "span_sha256": "sha256:e0820e65649222553572561f49324384ff9acd0ae05162f8b1c6a03e9046c357"
             }
           ],
-          "pmcid": "PMC6521994",
-          "source_metadata_sha256": "sha256:b84f22c1ed07c44cb7ccf940c2803bedb845a3177822aa922bfad1f0d8aa228e"
+          "pmcid": "PMC6521994"
         }
       ],
       "link_id": "PSE-SOURCE-LINK:611c2c24ffc4af0b",
@@ -2289,8 +2213,7 @@
               "span_sha256": "sha256:4c58b9a169f37c5c00adc032ae4e61c1f946e7b64aee64b9103b8774b06015a2"
             }
           ],
-          "pmcid": "PMC11963138",
-          "source_metadata_sha256": "sha256:a54e35929cd99debcc42b4e24529c1f998b4d92f89af5e5b3333ad0b74f3ae7e"
+          "pmcid": "PMC11963138"
         },
         {
           "document_content_sha256": "sha256:d7cbe569647ffbe48ebeba735551e36b9e8a084cbd6a02fa9ce7de4937f9de43",
@@ -2300,8 +2223,7 @@
               "span_sha256": "sha256:f02cd24af104f3aedc8dc69abc98e6a3ed7f8c316d0a8f13aff7d4719cd1723a"
             }
           ],
-          "pmcid": "PMC7410317",
-          "source_metadata_sha256": "sha256:3d7a2db78f50304d6469a25eb010726963c958035c13b5431d4f1d5391827815"
+          "pmcid": "PMC7410317"
         }
       ],
       "link_id": "PSE-SOURCE-LINK:009da755b6e19b78",
@@ -2343,8 +2265,7 @@
               "span_sha256": "sha256:c17cf2b1e47f62031d59dd628fb35536831441e44e2930ee1005fb0bb12aec0c"
             }
           ],
-          "pmcid": "PMC12106594",
-          "source_metadata_sha256": "sha256:d945cbb059e4caaf1b66cd504bf55b48e69e73e62e412b2eb094dccbfdc25470"
+          "pmcid": "PMC12106594"
         },
         {
           "document_content_sha256": "sha256:2862c716d2f99143840af98d9cda4edbd246dc24888a6ce1a7963322ac0c22f1",
@@ -2366,8 +2287,7 @@
               "span_sha256": "sha256:4f039141e01bc272bf997257ab6f86c09e365a363a6554fb16b052b168aa39c8"
             }
           ],
-          "pmcid": "PMC12244393",
-          "source_metadata_sha256": "sha256:29d8a3af8848337daad91d41df0a56c880cedc7f01af2084603e8736069c85c9"
+          "pmcid": "PMC12244393"
         }
       ],
       "link_id": "PSE-SOURCE-LINK:3587ccc6ee0771db",
@@ -2409,8 +2329,7 @@
               "span_sha256": "sha256:c17cf2b1e47f62031d59dd628fb35536831441e44e2930ee1005fb0bb12aec0c"
             }
           ],
-          "pmcid": "PMC12106594",
-          "source_metadata_sha256": "sha256:d945cbb059e4caaf1b66cd504bf55b48e69e73e62e412b2eb094dccbfdc25470"
+          "pmcid": "PMC12106594"
         },
         {
           "document_content_sha256": "sha256:5e71ceee29336f15c508b74ed4adac6aa916e8a2557d5edfb23e5384d6147a87",
@@ -2432,8 +2351,7 @@
               "span_sha256": "sha256:f3f17a46bda30c610305732069bba7e065f6ff90ffff6c85db258a85b00199f8"
             }
           ],
-          "pmcid": "PMC9968809",
-          "source_metadata_sha256": "sha256:6cda885159221c8710af7c6214a114c86984072b0ca93035a560ab2f968fd6ba"
+          "pmcid": "PMC9968809"
         }
       ],
       "link_id": "PSE-SOURCE-LINK:50bda0e0efb51206",
@@ -2471,8 +2389,7 @@
               "span_sha256": "sha256:529b4a960e059ecd7a932f0be7ec0a9f6367c3664f67568e211bc6fc027cef67"
             }
           ],
-          "pmcid": "PMC12121892",
-          "source_metadata_sha256": "sha256:588da3da66e6d4a46a75642c6fe219b66c158fafac39898a3aeae5f060e20c37"
+          "pmcid": "PMC12121892"
         },
         {
           "document_content_sha256": "sha256:2a3eb3d6f91747a4bdef19372037a254eaf5fb056d701dde61cc81ae5df05939",
@@ -2482,8 +2399,7 @@
               "span_sha256": "sha256:215100cdfc49a4d13a6502069537e2caa8104dd2471a942999aa75c27686ec88"
             }
           ],
-          "pmcid": "PMC7956260",
-          "source_metadata_sha256": "sha256:8c86aa75a977e79cf03b1c14e0171981794b872203ce71aefd65a2db0493a932"
+          "pmcid": "PMC7956260"
         }
       ],
       "link_id": "PSE-SOURCE-LINK:a5954eee4e5a1615",
@@ -2533,8 +2449,7 @@
               "span_sha256": "sha256:60129522588aae7bb19447d0eef850380f6c4f31125f153275ea10941320354e"
             }
           ],
-          "pmcid": "PMC12244382",
-          "source_metadata_sha256": "sha256:f20411b19f5e0bda91f5056f92e96b4c370581cf20531347c6dddbb552c0addb"
+          "pmcid": "PMC12244382"
         },
         {
           "document_content_sha256": "sha256:26c10c564530bdc7aeba095e504e1220a111eab492d3c8a98079fbbb7909cd92",
@@ -2556,8 +2471,7 @@
               "span_sha256": "sha256:cc7b01833f8aa9daf35560f9d2b7fc7fa4c139153bc3d0c4805df7dd7adc5624"
             }
           ],
-          "pmcid": "PMC6851047",
-          "source_metadata_sha256": "sha256:1a41be53047e30b04c3c27598ba51bd432594363340dec0573d0d24f3e7ec23f"
+          "pmcid": "PMC6851047"
         }
       ],
       "link_id": "PSE-SOURCE-LINK:9f39de8615bef7ca",
@@ -2613,8 +2527,7 @@
               "span_sha256": "sha256:4f039141e01bc272bf997257ab6f86c09e365a363a6554fb16b052b168aa39c8"
             }
           ],
-          "pmcid": "PMC12244393",
-          "source_metadata_sha256": "sha256:29d8a3af8848337daad91d41df0a56c880cedc7f01af2084603e8736069c85c9"
+          "pmcid": "PMC12244393"
         },
         {
           "document_content_sha256": "sha256:1e970c1171d6aad14ece02a625a6f665f546b502aaa8441c8f6a540faef1d666",
@@ -2636,8 +2549,7 @@
               "span_sha256": "sha256:33e91da2b14348c6f93cc35633f52e7bb5ae54da6064b452e15a4644ba3cd70d"
             }
           ],
-          "pmcid": "PMC12490298",
-          "source_metadata_sha256": "sha256:c1a3de7bd93995905c498a1e9293d9ce3ffacb400bfb903526231893e71dd183"
+          "pmcid": "PMC12490298"
         }
       ],
       "link_id": "PSE-SOURCE-LINK:90a3b49d0fe51f56",
@@ -2705,8 +2617,7 @@
               "span_sha256": "sha256:4f039141e01bc272bf997257ab6f86c09e365a363a6554fb16b052b168aa39c8"
             }
           ],
-          "pmcid": "PMC12244393",
-          "source_metadata_sha256": "sha256:29d8a3af8848337daad91d41df0a56c880cedc7f01af2084603e8736069c85c9"
+          "pmcid": "PMC12244393"
         },
         {
           "document_content_sha256": "sha256:f82a7c18e810e58bddf38dc6b632facb1cd2eee62f587e27afddbaf25bf0d393",
@@ -2728,8 +2639,7 @@
               "span_sha256": "sha256:0bd7fdcd835eebcbeece55721b9db94e329a608ffd54189bbf9ebb5742f997d9"
             }
           ],
-          "pmcid": "PMC12884896",
-          "source_metadata_sha256": "sha256:652f55f1935c6c00dfa3174f84e395159dd87f4ccfc4addb42f05bfae4fdfb06"
+          "pmcid": "PMC12884896"
         }
       ],
       "link_id": "PSE-SOURCE-LINK:fb9b85b731d13a97",
@@ -2786,8 +2696,7 @@
               "span_sha256": "sha256:4f039141e01bc272bf997257ab6f86c09e365a363a6554fb16b052b168aa39c8"
             }
           ],
-          "pmcid": "PMC12244393",
-          "source_metadata_sha256": "sha256:29d8a3af8848337daad91d41df0a56c880cedc7f01af2084603e8736069c85c9"
+          "pmcid": "PMC12244393"
         },
         {
           "document_content_sha256": "sha256:e57dc2691684847ef4968c085d0a3b253ed476227cd1c0b602e4f2f94a9568fa",
@@ -2801,8 +2710,7 @@
               "span_sha256": "sha256:98e462061e7ed3a961555cc62c57f5d180a9b50c6d47916f48928d3e10d0450a"
             }
           ],
-          "pmcid": "PMC9330844",
-          "source_metadata_sha256": "sha256:f6eb5eb5ea308b6a3bbb6e52d2636a87a21a55e557e1d4dac1f46efd275aa020"
+          "pmcid": "PMC9330844"
         }
       ],
       "link_id": "PSE-SOURCE-LINK:4b326e977bce8697",
@@ -2851,8 +2759,7 @@
               "span_sha256": "sha256:4f039141e01bc272bf997257ab6f86c09e365a363a6554fb16b052b168aa39c8"
             }
           ],
-          "pmcid": "PMC12244393",
-          "source_metadata_sha256": "sha256:29d8a3af8848337daad91d41df0a56c880cedc7f01af2084603e8736069c85c9"
+          "pmcid": "PMC12244393"
         },
         {
           "document_content_sha256": "sha256:5e71ceee29336f15c508b74ed4adac6aa916e8a2557d5edfb23e5384d6147a87",
@@ -2874,8 +2781,7 @@
               "span_sha256": "sha256:f3f17a46bda30c610305732069bba7e065f6ff90ffff6c85db258a85b00199f8"
             }
           ],
-          "pmcid": "PMC9968809",
-          "source_metadata_sha256": "sha256:6cda885159221c8710af7c6214a114c86984072b0ca93035a560ab2f968fd6ba"
+          "pmcid": "PMC9968809"
         }
       ],
       "link_id": "PSE-SOURCE-LINK:5214fc3dbc4de1ee",
@@ -2928,8 +2834,7 @@
               "span_sha256": "sha256:33e91da2b14348c6f93cc35633f52e7bb5ae54da6064b452e15a4644ba3cd70d"
             }
           ],
-          "pmcid": "PMC12490298",
-          "source_metadata_sha256": "sha256:c1a3de7bd93995905c498a1e9293d9ce3ffacb400bfb903526231893e71dd183"
+          "pmcid": "PMC12490298"
         },
         {
           "document_content_sha256": "sha256:f82a7c18e810e58bddf38dc6b632facb1cd2eee62f587e27afddbaf25bf0d393",
@@ -2951,8 +2856,7 @@
               "span_sha256": "sha256:0bd7fdcd835eebcbeece55721b9db94e329a608ffd54189bbf9ebb5742f997d9"
             }
           ],
-          "pmcid": "PMC12884896",
-          "source_metadata_sha256": "sha256:652f55f1935c6c00dfa3174f84e395159dd87f4ccfc4addb42f05bfae4fdfb06"
+          "pmcid": "PMC12884896"
         }
       ],
       "link_id": "PSE-SOURCE-LINK:d67d06ff53d06707",
@@ -3009,8 +2913,7 @@
               "span_sha256": "sha256:33e91da2b14348c6f93cc35633f52e7bb5ae54da6064b452e15a4644ba3cd70d"
             }
           ],
-          "pmcid": "PMC12490298",
-          "source_metadata_sha256": "sha256:c1a3de7bd93995905c498a1e9293d9ce3ffacb400bfb903526231893e71dd183"
+          "pmcid": "PMC12490298"
         },
         {
           "document_content_sha256": "sha256:e57dc2691684847ef4968c085d0a3b253ed476227cd1c0b602e4f2f94a9568fa",
@@ -3024,8 +2927,7 @@
               "span_sha256": "sha256:98e462061e7ed3a961555cc62c57f5d180a9b50c6d47916f48928d3e10d0450a"
             }
           ],
-          "pmcid": "PMC9330844",
-          "source_metadata_sha256": "sha256:f6eb5eb5ea308b6a3bbb6e52d2636a87a21a55e557e1d4dac1f46efd275aa020"
+          "pmcid": "PMC9330844"
         }
       ],
       "link_id": "PSE-SOURCE-LINK:02ef233c6e0924dd",
@@ -3074,8 +2976,7 @@
               "span_sha256": "sha256:0bd7fdcd835eebcbeece55721b9db94e329a608ffd54189bbf9ebb5742f997d9"
             }
           ],
-          "pmcid": "PMC12884896",
-          "source_metadata_sha256": "sha256:652f55f1935c6c00dfa3174f84e395159dd87f4ccfc4addb42f05bfae4fdfb06"
+          "pmcid": "PMC12884896"
         },
         {
           "document_content_sha256": "sha256:531e26135c7ae411e3b1952e65f60e71a88ff0ea3b8f448ae6df6fd876b8b504",
@@ -3089,8 +2990,7 @@
               "span_sha256": "sha256:c8da9cdde1986601177a2a39c164d203e65e29d60c58f6a9943d64cc7f24758e"
             }
           ],
-          "pmcid": "PMC8541344",
-          "source_metadata_sha256": "sha256:9c5dd920bfa8e8a26bbc3ddcc5c6940072162014188ddec0e2447c41244e9f7d"
+          "pmcid": "PMC8541344"
         }
       ],
       "link_id": "PSE-SOURCE-LINK:9d9825ac1e6fbbab",
@@ -3139,8 +3039,7 @@
               "span_sha256": "sha256:0bd7fdcd835eebcbeece55721b9db94e329a608ffd54189bbf9ebb5742f997d9"
             }
           ],
-          "pmcid": "PMC12884896",
-          "source_metadata_sha256": "sha256:652f55f1935c6c00dfa3174f84e395159dd87f4ccfc4addb42f05bfae4fdfb06"
+          "pmcid": "PMC12884896"
         },
         {
           "document_content_sha256": "sha256:e57dc2691684847ef4968c085d0a3b253ed476227cd1c0b602e4f2f94a9568fa",
@@ -3154,8 +3053,7 @@
               "span_sha256": "sha256:98e462061e7ed3a961555cc62c57f5d180a9b50c6d47916f48928d3e10d0450a"
             }
           ],
-          "pmcid": "PMC9330844",
-          "source_metadata_sha256": "sha256:f6eb5eb5ea308b6a3bbb6e52d2636a87a21a55e557e1d4dac1f46efd275aa020"
+          "pmcid": "PMC9330844"
         }
       ],
       "link_id": "PSE-SOURCE-LINK:e5fb5402d8f593d8",
@@ -3200,8 +3098,7 @@
               "span_sha256": "sha256:50baa52ee080ac5e2f08794c98d3f057a392e32d57315347d26e449637df5312"
             }
           ],
-          "pmcid": "PMC4840326",
-          "source_metadata_sha256": "sha256:483a332c1ce75e8432a9d73d117de258619ec00fc3865ece7f53289af0595957"
+          "pmcid": "PMC4840326"
         },
         {
           "document_content_sha256": "sha256:5e71ceee29336f15c508b74ed4adac6aa916e8a2557d5edfb23e5384d6147a87",
@@ -3223,8 +3120,7 @@
               "span_sha256": "sha256:f3f17a46bda30c610305732069bba7e065f6ff90ffff6c85db258a85b00199f8"
             }
           ],
-          "pmcid": "PMC9968809",
-          "source_metadata_sha256": "sha256:6cda885159221c8710af7c6214a114c86984072b0ca93035a560ab2f968fd6ba"
+          "pmcid": "PMC9968809"
         }
       ],
       "link_id": "PSE-SOURCE-LINK:987a89059b79b595",
@@ -3275,8 +3171,7 @@
               "span_sha256": "sha256:ee98ac8f1062005550ef273af202fc4dda4720dc631b7ad386fe8fc364402e31"
             }
           ],
-          "pmcid": "PMC5702311",
-          "source_metadata_sha256": "sha256:796f469c5da7b43748891d30cfb372a41ccce6b63ee269ce87783b04ea10a099"
+          "pmcid": "PMC5702311"
         },
         {
           "document_content_sha256": "sha256:03b383addc66d3c5f421a43341566fcfc68c9a522ca8419db021ad068442e845",
@@ -3294,8 +3189,7 @@
               "span_sha256": "sha256:f976ed081fca314f1c68b894250ce4d2adeaed0f7d5d01f0cef3a7267404d013"
             }
           ],
-          "pmcid": "PMC7371171",
-          "source_metadata_sha256": "sha256:34b17ed4d105b90f0db372b3b3151d28f1811208b071138b804b1faf31e002eb"
+          "pmcid": "PMC7371171"
         }
       ],
       "link_id": "PSE-SOURCE-LINK:38d6afe93a5f8d9f",
@@ -3336,8 +3230,7 @@
               "span_sha256": "sha256:7f9324737835806205b646ad1a03268f5aec26cd946c71e44db38085e2d91bb2"
             }
           ],
-          "pmcid": "PMC5933316",
-          "source_metadata_sha256": "sha256:a6f8855e7014afb89cff85dba8dec145a1aa9de08d02b6133113da036177a398"
+          "pmcid": "PMC5933316"
         },
         {
           "document_content_sha256": "sha256:18da3dec41be2f7506f05995e9dfa686b3a57f14c8f261ab4accd460c09dce54",
@@ -3355,8 +3248,7 @@
               "span_sha256": "sha256:631c8461eab555cb84f83c9dad862520b4764d84687ef62c5430216a623c70bb"
             }
           ],
-          "pmcid": "PMC9521678",
-          "source_metadata_sha256": "sha256:402d8ae11e309bdafd7c120f517faa030f4746619c68da98b47c48b1f8063862"
+          "pmcid": "PMC9521678"
         }
       ],
       "link_id": "PSE-SOURCE-LINK:967e068f4cef4800",
@@ -3393,8 +3285,7 @@
               "span_sha256": "sha256:73a614c28dfde4074efcbcae57e1c9f0be5e73a6aaa19909e12a29c22ee9bdd6"
             }
           ],
-          "pmcid": "PMC5968972",
-          "source_metadata_sha256": "sha256:cc2d258e5c0c92afccda44217db7b51e58e0f2351193099bf45994d43eb8f331"
+          "pmcid": "PMC5968972"
         },
         {
           "document_content_sha256": "sha256:357346028250dabff8ed357f5ea6a1edf16bf91ca4fb9d96d2c6a2b3f55ba05a",
@@ -3404,8 +3295,7 @@
               "span_sha256": "sha256:cf4350059afb81975abcbc362b03309385c806725bfec8ea629cb686b9662099"
             }
           ],
-          "pmcid": "PMC5969001",
-          "source_metadata_sha256": "sha256:88fe298e867b19173d7f79b3b5b843bf4b71fb050a258ef513fb60c78d4686ff"
+          "pmcid": "PMC5969001"
         }
       ],
       "link_id": "PSE-SOURCE-LINK:f438e76ff134eb56",
@@ -3444,8 +3334,7 @@
               "span_sha256": "sha256:73a614c28dfde4074efcbcae57e1c9f0be5e73a6aaa19909e12a29c22ee9bdd6"
             }
           ],
-          "pmcid": "PMC5968972",
-          "source_metadata_sha256": "sha256:cc2d258e5c0c92afccda44217db7b51e58e0f2351193099bf45994d43eb8f331"
+          "pmcid": "PMC5968972"
         },
         {
           "document_content_sha256": "sha256:5682680fee08480a3fb82dbf576acc60b80149e9c14aadca487203e3baf8ccb0",
@@ -3455,8 +3344,7 @@
               "span_sha256": "sha256:27842f1a8bc4ba87afc8516009aada10b892b33f9d677465c3a83cfd2dacc4c9"
             }
           ],
-          "pmcid": "PMC6722586",
-          "source_metadata_sha256": "sha256:624ec556467b5c7fff13c904ccc2abcfd661d26d33f01f2543e3e424ddae0b75"
+          "pmcid": "PMC6722586"
         }
       ],
       "link_id": "PSE-SOURCE-LINK:edf97fcaff4e6d89",
@@ -3493,8 +3381,7 @@
               "span_sha256": "sha256:cf4350059afb81975abcbc362b03309385c806725bfec8ea629cb686b9662099"
             }
           ],
-          "pmcid": "PMC5969001",
-          "source_metadata_sha256": "sha256:88fe298e867b19173d7f79b3b5b843bf4b71fb050a258ef513fb60c78d4686ff"
+          "pmcid": "PMC5969001"
         },
         {
           "document_content_sha256": "sha256:90a4282a1992528febe5c09bb6b95bdc86cce7dcfa766bf13a0edba34150b2f8",
@@ -3508,8 +3395,7 @@
               "span_sha256": "sha256:14912e72b2c3a5c157d8d230559a9483a92eb94b07b1d2f0dc2cfc20f9d95a62"
             }
           ],
-          "pmcid": "PMC6162366",
-          "source_metadata_sha256": "sha256:624178697bf06557cfbf27f921711d724924e602708762f58f0d741b4a59315c"
+          "pmcid": "PMC6162366"
         }
       ],
       "link_id": "PSE-SOURCE-LINK:4f45c081d2eabfd1",
@@ -3546,8 +3432,7 @@
               "span_sha256": "sha256:cf4350059afb81975abcbc362b03309385c806725bfec8ea629cb686b9662099"
             }
           ],
-          "pmcid": "PMC5969001",
-          "source_metadata_sha256": "sha256:88fe298e867b19173d7f79b3b5b843bf4b71fb050a258ef513fb60c78d4686ff"
+          "pmcid": "PMC5969001"
         },
         {
           "document_content_sha256": "sha256:5682680fee08480a3fb82dbf576acc60b80149e9c14aadca487203e3baf8ccb0",
@@ -3557,8 +3442,7 @@
               "span_sha256": "sha256:27842f1a8bc4ba87afc8516009aada10b892b33f9d677465c3a83cfd2dacc4c9"
             }
           ],
-          "pmcid": "PMC6722586",
-          "source_metadata_sha256": "sha256:624ec556467b5c7fff13c904ccc2abcfd661d26d33f01f2543e3e424ddae0b75"
+          "pmcid": "PMC6722586"
         }
       ],
       "link_id": "PSE-SOURCE-LINK:c810a3c454517ce6",
@@ -3595,8 +3479,7 @@
               "span_sha256": "sha256:cf4350059afb81975abcbc362b03309385c806725bfec8ea629cb686b9662099"
             }
           ],
-          "pmcid": "PMC5969001",
-          "source_metadata_sha256": "sha256:88fe298e867b19173d7f79b3b5b843bf4b71fb050a258ef513fb60c78d4686ff"
+          "pmcid": "PMC5969001"
         },
         {
           "document_content_sha256": "sha256:b0bea03ecd22939dadce8b629b8d047698dcb76f507e41df2b237ba0dce7ee87",
@@ -3618,8 +3501,7 @@
               "span_sha256": "sha256:26f5d165ba6843f2af20ad11eb5664e2673a62b178f560f129b12460d8d02362"
             }
           ],
-          "pmcid": "PMC8956158",
-          "source_metadata_sha256": "sha256:9689d018b83b60f7ee311ffd1b66122679b02e823789ebe6b79b43bd5e1f7dbd"
+          "pmcid": "PMC8956158"
         }
       ],
       "link_id": "PSE-SOURCE-LINK:008fabb4bdf309fe",
@@ -3660,8 +3542,7 @@
               "span_sha256": "sha256:14912e72b2c3a5c157d8d230559a9483a92eb94b07b1d2f0dc2cfc20f9d95a62"
             }
           ],
-          "pmcid": "PMC6162366",
-          "source_metadata_sha256": "sha256:624178697bf06557cfbf27f921711d724924e602708762f58f0d741b4a59315c"
+          "pmcid": "PMC6162366"
         },
         {
           "document_content_sha256": "sha256:b0bea03ecd22939dadce8b629b8d047698dcb76f507e41df2b237ba0dce7ee87",
@@ -3683,8 +3564,7 @@
               "span_sha256": "sha256:26f5d165ba6843f2af20ad11eb5664e2673a62b178f560f129b12460d8d02362"
             }
           ],
-          "pmcid": "PMC8956158",
-          "source_metadata_sha256": "sha256:9689d018b83b60f7ee311ffd1b66122679b02e823789ebe6b79b43bd5e1f7dbd"
+          "pmcid": "PMC8956158"
         }
       ],
       "link_id": "PSE-SOURCE-LINK:7d6ed7a517b998f9",
@@ -3732,8 +3612,7 @@
               "span_sha256": "sha256:ad8459d06b1f6df452091532d826f767bc42268d5d7e12ea34b9ad37a067c31d"
             }
           ],
-          "pmcid": "PMC6316512",
-          "source_metadata_sha256": "sha256:59fa28ae913c563eab21ea7204d824fecce31f51470ad22969bc81b2b1282b5b"
+          "pmcid": "PMC6316512"
         },
         {
           "document_content_sha256": "sha256:0c0bed2beb4bcc7ff08fb6ed18799cee6b0c51343079698776089f5c210d210b",
@@ -3743,8 +3622,7 @@
               "span_sha256": "sha256:05470c2ed5c5d8088b58373a894a74eefbcadb6e2436242d7cd778b211e0a108"
             }
           ],
-          "pmcid": "PMC7601858",
-          "source_metadata_sha256": "sha256:86d85f9dcd8ded69e49a94602a158d6eccfee2b0d0cab298b4a1314dcff837e0"
+          "pmcid": "PMC7601858"
         }
       ],
       "link_id": "PSE-SOURCE-LINK:3899ec94c298dded",
@@ -3786,8 +3664,7 @@
               "span_sha256": "sha256:304b3e785cdde8ff1c8527ac459ace886d0d8e127a45674fbf4154090f5a851c"
             }
           ],
-          "pmcid": "PMC6479167",
-          "source_metadata_sha256": "sha256:6c378a4b24e905f5c5bf64247cac8cab2080f8f6e6479ad490338be9593a2b0a"
+          "pmcid": "PMC6479167"
         },
         {
           "document_content_sha256": "sha256:1959016c29cba5bf09610dd9ec09e7404bef4b545e91a1da7ba2edfffdcfb234",
@@ -3801,8 +3678,7 @@
               "span_sha256": "sha256:ef509d33c9c5c2b9cdd0d08bb8f3d6bb96d2ea75d0ba57741e161805921c2ed9"
             }
           ],
-          "pmcid": "PMC6747517",
-          "source_metadata_sha256": "sha256:5686ae63a58d3fb2ea9067dde1670a8bcb5e237f7acf2fbe0db5f6150178cebf"
+          "pmcid": "PMC6747517"
         }
       ],
       "link_id": "PSE-SOURCE-LINK:c50051fd956e0438",
@@ -3844,8 +3720,7 @@
               "span_sha256": "sha256:304b3e785cdde8ff1c8527ac459ace886d0d8e127a45674fbf4154090f5a851c"
             }
           ],
-          "pmcid": "PMC6479167",
-          "source_metadata_sha256": "sha256:6c378a4b24e905f5c5bf64247cac8cab2080f8f6e6479ad490338be9593a2b0a"
+          "pmcid": "PMC6479167"
         },
         {
           "document_content_sha256": "sha256:eac3c31d052ac546ca38fc83765d2094ac1ce4a0198637d031c5cb2544c701e3",
@@ -3855,8 +3730,7 @@
               "span_sha256": "sha256:5f3f431c3d0ffacafa52da55693b3e10305a23cdc26151abde63c83c1146b0c9"
             }
           ],
-          "pmcid": "PMC8073015",
-          "source_metadata_sha256": "sha256:10e53e61815c02689585a3b9fcc34d370e27284c8bf3c5555a7af4be3d34e295"
+          "pmcid": "PMC8073015"
         }
       ],
       "link_id": "PSE-SOURCE-LINK:daac8d5b24ed0127",
@@ -3893,8 +3767,7 @@
               "span_sha256": "sha256:304b3e785cdde8ff1c8527ac459ace886d0d8e127a45674fbf4154090f5a851c"
             }
           ],
-          "pmcid": "PMC6479167",
-          "source_metadata_sha256": "sha256:6c378a4b24e905f5c5bf64247cac8cab2080f8f6e6479ad490338be9593a2b0a"
+          "pmcid": "PMC6479167"
         },
         {
           "document_content_sha256": "sha256:afd509e43342e4c8b142025c1d1b0030565d3ef67aa98089d1947520d0c8d7c4",
@@ -3904,8 +3777,7 @@
               "span_sha256": "sha256:dc46d39d58b3bf817868b5f27199f625e64314f5858d39b4419fc3d30c6ea557"
             }
           ],
-          "pmcid": "PMC8508289",
-          "source_metadata_sha256": "sha256:9d23a2a000a93c8f092c93935d6c4473b0aaa6f123d81f0d07921901d4d99fac"
+          "pmcid": "PMC8508289"
         }
       ],
       "link_id": "PSE-SOURCE-LINK:f5eb9ddeaa8716eb",
@@ -3943,14 +3815,12 @@
               "span_sha256": "sha256:38f856f411da13364b18fc594a0d00c9d1483043b2e90d2f85191529d593f44d"
             }
           ],
-          "pmcid": "PMC6655540",
-          "source_metadata_sha256": "sha256:37d71e31a4849b473d3f7ef586484cb3483c1866afdc51fc84062b7d6b119895"
+          "pmcid": "PMC6655540"
         },
         {
           "document_content_sha256": "sha256:e82c23b683cded621438ea03203d5e6231883178dbd40ca99d5cf96a600ada31",
           "methods_span_evidence": [],
-          "pmcid": "PMC6872694",
-          "source_metadata_sha256": "sha256:ed823c0eab6b42c9a83973a86e970c8364847ab718508563026ce0858ca29088"
+          "pmcid": "PMC6872694"
         }
       ],
       "link_id": "PSE-SOURCE-LINK:aaff2d6298e2f095",
@@ -3993,8 +3863,7 @@
               "span_sha256": "sha256:ef509d33c9c5c2b9cdd0d08bb8f3d6bb96d2ea75d0ba57741e161805921c2ed9"
             }
           ],
-          "pmcid": "PMC6747517",
-          "source_metadata_sha256": "sha256:5686ae63a58d3fb2ea9067dde1670a8bcb5e237f7acf2fbe0db5f6150178cebf"
+          "pmcid": "PMC6747517"
         },
         {
           "document_content_sha256": "sha256:eac3c31d052ac546ca38fc83765d2094ac1ce4a0198637d031c5cb2544c701e3",
@@ -4004,8 +3873,7 @@
               "span_sha256": "sha256:5f3f431c3d0ffacafa52da55693b3e10305a23cdc26151abde63c83c1146b0c9"
             }
           ],
-          "pmcid": "PMC8073015",
-          "source_metadata_sha256": "sha256:10e53e61815c02689585a3b9fcc34d370e27284c8bf3c5555a7af4be3d34e295"
+          "pmcid": "PMC8073015"
         }
       ],
       "link_id": "PSE-SOURCE-LINK:f8ffa7eac6470fdb",
@@ -4049,8 +3917,7 @@
               "span_sha256": "sha256:ef509d33c9c5c2b9cdd0d08bb8f3d6bb96d2ea75d0ba57741e161805921c2ed9"
             }
           ],
-          "pmcid": "PMC6747517",
-          "source_metadata_sha256": "sha256:5686ae63a58d3fb2ea9067dde1670a8bcb5e237f7acf2fbe0db5f6150178cebf"
+          "pmcid": "PMC6747517"
         },
         {
           "document_content_sha256": "sha256:afd509e43342e4c8b142025c1d1b0030565d3ef67aa98089d1947520d0c8d7c4",
@@ -4060,8 +3927,7 @@
               "span_sha256": "sha256:dc46d39d58b3bf817868b5f27199f625e64314f5858d39b4419fc3d30c6ea557"
             }
           ],
-          "pmcid": "PMC8508289",
-          "source_metadata_sha256": "sha256:9d23a2a000a93c8f092c93935d6c4473b0aaa6f123d81f0d07921901d4d99fac"
+          "pmcid": "PMC8508289"
         }
       ],
       "link_id": "PSE-SOURCE-LINK:a7fbf665cd8dac45",
@@ -4102,8 +3968,7 @@
               "span_sha256": "sha256:ef509d33c9c5c2b9cdd0d08bb8f3d6bb96d2ea75d0ba57741e161805921c2ed9"
             }
           ],
-          "pmcid": "PMC6747517",
-          "source_metadata_sha256": "sha256:5686ae63a58d3fb2ea9067dde1670a8bcb5e237f7acf2fbe0db5f6150178cebf"
+          "pmcid": "PMC6747517"
         },
         {
           "document_content_sha256": "sha256:d0f995a1c074f6f2cfe0d15ed93c7ea381f015f09ab77d05808826a6b6c8fc2f",
@@ -4113,8 +3978,7 @@
               "span_sha256": "sha256:1f2cf494112218aec3eb0882dd1184aa7794f9e08eff48f790b09fd992284b9d"
             }
           ],
-          "pmcid": "PMC8939825",
-          "source_metadata_sha256": "sha256:e1066cb36236142857be38c7a06dc154eaabfa289d85b5b23aef8ce9e60387be"
+          "pmcid": "PMC8939825"
         }
       ],
       "link_id": "PSE-SOURCE-LINK:ea5fa9248695ec0a",
@@ -4156,8 +4020,7 @@
               "span_sha256": "sha256:0ef54b2978ae97f950db2c18e4b51f872ffd367b08c783b5e664b32aea473b44"
             }
           ],
-          "pmcid": "PMC7558277",
-          "source_metadata_sha256": "sha256:9caf4da103b98c98a32582a5a276fe25b2447977e20c0973d6f3d9c5a4543930"
+          "pmcid": "PMC7558277"
         },
         {
           "document_content_sha256": "sha256:2795cad0424847e560c5c922bc813a182e2a456cf13f104013ff64a28badff70",
@@ -4167,8 +4030,7 @@
               "span_sha256": "sha256:83c205b8f3ebd6d8804b9b1e26124397b5a0ac0082b7dc238119d31ded75ae21"
             }
           ],
-          "pmcid": "PMC9865236",
-          "source_metadata_sha256": "sha256:0b28349522c86067495fa736ef427cea6cbed033f80f9ae9e5a360120bb56904"
+          "pmcid": "PMC9865236"
         }
       ],
       "link_id": "PSE-SOURCE-LINK:8d0a68a4d51384c0",
@@ -4205,8 +4067,7 @@
               "span_sha256": "sha256:926044ffc48d59df0473bcc4e5d8309f8001e03b6151cc6eef93dcc82b17c179"
             }
           ],
-          "pmcid": "PMC7747683",
-          "source_metadata_sha256": "sha256:c98b5b15c1ca16b27bdba1983c3cf7ca50fe65515c0c24a7abf27223557cedca"
+          "pmcid": "PMC7747683"
         },
         {
           "document_content_sha256": "sha256:762c74d0a02bbbe98504c2ff9e562f56a83001faae6c8e6c4924278585a8be2a",
@@ -4216,8 +4077,7 @@
               "span_sha256": "sha256:69cf5608673a54836a80527c02ebc958cea28e3d9b14af5512a54b19580ced58"
             }
           ],
-          "pmcid": "PMC9691012",
-          "source_metadata_sha256": "sha256:91e68bc4a8c7403310ad4f6292f9dcdc71d655c0576e9bf84b06989766c80914"
+          "pmcid": "PMC9691012"
         }
       ],
       "link_id": "PSE-SOURCE-LINK:9812c4183ebec043",
@@ -4251,8 +4111,7 @@
         {
           "document_content_sha256": "sha256:d52b7217c1a907a00440e80b3fec305ed4e82d574cab406ffd3b25770fc2e4e7",
           "methods_span_evidence": [],
-          "pmcid": "PMC7866505",
-          "source_metadata_sha256": "sha256:33eaee887e635e6a0ce31218cb269f426d6620ae8d0a48f189fb641b76d23da6"
+          "pmcid": "PMC7866505"
         },
         {
           "document_content_sha256": "sha256:13273ebdcec142443668990fcee040c921d7a8bd146aa6c1c10ed39a773a2f20",
@@ -4274,8 +4133,7 @@
               "span_sha256": "sha256:544d81dbf169efbee670f7993010f5bec7d7e1546887f74c5044079734efce25"
             }
           ],
-          "pmcid": "PMC9408288",
-          "source_metadata_sha256": "sha256:d175048861dfe2f5d987d7c0e4346ad65c4094c9e23fe97842bca12a780057fa"
+          "pmcid": "PMC9408288"
         }
       ],
       "link_id": "PSE-SOURCE-LINK:d0dbaa7287e695a6",
@@ -4309,8 +4167,7 @@
         {
           "document_content_sha256": "sha256:d52b7217c1a907a00440e80b3fec305ed4e82d574cab406ffd3b25770fc2e4e7",
           "methods_span_evidence": [],
-          "pmcid": "PMC7866505",
-          "source_metadata_sha256": "sha256:33eaee887e635e6a0ce31218cb269f426d6620ae8d0a48f189fb641b76d23da6"
+          "pmcid": "PMC7866505"
         },
         {
           "document_content_sha256": "sha256:14b3faf11d464996a56d54e7a8317de68c1957c76dff2ebcfb496b591173e881",
@@ -4328,8 +4185,7 @@
               "span_sha256": "sha256:431e2fcac0a8d57654b9c233c5f8208d9d45d19baab835809dd01698356850a9"
             }
           ],
-          "pmcid": "PMC9960825",
-          "source_metadata_sha256": "sha256:b5ab9839be10657d9e07253316ca9081398c8864a10d4532fb55e6a5ed02f112"
+          "pmcid": "PMC9960825"
         }
       ],
       "link_id": "PSE-SOURCE-LINK:d403d3169312767c",
@@ -4370,8 +4226,7 @@
               "span_sha256": "sha256:215100cdfc49a4d13a6502069537e2caa8104dd2471a942999aa75c27686ec88"
             }
           ],
-          "pmcid": "PMC7956260",
-          "source_metadata_sha256": "sha256:8c86aa75a977e79cf03b1c14e0171981794b872203ce71aefd65a2db0493a932"
+          "pmcid": "PMC7956260"
         },
         {
           "document_content_sha256": "sha256:c38dd3d562fb4d6bdf6058fa883dd3b6d2929a9dd586a98fcd44419e62ab1346",
@@ -4381,8 +4236,7 @@
               "span_sha256": "sha256:ef6ffc5124f03dd36893eb9013b52fc7ea9b862e77e31654fd25b9948c8c2dc2"
             }
           ],
-          "pmcid": "PMC9779822",
-          "source_metadata_sha256": "sha256:ac245255b5fba1bdb45dbf66c13719509676cb0b929eef7ac5a5a57d76c56b8e"
+          "pmcid": "PMC9779822"
         }
       ],
       "link_id": "PSE-SOURCE-LINK:3a43b6baaaf66cc1",
@@ -4422,8 +4276,7 @@
               "span_sha256": "sha256:5f3f431c3d0ffacafa52da55693b3e10305a23cdc26151abde63c83c1146b0c9"
             }
           ],
-          "pmcid": "PMC8073015",
-          "source_metadata_sha256": "sha256:10e53e61815c02689585a3b9fcc34d370e27284c8bf3c5555a7af4be3d34e295"
+          "pmcid": "PMC8073015"
         },
         {
           "document_content_sha256": "sha256:afd509e43342e4c8b142025c1d1b0030565d3ef67aa98089d1947520d0c8d7c4",
@@ -4433,8 +4286,7 @@
               "span_sha256": "sha256:dc46d39d58b3bf817868b5f27199f625e64314f5858d39b4419fc3d30c6ea557"
             }
           ],
-          "pmcid": "PMC8508289",
-          "source_metadata_sha256": "sha256:9d23a2a000a93c8f092c93935d6c4473b0aaa6f123d81f0d07921901d4d99fac"
+          "pmcid": "PMC8508289"
         }
       ],
       "link_id": "PSE-SOURCE-LINK:c766a0e9be9f13b3",
@@ -4477,8 +4329,7 @@
               "span_sha256": "sha256:01614a7874c77be7e73bd8865f512365849c005a54d11bf1e26cbed311c4a5e6"
             }
           ],
-          "pmcid": "PMC8173105",
-          "source_metadata_sha256": "sha256:d9b5880a0ff84824a69daf382c127376c924768177293c617e6796b357b7f5fe"
+          "pmcid": "PMC8173105"
         },
         {
           "document_content_sha256": "sha256:dfb1b5faa237ac905d592ed55040bf3b0b7158a563d9badadcd2c560ad891e6a",
@@ -4488,8 +4339,7 @@
               "span_sha256": "sha256:734418be0a98b3d737bb01a7903229fc5e26267818bb9c15b53c2c5a3be8e671"
             }
           ],
-          "pmcid": "PMC8430212",
-          "source_metadata_sha256": "sha256:c8c600f0a15902467df1281a9c4855ad0c412f99c06451fd5d4b68b51eaf7592"
+          "pmcid": "PMC8430212"
         }
       ],
       "link_id": "PSE-SOURCE-LINK:45592ac4cafae124",
@@ -4532,8 +4382,7 @@
               "span_sha256": "sha256:e1881bec95cdca36f1b6a60ee2df5bcdd41675817be423c20f65399bc73a2709"
             }
           ],
-          "pmcid": "PMC8587914",
-          "source_metadata_sha256": "sha256:15b624088ec4a9684e4606e6aad0147c6a036e75c869665c5c154f7e594c6a34"
+          "pmcid": "PMC8587914"
         },
         {
           "document_content_sha256": "sha256:ce9234fc124c81609dafac08ca095eff792039a14062352285d5796ddc21967b",
@@ -4543,8 +4392,7 @@
               "span_sha256": "sha256:31b56fa16902d6f066eae6b2f23221f65d72a501f7fc4ee4a45300c53e96d112"
             }
           ],
-          "pmcid": "PMC9945412",
-          "source_metadata_sha256": "sha256:3fc9acd397ef18385eb9eebfc6c889109d98b779be7cf59ea486325c1e7934c6"
+          "pmcid": "PMC9945412"
         }
       ],
       "link_id": "PSE-SOURCE-LINK:d7867d4a5b7a10e4",
@@ -4598,8 +4446,7 @@
               "span_sha256": "sha256:58acda2a517b6c041f4d64d7a6ddc598d0dbdc42ae2765e44af95c59ed606fce"
             }
           ],
-          "pmcid": "PMC9397540",
-          "source_metadata_sha256": "sha256:43e4278b0ee47def1daeee746aaf379508599ecc415cde33f595d6bde7c2c3b9"
+          "pmcid": "PMC9397540"
         },
         {
           "document_content_sha256": "sha256:025cd92d3970b274d2f1e011a8217d7d5074711fab0df70b5a82b800c91db711",
@@ -4609,8 +4456,7 @@
               "span_sha256": "sha256:5444e67ce98780dc813299c6a5d04398a4d56be00aba707531e7a8c43c445fea"
             }
           ],
-          "pmcid": "PMC9428458",
-          "source_metadata_sha256": "sha256:b030d92b3ff39f772c65663b1e7b9d431f53ded058ad2edbd26ab6dd9fe8dca9"
+          "pmcid": "PMC9428458"
         }
       ],
       "link_id": "PSE-SOURCE-LINK:63761403726fa067",
@@ -4667,8 +4513,7 @@
               "span_sha256": "sha256:544d81dbf169efbee670f7993010f5bec7d7e1546887f74c5044079734efce25"
             }
           ],
-          "pmcid": "PMC9408288",
-          "source_metadata_sha256": "sha256:d175048861dfe2f5d987d7c0e4346ad65c4094c9e23fe97842bca12a780057fa"
+          "pmcid": "PMC9408288"
         },
         {
           "document_content_sha256": "sha256:14b3faf11d464996a56d54e7a8317de68c1957c76dff2ebcfb496b591173e881",
@@ -4686,8 +4531,7 @@
               "span_sha256": "sha256:431e2fcac0a8d57654b9c233c5f8208d9d45d19baab835809dd01698356850a9"
             }
           ],
-          "pmcid": "PMC9960825",
-          "source_metadata_sha256": "sha256:b5ab9839be10657d9e07253316ca9081398c8864a10d4532fb55e6a5ed02f112"
+          "pmcid": "PMC9960825"
         }
       ],
       "link_id": "PSE-SOURCE-LINK:6caa43ebc8cb58bc",
@@ -6469,6 +6313,8 @@
     }
   ],
   "family_count": 94,
+  "family_evidence_binding_authority": "Source-family findings bind the immutable PMC article-version content SHA-256 and JATS Methods span SHA-256. Mutable public source-metadata sidecar hashes are not family identity evidence; family membership/digest binds member IDs and adjudicated links.",
+  "family_evidence_uses_mutable_metadata_sha256": false,
   "mission": "RES-115-SOURCE-REGISTRY-FIX-001",
   "multi_member_family_count": 9,
   "pairwise_document_comparisons": 5356,
