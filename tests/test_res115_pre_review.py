@@ -824,6 +824,33 @@ def test_mutation_candidate_must_preserve_parent_isolation_metadata() -> None:
         validate_candidate_set((parent, isolated_child))
 
 
+def test_mutation_candidate_allows_another_allocation_stratum_in_same_cluster() -> None:
+    parent = _semantic_candidate()
+    child = _mutation_candidate(parent)
+    other_stratum = next(
+        case.split.allocation_stratum
+        for case in build_synthetic_reference_fixture_cases()
+        if case.split.allocation_stratum != parent.isolation.allocation_stratum
+    )
+    cross_stratum_child = bind_candidate_review_packet(
+        replace(
+            child,
+            isolation=replace(child.isolation, allocation_stratum=other_stratum),
+        )
+    )
+
+    validate_candidate_set((cross_stratum_child, parent))
+
+    assert cross_stratum_child.parent_candidate_binding is not None
+    assert cross_stratum_child.proposed_provenance.mutation_lineage_id == (
+        cross_stratum_child.parent_candidate_binding.mutation_lineage_id
+    )
+    assert cross_stratum_child.isolation.isolation_cluster_id == (
+        parent.isolation.isolation_cluster_id
+    )
+    assert cross_stratum_child.isolation.allocation_stratum != (parent.isolation.allocation_stratum)
+
+
 def test_mutation_candidate_requires_explicit_operator_version_and_seed() -> None:
     parent = _semantic_candidate()
     child = _mutation_candidate(parent)
@@ -913,6 +940,52 @@ def test_mutation_promotion_requires_parent_and_rebinds_final_parent_identity() 
         parent_promotion_evidence=parent_evidence,
     )
     assert from_canonical_json(canonical_json(child_result), PromotionResult) == child_result
+
+
+@pytest.mark.parametrize(
+    ("field_name", "forged_value"),
+    (("source_reference_id", "forged-parent-id"), ("version", "9.9.9")),
+)
+def test_final_mutation_parent_authority_requires_exact_id_and_version(
+    field_name: str,
+    forged_value: str,
+) -> None:
+    parent_packet = _semantic_candidate()
+    child_packet = _mutation_candidate(parent_packet)
+    parent_approval = _approved_record(parent_packet)
+    child_approval = _approved_record(
+        child_packet,
+        approval_record_id=f"linear-review:identity-forgery-{field_name}",
+        reviewer_id=f"linear-user:identity-forgery-{field_name}",
+    )
+    parent_result = promote_with_receipt(parent_packet, parent_approval)
+    child_result = promote_with_receipt(
+        child_packet,
+        child_approval,
+        parent_promotion_evidence=ParentPromotionEvidence(
+            packet=parent_packet,
+            approval=parent_approval,
+            result=parent_result,
+        ),
+    )
+    from dynamislm.benchmark import validate_case_set
+    from dynamislm.benchmark.hashing import bind_case_payload
+
+    forged_child = bind_case_payload(
+        replace(
+            child_result.case,
+            authority=tuple(
+                replace(binding, **{field_name: forged_value})
+                if binding.authority_kind == AuthorityKind.MUTATION_PARENT.value
+                else binding
+                for binding in child_result.case.authority
+            ),
+        )
+    )
+
+    validate_case(forged_child)
+    with pytest.raises(ValueError, match="exact final parent case"):
+        validate_case_set((parent_result.case, forged_child))
 
 
 def test_mutation_promotion_rejects_parent_promotion_identity_mismatch() -> None:

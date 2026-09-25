@@ -1418,8 +1418,12 @@ def validate_candidate_set(
         if parent.proposed_provenance.origin_class is CaseOrigin.ADVERSARIAL_MUTATION:
             if provenance.mutation_lineage_id != parent.proposed_provenance.mutation_lineage_id:
                 raise ValueError("mutation descendants must preserve their parent's lineage ID")
+        child_isolation_without_stratum = replace(
+            child.isolation,
+            allocation_stratum=parent.isolation.allocation_stratum,
+        )
         if (
-            child.isolation != parent.isolation
+            child_isolation_without_stratum != parent.isolation
             or child.contamination.source_family_id != parent.contamination.source_family_id
         ):
             raise ValueError("mutation lineage must preserve parent isolation metadata")
