@@ -6,7 +6,6 @@ import json
 from collections.abc import Mapping
 from pathlib import Path
 
-from dynamislm.benchmark.constants import CaseOrigin
 from dynamislm.benchmark.pre_review import CandidateReviewPacket, validate_candidate_review_packet
 from dynamislm.benchmark.source_artifacts import PhaseASourceArtifactResolver
 
@@ -47,7 +46,7 @@ def validate_res115_candidate_for_authoring(packet: CandidateReviewPacket) -> No
         packet,
         source_resolver=build_res115_source_artifact_resolver(),
     )
-    if packet.proposed_provenance.origin_class is CaseOrigin.SOURCE_BACKED_EVIDENCE_EXTRACTION:
+    if packet.source_evidence_refs or packet.input.evidence_excerpts:
         validate_res115_source_applicability(packet)
 
 
@@ -88,7 +87,7 @@ def validate_res115_source_applicability(
 ) -> None:
     """Preserve Phase-A source applicability and exact source-backed answers."""
 
-    if packet.proposed_provenance.origin_class is not CaseOrigin.SOURCE_BACKED_EVIDENCE_EXTRACTION:
+    if not packet.source_evidence_refs and not packet.input.evidence_excerpts:
         return
     scopes = (
         dict(source_scopes)

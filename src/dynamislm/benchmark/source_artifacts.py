@@ -167,6 +167,12 @@ def _extract_jats_text(uncompressed_jats: bytes, locator: str) -> str:
     return "".join(selected.itertext())
 
 
+def extract_jats_text(uncompressed_jats: bytes, locator: str) -> str:
+    """Public exact extractor for a prevalidated structural JATS locator."""
+
+    return _extract_jats_text(uncompressed_jats, locator)
+
+
 @dataclass(frozen=True, slots=True)
 class PhaseASourceArtifactResolver:
     """Resolve evidence against an accepted Phase-A registry and retained store."""
@@ -339,4 +345,5 @@ __all__ = [
     "SourceArtifactResolution",
     "SourceArtifactResolver",
     "derive_unique_jats_paragraph_locator",
+    "extract_jats_text",
 ]

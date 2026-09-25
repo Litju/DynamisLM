@@ -1,14 +1,15 @@
 from __future__ import annotations
 
 import hashlib
+import subprocess
 from dataclasses import replace
+from pathlib import Path
 
 import pytest
 
 from dynamislm.benchmark.authoring import (
     ACTIVE_SCORERS,
     AUTHORING_RECIPE_REGISTRY,
-    PHASE_A_SEARCH_STRATA,
     QUALIFICATION_CANDIDATE_ID_PREFIX,
     QUALIFICATION_MANIFEST_VERSION,
     AuthoringPlanItemV1,
@@ -36,8 +37,58 @@ from dynamislm.benchmark.constants import (
     RefusalDecision,
     ScoringProfile,
 )
+from dynamislm.benchmark.contamination import (
+    exact_shingle_digest,
+    fuzzy_fingerprint,
+    normalized_text_sha256,
+)
+from dynamislm.benchmark.contracts import (
+    AuthorityBinding,
+    ClaimContract,
+    ComparabilityContract,
+    ContaminationBinding,
+    DeterministicResultView,
+    DifficultyBinding,
+    ExpectedStructuredAnswer,
+    InputContract,
+    RefusalExpectation,
+    ScoringContract,
+)
 from dynamislm.benchmark.coverage import COVERAGE_MATRIX, coverage_manifest_digest
-from dynamislm.qualification import get_reference_cases
+from dynamislm.benchmark.pre_review import (
+    CandidateIsolationMetadata,
+    CandidateReviewPacket,
+    ProposedCaseProvenance,
+    bind_candidate_review_packet,
+    validate_candidate_review_packet,
+    validate_candidate_set,
+)
+from dynamislm.benchmark.public_repository import validate_qualification_repository_boundary
+from dynamislm.benchmark.qualification_store import (
+    read_external_qualification_json,
+    read_qualification_store,
+    write_external_qualification_json,
+    write_qualification_store,
+)
+from dynamislm.qualification import ReferenceCaseStatus, get_reference_cases
+from dynamislm.qualification.res115_authoring import (
+    _BASE_SEMANTIC_CITATIONS,
+    _CAPABILITY_AUTHORITY_CITATIONS,
+    AUTHORING_PROCESS_ID,
+    PHASE_A_SEARCH_STRATA,
+    QUALIFICATION_BATCH_ID,
+    RES115_SYNTHETIC_GENERATOR_DIGEST,
+    QualificationSeedInputV1,
+    _semantic_cell_candidate,
+    build_res115_qualification_draft,
+    build_res115_qualification_manifest,
+    build_res115_reference_lane,
+    generate_synthetic_unregistered_operation_context,
+    validate_res115_qualification_batch,
+    validate_res115_reference_candidate,
+    validate_res115_reference_lane,
+)
+from dynamislm.serialization import canonical_hash
 
 _ZERO_SHA = "sha256:" + "0" * 64
 
@@ -214,6 +265,192 @@ def _synthetic_plan_item(
     )
 
 
+def _test_seed_input(
+    *,
+    batch_id: str = QUALIFICATION_BATCH_ID,
+    seed_prefix: str = "test-seed",
+) -> QualificationSeedInputV1:
+    seed_cases = tuple(
+        sorted(
+            (
+                item.case_id
+                for item in get_reference_cases()
+                if item.status is ReferenceCaseStatus.REFUSAL and item.operation_id is None
+            ),
+            key=lambda value: value.encode("utf-8"),
+        )
+    )
+    return QualificationSeedInputV1(
+        batch_id=batch_id,
+        generator_registry_digest=RES115_SYNTHETIC_GENERATOR_DIGEST,
+        seed_blocks=tuple(
+            (case_id, f"{seed_prefix}-{index:02d}") for index, case_id in enumerate(seed_cases)
+        ),
+    )
+
+
+def _store_roundtrip_fixture() -> tuple[CandidateReviewPacket, AuthoringPlanV1]:
+    candidate_id = "PSE-V1-QUALIFICATION:TEST:STORE-ROUNDTRIP"
+    question = "Read the synthetic test identity field and return its exact value."
+    rubric_digest = _digest("synthetic test rubric")
+    expected = ExpectedStructuredAnswer(
+        kind=ExpectedAnswerKind.ANSWER,
+        required_field_ids=("identity_field",),
+        expected_fields={"identity_field": "VERTICAL_JUMP"},
+    )
+    refusal = RefusalExpectation(
+        decision=RefusalDecision.PROHIBITED,
+        blocked_claim=None,
+        refusal_class=None,
+        reason_codes=(),
+        missing_information=(),
+        what_can_still_be_safely_described=(),
+    )
+    authority = AuthorityBinding(
+        "EXPERT_RUBRIC",
+        "TEST-RUBRIC:STORE-ROUNDTRIP",
+        "1.0.0",
+        rubric_digest,
+        ("expected_answer", "claim_contract", "refusal_expectation"),
+    )
+    contamination = ContaminationBinding(
+        source_artifact_ids=(),
+        document_ids=(),
+        source_family_id="PSE-QUALIFICATION-TEST-FAMILY:STORE",
+        provider_export_id=None,
+        protocol_template_id=None,
+        expert_author_batch_id="test-authoring-process",
+        artifact_ids=(),
+        source_content_sha256=None,
+        normalized_text_sha256=normalized_text_sha256(question),
+        exact_shingle_digest=exact_shingle_digest(question),
+        fuzzy_fingerprint=fuzzy_fingerprint(question),
+        semantic_cluster_id=None,
+        generator_namespace=None,
+        generator_seed_block=None,
+        benchmark_artifact_ids=(),
+        training_exclusion_ids=(),
+    )
+    packet = bind_candidate_review_packet(
+        CandidateReviewPacket(
+            benchmark_version="PerformanceScience-Eval@1.0.0",
+            schema_version="pse-case-schema@1.1.0",
+            candidate_id=candidate_id,
+            candidate_version="1.0.0",
+            capability_id="C03",
+            benchmark_family="F03",
+            practitioner_question_class=(
+                PractitionerQuestionClass.MEASUREMENT_IDENTITY_AND_PROVENANCE
+            ),
+            question=question,
+            input=InputContract(
+                modality=("TEXT", "STRUCTURED_MEASUREMENT_RECORD"),
+                question_text=question,
+                structured_context={
+                    "fixture_kind": "SYNTHETIC_QUALIFICATION_TEST_ONLY",
+                    "display_label": "vertical jump height",
+                },
+            ),
+            source_evidence_refs=(),
+            proposed_expected_answer=expected,
+            authority=(authority,),
+            refusal_contract=refusal,
+            claim_contract=ClaimContract(
+                requested_claim="identify the supplied test label",
+                maximum_supported_claim_level="OBSERVED_VALUE",
+                safe_lower_claim_levels=("OBSERVED_VALUE",),
+                prohibited_escalation=("CAUSAL_EVIDENCE",),
+            ),
+            comparability_contract=ComparabilityContract(
+                requested_state=None,
+                material_dimensions=(),
+                dimension_findings={},
+                conditions=(),
+                transformations_required=(),
+                not_applicable=True,
+            ),
+            scoring_contract=ScoringContract(
+                profile_id=ScoringProfile.CLASSIFICATION_V1,
+                profile_version="1.0.0",
+                required_output_fields=("identity_field",),
+                critical_fields=("identity_field",),
+                accepted_normalization=("exact-controlled-label",),
+                error_class_rules=(
+                    ErrorClass.FALSE_SCIENTIFIC_ACCEPTANCE,
+                    ErrorClass.OVER_REFUSAL,
+                ),
+                task_status_policy="critical-field-failure-is-fail",
+                error_attribution=(
+                    ("identity_field", ErrorClass.FALSE_SCIENTIFIC_ACCEPTANCE),
+                    ("__over_refusal__", ErrorClass.OVER_REFUSAL),
+                ),
+            ),
+            tolerance_contract=None,
+            proposed_provenance=ProposedCaseProvenance(
+                author_id="test-authoring-process",
+                rubric_digest=rubric_digest,
+                review_scope="synthetic storage round-trip test only",
+                origin_class=CaseOrigin.EXPERT_AUTHORED_SEMANTIC,
+                authority_lineage=("TEST-RUBRIC:STORE-ROUNDTRIP",),
+                population_scope="synthetic test fixture; no empirical population claim",
+                derivation_status="TEST_RUBRIC_BOUND",
+                derivation_edges=(),
+            ),
+            contamination=contamination,
+            isolation=CandidateIsolationMetadata(
+                source_family_id=contamination.source_family_id,
+                isolation_cluster_id="PSE-QUALIFICATION-TEST-CLUSTER:STORE",
+                allocation_stratum="C03:F03",
+            ),
+            difficulty=DifficultyBinding(DifficultyLevel.EASY, "synthetic storage test"),
+            adversarial_tags=("SAME_LABEL_DIFFERENT_MEASURAND",),
+        )
+    )
+    recipe = next(
+        item
+        for item in AUTHORING_RECIPE_REGISTRY
+        if (item.capability_id, item.benchmark_family) == ("C03", "F03")
+    )
+    item = AuthoringPlanItemV1(
+        recipe_id=recipe.recipe_id,
+        recipe_version=recipe.recipe_version,
+        coverage_role="CELL",
+        supplement_reason=None,
+        capability_id="C03",
+        benchmark_family="F03",
+        practitioner_question_class=packet.practitioner_question_class,
+        origin_class=CaseOrigin.EXPERT_AUTHORED_SEMANTIC,
+        scoring_profile=ScoringProfile.CLASSIFICATION_V1,
+        authority_class="EXPERT_SEMANTIC",
+        authority_kinds=("EXPERT_RUBRIC",),
+        source_reference_ids=("TEST-RUBRIC:STORE-ROUNDTRIP",),
+        source_search_strata=(),
+        parent_candidate_id=None,
+        engine_reference_case_id=None,
+        engine_operation_id=None,
+        generator_id=None,
+        generator_registry_digest=None,
+        seed_namespace=None,
+        seed_block=None,
+        difficulty=DifficultyLevel.EASY,
+        adversarial_tags=packet.adversarial_tags,
+        authoring_rationale="Synthetic test packet proves external canonical round trip.",
+        candidate_id=packet.candidate_id,
+        candidate_payload_hash=packet.candidate_payload_hash,
+    )
+    plan = bind_authoring_plan(
+        AuthoringPlanV1(
+            plan_id="PSE-V1-QUALIFICATION/TEST-STORE-PLAN",
+            plan_version="pse-authoring-plan@1.0.0",
+            coverage_matrix_digest=coverage_manifest_digest(),
+            recipe_registry_digest=authoring_recipe_registry_digest(),
+            items=(item,),
+            plan_digest=_ZERO_SHA,
+        )
+    )
+    return packet, plan
+
+
 def test_authoring_recipe_registry_has_a_real_operator_for_all_87_cells() -> None:
     validate_authoring_recipe_registry()
 
@@ -222,6 +459,24 @@ def test_authoring_recipe_registry_has_a_real_operator_for_all_87_cells() -> Non
     assert question_classes_for_cell("C17", "F13")
     assert question_classes_for_cell("C18", "F14")
     assert question_classes_for_cell("C99", "F99") == ()
+
+
+def test_generic_semantic_operators_validate_each_supported_cell() -> None:
+    semantic_recipes = tuple(
+        item
+        for item in AUTHORING_RECIPE_REGISTRY
+        if item.capability_id not in {"C08", "C13", "C16"}
+    )
+
+    for recipe in semantic_recipes:
+        packet = _semantic_cell_candidate(recipe.capability_id, recipe.benchmark_family)
+        validate_candidate_review_packet(packet)
+        expected_citations = (
+            *_BASE_SEMANTIC_CITATIONS,
+            *_CAPABILITY_AUTHORITY_CITATIONS.get(recipe.capability_id, ()),
+        )
+        assert packet.proposed_provenance.author_id == AUTHORING_PROCESS_ID
+        assert set(expected_citations).issubset(packet.proposed_provenance.authority_lineage)
 
 
 def test_recipe_registry_fails_closed_if_any_obligation_has_no_recipe() -> None:
@@ -318,6 +573,43 @@ def test_synthetic_plan_rejects_production_namespace_and_missing_generator_diges
         replace(_synthetic_plan_item(), generator_registry_digest=None)
 
 
+def test_private_qualification_seed_input_is_complete_unique_and_version_bound() -> None:
+    seed_input = _test_seed_input()
+
+    assert seed_input.generator_registry_digest == RES115_SYNTHETIC_GENERATOR_DIGEST
+    assert len(seed_input.seed_blocks) == 2
+    with pytest.raises(ValueError, match="cannot collide"):
+        replace(
+            seed_input,
+            seed_blocks=(
+                seed_input.seed_blocks[0],
+                (seed_input.seed_blocks[1][0], seed_input.seed_blocks[0][1]),
+            ),
+        )
+    with pytest.raises(ValueError, match="every synthetic RES-71 refusal"):
+        replace(seed_input, seed_blocks=seed_input.seed_blocks[:-1])
+
+
+def test_pure_synthetic_refusal_generator_is_versioned_and_non_numeric() -> None:
+    seed_input = _test_seed_input()
+    reference = next(
+        item for item in get_reference_cases() if item.case_id == seed_input.seed_blocks[0][0]
+    )
+    seed_block = seed_input.seed_blocks[0][1]
+
+    generated = generate_synthetic_unregistered_operation_context(
+        reference,
+        seed_block=seed_block,
+    )
+
+    assert generated == generate_synthetic_unregistered_operation_context(
+        reference,
+        seed_block=seed_block,
+    )
+    assert generated["fixture_scope"] == "QUALIFICATION_ONLY"
+    assert generated["numeric_gold_generated"] is False
+
+
 def test_qualification_commitment_validator_proves_87_cells_and_all_dimensions() -> None:
     commitments = _public_commitments()
 
@@ -369,3 +661,216 @@ def test_qualification_manifest_hash_integrity_and_final_status_enforcement() ->
         replace(manifest, final_v1_eligible=True)
     with pytest.raises(ValueError, match="cannot contain approvals"):
         replace(manifest, human_approval_count=1)
+
+
+def test_external_candidate_store_round_trip_and_packet_file_integrity(
+    tmp_path: Path,
+) -> None:
+    packet, plan = _store_roundtrip_fixture()
+    validate_candidate_review_packet(packet)
+
+    receipt = write_qualification_store(
+        (packet,),
+        plan,
+        batch_id="PSE-V1-QUALIFICATION/TEST-STORE-ROUNDTRIP",
+        repository_root=tmp_path / "public-repo",
+        qualification_root=tmp_path / "outside-git-store",
+        require_all_cells=False,
+    )
+
+    restored = read_qualification_store(
+        receipt,
+        repository_root=tmp_path / "public-repo",
+        qualification_root=tmp_path / "outside-git-store",
+    )
+    assert restored == (packet,)
+    assert receipt.candidate_count == 1
+    assert receipt.total_bytes > 0
+    assert not (tmp_path / "public-repo" / receipt.store_relative_path).exists()
+
+    seed_input = _test_seed_input()
+    relative_path, seed_digest, seed_size = write_external_qualification_json(
+        seed_input,
+        "qualification/authoring_plan/private_seed_inputs.json",
+        repository_root=tmp_path / "public-repo",
+        qualification_root=tmp_path / "outside-git-store",
+    )
+    restored_seed_input, restored_digest, restored_size = read_external_qualification_json(
+        relative_path,
+        QualificationSeedInputV1,
+        repository_root=tmp_path / "public-repo",
+        qualification_root=tmp_path / "outside-git-store",
+    )
+    assert restored_seed_input == seed_input
+    assert restored_digest == seed_digest
+    assert restored_size == seed_size
+
+
+def test_external_qualification_writer_rejects_symlink_escape(tmp_path: Path) -> None:
+    repository = tmp_path / "public-repo"
+    repository.mkdir()
+    external_root = tmp_path / "external-store"
+    external_root.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (external_root / "qualification").symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(ValueError, match="escapes its canonical root"):
+        write_external_qualification_json(
+            _test_seed_input(),
+            "qualification/authoring_plan/private_seed_inputs.json",
+            repository_root=repository,
+            qualification_root=external_root,
+        )
+    assert not tuple(outside.rglob("*.json"))
+
+
+def test_live_res71_reference_lane_uses_all_twelve_cases_without_formula_gold() -> None:
+    packets = build_res115_reference_lane(_test_seed_input())
+    ids = validate_res115_reference_lane(packets)
+
+    assert len(ids) == 12
+    assert len(packets) == 12
+    assert len({packet.candidate_payload_hash for packet in packets}) == 12
+    assert {reference.status for reference in get_reference_cases()} == set(ReferenceCaseStatus)
+    validate_candidate_set(packets)
+
+
+def test_forged_res71_result_view_is_rejected() -> None:
+    packet = next(
+        item
+        for item in build_res115_reference_lane(_test_seed_input())
+        if item.candidate_id.endswith("res71-external-unit-km-to-m")
+    )
+    result = packet.input.deterministic_results[0]
+    forged_result = DeterministicResultView(
+        result_reference_id=result.result_reference_id,
+        operation_id=result.operation_id,
+        method_version=result.method_version,
+        output_unit=result.output_unit,
+        result_or_refusal_digest=result.result_or_refusal_digest,
+        authority_reference=result.authority_reference,
+        values={"value": 1001.0},
+        refusal=None,
+    )
+    forged_packet = bind_candidate_review_packet(
+        replace(
+            packet,
+            input=replace(packet.input, deterministic_results=(forged_result,)),
+        )
+    )
+
+    with pytest.raises(ValueError, match="deterministic result view differs"):
+        validate_candidate_review_packet(forged_packet)
+    with pytest.raises(ValueError, match="deterministic result view differs"):
+        validate_res115_reference_candidate(forged_packet)
+
+
+@pytest.mark.skipif(
+    not Path(
+        "/mnt/e/Data/Datasets/DynamisLM/PerformanceScienceEval/manifests/accepted.jsonl"
+    ).is_file(),
+    reason="sealed Phase-A artifacts are required for the real qualification integration proof",
+)
+def test_real_qualification_draft_validates_all_cells_and_phase_a_lanes() -> None:
+    draft = build_res115_qualification_draft(seed_input=_test_seed_input())
+    receipt_entries = tuple(
+        (packet.candidate_id, _digest(packet.candidate_id)) for packet in draft.packets
+    )
+    receipt = bind_candidate_store_receipt(
+        CandidateStoreReceiptV1(
+            batch_id=draft.batch_id,
+            store_relative_path="qualification/candidates/ephemeral-preflight",
+            candidate_file_digests=receipt_entries,
+            candidate_count=len(draft.packets),
+            total_bytes=1,
+            authoring_plan_digest=draft.plan.plan_digest,
+            artifact_inventory_digest=canonical_hash(receipt_entries),
+            receipt_digest=_ZERO_SHA,
+        )
+    )
+    manifest = build_res115_qualification_manifest(draft, receipt)
+
+    validation = validate_res115_qualification_batch(draft, manifest, receipt)
+
+    assert len(draft.packets) == 101
+    assert validation.candidate_validation.represented_cells == 87
+    assert validation.candidate_validation.represented_capabilities == 18
+    assert validation.candidate_validation.represented_families == 14
+    assert validation.candidate_validation.represented_question_classes == 8
+    assert validation.candidate_validation.represented_origins == 5
+    assert validation.candidate_validation.represented_scorers == 7
+    assert validation.candidate_validation.represented_error_classes == len(ErrorClass)
+    assert validation.candidate_validation.multi_stratum_mutation
+    assert len(validation.reference_case_ids) == 12
+    assert validation.source_validation.direct_target_document_count == 5
+    assert validation.source_validation.evidence_strata_count == 10
+    assert validation.source_validation.source_family_count >= 10
+
+
+@pytest.mark.parametrize("location", ("history", "index", "worktree", "ignored_worktree"))
+def test_qualification_packet_copied_into_git_fails_leak_guard(
+    tmp_path: Path,
+    location: str,
+) -> None:
+    packet, plan = _store_roundtrip_fixture()
+    repository = tmp_path / "public-repo"
+    repository.mkdir()
+    subprocess.run(("git", "init", "-q", str(repository)), check=True)
+    subprocess.run(
+        ("git", "-C", str(repository), "config", "user.name", "Qualification test"),
+        check=True,
+    )
+    subprocess.run(
+        (
+            "git",
+            "-C",
+            str(repository),
+            "config",
+            "user.email",
+            "qualification-test@example.invalid",
+        ),
+        check=True,
+    )
+    (repository / "README.md").write_text("empty synthetic leak-guard fixture\n", encoding="utf-8")
+    subprocess.run(("git", "-C", str(repository), "add", "README.md"), check=True)
+    subprocess.run(
+        ("git", "-C", str(repository), "commit", "-q", "-m", "fixture baseline"),
+        check=True,
+    )
+    external_root = tmp_path / "external-store"
+    receipt = write_qualification_store(
+        (packet,),
+        plan,
+        batch_id="PSE-V1-QUALIFICATION/TEST-LEAK-GUARD",
+        repository_root=repository,
+        qualification_root=external_root,
+        require_all_cells=False,
+    )
+    if location == "ignored_worktree":
+        (repository / ".gitignore").write_text(
+            "qualification-leak.json\n",
+            encoding="utf-8",
+        )
+    copied_packet = (
+        external_root
+        / receipt.store_relative_path
+        / (hashlib.sha256(packet.candidate_id.encode("utf-8")).hexdigest() + ".json")
+    ).read_bytes()
+    (repository / "qualification-leak.json").write_bytes(copied_packet)
+    if location in {"history", "index"}:
+        subprocess.run(("git", "-C", str(repository), "add", "qualification-leak.json"), check=True)
+    if location == "history":
+        subprocess.run(
+            ("git", "-C", str(repository), "commit", "-q", "-m", "leaked fixture packet"),
+            check=True,
+        )
+
+    with pytest.raises(ValueError, match="external qualification packet"):
+        validate_qualification_repository_boundary(
+            (packet,),
+            plan,
+            receipt,
+            repository_root=repository,
+            qualification_root=external_root,
+        )

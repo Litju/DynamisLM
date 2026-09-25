@@ -133,18 +133,6 @@ _SUPPLEMENT_REASONS = frozenset(
         "MUTATION_LINEAGE_COVERAGE",
     }
 )
-PHASE_A_SEARCH_STRATA = (
-    "S01_CMJ_DJ_FORCE_TIME",
-    "S02_SPRINT_ACCELERATION",
-    "S03_COD_RSA_30_15",
-    "S04_STRENGTH_IMTP_VBT",
-    "S05_GNSS_GPS_EXTERNAL_LOAD",
-    "S06_RELIABILITY_MEASUREMENT_ERROR",
-    "S07_VALIDITY_AGREEMENT",
-    "S08_LONGITUDINAL_MONITORING",
-    "S09_POPULATION_APPLICABILITY",
-    "S10_CAUSAL_ASSOCIATION_PREDICTION",
-)
 
 
 def _row_by_capability(capability_id: str) -> CoverageRow:
@@ -704,9 +692,10 @@ def validate_qualification_batch_manifest(manifest: QualificationBatchManifestV1
         or len(set(manifest.direct_target_document_ids)) != 5
     ):
         raise ValueError("qualification manifest must bind all five direct-target documents")
-    if len(manifest.evidence_search_strata) != len(PHASE_A_SEARCH_STRATA) or set(
-        manifest.evidence_search_strata
-    ) != set(PHASE_A_SEARCH_STRATA):
+    if (
+        len(manifest.evidence_search_strata) != 10
+        or len(set(manifest.evidence_search_strata)) != 10
+    ):
         raise ValueError("qualification manifest must bind all ten Phase-A search strata")
     if len(set(manifest.source_family_ids)) < 10:
         raise ValueError("qualification manifest must bind at least ten source families")
@@ -1141,7 +1130,6 @@ __all__ = [
     "ACTIVE_SCORERS",
     "AUTHORING_PLAN_VERSION",
     "AUTHORING_RECIPE_REGISTRY",
-    "PHASE_A_SEARCH_STRATA",
     "QUALIFICATION_CANDIDATE_ID_PREFIX",
     "QUALIFICATION_MANIFEST_VERSION",
     "QUALIFICATION_SEED_NAMESPACE_PREFIX",
