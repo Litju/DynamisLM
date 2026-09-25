@@ -1245,6 +1245,52 @@ def test_exact_jats_derived_source_span_passes(tmp_path: Path) -> None:
     validate_candidate_review_packet(packet, source_resolver=source_resolver)
 
 
+def test_phase_a_source_applicability_escalation_is_rejected(tmp_path: Path) -> None:
+    from dynamislm.benchmark.res115_authoring import validate_res115_source_applicability
+
+    packet, _, _ = _controlled_source_candidate(tmp_path)
+    excerpt = packet.input.evidence_excerpts[0]
+    scope = "INDIRECT_MEASUREMENT_EVIDENCE"
+    registered_scopes = {excerpt.document_identity.document_id: scope}
+    updated_excerpt = replace(excerpt, applicability=scope)
+    updated_reference = replace(packet.source_evidence_refs[0], applicability=scope)
+    fields = dict(packet.proposed_expected_answer.expected_fields.items())
+    fields.update(
+        {
+            "source_spans": (updated_excerpt.text,),
+            "applicability_scopes": (scope,),
+            "target_population_use": ("METHOD_OR_MEASUREMENT_ONLY",),
+        }
+    )
+    valid_packet = bind_candidate_review_packet(
+        replace(
+            packet,
+            input=replace(packet.input, evidence_excerpts=(updated_excerpt,)),
+            source_evidence_refs=(updated_reference,),
+            proposed_expected_answer=replace(
+                packet.proposed_expected_answer,
+                expected_fields=fields,
+            ),
+        )
+    )
+
+    validate_res115_source_applicability(valid_packet, source_scopes=registered_scopes)
+
+    escalated_fields = dict(valid_packet.proposed_expected_answer.expected_fields.items())
+    escalated_fields["target_population_use"] = ("CANONICAL_TARGET_THRESHOLD",)
+    escalated = bind_candidate_review_packet(
+        replace(
+            valid_packet,
+            proposed_expected_answer=replace(
+                valid_packet.proposed_expected_answer,
+                expected_fields=escalated_fields,
+            ),
+        )
+    )
+    with pytest.raises(ValueError, match="cannot be escalated into target norms or thresholds"):
+        validate_res115_source_applicability(escalated, source_scopes=registered_scopes)
+
+
 def test_multi_reference_same_family_checks_each_document_and_span_authority(
     tmp_path: Path,
 ) -> None:
