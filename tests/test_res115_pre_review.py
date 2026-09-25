@@ -217,6 +217,39 @@ def _digest(data: bytes) -> str:
     return "sha256:" + hashlib.sha256(data).hexdigest()
 
 
+def test_phase_a_span_digest_derives_exact_structural_jats_locator() -> None:
+    from dynamislm.benchmark.source_artifacts import (
+        _extract_jats_text,
+        derive_unique_jats_paragraph_locator,
+    )
+
+    jats = (
+        b"<article><body><sec><title>Methods</title>"
+        b"<p>Exact <italic>support</italic> bytes.</p></sec></body></article>"
+    )
+    span_digest = _digest(b"Exact support bytes.")
+
+    locator = derive_unique_jats_paragraph_locator(jats, span_digest)
+
+    assert locator == "jats-text-v1:/article[1]/body[1]/sec[1]/p[1]"
+    assert _extract_jats_text(jats, locator) == "Exact support bytes."
+
+
+def test_phase_a_span_digest_with_ambiguous_or_missing_jats_match_blocks() -> None:
+    from dynamislm.benchmark.source_artifacts import derive_unique_jats_paragraph_locator
+
+    duplicated = (
+        b"<article><body><p>Repeated exact span.</p><p>Repeated exact span.</p></body></article>"
+    )
+    missing = b"<article><body><p>Different span.</p></body></article>"
+    digest = _digest(b"Repeated exact span.")
+
+    with pytest.raises(ValueError, match="matches multiple JATS paragraphs"):
+        derive_unique_jats_paragraph_locator(duplicated, digest)
+    with pytest.raises(ValueError, match="absent from retained JATS paragraphs"):
+        derive_unique_jats_paragraph_locator(missing, digest)
+
+
 def _controlled_source_candidate(
     tmp_path: Path,
     *,

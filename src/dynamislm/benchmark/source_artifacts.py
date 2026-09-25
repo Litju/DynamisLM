@@ -77,6 +77,54 @@ def _sha256(data: bytes) -> str:
     return "sha256:" + hashlib.sha256(data).hexdigest()
 
 
+def derive_unique_jats_paragraph_locator(
+    uncompressed_jats: bytes,
+    expected_span_digest: str,
+) -> str:
+    """Derive one structural locator from an exact Phase-A paragraph digest.
+
+    Every JATS ``p`` element is enumerated and hashed from its exact
+    ``itertext()`` UTF-8 bytes. A locator is returned only when exactly one
+    paragraph has the requested digest. The Phase-A human-readable locator is
+    never used as a path hint, and the text is never searched approximately.
+    """
+
+    if not isinstance(uncompressed_jats, bytes):
+        raise TypeError("uncompressed_jats must be bytes")
+    if _SHA256_PATTERN.fullmatch(expected_span_digest) is None:
+        raise ValueError("expected_span_digest must be a sha256 digest")
+    try:
+        root = ET.fromstring(uncompressed_jats)
+    except ET.ParseError as exc:
+        raise ValueError("retained source artifact is not valid JATS XML") from exc
+
+    matches: list[str] = []
+
+    def visit(element: ET.Element, path: tuple[str, ...]) -> None:
+        local_name = element.tag.rsplit("}", 1)[-1]
+        if local_name == "p":
+            exact_text = "".join(element.itertext())
+            if _sha256(exact_text.encode("utf-8")) == expected_span_digest:
+                matches.append("jats-text-v1:" + "/" + "/".join(path))
+
+        occurrences: dict[str, int] = {}
+        for child in element:
+            child_local_name = child.tag.rsplit("}", 1)[-1]
+            occurrences[child_local_name] = occurrences.get(child_local_name, 0) + 1
+            visit(
+                child,
+                (*path, f"{child_local_name}[{occurrences[child_local_name]}]"),
+            )
+
+    root_name = root.tag.rsplit("}", 1)[-1]
+    visit(root, (f"{root_name}[1]",))
+    if not matches:
+        raise ValueError("Phase-A evidence span digest is absent from retained JATS paragraphs")
+    if len(matches) != 1:
+        raise ValueError("Phase-A evidence span digest matches multiple JATS paragraphs")
+    return matches[0]
+
+
 def _extract_jats_text(uncompressed_jats: bytes, locator: str) -> str:
     """Apply JATS_TEXT_CONTENT_V1 to one explicitly indexed structural path.
 
@@ -290,4 +338,5 @@ __all__ = [
     "PhaseASourceArtifactResolver",
     "SourceArtifactResolution",
     "SourceArtifactResolver",
+    "derive_unique_jats_paragraph_locator",
 ]
