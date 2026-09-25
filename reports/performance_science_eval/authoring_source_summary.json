@@ -1,0 +1,297 @@
+{
+  "canonical_empirical_target_documents_created": 0,
+  "direct_target_documents_used": 5,
+  "evidence_strata_used": [
+    "S01_CMJ_DJ_FORCE_TIME",
+    "S02_SPRINT_ACCELERATION",
+    "S03_COD_RSA_30_15",
+    "S04_STRENGTH_IMTP_VBT",
+    "S05_GNSS_GPS_EXTERNAL_LOAD",
+    "S06_RELIABILITY_MEASUREMENT_ERROR",
+    "S07_VALIDITY_AGREEMENT",
+    "S08_LONGITUDINAL_MONITORING",
+    "S09_POPULATION_APPLICABILITY",
+    "S10_CAUSAL_ASSOCIATION_PREDICTION"
+  ],
+  "indirect_documents_used": 9,
+  "laliga_direct_target_documents_created": 0,
+  "noncanonical_context_documents_used": 1,
+  "qualification_only": true,
+  "schema_version": "pse-authoring-source-summary@1.0.0",
+  "source_backed_candidate_count": 15,
+  "source_documents": [
+    {
+      "applicability_scope": "INDIRECT_MEASUREMENT_EVIDENCE",
+      "candidate_ids": [
+        "PSE-V1-QUALIFICATION:SRC:C13:F02:PMC10224001"
+      ],
+      "candidate_payload_hashes": [
+        "sha256:002502e45f622a91a94b698aa86b7cda04bdaa81bbf383734dd21e7f0467debf"
+      ],
+      "document_id": "PSE-DOCUMENT:PMC10224001",
+      "doi": "10.3390/s23104820",
+      "evidence_span_count": 2,
+      "pmcid": "PMC10224001",
+      "source_family_id": "PSE-SOURCE-FAMILY:f58815097d460d068fae4658",
+      "source_search_strata": [
+        "S01_CMJ_DJ_FORCE_TIME"
+      ]
+    },
+    {
+      "applicability_scope": "INDIRECT_MEASUREMENT_EVIDENCE",
+      "candidate_ids": [
+        "PSE-V1-QUALIFICATION:SRC:C13:F11:PMC10289087"
+      ],
+      "candidate_payload_hashes": [
+        "sha256:434ea58265ef478938637af7feab28a6ce59ae98aa993acfd38c9043ebd15cbd"
+      ],
+      "document_id": "PSE-DOCUMENT:PMC10289087",
+      "doi": "10.7717/peerj.15553",
+      "evidence_span_count": 1,
+      "pmcid": "PMC10289087",
+      "source_family_id": "PSE-SOURCE-FAMILY:4e753c2b48f04643389a84cc",
+      "source_search_strata": [
+        "S06_RELIABILITY_MEASUREMENT_ERROR",
+        "S07_VALIDITY_AGREEMENT"
+      ]
+    },
+    {
+      "applicability_scope": "INDIRECT_MEASUREMENT_EVIDENCE",
+      "candidate_ids": [
+        "PSE-V1-QUALIFICATION:SRC:C13:F11:PMC10346244"
+      ],
+      "candidate_payload_hashes": [
+        "sha256:1b6166ef38a0be2e36765803806aa624968212e690fe71d4c47347fdc2c8d578"
+      ],
+      "document_id": "PSE-DOCUMENT:PMC10346244",
+      "doi": "10.3390/s23135832",
+      "evidence_span_count": 1,
+      "pmcid": "PMC10346244",
+      "source_family_id": "PSE-SOURCE-FAMILY:78e393ca2e791dc61bcefced",
+      "source_search_strata": [
+        "S04_STRENGTH_IMTP_VBT"
+      ]
+    },
+    {
+      "applicability_scope": "INDIRECT_MEASUREMENT_EVIDENCE",
+      "candidate_ids": [
+        "PSE-V1-QUALIFICATION:SRC:C13:F11:PMC10529540"
+      ],
+      "candidate_payload_hashes": [
+        "sha256:dbc4f3e1d0251cc5716c33cd071fec0ae51e0dbe55a152052bff53eaef55e1e7"
+      ],
+      "document_id": "PSE-DOCUMENT:PMC10529540",
+      "doi": "10.1371/journal.pone.0286581",
+      "evidence_span_count": 1,
+      "pmcid": "PMC10529540",
+      "source_family_id": "PSE-SOURCE-FAMILY:8ac774fc2bc9e42448e8c122",
+      "source_search_strata": [
+        "S01_CMJ_DJ_FORCE_TIME",
+        "S08_LONGITUDINAL_MONITORING"
+      ]
+    },
+    {
+      "applicability_scope": "INDIRECT_MEASUREMENT_EVIDENCE",
+      "candidate_ids": [
+        "PSE-V1-QUALIFICATION:SRC:C13:F11:PMC10575115"
+      ],
+      "candidate_payload_hashes": [
+        "sha256:7ee3498bfa6325a36323677ab103583bc3b08ff110026306855d513fe7d3e3fe"
+      ],
+      "document_id": "PSE-DOCUMENT:PMC10575115",
+      "doi": "10.3390/s23198189",
+      "evidence_span_count": 1,
+      "pmcid": "PMC10575115",
+      "source_family_id": "PSE-SOURCE-FAMILY:e4dcc6fc73eae213e43c3fd2",
+      "source_search_strata": [
+        "S02_SPRINT_ACCELERATION",
+        "S06_RELIABILITY_MEASUREMENT_ERROR",
+        "S07_VALIDITY_AGREEMENT"
+      ]
+    },
+    {
+      "applicability_scope": "INDIRECT_MEASUREMENT_EVIDENCE",
+      "candidate_ids": [
+        "PSE-V1-QUALIFICATION:SRC:C13:F11:PMC10594421"
+      ],
+      "candidate_payload_hashes": [
+        "sha256:27d7c159bd213584b0199b4950c8a8c6e226186fb18d92aa495be2aa4910582d"
+      ],
+      "document_id": "PSE-DOCUMENT:PMC10594421",
+      "doi": "10.3390/jfmk8040147",
+      "evidence_span_count": 1,
+      "pmcid": "PMC10594421",
+      "source_family_id": "PSE-SOURCE-FAMILY:a682c0096465e450d947b43f",
+      "source_search_strata": [
+        "S06_RELIABILITY_MEASUREMENT_ERROR",
+        "S07_VALIDITY_AGREEMENT"
+      ]
+    },
+    {
+      "applicability_scope": "INDIRECT_MEASUREMENT_EVIDENCE",
+      "candidate_ids": [
+        "PSE-V1-QUALIFICATION:SRC:C13:F01:PMC10703208"
+      ],
+      "candidate_payload_hashes": [
+        "sha256:40bc870e6b57648ef48755cb35bcf9093310def0411f9eca3f103e8639af840b"
+      ],
+      "document_id": "PSE-DOCUMENT:PMC10703208",
+      "doi": "10.1371/journal.pone.0295405",
+      "evidence_span_count": 2,
+      "pmcid": "PMC10703208",
+      "source_family_id": "PSE-SOURCE-FAMILY:235dd890d635bf8ac6baae6b",
+      "source_search_strata": [
+        "S03_COD_RSA_30_15"
+      ]
+    },
+    {
+      "applicability_scope": "INDIRECT_MEASUREMENT_EVIDENCE",
+      "candidate_ids": [
+        "PSE-V1-QUALIFICATION:SRC:C13:F11:PMC11059726"
+      ],
+      "candidate_payload_hashes": [
+        "sha256:a56a8d57519f4aaed5c15ae3dc89707bb2cd3caa68f880dbe7a2d505e24cf27f"
+      ],
+      "document_id": "PSE-DOCUMENT:PMC11059726",
+      "doi": "10.1186/s13102-024-00886-6",
+      "evidence_span_count": 1,
+      "pmcid": "PMC11059726",
+      "source_family_id": "PSE-SOURCE-FAMILY:45a82e9a639a23d2d5d60e10",
+      "source_search_strata": [
+        "S09_POPULATION_APPLICABILITY"
+      ]
+    },
+    {
+      "applicability_scope": "NONCANONICAL_CONTEXT_ONLY",
+      "candidate_ids": [
+        "PSE-V1-QUALIFICATION:SRC:C13:F11:PMC11694206"
+      ],
+      "candidate_payload_hashes": [
+        "sha256:d73162f1b46ce67e08edc35bc20ab8b2ca9c2ed9178fdb4a7b3cc495b36571b0"
+      ],
+      "document_id": "PSE-DOCUMENT:PMC11694206",
+      "doi": "10.5114/biolsport.2024.136089",
+      "evidence_span_count": 1,
+      "pmcid": "PMC11694206",
+      "source_family_id": "PSE-SOURCE-FAMILY:7ac65766d2e95e6f97b425c6",
+      "source_search_strata": [
+        "S05_GNSS_GPS_EXTERNAL_LOAD"
+      ]
+    },
+    {
+      "applicability_scope": "DIRECT_TARGET_POPULATION_EVIDENCE",
+      "candidate_ids": [
+        "PSE-V1-QUALIFICATION:SRC:C14:F11:PMC12244382"
+      ],
+      "candidate_payload_hashes": [
+        "sha256:5fbcca3e2aa9a3747b6609adf1a9b93bd91a8bdb6447e48433945f1055f8c346"
+      ],
+      "document_id": "PSE-DOCUMENT:PMC12244382",
+      "doi": "10.5114/biolsport.2024.133001",
+      "evidence_span_count": 2,
+      "pmcid": "PMC12244382",
+      "source_family_id": "PSE-SOURCE-FAMILY:d22c32e574f9cd4d23cfcce0",
+      "source_search_strata": []
+    },
+    {
+      "applicability_scope": "DIRECT_TARGET_POPULATION_EVIDENCE",
+      "candidate_ids": [
+        "PSE-V1-QUALIFICATION:SRC:C14:F11:PMC12244393"
+      ],
+      "candidate_payload_hashes": [
+        "sha256:8728f8bbde990a018aacb4b8b15885e332a9ca7b9a66690493453cc3395c0017"
+      ],
+      "document_id": "PSE-DOCUMENT:PMC12244393",
+      "doi": "10.5114/biolsport.2025.147011",
+      "evidence_span_count": 2,
+      "pmcid": "PMC12244393",
+      "source_family_id": "PSE-SOURCE-FAMILY:10aa0bc8b283133ad7534d21",
+      "source_search_strata": []
+    },
+    {
+      "applicability_scope": "DIRECT_TARGET_POPULATION_EVIDENCE",
+      "candidate_ids": [
+        "PSE-V1-QUALIFICATION:SRC:C14:F11:PMC12490298"
+      ],
+      "candidate_payload_hashes": [
+        "sha256:0d87d881d31c8961ad3b01ec7d1026c3c794f788029751c8ff3f9a723b2cffff"
+      ],
+      "document_id": "PSE-DOCUMENT:PMC12490298",
+      "doi": "10.5114/biolsport.2025.148540",
+      "evidence_span_count": 2,
+      "pmcid": "PMC12490298",
+      "source_family_id": "PSE-SOURCE-FAMILY:10aa0bc8b283133ad7534d21",
+      "source_search_strata": []
+    },
+    {
+      "applicability_scope": "DIRECT_TARGET_POPULATION_EVIDENCE",
+      "candidate_ids": [
+        "PSE-V1-QUALIFICATION:SRC:C14:F11:PMC12884896"
+      ],
+      "candidate_payload_hashes": [
+        "sha256:3305dfa52e30d1b50b6d2b180512721f5ea20879097c1565413265904ee0781d"
+      ],
+      "document_id": "PSE-DOCUMENT:PMC12884896",
+      "doi": "10.5114/biolsport.2026.153305",
+      "evidence_span_count": 3,
+      "pmcid": "PMC12884896",
+      "source_family_id": "PSE-SOURCE-FAMILY:10aa0bc8b283133ad7534d21",
+      "source_search_strata": []
+    },
+    {
+      "applicability_scope": "INDIRECT_MEASUREMENT_EVIDENCE",
+      "candidate_ids": [
+        "PSE-V1-QUALIFICATION:SRC:C13:F11:PMC8173105"
+      ],
+      "candidate_payload_hashes": [
+        "sha256:d8982645d527f30327d88e7144ed22db3d66117a65ff5b2a34ff278bb2a576d0"
+      ],
+      "document_id": "PSE-DOCUMENT:PMC8173105",
+      "doi": "10.3389/fspor.2021.679824",
+      "evidence_span_count": 1,
+      "pmcid": "PMC8173105",
+      "source_family_id": "PSE-SOURCE-FAMILY:dd59f1fae28f52c746249296",
+      "source_search_strata": [
+        "S05_GNSS_GPS_EXTERNAL_LOAD",
+        "S10_CAUSAL_ASSOCIATION_PREDICTION"
+      ]
+    },
+    {
+      "applicability_scope": "DIRECT_TARGET_POPULATION_EVIDENCE",
+      "candidate_ids": [
+        "PSE-V1-QUALIFICATION:SRC:C14:F11:PMC9397540"
+      ],
+      "candidate_payload_hashes": [
+        "sha256:f33644aa8c0db5c15b94bb79d7b6fd2b930327a5a1c24bea361843b118330b22"
+      ],
+      "document_id": "PSE-DOCUMENT:PMC9397540",
+      "doi": "10.3389/fspor.2022.939676",
+      "evidence_span_count": 2,
+      "pmcid": "PMC9397540",
+      "source_family_id": "PSE-SOURCE-FAMILY:973a9ac285cc30d29d35cb75",
+      "source_search_strata": []
+    }
+  ],
+  "source_family_count": 13,
+  "source_family_ids": [
+    "PSE-SOURCE-FAMILY:10aa0bc8b283133ad7534d21",
+    "PSE-SOURCE-FAMILY:235dd890d635bf8ac6baae6b",
+    "PSE-SOURCE-FAMILY:45a82e9a639a23d2d5d60e10",
+    "PSE-SOURCE-FAMILY:4e753c2b48f04643389a84cc",
+    "PSE-SOURCE-FAMILY:78e393ca2e791dc61bcefced",
+    "PSE-SOURCE-FAMILY:7ac65766d2e95e6f97b425c6",
+    "PSE-SOURCE-FAMILY:8ac774fc2bc9e42448e8c122",
+    "PSE-SOURCE-FAMILY:973a9ac285cc30d29d35cb75",
+    "PSE-SOURCE-FAMILY:a682c0096465e450d947b43f",
+    "PSE-SOURCE-FAMILY:d22c32e574f9cd4d23cfcce0",
+    "PSE-SOURCE-FAMILY:dd59f1fae28f52c746249296",
+    "PSE-SOURCE-FAMILY:e4dcc6fc73eae213e43c3fd2",
+    "PSE-SOURCE-FAMILY:f58815097d460d068fae4658"
+  ],
+  "source_scope_document_counts": {
+    "DIRECT_TARGET_POPULATION_EVIDENCE": 5,
+    "INDIRECT_MEASUREMENT_EVIDENCE": 9,
+    "NONCANONICAL_CONTEXT_ONLY": 1
+  },
+  "unique_source_document_count": 15
+}

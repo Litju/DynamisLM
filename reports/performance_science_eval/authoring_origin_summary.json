@@ -1,0 +1,1644 @@
+{
+  "candidate_commitments": [
+    {
+      "authority_class": "EXPERT_SEMANTIC",
+      "benchmark_family": "F01",
+      "candidate_id": "PSE-V1-QUALIFICATION:CELL:C01:F01",
+      "candidate_payload_hash": "sha256:fe4e93c58061c5d574d88903cc4ffb45bdb0162783d438500d3cf59ea62f9755",
+      "capability_id": "C01",
+      "coverage_role": "CELL",
+      "origin": "EXPERT_AUTHORED_SEMANTIC",
+      "question_class": "MEASUREMENT_IDENTITY_AND_PROVENANCE",
+      "reachable_error_classes": [
+        "FALSE_SCIENTIFIC_ACCEPTANCE",
+        "WRONG_MEASUREMENT_IDENTITY"
+      ],
+      "scorer": "CLASSIFICATION_V1"
+    },
+    {
+      "authority_class": "EXPERT_SEMANTIC",
+      "benchmark_family": "F03",
+      "candidate_id": "PSE-V1-QUALIFICATION:CELL:C01:F03",
+      "candidate_payload_hash": "sha256:07f2d5b7d60ce3daf552cad2870ee60b0b3ffb86bba9c945870d4078ac855b9a",
+      "capability_id": "C01",
+      "coverage_role": "CELL",
+      "origin": "EXPERT_AUTHORED_SEMANTIC",
+      "question_class": "CONSTRUCT_AND_CLAIM_INTERPRETATION",
+      "reachable_error_classes": [
+        "FALSE_SCIENTIFIC_ACCEPTANCE",
+        "WRONG_MEASUREMENT_IDENTITY"
+      ],
+      "scorer": "CLASSIFICATION_V1"
+    },
+    {
+      "authority_class": "EXPERT_SEMANTIC",
+      "benchmark_family": "F11",
+      "candidate_id": "PSE-V1-QUALIFICATION:CELL:C01:F11",
+      "candidate_payload_hash": "sha256:65fc1aa6e42caa8382998b0ebdc99cc9d4190e5ee342c074a64887ac644971cc",
+      "capability_id": "C01",
+      "coverage_role": "CELL",
+      "origin": "EXPERT_AUTHORED_SEMANTIC",
+      "question_class": "MEASUREMENT_IDENTITY_AND_PROVENANCE",
+      "reachable_error_classes": [
+        "FALSE_SCIENTIFIC_ACCEPTANCE",
+        "WRONG_MEASUREMENT_IDENTITY"
+      ],
+      "scorer": "CLASSIFICATION_V1"
+    },
+    {
+      "authority_class": "EXPERT_SEMANTIC",
+      "benchmark_family": "F02",
+      "candidate_id": "PSE-V1-QUALIFICATION:CELL:C02:F02",
+      "candidate_payload_hash": "sha256:79f675855ee9019c78d0665f5a6030e9f91e40d4bb60d8cfde4c94851ea8528c",
+      "capability_id": "C02",
+      "coverage_role": "CELL",
+      "origin": "EXPERT_AUTHORED_SEMANTIC",
+      "question_class": "METHOD_AND_ANALYSIS_REASONING",
+      "reachable_error_classes": [
+        "FALSE_SCIENTIFIC_ACCEPTANCE",
+        "WRONG_MEASUREMENT_IDENTITY"
+      ],
+      "scorer": "STRUCTURED_FIELDS_V1"
+    },
+    {
+      "authority_class": "EXPERT_SEMANTIC",
+      "benchmark_family": "F01",
+      "candidate_id": "PSE-V1-QUALIFICATION:CELL:C03:F01",
+      "candidate_payload_hash": "sha256:9ded1876522b0bca9aab7aea27545e8f2a9b1c8f939b2364eefe3dbf3a9297c1",
+      "capability_id": "C03",
+      "coverage_role": "CELL",
+      "origin": "EXPERT_AUTHORED_SEMANTIC",
+      "question_class": "MEASUREMENT_IDENTITY_AND_PROVENANCE",
+      "reachable_error_classes": [
+        "DIRECT_DERIVED_COLLAPSE",
+        "FALSE_COMPARABILITY_ACCEPTANCE",
+        "WRONG_MEASUREMENT_IDENTITY"
+      ],
+      "scorer": "CLASSIFICATION_V1"
+    },
+    {
+      "authority_class": "EXPERT_SEMANTIC",
+      "benchmark_family": "F03",
+      "candidate_id": "PSE-V1-QUALIFICATION:CELL:C03:F03",
+      "candidate_payload_hash": "sha256:f146f922e4f36548babd320893805e7f30c7d49e9acec24929c4c5b4075547e9",
+      "capability_id": "C03",
+      "coverage_role": "CELL",
+      "origin": "EXPERT_AUTHORED_SEMANTIC",
+      "question_class": "MEASUREMENT_IDENTITY_AND_PROVENANCE",
+      "reachable_error_classes": [
+        "DIRECT_DERIVED_COLLAPSE",
+        "FALSE_COMPARABILITY_ACCEPTANCE",
+        "WRONG_MEASUREMENT_IDENTITY"
+      ],
+      "scorer": "CLASSIFICATION_V1"
+    },
+    {
+      "authority_class": "EXPERT_SEMANTIC",
+      "benchmark_family": "F04",
+      "candidate_id": "PSE-V1-QUALIFICATION:CELL:C03:F04",
+      "candidate_payload_hash": "sha256:3562f66bb64f364046612597b0a010b9abf5d4d5826ffff0cfb9dc2eebc06d18",
+      "capability_id": "C03",
+      "coverage_role": "CELL",
+      "origin": "EXPERT_AUTHORED_SEMANTIC",
+      "question_class": "ANSWERABILITY_AND_REFUSAL",
+      "reachable_error_classes": [
+        "DIRECT_DERIVED_COLLAPSE",
+        "FALSE_COMPARABILITY_ACCEPTANCE",
+        "WRONG_MEASUREMENT_IDENTITY"
+      ],
+      "scorer": "CLASSIFICATION_V1"
+    },
+    {
+      "authority_class": "EXPERT_SEMANTIC",
+      "benchmark_family": "F13",
+      "candidate_id": "PSE-V1-QUALIFICATION:CELL:C03:F13",
+      "candidate_payload_hash": "sha256:25e071cefd93c2fd0412131339ee371c023cbe2161da2db5baa8b83db8da5e96",
+      "capability_id": "C03",
+      "coverage_role": "CELL",
+      "origin": "EXPERT_AUTHORED_SEMANTIC",
+      "question_class": "CONSTRUCT_AND_CLAIM_INTERPRETATION",
+      "reachable_error_classes": [
+        "DIRECT_DERIVED_COLLAPSE",
+        "FALSE_COMPARABILITY_ACCEPTANCE",
+        "WRONG_MEASUREMENT_IDENTITY"
+      ],
+      "scorer": "CLASSIFICATION_V1"
+    },
+    {
+      "authority_class": "EXPERT_SEMANTIC",
+      "benchmark_family": "F03",
+      "candidate_id": "PSE-V1-QUALIFICATION:CELL:C04:F03",
+      "candidate_payload_hash": "sha256:8148c6d97275897fae62c307ddbff1532e05ce98cf28bee4ae7acdb6546f904b",
+      "capability_id": "C04",
+      "coverage_role": "CELL",
+      "origin": "EXPERT_AUTHORED_SEMANTIC",
+      "question_class": "MEASUREMENT_IDENTITY_AND_PROVENANCE",
+      "reachable_error_classes": [
+        "DIRECT_DERIVED_COLLAPSE",
+        "UNSUPPORTED_LATENT_OR_PHYSIOLOGICAL_INFERENCE"
+      ],
+      "scorer": "CLASSIFICATION_V1"
+    },
+    {
+      "authority_class": "EXPERT_SEMANTIC",
+      "benchmark_family": "F05",
+      "candidate_id": "PSE-V1-QUALIFICATION:CELL:C04:F05",
+      "candidate_payload_hash": "sha256:368dd45ea32e96a263de97aa511762e249e536208fd949c644e7e92af6ef6b71",
+      "capability_id": "C04",
+      "coverage_role": "CELL",
+      "origin": "EXPERT_AUTHORED_SEMANTIC",
+      "question_class": "ANSWERABILITY_AND_REFUSAL",
+      "reachable_error_classes": [
+        "DIRECT_DERIVED_COLLAPSE",
+        "UNSUPPORTED_LATENT_OR_PHYSIOLOGICAL_INFERENCE"
+      ],
+      "scorer": "CLASSIFICATION_V1"
+    },
+    {
+      "authority_class": "EXPERT_SEMANTIC",
+      "benchmark_family": "F10",
+      "candidate_id": "PSE-V1-QUALIFICATION:CELL:C04:F10",
+      "candidate_payload_hash": "sha256:fa46363420033a5caa0ab646e0cea5c23b5b539a7b0a79732e2cb3d58a3577bd",
+      "capability_id": "C04",
+      "coverage_role": "CELL",
+      "origin": "EXPERT_AUTHORED_SEMANTIC",
+      "question_class": "ANSWERABILITY_AND_REFUSAL",
+      "reachable_error_classes": [
+        "DIRECT_DERIVED_COLLAPSE",
+        "UNSUPPORTED_LATENT_OR_PHYSIOLOGICAL_INFERENCE"
+      ],
+      "scorer": "CLASSIFICATION_V1"
+    },
+    {
+      "authority_class": "EXPERT_SEMANTIC",
+      "benchmark_family": "F13",
+      "candidate_id": "PSE-V1-QUALIFICATION:CELL:C04:F13",
+      "candidate_payload_hash": "sha256:df0f11f24f3e0a7625e9dad88f477177a69cc7cabc478f5a4dc83411319015ca",
+      "capability_id": "C04",
+      "coverage_role": "CELL",
+      "origin": "EXPERT_AUTHORED_SEMANTIC",
+      "question_class": "ANSWERABILITY_AND_REFUSAL",
+      "reachable_error_classes": [
+        "DIRECT_DERIVED_COLLAPSE",
+        "UNSUPPORTED_LATENT_OR_PHYSIOLOGICAL_INFERENCE"
+      ],
+      "scorer": "CLASSIFICATION_V1"
+    },
+    {
+      "authority_class": "EXPERT_SEMANTIC",
+      "benchmark_family": "F03",
+      "candidate_id": "PSE-V1-QUALIFICATION:CELL:C05:F03",
+      "candidate_payload_hash": "sha256:3a0656500c8549a08c2fd6cc5c595979ec9bd32b03a59e01329ae3e658618587",
+      "capability_id": "C05",
+      "coverage_role": "CELL",
+      "origin": "EXPERT_AUTHORED_SEMANTIC",
+      "question_class": "ANSWERABILITY_AND_REFUSAL",
+      "reachable_error_classes": [
+        "FALSE_COMPARABILITY_ACCEPTANCE",
+        "INVENTED_NUMERICAL_SCIENCE",
+        "WRONG_MEASUREMENT_IDENTITY"
+      ],
+      "scorer": "CLASSIFICATION_V1"
+    },
+    {
+      "authority_class": "EXPERT_SEMANTIC",
+      "benchmark_family": "F04",
+      "candidate_id": "PSE-V1-QUALIFICATION:CELL:C05:F04",
+      "candidate_payload_hash": "sha256:9009946205a81cdf7ffba59aba0a8c31b45285a887a2295e00694ed70a231e37",
+      "capability_id": "C05",
+      "coverage_role": "CELL",
+      "origin": "EXPERT_AUTHORED_SEMANTIC",
+      "question_class": "COMPARABILITY_AND_HARMONIZATION",
+      "reachable_error_classes": [
+        "FALSE_COMPARABILITY_ACCEPTANCE",
+        "INVENTED_NUMERICAL_SCIENCE",
+        "WRONG_MEASUREMENT_IDENTITY"
+      ],
+      "scorer": "CLASSIFICATION_V1"
+    },
+    {
+      "authority_class": "EXPERT_SEMANTIC",
+      "benchmark_family": "F05",
+      "candidate_id": "PSE-V1-QUALIFICATION:CELL:C05:F05",
+      "candidate_payload_hash": "sha256:a04e6f2da2628c61180d189a0b2f9f1fdcf1ff43e0633307367ff9091dcfc986",
+      "capability_id": "C05",
+      "coverage_role": "CELL",
+      "origin": "EXPERT_AUTHORED_SEMANTIC",
+      "question_class": "METHOD_AND_ANALYSIS_REASONING",
+      "reachable_error_classes": [
+        "FALSE_COMPARABILITY_ACCEPTANCE",
+        "INVENTED_NUMERICAL_SCIENCE",
+        "WRONG_MEASUREMENT_IDENTITY"
+      ],
+      "scorer": "CLASSIFICATION_V1"
+    },
+    {
+      "authority_class": "EXPERT_SEMANTIC",
+      "benchmark_family": "F02",
+      "candidate_id": "PSE-V1-QUALIFICATION:CELL:C06:F02",
+      "candidate_payload_hash": "sha256:ef8780c636553fd186cc89ad7217624e4ff2fe585545a2faec4030e5fa6483df",
+      "capability_id": "C06",
+      "coverage_role": "CELL",
+      "origin": "EXPERT_AUTHORED_SEMANTIC",
+      "question_class": "METHOD_AND_ANALYSIS_REASONING",
+      "reachable_error_classes": [
+        "FALSE_SCIENTIFIC_ACCEPTANCE",
+        "INVENTED_NUMERICAL_SCIENCE",
+        "WRONG_MEASUREMENT_IDENTITY"
+      ],
+      "scorer": "CLASSIFICATION_V1"
+    },
+    {
+      "authority_class": "EXPERT_SEMANTIC",
+      "benchmark_family": "F05",
+      "candidate_id": "PSE-V1-QUALIFICATION:CELL:C06:F05",
+      "candidate_payload_hash": "sha256:ba482339272d37236d379abf79f319d0697a547b3f37462adfdb80fdb5c0fcbf",
+      "capability_id": "C06",
+      "coverage_role": "CELL",
+      "origin": "EXPERT_AUTHORED_SEMANTIC",
+      "question_class": "METHOD_AND_ANALYSIS_REASONING",
+      "reachable_error_classes": [
+        "FALSE_SCIENTIFIC_ACCEPTANCE",
+        "INVENTED_NUMERICAL_SCIENCE",
+        "WRONG_MEASUREMENT_IDENTITY"
+      ],
+      "scorer": "CLASSIFICATION_V1"
+    },
+    {
+      "authority_class": "EXPERT_SEMANTIC",
+      "benchmark_family": "F06",
+      "candidate_id": "PSE-V1-QUALIFICATION:CELL:C06:F06",
+      "candidate_payload_hash": "sha256:a5b5ebda910d790c0f9a89a58116a6c280649f50bf730f0c902d2985f47e23f8",
+      "capability_id": "C06",
+      "coverage_role": "CELL",
+      "origin": "EXPERT_AUTHORED_SEMANTIC",
+      "question_class": "COMPARABILITY_AND_HARMONIZATION",
+      "reachable_error_classes": [
+        "FALSE_SCIENTIFIC_ACCEPTANCE",
+        "INVENTED_NUMERICAL_SCIENCE",
+        "WRONG_MEASUREMENT_IDENTITY"
+      ],
+      "scorer": "CLASSIFICATION_V1"
+    },
+    {
+      "authority_class": "EXPERT_SEMANTIC",
+      "benchmark_family": "F13",
+      "candidate_id": "PSE-V1-QUALIFICATION:CELL:C06:F13",
+      "candidate_payload_hash": "sha256:6e5ea323ef9f1c71e35a2f2b7192c3dceca7ccac85dabf8a25fa508ec87e3e23",
+      "capability_id": "C06",
+      "coverage_role": "CELL",
+      "origin": "EXPERT_AUTHORED_SEMANTIC",
+      "question_class": "COMPARABILITY_AND_HARMONIZATION",
+      "reachable_error_classes": [
+        "FALSE_SCIENTIFIC_ACCEPTANCE",
+        "INVENTED_NUMERICAL_SCIENCE",
+        "WRONG_MEASUREMENT_IDENTITY"
+      ],
+      "scorer": "CLASSIFICATION_V1"
+    },
+    {
+      "authority_class": "EXPERT_SEMANTIC",
+      "benchmark_family": "F06",
+      "candidate_id": "PSE-V1-QUALIFICATION:CELL:C07:F06",
+      "candidate_payload_hash": "sha256:2b1ed0fccbf8399f16d298c15c41b9a1f139250e2f6dac3223ad4a094791ef74",
+      "capability_id": "C07",
+      "coverage_role": "CELL",
+      "origin": "EXPERT_AUTHORED_SEMANTIC",
+      "question_class": "COMPARABILITY_AND_HARMONIZATION",
+      "reachable_error_classes": [
+        "FALSE_COMPARABILITY_ACCEPTANCE",
+        "FALSE_SCIENTIFIC_ACCEPTANCE",
+        "WRONG_MEASUREMENT_IDENTITY"
+      ],
+      "scorer": "COMPARABILITY_V1"
+    },
+    {
+      "authority_class": "EXPERT_SEMANTIC",
+      "benchmark_family": "F13",
+      "candidate_id": "PSE-V1-QUALIFICATION:CELL:C07:F13",
+      "candidate_payload_hash": "sha256:e6dbd3bba5a1dadb879cd38e1656beb795a332c904652c0867ddd4cb7dcf4a6a",
+      "capability_id": "C07",
+      "coverage_role": "CELL",
+      "origin": "EXPERT_AUTHORED_SEMANTIC",
+      "question_class": "COMPARABILITY_AND_HARMONIZATION",
+      "reachable_error_classes": [
+        "FALSE_COMPARABILITY_ACCEPTANCE",
+        "FALSE_SCIENTIFIC_ACCEPTANCE",
+        "WRONG_MEASUREMENT_IDENTITY"
+      ],
+      "scorer": "COMPARABILITY_V1"
+    },
+    {
+      "authority_class": "EXPERT_SEMANTIC",
+      "benchmark_family": "F14",
+      "candidate_id": "PSE-V1-QUALIFICATION:CELL:C07:F14",
+      "candidate_payload_hash": "sha256:a38ba160660ed5ef8c311d2d3b997a08412585dc56229fa7fa265508144fa4c0",
+      "capability_id": "C07",
+      "coverage_role": "CELL",
+      "origin": "EXPERT_AUTHORED_SEMANTIC",
+      "question_class": "COMPARABILITY_AND_HARMONIZATION",
+      "reachable_error_classes": [
+        "FALSE_COMPARABILITY_ACCEPTANCE",
+        "FALSE_SCIENTIFIC_ACCEPTANCE",
+        "WRONG_MEASUREMENT_IDENTITY"
+      ],
+      "scorer": "COMPARABILITY_V1"
+    },
+    {
+      "authority_class": "EXPERT_SEMANTIC",
+      "benchmark_family": "F07",
+      "candidate_id": "PSE-V1-QUALIFICATION:CELL:C09:F07",
+      "candidate_payload_hash": "sha256:a8a8e2f26cd4cf45d2312d9cc797008d31e571fb5d9ec2bf13cd39c28aa25ef4",
+      "capability_id": "C09",
+      "coverage_role": "CELL",
+      "origin": "EXPERT_AUTHORED_SEMANTIC",
+      "question_class": "INDIVIDUAL_LONGITUDINAL_CHANGE",
+      "reachable_error_classes": [
+        "CAUSAL_OVERCLAIM",
+        "FALSE_SCIENTIFIC_ACCEPTANCE",
+        "UNSUPPORTED_LATENT_OR_PHYSIOLOGICAL_INFERENCE"
+      ],
+      "scorer": "CAUSAL_BOUNDARY_V1"
+    },
+    {
+      "authority_class": "EXPERT_SEMANTIC",
+      "benchmark_family": "F10",
+      "candidate_id": "PSE-V1-QUALIFICATION:CELL:C09:F10",
+      "candidate_payload_hash": "sha256:1d5e5a1efc2d89d6920e52c4923363487efee3d5e038282a810750783c41adf0",
+      "capability_id": "C09",
+      "coverage_role": "CELL",
+      "origin": "EXPERT_AUTHORED_SEMANTIC",
+      "question_class": "INDIVIDUAL_LONGITUDINAL_CHANGE",
+      "reachable_error_classes": [
+        "CAUSAL_OVERCLAIM",
+        "FALSE_SCIENTIFIC_ACCEPTANCE",
+        "UNSUPPORTED_LATENT_OR_PHYSIOLOGICAL_INFERENCE"
+      ],
+      "scorer": "CAUSAL_BOUNDARY_V1"
+    },
+    {
+      "authority_class": "EXPERT_SEMANTIC",
+      "benchmark_family": "F12",
+      "candidate_id": "PSE-V1-QUALIFICATION:CELL:C09:F12",
+      "candidate_payload_hash": "sha256:429f885a56b004e387d51dbb9cb0853c9ac26dfef1c1729c92366a76c3c005c3",
+      "capability_id": "C09",
+      "coverage_role": "CELL",
+      "origin": "EXPERT_AUTHORED_SEMANTIC",
+      "question_class": "INDIVIDUAL_LONGITUDINAL_CHANGE",
+      "reachable_error_classes": [
+        "CAUSAL_OVERCLAIM",
+        "FALSE_SCIENTIFIC_ACCEPTANCE",
+        "UNSUPPORTED_LATENT_OR_PHYSIOLOGICAL_INFERENCE"
+      ],
+      "scorer": "CAUSAL_BOUNDARY_V1"
+    },
+    {
+      "authority_class": "EXPERT_SEMANTIC",
+      "benchmark_family": "F08",
+      "candidate_id": "PSE-V1-QUALIFICATION:CELL:C10:F08",
+      "candidate_payload_hash": "sha256:d1a08a3526726b8636a50d3c04ad54688f9888d9b5c9f816d54234f253eb3177",
+      "capability_id": "C10",
+      "coverage_role": "CELL",
+      "origin": "EXPERT_AUTHORED_SEMANTIC",
+      "question_class": "RELATIONSHIP_AND_MULTILEVEL_STRUCTURE",
+      "reachable_error_classes": [
+        "FALSE_SCIENTIFIC_ACCEPTANCE",
+        "WRONG_ANALYSIS_CLASS"
+      ],
+      "scorer": "STRUCTURED_FIELDS_V1"
+    },
+    {
+      "authority_class": "EXPERT_SEMANTIC",
+      "benchmark_family": "F09",
+      "candidate_id": "PSE-V1-QUALIFICATION:CELL:C10:F09",
+      "candidate_payload_hash": "sha256:9f0446adbe7143420dcc997b9852dec4eb77226ae579b0e95f1e0417fcd6b38e",
+      "capability_id": "C10",
+      "coverage_role": "CELL",
+      "origin": "EXPERT_AUTHORED_SEMANTIC",
+      "question_class": "GROUP_OR_SQUAD_CHANGE",
+      "reachable_error_classes": [
+        "FALSE_SCIENTIFIC_ACCEPTANCE",
+        "WRONG_ANALYSIS_CLASS"
+      ],
+      "scorer": "STRUCTURED_FIELDS_V1"
+    },
+    {
+      "authority_class": "EXPERT_SEMANTIC",
+      "benchmark_family": "F13",
+      "candidate_id": "PSE-V1-QUALIFICATION:CELL:C10:F13",
+      "candidate_payload_hash": "sha256:d65bebb645dbd31ade7001eebc839f73071f50bbc6e4ae6bc29203366ae4e474",
+      "capability_id": "C10",
+      "coverage_role": "CELL",
+      "origin": "EXPERT_AUTHORED_SEMANTIC",
+      "question_class": "RELATIONSHIP_AND_MULTILEVEL_STRUCTURE",
+      "reachable_error_classes": [
+        "FALSE_SCIENTIFIC_ACCEPTANCE",
+        "WRONG_ANALYSIS_CLASS"
+      ],
+      "scorer": "STRUCTURED_FIELDS_V1"
+    },
+    {
+      "authority_class": "EXPERT_SEMANTIC",
+      "benchmark_family": "F14",
+      "candidate_id": "PSE-V1-QUALIFICATION:CELL:C10:F14",
+      "candidate_payload_hash": "sha256:ff66c645031a90ff01bebf8961bb8b72d7d85ce08beffd5e7f054d83220bf740",
+      "capability_id": "C10",
+      "coverage_role": "CELL",
+      "origin": "EXPERT_AUTHORED_SEMANTIC",
+      "question_class": "ANSWERABILITY_AND_REFUSAL",
+      "reachable_error_classes": [
+        "FALSE_SCIENTIFIC_ACCEPTANCE",
+        "WRONG_ANALYSIS_CLASS"
+      ],
+      "scorer": "STRUCTURED_FIELDS_V1"
+    },
+    {
+      "authority_class": "EXPERT_SEMANTIC",
+      "benchmark_family": "F07",
+      "candidate_id": "PSE-V1-QUALIFICATION:CELL:C11:F07",
+      "candidate_payload_hash": "sha256:a56a8d02478d78d4d1ecaf52c010a7083b55277d12260920bce82d3b4cd92728",
+      "capability_id": "C11",
+      "coverage_role": "CELL",
+      "origin": "EXPERT_AUTHORED_SEMANTIC",
+      "question_class": "GROUP_OR_SQUAD_CHANGE",
+      "reachable_error_classes": [
+        "BETWEEN_TO_WITHIN_MISINFERENCE",
+        "CAUSAL_OVERCLAIM",
+        "WRONG_ANALYSIS_CLASS"
+      ],
+      "scorer": "CLASSIFICATION_V1"
+    },
+    {
+      "authority_class": "EXPERT_SEMANTIC",
+      "benchmark_family": "F08",
+      "candidate_id": "PSE-V1-QUALIFICATION:CELL:C11:F08",
+      "candidate_payload_hash": "sha256:a23f1cfea69b2072b7ea828e5400b9abae90bbcd2e1f2b86ac9179e5e152bfbf",
+      "capability_id": "C11",
+      "coverage_role": "CELL",
+      "origin": "EXPERT_AUTHORED_SEMANTIC",
+      "question_class": "GROUP_OR_SQUAD_CHANGE",
+      "reachable_error_classes": [
+        "BETWEEN_TO_WITHIN_MISINFERENCE",
+        "CAUSAL_OVERCLAIM",
+        "WRONG_ANALYSIS_CLASS"
+      ],
+      "scorer": "CLASSIFICATION_V1"
+    },
+    {
+      "authority_class": "EXPERT_SEMANTIC",
+      "benchmark_family": "F13",
+      "candidate_id": "PSE-V1-QUALIFICATION:CELL:C11:F13",
+      "candidate_payload_hash": "sha256:fc77692e2c9892f7acede56b60994e7415e9894e3c37028286f782cf2609d599",
+      "capability_id": "C11",
+      "coverage_role": "CELL",
+      "origin": "EXPERT_AUTHORED_SEMANTIC",
+      "question_class": "RELATIONSHIP_AND_MULTILEVEL_STRUCTURE",
+      "reachable_error_classes": [
+        "BETWEEN_TO_WITHIN_MISINFERENCE",
+        "CAUSAL_OVERCLAIM",
+        "WRONG_ANALYSIS_CLASS"
+      ],
+      "scorer": "CLASSIFICATION_V1"
+    },
+    {
+      "authority_class": "EXPERT_SEMANTIC",
+      "benchmark_family": "F07",
+      "candidate_id": "PSE-V1-QUALIFICATION:CELL:C12:F07",
+      "candidate_payload_hash": "sha256:4321240fe2b58c3d464b5b6fbe04e064c4604aac91ebbf76fcf2b88172d20cb0",
+      "capability_id": "C12",
+      "coverage_role": "CELL",
+      "origin": "EXPERT_AUTHORED_SEMANTIC",
+      "question_class": "INDIVIDUAL_LONGITUDINAL_CHANGE",
+      "reachable_error_classes": [
+        "FALSE_SCIENTIFIC_ACCEPTANCE",
+        "UNSUPPORTED_LATENT_OR_PHYSIOLOGICAL_INFERENCE",
+        "WRONG_ANALYSIS_CLASS"
+      ],
+      "scorer": "CLASSIFICATION_V1"
+    },
+    {
+      "authority_class": "EXPERT_SEMANTIC",
+      "benchmark_family": "F08",
+      "candidate_id": "PSE-V1-QUALIFICATION:CELL:C12:F08",
+      "candidate_payload_hash": "sha256:bf3b7320a3177bae65a8a0137a84f612becd4c677563535448865868496c61bd",
+      "capability_id": "C12",
+      "coverage_role": "CELL",
+      "origin": "EXPERT_AUTHORED_SEMANTIC",
+      "question_class": "GROUP_OR_SQUAD_CHANGE",
+      "reachable_error_classes": [
+        "FALSE_SCIENTIFIC_ACCEPTANCE",
+        "UNSUPPORTED_LATENT_OR_PHYSIOLOGICAL_INFERENCE",
+        "WRONG_ANALYSIS_CLASS"
+      ],
+      "scorer": "CLASSIFICATION_V1"
+    },
+    {
+      "authority_class": "EXPERT_SEMANTIC",
+      "benchmark_family": "F10",
+      "candidate_id": "PSE-V1-QUALIFICATION:CELL:C12:F10",
+      "candidate_payload_hash": "sha256:cfe0f166ccba6c2d6b35e3ed2d36d7c7df7e7e838119d5292b6b6f39bffad892",
+      "capability_id": "C12",
+      "coverage_role": "CELL",
+      "origin": "EXPERT_AUTHORED_SEMANTIC",
+      "question_class": "INDIVIDUAL_LONGITUDINAL_CHANGE",
+      "reachable_error_classes": [
+        "FALSE_SCIENTIFIC_ACCEPTANCE",
+        "UNSUPPORTED_LATENT_OR_PHYSIOLOGICAL_INFERENCE",
+        "WRONG_ANALYSIS_CLASS"
+      ],
+      "scorer": "CLASSIFICATION_V1"
+    },
+    {
+      "authority_class": "EXPERT_SEMANTIC",
+      "benchmark_family": "F13",
+      "candidate_id": "PSE-V1-QUALIFICATION:CELL:C12:F13",
+      "candidate_payload_hash": "sha256:ec7b673a1d79c889673970855e64d60ae3b9421ccf7dbe3f2da8ee3eb49eb016",
+      "capability_id": "C12",
+      "coverage_role": "CELL",
+      "origin": "EXPERT_AUTHORED_SEMANTIC",
+      "question_class": "RELATIONSHIP_AND_MULTILEVEL_STRUCTURE",
+      "reachable_error_classes": [
+        "FALSE_SCIENTIFIC_ACCEPTANCE",
+        "UNSUPPORTED_LATENT_OR_PHYSIOLOGICAL_INFERENCE",
+        "WRONG_ANALYSIS_CLASS"
+      ],
+      "scorer": "CLASSIFICATION_V1"
+    },
+    {
+      "authority_class": "EXPERT_SEMANTIC",
+      "benchmark_family": "F01",
+      "candidate_id": "PSE-V1-QUALIFICATION:CELL:C14:F01",
+      "candidate_payload_hash": "sha256:b4797779a3061b05067865c4626e3eb48820ad0d4090b756ca5d249fdce6f586",
+      "capability_id": "C14",
+      "coverage_role": "CELL",
+      "origin": "EXPERT_AUTHORED_SEMANTIC",
+      "question_class": "CONSTRUCT_AND_CLAIM_INTERPRETATION",
+      "reachable_error_classes": [
+        "FALSE_COMPARABILITY_ACCEPTANCE",
+        "FALSE_SCIENTIFIC_ACCEPTANCE",
+        "UNSUPPORTED_LATENT_OR_PHYSIOLOGICAL_INFERENCE"
+      ],
+      "scorer": "CLASSIFICATION_V1"
+    },
+    {
+      "authority_class": "EXPERT_SEMANTIC",
+      "benchmark_family": "F04",
+      "candidate_id": "PSE-V1-QUALIFICATION:CELL:C14:F04",
+      "candidate_payload_hash": "sha256:c0f9d65e580bae0cc9005ca02bed291a8b38ac61c6ec29e76b0828114b14654e",
+      "capability_id": "C14",
+      "coverage_role": "CELL",
+      "origin": "EXPERT_AUTHORED_SEMANTIC",
+      "question_class": "COMPARABILITY_AND_HARMONIZATION",
+      "reachable_error_classes": [
+        "FALSE_COMPARABILITY_ACCEPTANCE",
+        "FALSE_SCIENTIFIC_ACCEPTANCE",
+        "UNSUPPORTED_LATENT_OR_PHYSIOLOGICAL_INFERENCE"
+      ],
+      "scorer": "CLASSIFICATION_V1"
+    },
+    {
+      "authority_class": "EXPERT_SEMANTIC",
+      "benchmark_family": "F10",
+      "candidate_id": "PSE-V1-QUALIFICATION:CELL:C14:F10",
+      "candidate_payload_hash": "sha256:1b022d794c52c95ece1883218f0a4922f61d9ed115fca4b79dc45a1c721f4bf6",
+      "capability_id": "C14",
+      "coverage_role": "CELL",
+      "origin": "EXPERT_AUTHORED_SEMANTIC",
+      "question_class": "CONSTRUCT_AND_CLAIM_INTERPRETATION",
+      "reachable_error_classes": [
+        "FALSE_COMPARABILITY_ACCEPTANCE",
+        "FALSE_SCIENTIFIC_ACCEPTANCE",
+        "UNSUPPORTED_LATENT_OR_PHYSIOLOGICAL_INFERENCE"
+      ],
+      "scorer": "CLASSIFICATION_V1"
+    },
+    {
+      "authority_class": "EXPERT_SEMANTIC",
+      "benchmark_family": "F12",
+      "candidate_id": "PSE-V1-QUALIFICATION:CELL:C14:F12",
+      "candidate_payload_hash": "sha256:9f0c83d237e444a6ce4ec77c21832a3d417c620bbe9738ea526a42a13da4607e",
+      "capability_id": "C14",
+      "coverage_role": "CELL",
+      "origin": "EXPERT_AUTHORED_SEMANTIC",
+      "question_class": "GROUP_OR_SQUAD_CHANGE",
+      "reachable_error_classes": [
+        "FALSE_COMPARABILITY_ACCEPTANCE",
+        "FALSE_SCIENTIFIC_ACCEPTANCE",
+        "UNSUPPORTED_LATENT_OR_PHYSIOLOGICAL_INFERENCE"
+      ],
+      "scorer": "CLASSIFICATION_V1"
+    },
+    {
+      "authority_class": "EXPERT_SEMANTIC",
+      "benchmark_family": "F07",
+      "candidate_id": "PSE-V1-QUALIFICATION:CELL:C15:F07",
+      "candidate_payload_hash": "sha256:bd56ce937d7826828f128da324fa4fb6c5e86960a5177083a64bd759a4c83e2c",
+      "capability_id": "C15",
+      "coverage_role": "CELL",
+      "origin": "EXPERT_AUTHORED_SEMANTIC",
+      "question_class": "INDIVIDUAL_LONGITUDINAL_CHANGE",
+      "reachable_error_classes": [
+        "CAUSAL_OVERCLAIM",
+        "FALSE_SCIENTIFIC_ACCEPTANCE",
+        "UNSUPPORTED_LATENT_OR_PHYSIOLOGICAL_INFERENCE"
+      ],
+      "scorer": "CAUSAL_BOUNDARY_V1"
+    },
+    {
+      "authority_class": "EXPERT_SEMANTIC",
+      "benchmark_family": "F09",
+      "candidate_id": "PSE-V1-QUALIFICATION:CELL:C15:F09",
+      "candidate_payload_hash": "sha256:3e7558a080aa21c39ee94fdd23c812b33cf3b15bb2765bbab16856d446d39177",
+      "capability_id": "C15",
+      "coverage_role": "CELL",
+      "origin": "EXPERT_AUTHORED_SEMANTIC",
+      "question_class": "GROUP_OR_SQUAD_CHANGE",
+      "reachable_error_classes": [
+        "CAUSAL_OVERCLAIM",
+        "FALSE_SCIENTIFIC_ACCEPTANCE",
+        "UNSUPPORTED_LATENT_OR_PHYSIOLOGICAL_INFERENCE"
+      ],
+      "scorer": "CAUSAL_BOUNDARY_V1"
+    },
+    {
+      "authority_class": "EXPERT_SEMANTIC",
+      "benchmark_family": "F13",
+      "candidate_id": "PSE-V1-QUALIFICATION:CELL:C15:F13",
+      "candidate_payload_hash": "sha256:b4fb6884e0ea5222f15b8d397f437c5245af25a155141162d1b79bebea35aeb9",
+      "capability_id": "C15",
+      "coverage_role": "CELL",
+      "origin": "EXPERT_AUTHORED_SEMANTIC",
+      "question_class": "RELATIONSHIP_AND_MULTILEVEL_STRUCTURE",
+      "reachable_error_classes": [
+        "CAUSAL_OVERCLAIM",
+        "FALSE_SCIENTIFIC_ACCEPTANCE",
+        "UNSUPPORTED_LATENT_OR_PHYSIOLOGICAL_INFERENCE"
+      ],
+      "scorer": "CAUSAL_BOUNDARY_V1"
+    },
+    {
+      "authority_class": "EXPERT_SEMANTIC",
+      "benchmark_family": "F01",
+      "candidate_id": "PSE-V1-QUALIFICATION:CELL:C17:F01",
+      "candidate_payload_hash": "sha256:3ebe20555a8c0e1cfa94a52232b805e5eef9c40bae0bc808d26e316e540f521b",
+      "capability_id": "C17",
+      "coverage_role": "CELL",
+      "origin": "EXPERT_AUTHORED_SEMANTIC",
+      "question_class": "CONSTRUCT_AND_CLAIM_INTERPRETATION",
+      "reachable_error_classes": [
+        "EXCESSIVE_CONSERVATISM",
+        "FALSE_SCIENTIFIC_ACCEPTANCE",
+        "OVER_REFUSAL",
+        "WRONG_MEASUREMENT_IDENTITY"
+      ],
+      "scorer": "CLASSIFICATION_V1"
+    },
+    {
+      "authority_class": "EXPERT_SEMANTIC",
+      "benchmark_family": "F02",
+      "candidate_id": "PSE-V1-QUALIFICATION:CELL:C17:F02",
+      "candidate_payload_hash": "sha256:262339c42e7cd15d2ee6e535da1f6bff900ed41e22a9eb4e3dfedfcf473098ba",
+      "capability_id": "C17",
+      "coverage_role": "CELL",
+      "origin": "EXPERT_AUTHORED_SEMANTIC",
+      "question_class": "ANSWERABILITY_AND_REFUSAL",
+      "reachable_error_classes": [
+        "EXCESSIVE_CONSERVATISM",
+        "FALSE_SCIENTIFIC_ACCEPTANCE",
+        "OVER_REFUSAL"
+      ],
+      "scorer": "CLASSIFICATION_V1"
+    },
+    {
+      "authority_class": "EXPERT_SEMANTIC",
+      "benchmark_family": "F03",
+      "candidate_id": "PSE-V1-QUALIFICATION:CELL:C17:F03",
+      "candidate_payload_hash": "sha256:4092bd9ae49cc3ba05bd5176065fa5c134d93342ac43aa4599970c0adcd31888",
+      "capability_id": "C17",
+      "coverage_role": "CELL",
+      "origin": "EXPERT_AUTHORED_SEMANTIC",
+      "question_class": "CONSTRUCT_AND_CLAIM_INTERPRETATION",
+      "reachable_error_classes": [
+        "DIRECT_DERIVED_COLLAPSE",
+        "EXCESSIVE_CONSERVATISM",
+        "FALSE_SCIENTIFIC_ACCEPTANCE",
+        "OVER_REFUSAL"
+      ],
+      "scorer": "CLASSIFICATION_V1"
+    },
+    {
+      "authority_class": "EXPERT_SEMANTIC",
+      "benchmark_family": "F04",
+      "candidate_id": "PSE-V1-QUALIFICATION:CELL:C17:F04",
+      "candidate_payload_hash": "sha256:56ad3c5cf3e9926e294db0784f9d05859fe9fdacc0bf7c36722795b4233ea303",
+      "capability_id": "C17",
+      "coverage_role": "CELL",
+      "origin": "EXPERT_AUTHORED_SEMANTIC",
+      "question_class": "COMPARABILITY_AND_HARMONIZATION",
+      "reachable_error_classes": [
+        "EXCESSIVE_CONSERVATISM",
+        "FALSE_COMPARABILITY_ACCEPTANCE",
+        "FALSE_SCIENTIFIC_ACCEPTANCE",
+        "OVER_REFUSAL"
+      ],
+      "scorer": "CLASSIFICATION_V1"
+    },
+    {
+      "authority_class": "EXPERT_SEMANTIC",
+      "benchmark_family": "F05",
+      "candidate_id": "PSE-V1-QUALIFICATION:CELL:C17:F05",
+      "candidate_payload_hash": "sha256:459807d63d43f3dfd338c36700fa377ed0554c3523d130e9d34c9a1f92d64853",
+      "capability_id": "C17",
+      "coverage_role": "CELL",
+      "origin": "EXPERT_AUTHORED_SEMANTIC",
+      "question_class": "ANSWERABILITY_AND_REFUSAL",
+      "reachable_error_classes": [
+        "EXCESSIVE_CONSERVATISM",
+        "FALSE_SCIENTIFIC_ACCEPTANCE",
+        "INVENTED_NUMERICAL_SCIENCE",
+        "OVER_REFUSAL"
+      ],
+      "scorer": "CLASSIFICATION_V1"
+    },
+    {
+      "authority_class": "EXPERT_SEMANTIC",
+      "benchmark_family": "F06",
+      "candidate_id": "PSE-V1-QUALIFICATION:CELL:C17:F06",
+      "candidate_payload_hash": "sha256:757df600cde3bc29bf4985b45ca1178138f31ab96928b09af8450e6e4178a221",
+      "capability_id": "C17",
+      "coverage_role": "CELL",
+      "origin": "EXPERT_AUTHORED_SEMANTIC",
+      "question_class": "COMPARABILITY_AND_HARMONIZATION",
+      "reachable_error_classes": [
+        "EXCESSIVE_CONSERVATISM",
+        "FALSE_SCIENTIFIC_ACCEPTANCE",
+        "OVER_REFUSAL",
+        "WRONG_MEASUREMENT_IDENTITY"
+      ],
+      "scorer": "CLASSIFICATION_V1"
+    },
+    {
+      "authority_class": "EXPERT_SEMANTIC",
+      "benchmark_family": "F07",
+      "candidate_id": "PSE-V1-QUALIFICATION:CELL:C17:F07",
+      "candidate_payload_hash": "sha256:1010d5f6d6fbc0cce8a75e66eafb3586628867474ccdcb7cd1c8a7e6739569a7",
+      "capability_id": "C17",
+      "coverage_role": "CELL",
+      "origin": "EXPERT_AUTHORED_SEMANTIC",
+      "question_class": "CONSTRUCT_AND_CLAIM_INTERPRETATION",
+      "reachable_error_classes": [
+        "EXCESSIVE_CONSERVATISM",
+        "FALSE_SCIENTIFIC_ACCEPTANCE",
+        "OVER_REFUSAL",
+        "UNSUPPORTED_LATENT_OR_PHYSIOLOGICAL_INFERENCE"
+      ],
+      "scorer": "CLASSIFICATION_V1"
+    },
+    {
+      "authority_class": "EXPERT_SEMANTIC",
+      "benchmark_family": "F08",
+      "candidate_id": "PSE-V1-QUALIFICATION:CELL:C17:F08",
+      "candidate_payload_hash": "sha256:8116c665e5986d25c469a551f8854a85d5dbe458428722d151d77b3da9d4c5dc",
+      "capability_id": "C17",
+      "coverage_role": "CELL",
+      "origin": "EXPERT_AUTHORED_SEMANTIC",
+      "question_class": "RELATIONSHIP_AND_MULTILEVEL_STRUCTURE",
+      "reachable_error_classes": [
+        "EXCESSIVE_CONSERVATISM",
+        "FALSE_SCIENTIFIC_ACCEPTANCE",
+        "OVER_REFUSAL",
+        "WRONG_ANALYSIS_CLASS"
+      ],
+      "scorer": "CLASSIFICATION_V1"
+    },
+    {
+      "authority_class": "EXPERT_SEMANTIC",
+      "benchmark_family": "F09",
+      "candidate_id": "PSE-V1-QUALIFICATION:CELL:C17:F09",
+      "candidate_payload_hash": "sha256:b27c23a16857b8ef58c1460e93f156d95cac4742989a400afcd70d25749742ce",
+      "capability_id": "C17",
+      "coverage_role": "CELL",
+      "origin": "EXPERT_AUTHORED_SEMANTIC",
+      "question_class": "RELATIONSHIP_AND_MULTILEVEL_STRUCTURE",
+      "reachable_error_classes": [
+        "BETWEEN_TO_WITHIN_MISINFERENCE",
+        "EXCESSIVE_CONSERVATISM",
+        "FALSE_SCIENTIFIC_ACCEPTANCE",
+        "OVER_REFUSAL"
+      ],
+      "scorer": "CLASSIFICATION_V1"
+    },
+    {
+      "authority_class": "EXPERT_SEMANTIC",
+      "benchmark_family": "F10",
+      "candidate_id": "PSE-V1-QUALIFICATION:CELL:C17:F10",
+      "candidate_payload_hash": "sha256:4fb41e8c22d311abefec755f62cb6b51db66499018e7bf9416f790142efaa58a",
+      "capability_id": "C17",
+      "coverage_role": "CELL",
+      "origin": "EXPERT_AUTHORED_SEMANTIC",
+      "question_class": "RELATIONSHIP_AND_MULTILEVEL_STRUCTURE",
+      "reachable_error_classes": [
+        "EXCESSIVE_CONSERVATISM",
+        "FALSE_SCIENTIFIC_ACCEPTANCE",
+        "OVER_REFUSAL"
+      ],
+      "scorer": "CLASSIFICATION_V1"
+    },
+    {
+      "authority_class": "EXPERT_SEMANTIC",
+      "benchmark_family": "F11",
+      "candidate_id": "PSE-V1-QUALIFICATION:CELL:C17:F11",
+      "candidate_payload_hash": "sha256:dfefe2463c9cf9bdcbb76dfa15fb906b93b93bbdbfb169e2beffbde7a3557080",
+      "capability_id": "C17",
+      "coverage_role": "CELL",
+      "origin": "EXPERT_AUTHORED_SEMANTIC",
+      "question_class": "ANSWERABILITY_AND_REFUSAL",
+      "reachable_error_classes": [
+        "EXCESSIVE_CONSERVATISM",
+        "FALSE_SCIENTIFIC_ACCEPTANCE",
+        "OVER_REFUSAL",
+        "WRONG_MEASUREMENT_IDENTITY"
+      ],
+      "scorer": "CLASSIFICATION_V1"
+    },
+    {
+      "authority_class": "EXPERT_SEMANTIC",
+      "benchmark_family": "F12",
+      "candidate_id": "PSE-V1-QUALIFICATION:CELL:C17:F12",
+      "candidate_payload_hash": "sha256:0ff36d74ab47d7c5347175f91b05416d82d70c8bf55b59e066200538f2c7dde1",
+      "capability_id": "C17",
+      "coverage_role": "CELL",
+      "origin": "EXPERT_AUTHORED_SEMANTIC",
+      "question_class": "RELATIONSHIP_AND_MULTILEVEL_STRUCTURE",
+      "reachable_error_classes": [
+        "CAUSAL_OVERCLAIM",
+        "EXCESSIVE_CONSERVATISM",
+        "FALSE_SCIENTIFIC_ACCEPTANCE",
+        "OVER_REFUSAL"
+      ],
+      "scorer": "CLASSIFICATION_V1"
+    },
+    {
+      "authority_class": "EXPERT_SEMANTIC",
+      "benchmark_family": "F13",
+      "candidate_id": "PSE-V1-QUALIFICATION:CELL:C17:F13",
+      "candidate_payload_hash": "sha256:3d92c6fdae21629f762c018c2726146e30e0af74a1f2ecac972c860231f99045",
+      "capability_id": "C17",
+      "coverage_role": "CELL",
+      "origin": "EXPERT_AUTHORED_SEMANTIC",
+      "question_class": "COMPARABILITY_AND_HARMONIZATION",
+      "reachable_error_classes": [
+        "EXCESSIVE_CONSERVATISM",
+        "FALSE_SCIENTIFIC_ACCEPTANCE",
+        "OVER_REFUSAL"
+      ],
+      "scorer": "CLASSIFICATION_V1"
+    },
+    {
+      "authority_class": "EXPERT_SEMANTIC",
+      "benchmark_family": "F14",
+      "candidate_id": "PSE-V1-QUALIFICATION:CELL:C17:F14",
+      "candidate_payload_hash": "sha256:d192170a0fb8359b7f6e2a09357b8e2c5896b90808b604eb1e9b0decfd1a8add",
+      "capability_id": "C17",
+      "coverage_role": "CELL",
+      "origin": "EXPERT_AUTHORED_SEMANTIC",
+      "question_class": "COMPARABILITY_AND_HARMONIZATION",
+      "reachable_error_classes": [
+        "EXCESSIVE_CONSERVATISM",
+        "FALSE_SCIENTIFIC_ACCEPTANCE",
+        "OVER_REFUSAL",
+        "UNDER_SPECIFIED_REFUSAL"
+      ],
+      "scorer": "CLASSIFICATION_V1"
+    },
+    {
+      "authority_class": "EXPERT_SEMANTIC",
+      "benchmark_family": "F01",
+      "candidate_id": "PSE-V1-QUALIFICATION:CELL:C18:F01",
+      "candidate_payload_hash": "sha256:374de9ad2f23ecba2ad0a3f7e69fcee72e1fd0544f0d0c62a1d77b7350fcbc0f",
+      "capability_id": "C18",
+      "coverage_role": "CELL",
+      "origin": "EXPERT_AUTHORED_SEMANTIC",
+      "question_class": "MEASUREMENT_IDENTITY_AND_PROVENANCE",
+      "reachable_error_classes": [
+        "EXCESSIVE_CONSERVATISM",
+        "FALSE_SCIENTIFIC_ACCEPTANCE",
+        "OVER_REFUSAL"
+      ],
+      "scorer": "REFUSAL_V1"
+    },
+    {
+      "authority_class": "EXPERT_SEMANTIC",
+      "benchmark_family": "F02",
+      "candidate_id": "PSE-V1-QUALIFICATION:CELL:C18:F02",
+      "candidate_payload_hash": "sha256:4fb2d877d3e4a89c7e32c36414fc9edef9a789d2a30ed50250d3199b58ce677c",
+      "capability_id": "C18",
+      "coverage_role": "CELL",
+      "origin": "EXPERT_AUTHORED_SEMANTIC",
+      "question_class": "MEASUREMENT_IDENTITY_AND_PROVENANCE",
+      "reachable_error_classes": [
+        "EXCESSIVE_CONSERVATISM",
+        "FALSE_SCIENTIFIC_ACCEPTANCE",
+        "OVER_REFUSAL",
+        "UNDER_SPECIFIED_REFUSAL"
+      ],
+      "scorer": "REFUSAL_V1"
+    },
+    {
+      "authority_class": "EXPERT_SEMANTIC",
+      "benchmark_family": "F03",
+      "candidate_id": "PSE-V1-QUALIFICATION:CELL:C18:F03",
+      "candidate_payload_hash": "sha256:d3cb598640c33d263b6d3ad715c16082d1eb377e6a4c835620ef2bf320625d67",
+      "capability_id": "C18",
+      "coverage_role": "CELL",
+      "origin": "EXPERT_AUTHORED_SEMANTIC",
+      "question_class": "MEASUREMENT_IDENTITY_AND_PROVENANCE",
+      "reachable_error_classes": [
+        "EXCESSIVE_CONSERVATISM",
+        "FALSE_SCIENTIFIC_ACCEPTANCE",
+        "OVER_REFUSAL",
+        "UNDER_SPECIFIED_REFUSAL"
+      ],
+      "scorer": "REFUSAL_V1"
+    },
+    {
+      "authority_class": "EXPERT_SEMANTIC",
+      "benchmark_family": "F04",
+      "candidate_id": "PSE-V1-QUALIFICATION:CELL:C18:F04",
+      "candidate_payload_hash": "sha256:7e5c2a0ba12d5ed316d387152d3efc37b6896a672d83bd80a489e3e8c8fa38a6",
+      "capability_id": "C18",
+      "coverage_role": "CELL",
+      "origin": "EXPERT_AUTHORED_SEMANTIC",
+      "question_class": "COMPARABILITY_AND_HARMONIZATION",
+      "reachable_error_classes": [
+        "EXCESSIVE_CONSERVATISM",
+        "FALSE_SCIENTIFIC_ACCEPTANCE",
+        "OVER_REFUSAL",
+        "UNDER_SPECIFIED_REFUSAL"
+      ],
+      "scorer": "REFUSAL_V1"
+    },
+    {
+      "authority_class": "EXPERT_SEMANTIC",
+      "benchmark_family": "F05",
+      "candidate_id": "PSE-V1-QUALIFICATION:CELL:C18:F05",
+      "candidate_payload_hash": "sha256:46ffdd5cf6cdbfeb24e2318cae237e83378b6fa205256b39b42346775d6c6d8c",
+      "capability_id": "C18",
+      "coverage_role": "CELL",
+      "origin": "EXPERT_AUTHORED_SEMANTIC",
+      "question_class": "METHOD_AND_ANALYSIS_REASONING",
+      "reachable_error_classes": [
+        "EXCESSIVE_CONSERVATISM",
+        "FALSE_SCIENTIFIC_ACCEPTANCE",
+        "OVER_REFUSAL",
+        "UNDER_SPECIFIED_REFUSAL"
+      ],
+      "scorer": "REFUSAL_V1"
+    },
+    {
+      "authority_class": "EXPERT_SEMANTIC",
+      "benchmark_family": "F06",
+      "candidate_id": "PSE-V1-QUALIFICATION:CELL:C18:F06",
+      "candidate_payload_hash": "sha256:63b4f9295d767e33a861f3c07a53ce2b7cfc2fc330a352b1c680cebab3f3675c",
+      "capability_id": "C18",
+      "coverage_role": "CELL",
+      "origin": "EXPERT_AUTHORED_SEMANTIC",
+      "question_class": "COMPARABILITY_AND_HARMONIZATION",
+      "reachable_error_classes": [
+        "EXCESSIVE_CONSERVATISM",
+        "FALSE_SCIENTIFIC_ACCEPTANCE",
+        "OVER_REFUSAL",
+        "UNDER_SPECIFIED_REFUSAL"
+      ],
+      "scorer": "REFUSAL_V1"
+    },
+    {
+      "authority_class": "EXPERT_SEMANTIC",
+      "benchmark_family": "F07",
+      "candidate_id": "PSE-V1-QUALIFICATION:CELL:C18:F07",
+      "candidate_payload_hash": "sha256:c6dc1fc988e8033b50b806d2d12f5e02a6e00e0aabd814392f8b1d251ecdbae4",
+      "capability_id": "C18",
+      "coverage_role": "CELL",
+      "origin": "EXPERT_AUTHORED_SEMANTIC",
+      "question_class": "INDIVIDUAL_LONGITUDINAL_CHANGE",
+      "reachable_error_classes": [
+        "EXCESSIVE_CONSERVATISM",
+        "FALSE_SCIENTIFIC_ACCEPTANCE",
+        "OVER_REFUSAL",
+        "UNDER_SPECIFIED_REFUSAL"
+      ],
+      "scorer": "REFUSAL_V1"
+    },
+    {
+      "authority_class": "EXPERT_SEMANTIC",
+      "benchmark_family": "F08",
+      "candidate_id": "PSE-V1-QUALIFICATION:CELL:C18:F08",
+      "candidate_payload_hash": "sha256:a6f1f75d541f1aed845c8ffdc669b0939f6e10e2addf4a671cafa2121f69b5bb",
+      "capability_id": "C18",
+      "coverage_role": "CELL",
+      "origin": "EXPERT_AUTHORED_SEMANTIC",
+      "question_class": "RELATIONSHIP_AND_MULTILEVEL_STRUCTURE",
+      "reachable_error_classes": [
+        "EXCESSIVE_CONSERVATISM",
+        "FALSE_SCIENTIFIC_ACCEPTANCE",
+        "OVER_REFUSAL",
+        "UNDER_SPECIFIED_REFUSAL"
+      ],
+      "scorer": "REFUSAL_V1"
+    },
+    {
+      "authority_class": "EXPERT_SEMANTIC",
+      "benchmark_family": "F09",
+      "candidate_id": "PSE-V1-QUALIFICATION:CELL:C18:F09",
+      "candidate_payload_hash": "sha256:abc4781fb29444003776e560b603ec03d7740e3f40dc0bed1cbb1456f1a0ffe4",
+      "capability_id": "C18",
+      "coverage_role": "CELL",
+      "origin": "EXPERT_AUTHORED_SEMANTIC",
+      "question_class": "RELATIONSHIP_AND_MULTILEVEL_STRUCTURE",
+      "reachable_error_classes": [
+        "EXCESSIVE_CONSERVATISM",
+        "FALSE_SCIENTIFIC_ACCEPTANCE",
+        "OVER_REFUSAL",
+        "UNDER_SPECIFIED_REFUSAL"
+      ],
+      "scorer": "REFUSAL_V1"
+    },
+    {
+      "authority_class": "EXPERT_SEMANTIC",
+      "benchmark_family": "F10",
+      "candidate_id": "PSE-V1-QUALIFICATION:CELL:C18:F10",
+      "candidate_payload_hash": "sha256:81cfecfdcbb1e79fb240042f01be86d63348e184b2f3b8cd44e2e858ad579835",
+      "capability_id": "C18",
+      "coverage_role": "CELL",
+      "origin": "EXPERT_AUTHORED_SEMANTIC",
+      "question_class": "INDIVIDUAL_LONGITUDINAL_CHANGE",
+      "reachable_error_classes": [
+        "EXCESSIVE_CONSERVATISM",
+        "FALSE_SCIENTIFIC_ACCEPTANCE",
+        "OVER_REFUSAL",
+        "UNDER_SPECIFIED_REFUSAL"
+      ],
+      "scorer": "REFUSAL_V1"
+    },
+    {
+      "authority_class": "EXPERT_SEMANTIC",
+      "benchmark_family": "F11",
+      "candidate_id": "PSE-V1-QUALIFICATION:CELL:C18:F11",
+      "candidate_payload_hash": "sha256:fc1a5457d249ed7f34ef6cc0cd2d926bb26c212d47681ca76ddeba5dc79490b9",
+      "capability_id": "C18",
+      "coverage_role": "CELL",
+      "origin": "EXPERT_AUTHORED_SEMANTIC",
+      "question_class": "MEASUREMENT_IDENTITY_AND_PROVENANCE",
+      "reachable_error_classes": [
+        "EXCESSIVE_CONSERVATISM",
+        "FALSE_SCIENTIFIC_ACCEPTANCE",
+        "OVER_REFUSAL",
+        "UNDER_SPECIFIED_REFUSAL"
+      ],
+      "scorer": "REFUSAL_V1"
+    },
+    {
+      "authority_class": "EXPERT_SEMANTIC",
+      "benchmark_family": "F12",
+      "candidate_id": "PSE-V1-QUALIFICATION:CELL:C18:F12",
+      "candidate_payload_hash": "sha256:c21d4c07b6789f2cfe7b2f1dce5747ddf5896b342f60f31c6c547ce73370f32a",
+      "capability_id": "C18",
+      "coverage_role": "CELL",
+      "origin": "EXPERT_AUTHORED_SEMANTIC",
+      "question_class": "INDIVIDUAL_LONGITUDINAL_CHANGE",
+      "reachable_error_classes": [
+        "EXCESSIVE_CONSERVATISM",
+        "FALSE_SCIENTIFIC_ACCEPTANCE",
+        "OVER_REFUSAL",
+        "UNDER_SPECIFIED_REFUSAL"
+      ],
+      "scorer": "REFUSAL_V1"
+    },
+    {
+      "authority_class": "EXPERT_SEMANTIC",
+      "benchmark_family": "F13",
+      "candidate_id": "PSE-V1-QUALIFICATION:CELL:C18:F13",
+      "candidate_payload_hash": "sha256:cf4ef3980fbd899c42f05000de790d89298df3121169ea0515e308c6eb062d37",
+      "capability_id": "C18",
+      "coverage_role": "CELL",
+      "origin": "EXPERT_AUTHORED_SEMANTIC",
+      "question_class": "COMPARABILITY_AND_HARMONIZATION",
+      "reachable_error_classes": [
+        "EXCESSIVE_CONSERVATISM",
+        "FALSE_SCIENTIFIC_ACCEPTANCE",
+        "OVER_REFUSAL",
+        "UNDER_SPECIFIED_REFUSAL"
+      ],
+      "scorer": "REFUSAL_V1"
+    },
+    {
+      "authority_class": "CANDIDATE_MUTATION",
+      "benchmark_family": "F11",
+      "candidate_id": "PSE-V1-QUALIFICATION:MUTATION:POPULATION-NORM:001",
+      "candidate_payload_hash": "sha256:35ed31cf48713a39773a4d82af7148a6517dac00ceeeca433dd39181bc62609f",
+      "capability_id": "C14",
+      "coverage_role": "SUPPLEMENT",
+      "origin": "ADVERSARIAL_MUTATION",
+      "question_class": "GROUP_OR_SQUAD_CHANGE",
+      "reachable_error_classes": [
+        "FALSE_COMPARABILITY_ACCEPTANCE",
+        "FALSE_SCIENTIFIC_ACCEPTANCE",
+        "UNSUPPORTED_LATENT_OR_PHYSIOLOGICAL_INFERENCE"
+      ],
+      "scorer": "REFUSAL_V1"
+    },
+    {
+      "authority_class": "CANDIDATE_MUTATION",
+      "benchmark_family": "F11",
+      "candidate_id": "PSE-V1-QUALIFICATION:MUTATION:POPULATION-NORM:002",
+      "candidate_payload_hash": "sha256:ce2fc0eab412727e7b9b6638ddd8ebde48ff75c7a9823da3f1c5a7b910203f5b",
+      "capability_id": "C14",
+      "coverage_role": "SUPPLEMENT",
+      "origin": "ADVERSARIAL_MUTATION",
+      "question_class": "GROUP_OR_SQUAD_CHANGE",
+      "reachable_error_classes": [
+        "FALSE_COMPARABILITY_ACCEPTANCE",
+        "FALSE_SCIENTIFIC_ACCEPTANCE",
+        "UNSUPPORTED_LATENT_OR_PHYSIOLOGICAL_INFERENCE"
+      ],
+      "scorer": "REFUSAL_V1"
+    },
+    {
+      "authority_class": "RES71_REFERENCE",
+      "benchmark_family": "F06",
+      "candidate_id": "PSE-V1-QUALIFICATION:REFCLONE:C08:F06:res71-cmj-flight-time-v2-gold",
+      "candidate_payload_hash": "sha256:ca8dc1681142428edf44c91026cb6098e3caf26aa1a6f115c5145ef9a0e7f193",
+      "capability_id": "C08",
+      "coverage_role": "CELL",
+      "origin": "DETERMINISTIC_ENGINE_DERIVED",
+      "question_class": "METHOD_AND_ANALYSIS_REASONING",
+      "reachable_error_classes": [
+        "FALSE_SCIENTIFIC_ACCEPTANCE",
+        "INVENTED_NUMERICAL_SCIENCE"
+      ],
+      "scorer": "NUMERIC_TOLERANCE_V1"
+    },
+    {
+      "authority_class": "RES71_REFERENCE",
+      "benchmark_family": "F05",
+      "candidate_id": "PSE-V1-QUALIFICATION:REFCLONE:C16:F05:res71-cmj-flight-time-v2-gold",
+      "candidate_payload_hash": "sha256:1bb9ee864d36f6938b665f269a2e424ed47ac4aadb155332f7c0d5e5b596fb0c",
+      "capability_id": "C16",
+      "coverage_role": "CELL",
+      "origin": "DETERMINISTIC_ENGINE_DERIVED",
+      "question_class": "ANSWERABILITY_AND_REFUSAL",
+      "reachable_error_classes": [
+        "FALSE_SCIENTIFIC_ACCEPTANCE",
+        "INVENTED_NUMERICAL_SCIENCE"
+      ],
+      "scorer": "NUMERIC_TOLERANCE_V1"
+    },
+    {
+      "authority_class": "RES71_REFERENCE",
+      "benchmark_family": "F09",
+      "candidate_id": "PSE-V1-QUALIFICATION:RES71:res71-between-to-within-refusal",
+      "candidate_payload_hash": "sha256:b26d4c11ead51119b3c91673b5459610429957ef1e1c5e6835ccc2bae2e6a23f",
+      "capability_id": "C11",
+      "coverage_role": "CELL",
+      "origin": "EXPERT_AUTHORED_SEMANTIC",
+      "question_class": "GROUP_OR_SQUAD_CHANGE",
+      "reachable_error_classes": [
+        "BETWEEN_TO_WITHIN_MISINFERENCE",
+        "CAUSAL_OVERCLAIM",
+        "WRONG_ANALYSIS_CLASS"
+      ],
+      "scorer": "CLASSIFICATION_V1"
+    },
+    {
+      "authority_class": "DETERMINISTIC_GENERATOR",
+      "benchmark_family": "F05",
+      "candidate_id": "PSE-V1-QUALIFICATION:RES71:res71-bpt-generic-power-refusal",
+      "candidate_payload_hash": "sha256:c759f91e42a50e10745b9b4721c882e047a82253a621eba553735245d7221210",
+      "capability_id": "C08",
+      "coverage_role": "SUPPLEMENT",
+      "origin": "DETERMINISTIC_SYNTHETIC",
+      "question_class": "METHOD_AND_ANALYSIS_REASONING",
+      "reachable_error_classes": [
+        "FALSE_SCIENTIFIC_ACCEPTANCE",
+        "INVENTED_NUMERICAL_SCIENCE"
+      ],
+      "scorer": "STRUCTURED_FIELDS_V1"
+    },
+    {
+      "authority_class": "RES71_REFERENCE",
+      "benchmark_family": "F14",
+      "candidate_id": "PSE-V1-QUALIFICATION:RES71:res71-bpt-mpv-refusal",
+      "candidate_payload_hash": "sha256:00ea8ab1e40e03e49d13e3654758e2a5ba1282e9eee96dd3a8f4fb79b647bfdb",
+      "capability_id": "C08",
+      "coverage_role": "CELL",
+      "origin": "DETERMINISTIC_ENGINE_DERIVED",
+      "question_class": "ANSWERABILITY_AND_REFUSAL",
+      "reachable_error_classes": [
+        "FALSE_SCIENTIFIC_ACCEPTANCE",
+        "INVENTED_NUMERICAL_SCIENCE"
+      ],
+      "scorer": "REFUSAL_V1"
+    },
+    {
+      "authority_class": "RES71_REFERENCE",
+      "benchmark_family": "F12",
+      "candidate_id": "PSE-V1-QUALIFICATION:RES71:res71-causal-overclaim-refusal",
+      "candidate_payload_hash": "sha256:265d47ba5a9b62b8f121d5edb7467be98ccf2456d1b536ecbb114b5e2eac9790",
+      "capability_id": "C15",
+      "coverage_role": "CELL",
+      "origin": "EXPERT_AUTHORED_SEMANTIC",
+      "question_class": "INDIVIDUAL_LONGITUDINAL_CHANGE",
+      "reachable_error_classes": [
+        "CAUSAL_OVERCLAIM",
+        "FALSE_SCIENTIFIC_ACCEPTANCE",
+        "UNSUPPORTED_LATENT_OR_PHYSIOLOGICAL_INFERENCE"
+      ],
+      "scorer": "CAUSAL_BOUNDARY_V1"
+    },
+    {
+      "authority_class": "RES71_REFERENCE",
+      "benchmark_family": "F05",
+      "candidate_id": "PSE-V1-QUALIFICATION:RES71:res71-cmj-flight-time-v2-gold",
+      "candidate_payload_hash": "sha256:89117d3bbed7fb0f8ed596c711a4fd000d9588a9a0ca4d4ae924c0b16b92314d",
+      "capability_id": "C08",
+      "coverage_role": "CELL",
+      "origin": "DETERMINISTIC_ENGINE_DERIVED",
+      "question_class": "METHOD_AND_ANALYSIS_REASONING",
+      "reachable_error_classes": [
+        "FALSE_SCIENTIFIC_ACCEPTANCE",
+        "INVENTED_NUMERICAL_SCIENCE"
+      ],
+      "scorer": "NUMERIC_TOLERANCE_V1"
+    },
+    {
+      "authority_class": "DETERMINISTIC_GENERATOR",
+      "benchmark_family": "F13",
+      "candidate_id": "PSE-V1-QUALIFICATION:RES71:res71-cmj-rfd-refusal",
+      "candidate_payload_hash": "sha256:a985dcaebbc0bd5090a24bbb0470325e450103a4869303d2d1662118f406d586",
+      "capability_id": "C08",
+      "coverage_role": "CELL",
+      "origin": "DETERMINISTIC_SYNTHETIC",
+      "question_class": "ANSWERABILITY_AND_REFUSAL",
+      "reachable_error_classes": [
+        "FALSE_SCIENTIFIC_ACCEPTANCE",
+        "INVENTED_NUMERICAL_SCIENCE"
+      ],
+      "scorer": "STRUCTURED_FIELDS_V1"
+    },
+    {
+      "authority_class": "RES71_REFERENCE",
+      "benchmark_family": "F10",
+      "candidate_id": "PSE-V1-QUALIFICATION:RES71:res71-external-relative-distance",
+      "candidate_payload_hash": "sha256:0dc5c9ae5458450f64e9f0e932f181c453f5ea73ea98d3c7c58fbdcd2a8ff251",
+      "capability_id": "C16",
+      "coverage_role": "CELL",
+      "origin": "DETERMINISTIC_ENGINE_DERIVED",
+      "question_class": "CONSTRUCT_AND_CLAIM_INTERPRETATION",
+      "reachable_error_classes": [
+        "CAUSAL_OVERCLAIM",
+        "INVENTED_NUMERICAL_SCIENCE"
+      ],
+      "scorer": "NUMERIC_TOLERANCE_V1"
+    },
+    {
+      "authority_class": "RES71_REFERENCE",
+      "benchmark_family": "F06",
+      "candidate_id": "PSE-V1-QUALIFICATION:RES71:res71-external-unit-km-to-m",
+      "candidate_payload_hash": "sha256:3395b02312e92c5839f14f447622839d5e53d2746ad8e7d56b3dd3dbf8d79774",
+      "capability_id": "C05",
+      "coverage_role": "CELL",
+      "origin": "DETERMINISTIC_ENGINE_DERIVED",
+      "question_class": "COMPARABILITY_AND_HARMONIZATION",
+      "reachable_error_classes": [
+        "INVENTED_NUMERICAL_SCIENCE",
+        "WRONG_MEASUREMENT_IDENTITY"
+      ],
+      "scorer": "NUMERIC_TOLERANCE_V1"
+    },
+    {
+      "authority_class": "RES71_REFERENCE",
+      "benchmark_family": "F07",
+      "candidate_id": "PSE-V1-QUALIFICATION:RES71:res71-longitudinal-absolute-change",
+      "candidate_payload_hash": "sha256:dc5fb544fd630ce1e978ff5fc24e0223b7f9e87ac876091b7c9ed1787965735e",
+      "capability_id": "C16",
+      "coverage_role": "CELL",
+      "origin": "DETERMINISTIC_ENGINE_DERIVED",
+      "question_class": "CONSTRUCT_AND_CLAIM_INTERPRETATION",
+      "reachable_error_classes": [
+        "CAUSAL_OVERCLAIM",
+        "INVENTED_NUMERICAL_SCIENCE"
+      ],
+      "scorer": "NUMERIC_TOLERANCE_V1"
+    },
+    {
+      "authority_class": "RES71_REFERENCE",
+      "benchmark_family": "F14",
+      "candidate_id": "PSE-V1-QUALIFICATION:RES71:res71-nonfinite-unit-refusal",
+      "candidate_payload_hash": "sha256:dba116afd63ddb4e08a93ea43038d6ac243a4983c7770f25630f914e6de4bbc3",
+      "capability_id": "C18",
+      "coverage_role": "CELL",
+      "origin": "DETERMINISTIC_ENGINE_DERIVED",
+      "question_class": "ANSWERABILITY_AND_REFUSAL",
+      "reachable_error_classes": [
+        "EXCESSIVE_CONSERVATISM",
+        "FALSE_SCIENTIFIC_ACCEPTANCE",
+        "OVER_REFUSAL",
+        "UNDER_SPECIFIED_REFUSAL"
+      ],
+      "scorer": "REFUSAL_V1"
+    },
+    {
+      "authority_class": "RES71_REFERENCE",
+      "benchmark_family": "F14",
+      "candidate_id": "PSE-V1-QUALIFICATION:RES71:res71-rsa-mechanical-percent-decrement",
+      "candidate_payload_hash": "sha256:147765c5b03fec19ae8c6fd1581ca27778441eaaa3ed2b662f10476c1897b5f7",
+      "capability_id": "C16",
+      "coverage_role": "CELL",
+      "origin": "DETERMINISTIC_ENGINE_DERIVED",
+      "question_class": "ANSWERABILITY_AND_REFUSAL",
+      "reachable_error_classes": [
+        "CAUSAL_OVERCLAIM",
+        "INVENTED_NUMERICAL_SCIENCE"
+      ],
+      "scorer": "NUMERIC_TOLERANCE_V1"
+    },
+    {
+      "authority_class": "RES71_REFERENCE",
+      "benchmark_family": "F04",
+      "candidate_id": "PSE-V1-QUALIFICATION:RES71:res71-same-label-different-method",
+      "candidate_payload_hash": "sha256:5d96a36de9943b15898bac951641c6d88e97edd9b2f7f31a9a62eb1667a7012c",
+      "capability_id": "C07",
+      "coverage_role": "CELL",
+      "origin": "EXPERT_AUTHORED_SEMANTIC",
+      "question_class": "COMPARABILITY_AND_HARMONIZATION",
+      "reachable_error_classes": [
+        "FALSE_COMPARABILITY_ACCEPTANCE",
+        "FALSE_SCIENTIFIC_ACCEPTANCE",
+        "WRONG_MEASUREMENT_IDENTITY"
+      ],
+      "scorer": "COMPARABILITY_V1"
+    },
+    {
+      "authority_class": "PHASE_A_SOURCE",
+      "benchmark_family": "F01",
+      "candidate_id": "PSE-V1-QUALIFICATION:SRC:C13:F01:PMC10703208",
+      "candidate_payload_hash": "sha256:40bc870e6b57648ef48755cb35bcf9093310def0411f9eca3f103e8639af840b",
+      "capability_id": "C13",
+      "coverage_role": "CELL",
+      "origin": "SOURCE_BACKED_EVIDENCE_EXTRACTION",
+      "question_class": "MEASUREMENT_IDENTITY_AND_PROVENANCE",
+      "reachable_error_classes": [
+        "FALSE_SCIENTIFIC_ACCEPTANCE",
+        "WRONG_MEASUREMENT_IDENTITY"
+      ],
+      "scorer": "EVIDENCE_SPAN_V1"
+    },
+    {
+      "authority_class": "PHASE_A_SOURCE",
+      "benchmark_family": "F02",
+      "candidate_id": "PSE-V1-QUALIFICATION:SRC:C13:F02:PMC10224001",
+      "candidate_payload_hash": "sha256:002502e45f622a91a94b698aa86b7cda04bdaa81bbf383734dd21e7f0467debf",
+      "capability_id": "C13",
+      "coverage_role": "CELL",
+      "origin": "SOURCE_BACKED_EVIDENCE_EXTRACTION",
+      "question_class": "MEASUREMENT_IDENTITY_AND_PROVENANCE",
+      "reachable_error_classes": [
+        "FALSE_SCIENTIFIC_ACCEPTANCE",
+        "WRONG_MEASUREMENT_IDENTITY"
+      ],
+      "scorer": "EVIDENCE_SPAN_V1"
+    },
+    {
+      "authority_class": "PHASE_A_SOURCE",
+      "benchmark_family": "F11",
+      "candidate_id": "PSE-V1-QUALIFICATION:SRC:C13:F11:PMC10289087",
+      "candidate_payload_hash": "sha256:434ea58265ef478938637af7feab28a6ce59ae98aa993acfd38c9043ebd15cbd",
+      "capability_id": "C13",
+      "coverage_role": "SUPPLEMENT",
+      "origin": "SOURCE_BACKED_EVIDENCE_EXTRACTION",
+      "question_class": "MEASUREMENT_IDENTITY_AND_PROVENANCE",
+      "reachable_error_classes": [
+        "FALSE_SCIENTIFIC_ACCEPTANCE",
+        "WRONG_MEASUREMENT_IDENTITY"
+      ],
+      "scorer": "EVIDENCE_SPAN_V1"
+    },
+    {
+      "authority_class": "PHASE_A_SOURCE",
+      "benchmark_family": "F11",
+      "candidate_id": "PSE-V1-QUALIFICATION:SRC:C13:F11:PMC10346244",
+      "candidate_payload_hash": "sha256:1b6166ef38a0be2e36765803806aa624968212e690fe71d4c47347fdc2c8d578",
+      "capability_id": "C13",
+      "coverage_role": "SUPPLEMENT",
+      "origin": "SOURCE_BACKED_EVIDENCE_EXTRACTION",
+      "question_class": "MEASUREMENT_IDENTITY_AND_PROVENANCE",
+      "reachable_error_classes": [
+        "FALSE_SCIENTIFIC_ACCEPTANCE",
+        "WRONG_MEASUREMENT_IDENTITY"
+      ],
+      "scorer": "EVIDENCE_SPAN_V1"
+    },
+    {
+      "authority_class": "PHASE_A_SOURCE",
+      "benchmark_family": "F11",
+      "candidate_id": "PSE-V1-QUALIFICATION:SRC:C13:F11:PMC10529540",
+      "candidate_payload_hash": "sha256:dbc4f3e1d0251cc5716c33cd071fec0ae51e0dbe55a152052bff53eaef55e1e7",
+      "capability_id": "C13",
+      "coverage_role": "SUPPLEMENT",
+      "origin": "SOURCE_BACKED_EVIDENCE_EXTRACTION",
+      "question_class": "MEASUREMENT_IDENTITY_AND_PROVENANCE",
+      "reachable_error_classes": [
+        "FALSE_SCIENTIFIC_ACCEPTANCE",
+        "WRONG_MEASUREMENT_IDENTITY"
+      ],
+      "scorer": "EVIDENCE_SPAN_V1"
+    },
+    {
+      "authority_class": "PHASE_A_SOURCE",
+      "benchmark_family": "F11",
+      "candidate_id": "PSE-V1-QUALIFICATION:SRC:C13:F11:PMC10575115",
+      "candidate_payload_hash": "sha256:7ee3498bfa6325a36323677ab103583bc3b08ff110026306855d513fe7d3e3fe",
+      "capability_id": "C13",
+      "coverage_role": "CELL",
+      "origin": "SOURCE_BACKED_EVIDENCE_EXTRACTION",
+      "question_class": "MEASUREMENT_IDENTITY_AND_PROVENANCE",
+      "reachable_error_classes": [
+        "FALSE_SCIENTIFIC_ACCEPTANCE",
+        "WRONG_MEASUREMENT_IDENTITY"
+      ],
+      "scorer": "EVIDENCE_SPAN_V1"
+    },
+    {
+      "authority_class": "PHASE_A_SOURCE",
+      "benchmark_family": "F11",
+      "candidate_id": "PSE-V1-QUALIFICATION:SRC:C13:F11:PMC10594421",
+      "candidate_payload_hash": "sha256:27d7c159bd213584b0199b4950c8a8c6e226186fb18d92aa495be2aa4910582d",
+      "capability_id": "C13",
+      "coverage_role": "SUPPLEMENT",
+      "origin": "SOURCE_BACKED_EVIDENCE_EXTRACTION",
+      "question_class": "MEASUREMENT_IDENTITY_AND_PROVENANCE",
+      "reachable_error_classes": [
+        "FALSE_SCIENTIFIC_ACCEPTANCE",
+        "WRONG_MEASUREMENT_IDENTITY"
+      ],
+      "scorer": "EVIDENCE_SPAN_V1"
+    },
+    {
+      "authority_class": "PHASE_A_SOURCE",
+      "benchmark_family": "F11",
+      "candidate_id": "PSE-V1-QUALIFICATION:SRC:C13:F11:PMC11059726",
+      "candidate_payload_hash": "sha256:a56a8d57519f4aaed5c15ae3dc89707bb2cd3caa68f880dbe7a2d505e24cf27f",
+      "capability_id": "C13",
+      "coverage_role": "SUPPLEMENT",
+      "origin": "SOURCE_BACKED_EVIDENCE_EXTRACTION",
+      "question_class": "MEASUREMENT_IDENTITY_AND_PROVENANCE",
+      "reachable_error_classes": [
+        "FALSE_SCIENTIFIC_ACCEPTANCE",
+        "WRONG_MEASUREMENT_IDENTITY"
+      ],
+      "scorer": "EVIDENCE_SPAN_V1"
+    },
+    {
+      "authority_class": "PHASE_A_SOURCE",
+      "benchmark_family": "F11",
+      "candidate_id": "PSE-V1-QUALIFICATION:SRC:C13:F11:PMC11694206",
+      "candidate_payload_hash": "sha256:d73162f1b46ce67e08edc35bc20ab8b2ca9c2ed9178fdb4a7b3cc495b36571b0",
+      "capability_id": "C13",
+      "coverage_role": "SUPPLEMENT",
+      "origin": "SOURCE_BACKED_EVIDENCE_EXTRACTION",
+      "question_class": "MEASUREMENT_IDENTITY_AND_PROVENANCE",
+      "reachable_error_classes": [
+        "FALSE_SCIENTIFIC_ACCEPTANCE",
+        "WRONG_MEASUREMENT_IDENTITY"
+      ],
+      "scorer": "EVIDENCE_SPAN_V1"
+    },
+    {
+      "authority_class": "PHASE_A_SOURCE",
+      "benchmark_family": "F11",
+      "candidate_id": "PSE-V1-QUALIFICATION:SRC:C13:F11:PMC8173105",
+      "candidate_payload_hash": "sha256:d8982645d527f30327d88e7144ed22db3d66117a65ff5b2a34ff278bb2a576d0",
+      "capability_id": "C13",
+      "coverage_role": "SUPPLEMENT",
+      "origin": "SOURCE_BACKED_EVIDENCE_EXTRACTION",
+      "question_class": "MEASUREMENT_IDENTITY_AND_PROVENANCE",
+      "reachable_error_classes": [
+        "FALSE_SCIENTIFIC_ACCEPTANCE",
+        "WRONG_MEASUREMENT_IDENTITY"
+      ],
+      "scorer": "EVIDENCE_SPAN_V1"
+    },
+    {
+      "authority_class": "PHASE_A_SOURCE",
+      "benchmark_family": "F11",
+      "candidate_id": "PSE-V1-QUALIFICATION:SRC:C14:F11:PMC12244382",
+      "candidate_payload_hash": "sha256:5fbcca3e2aa9a3747b6609adf1a9b93bd91a8bdb6447e48433945f1055f8c346",
+      "capability_id": "C14",
+      "coverage_role": "CELL",
+      "origin": "SOURCE_BACKED_EVIDENCE_EXTRACTION",
+      "question_class": "GROUP_OR_SQUAD_CHANGE",
+      "reachable_error_classes": [
+        "FALSE_COMPARABILITY_ACCEPTANCE",
+        "FALSE_SCIENTIFIC_ACCEPTANCE",
+        "UNSUPPORTED_LATENT_OR_PHYSIOLOGICAL_INFERENCE"
+      ],
+      "scorer": "STRUCTURED_FIELDS_V1"
+    },
+    {
+      "authority_class": "PHASE_A_SOURCE",
+      "benchmark_family": "F11",
+      "candidate_id": "PSE-V1-QUALIFICATION:SRC:C14:F11:PMC12244393",
+      "candidate_payload_hash": "sha256:8728f8bbde990a018aacb4b8b15885e332a9ca7b9a66690493453cc3395c0017",
+      "capability_id": "C14",
+      "coverage_role": "SUPPLEMENT",
+      "origin": "SOURCE_BACKED_EVIDENCE_EXTRACTION",
+      "question_class": "GROUP_OR_SQUAD_CHANGE",
+      "reachable_error_classes": [
+        "FALSE_COMPARABILITY_ACCEPTANCE",
+        "FALSE_SCIENTIFIC_ACCEPTANCE",
+        "UNSUPPORTED_LATENT_OR_PHYSIOLOGICAL_INFERENCE"
+      ],
+      "scorer": "STRUCTURED_FIELDS_V1"
+    },
+    {
+      "authority_class": "PHASE_A_SOURCE",
+      "benchmark_family": "F11",
+      "candidate_id": "PSE-V1-QUALIFICATION:SRC:C14:F11:PMC12490298",
+      "candidate_payload_hash": "sha256:0d87d881d31c8961ad3b01ec7d1026c3c794f788029751c8ff3f9a723b2cffff",
+      "capability_id": "C14",
+      "coverage_role": "SUPPLEMENT",
+      "origin": "SOURCE_BACKED_EVIDENCE_EXTRACTION",
+      "question_class": "GROUP_OR_SQUAD_CHANGE",
+      "reachable_error_classes": [
+        "FALSE_COMPARABILITY_ACCEPTANCE",
+        "FALSE_SCIENTIFIC_ACCEPTANCE",
+        "UNSUPPORTED_LATENT_OR_PHYSIOLOGICAL_INFERENCE"
+      ],
+      "scorer": "STRUCTURED_FIELDS_V1"
+    },
+    {
+      "authority_class": "PHASE_A_SOURCE",
+      "benchmark_family": "F11",
+      "candidate_id": "PSE-V1-QUALIFICATION:SRC:C14:F11:PMC12884896",
+      "candidate_payload_hash": "sha256:3305dfa52e30d1b50b6d2b180512721f5ea20879097c1565413265904ee0781d",
+      "capability_id": "C14",
+      "coverage_role": "SUPPLEMENT",
+      "origin": "SOURCE_BACKED_EVIDENCE_EXTRACTION",
+      "question_class": "GROUP_OR_SQUAD_CHANGE",
+      "reachable_error_classes": [
+        "FALSE_COMPARABILITY_ACCEPTANCE",
+        "FALSE_SCIENTIFIC_ACCEPTANCE",
+        "UNSUPPORTED_LATENT_OR_PHYSIOLOGICAL_INFERENCE"
+      ],
+      "scorer": "STRUCTURED_FIELDS_V1"
+    },
+    {
+      "authority_class": "PHASE_A_SOURCE",
+      "benchmark_family": "F11",
+      "candidate_id": "PSE-V1-QUALIFICATION:SRC:C14:F11:PMC9397540",
+      "candidate_payload_hash": "sha256:f33644aa8c0db5c15b94bb79d7b6fd2b930327a5a1c24bea361843b118330b22",
+      "capability_id": "C14",
+      "coverage_role": "SUPPLEMENT",
+      "origin": "SOURCE_BACKED_EVIDENCE_EXTRACTION",
+      "question_class": "GROUP_OR_SQUAD_CHANGE",
+      "reachable_error_classes": [
+        "FALSE_COMPARABILITY_ACCEPTANCE",
+        "FALSE_SCIENTIFIC_ACCEPTANCE",
+        "UNSUPPORTED_LATENT_OR_PHYSIOLOGICAL_INFERENCE"
+      ],
+      "scorer": "STRUCTURED_FIELDS_V1"
+    }
+  ],
+  "origin_counts": {
+    "ADVERSARIAL_MUTATION": 2,
+    "DETERMINISTIC_ENGINE_DERIVED": 9,
+    "DETERMINISTIC_SYNTHETIC": 2,
+    "EXPERT_AUTHORED_SEMANTIC": 73,
+    "SOURCE_BACKED_EVIDENCE_EXTRACTION": 15
+  },
+  "qualification_only": true,
+  "reachable_error_class_counts": {
+    "BETWEEN_TO_WITHIN_MISINFERENCE": 5,
+    "CAUSAL_OVERCLAIM": 15,
+    "DIRECT_DERIVED_COLLAPSE": 9,
+    "EXCESSIVE_CONSERVATISM": 28,
+    "FALSE_COMPARABILITY_ACCEPTANCE": 23,
+    "FALSE_SCIENTIFIC_ACCEPTANCE": 82,
+    "INVENTED_NUMERICAL_SCIENCE": 18,
+    "OVER_REFUSAL": 28,
+    "UNDER_SPECIFIED_REFUSAL": 14,
+    "UNSUPPORTED_LATENT_OR_PHYSIOLOGICAL_INFERENCE": 27,
+    "WRONG_ANALYSIS_CLASS": 13,
+    "WRONG_MEASUREMENT_IDENTITY": 33
+  },
+  "schema_version": "pse-authoring-origin-summary@1.0.0",
+  "scorer_counts": {
+    "CAUSAL_BOUNDARY_V1": 7,
+    "CLASSIFICATION_V1": 44,
+    "COMPARABILITY_V1": 4,
+    "EVIDENCE_SPAN_V1": 10,
+    "NUMERIC_TOLERANCE_V1": 7,
+    "REFUSAL_V1": 17,
+    "STRUCTURED_FIELDS_V1": 12
+  }
+}
