@@ -115,10 +115,13 @@ def validate_res115_source_applicability(
     answer = packet.proposed_expected_answer
     fields = dict(answer.expected_fields.items())
     expected_spans = fields.get("source_spans")
+    expected_source_scopes = fields.get("source_scopes")
     expected_scopes = fields.get("applicability_scopes")
     expected_target_use = fields.get("target_population_use")
     if expected_spans != tuple(excerpt.text for excerpt in excerpts):
         raise ValueError("source-backed expected spans must equal exact resolved JATS text")
+    if expected_source_scopes != tuple(excerpt.scope for excerpt in excerpts):
+        raise ValueError("source-backed expected scope claims must equal exact excerpt scopes")
     if expected_scopes != tuple(document_scopes):
         raise ValueError("source-backed expected applicability must equal Phase-A classes")
     allowed_target_use = tuple(_TARGET_USE_BY_SCOPE[scope] for scope in document_scopes)

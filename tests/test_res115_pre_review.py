@@ -1008,7 +1008,11 @@ def test_final_mutation_parent_authority_requires_exact_id_and_version(
         replace(
             child_result.case,
             authority=tuple(
-                replace(binding, **{field_name: forged_value})
+                (
+                    replace(binding, source_reference_id=forged_value)
+                    if field_name == "source_reference_id"
+                    else replace(binding, version=forged_value)
+                )
                 if binding.authority_kind == AuthorityKind.MUTATION_PARENT.value
                 else binding
                 for binding in child_result.case.authority
@@ -1258,6 +1262,7 @@ def test_phase_a_source_applicability_escalation_is_rejected(tmp_path: Path) -> 
     fields.update(
         {
             "source_spans": (updated_excerpt.text,),
+            "source_scopes": (updated_excerpt.scope,),
             "applicability_scopes": (scope,),
             "target_population_use": ("METHOD_OR_MEASUREMENT_ONLY",),
         }
