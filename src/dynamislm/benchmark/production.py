@@ -17,6 +17,7 @@ from dynamislm.benchmark.authoring import (
 )
 from dynamislm.benchmark.constants import (
     CAPABILITY_IDS,
+    CRITICAL_ERROR_CLASSES,
     FAMILY_IDS,
     CaseOrigin,
     DifficultyLevel,
@@ -27,7 +28,11 @@ from dynamislm.benchmark.constants import (
     ScoringProfile,
     SplitName,
 )
-from dynamislm.benchmark.coverage import COVERAGE_MATRIX, coverage_manifest_digest
+from dynamislm.benchmark.coverage import (
+    COVERAGE_MATRIX,
+    CoverageRow,
+    coverage_manifest_digest,
+)
 from dynamislm.benchmark.pre_review import (
     CandidateReviewPacket,
     validate_candidate_review_packet,
@@ -230,6 +235,10 @@ class ProductionAuthoringPlanItemV1:
                 raise ValueError("mutation candidate requires parent and lineage identities")
         elif self.mutation_lineage_id is not None or self.parent_candidate_id is not None:
             raise ValueError("non-mutation candidate cannot carry mutation lineage")
+        if self.expected_answer_kind is ExpectedAnswerKind.REFUSAL and (
+            self.refusal_decision is not RefusalDecision.REQUIRED
+        ):
+            raise ValueError("refusal answer kind requires a refusal-required commitment")
         if not isinstance(self.safe_partial_support, bool):
             raise ValueError("safe_partial_support must be boolean")
 
@@ -580,6 +589,736 @@ def validate_production_isolation(
     )
 
 
+PRODUCTION_FEASIBILITY_ALGORITHM = "PSE-V1-PRE-REVIEW-FEASIBILITY@1.0.0"
+
+
+class ProductionFeasibilityBlocked(ValueError):  # noqa: N818 - status is part of the gate contract
+    """Raised when the exact pre-review production commitments have no witness."""
+
+
+@dataclass(frozen=True, slots=True)
+class _FeasibilityCluster:
+    isolation_cluster_id: str
+    items: tuple[ProductionAuthoringPlanItemV1, ...]
+    cluster_key: str
+    preferred_rank: int
+    locked_rank: int | None
+
+    @property
+    def size(self) -> int:
+        return len(self.items)
+
+
+@register_serializable_type
+@dataclass(frozen=True, slots=True)
+class ProductionFeasibilityReceiptV1:
+    status: str
+    algorithm_id: str
+    candidate_count: int
+    target_counts: tuple[tuple[SplitName, int], ...]
+    atomic_cluster_count: int
+    cluster_size_distribution: tuple[tuple[int, int], ...]
+    hard_cell_count_by_split: tuple[tuple[SplitName, int], ...]
+    adversarial_tag_count_by_split: tuple[tuple[SplitName, int], ...]
+    reachable_error_count_by_split: tuple[tuple[SplitName, int], ...]
+    protected_critical_error_count_by_split: tuple[tuple[SplitName, int], ...]
+    answerable_case_count_by_split: tuple[tuple[SplitName, int], ...]
+    c18_refusal_cell_count_by_split: tuple[tuple[SplitName, int], ...]
+    commitments_digest: str
+    feasibility_witness_digest: str
+    receipt_digest: str
+
+    def __post_init__(self) -> None:
+        if self.status != "PASS" or self.algorithm_id != PRODUCTION_FEASIBILITY_ALGORITHM:
+            raise ValueError("feasibility receipt must be a passing frozen algorithm result")
+        if self.candidate_count != FINAL_TARGET_CASES:
+            raise ValueError("feasibility receipt must bind exactly 434 commitments")
+        if self.target_counts != PROSPECTIVE_SPLIT_COUNTS:
+            raise ValueError("feasibility receipt must bind exact 260/87/87 targets")
+        if self.atomic_cluster_count < 1:
+            raise ValueError("feasibility receipt requires atomic clusters")
+        if (
+            sum(count for _size, count in self.cluster_size_distribution)
+            != self.atomic_cluster_count
+        ):
+            raise ValueError("feasibility cluster distribution does not sum to its count")
+        for name, values, expected in (
+            ("cell", self.hard_cell_count_by_split, 87),
+            (
+                "tag",
+                self.adversarial_tag_count_by_split,
+                sum(len(row.adversarial_tags) for row in COVERAGE_MATRIX),
+            ),
+            (
+                "error",
+                self.reachable_error_count_by_split,
+                sum(len(row.error_classes) for row in COVERAGE_MATRIX),
+            ),
+            (
+                "critical error",
+                self.protected_critical_error_count_by_split,
+                len(CRITICAL_ERROR_CLASSES),
+            ),
+            ("answerable", self.answerable_case_count_by_split, None),
+            ("C18 refusal", self.c18_refusal_cell_count_by_split, 14),
+        ):
+            split_names = tuple(split for split, _count in values)
+            required_splits = (
+                (SplitName.FROZEN_VALIDATION, SplitName.HIDDEN_FINAL)
+                if name == "critical error"
+                else tuple(split for split, _count in PROSPECTIVE_SPLIT_COUNTS)
+            )
+            if split_names != required_splits:
+                raise ValueError(f"feasibility {name} counts have incorrect split coverage")
+            if (
+                name in {"cell", "tag", "error", "C18 refusal"}
+                and expected is not None
+                and any(count != expected for _split, count in values)
+            ):
+                raise ValueError(f"feasibility {name} counts differ from the frozen obligation")
+            if (
+                name == "critical error"
+                and expected is not None
+                and any(count < expected for _split, count in values)
+            ):
+                raise ValueError("protected split critical-error eligibility is incomplete")
+            if name == "answerable" and any(count < 1 for _split, count in values):
+                raise ValueError("each split requires at least one answerable candidate")
+        for name in (
+            "commitments_digest",
+            "feasibility_witness_digest",
+            "receipt_digest",
+        ):
+            if _SHA256.fullmatch(getattr(self, name)) is None:
+                raise ValueError(f"{name} must be a SHA-256 digest")
+
+
+def production_feasibility_receipt_digest(receipt: ProductionFeasibilityReceiptV1) -> str:
+    return canonical_hash(
+        {
+            item.name: getattr(receipt, item.name)
+            for item in fields(receipt)
+            if item.name != "receipt_digest"
+        }
+    )
+
+
+def bind_production_feasibility_receipt(
+    receipt: ProductionFeasibilityReceiptV1,
+) -> ProductionFeasibilityReceiptV1:
+    return replace(receipt, receipt_digest=production_feasibility_receipt_digest(receipt))
+
+
+def validate_production_feasibility_receipt(receipt: ProductionFeasibilityReceiptV1) -> None:
+    if receipt.receipt_digest != production_feasibility_receipt_digest(receipt):
+        raise ValueError("production feasibility receipt digest mismatch")
+
+
+def _row_by_capability(capability_id: str) -> CoverageRow:
+    return next(row for row in COVERAGE_MATRIX if row.capability_id == capability_id)
+
+
+def _validate_feasibility_item(item: ProductionAuthoringPlanItemV1) -> None:
+    row = _row_by_capability(item.capability_id)
+    if item.benchmark_family not in row.benchmark_families:
+        raise ProductionFeasibilityBlocked(
+            "commitment is outside its frozen capability/family cell"
+        )
+    if item.practitioner_question_class not in question_classes_for_cell(
+        item.capability_id, item.benchmark_family
+    ):
+        raise ProductionFeasibilityBlocked("commitment has an unauthorized question class")
+    if item.origin_class not in row.case_origins:
+        raise ProductionFeasibilityBlocked("commitment origin is not permitted for its cell")
+    if item.scoring_profile not in row.scorer_profiles:
+        raise ProductionFeasibilityBlocked("commitment scorer is not permitted for its cell")
+    if not set(item.authority_kinds).intersection(
+        row.answer_authorities
+    ) or item.authority_class not in _authority_classes(row.answer_authorities):
+        raise ProductionFeasibilityBlocked("commitment authority is not permitted for its cell")
+    if not set(item.adversarial_tags).issubset(row.adversarial_tags) or not item.adversarial_tags:
+        raise ProductionFeasibilityBlocked("commitment adversarial tags exceed or omit its row")
+    if (
+        not set(item.reachable_error_classes).issubset(row.error_classes)
+        or not item.reachable_error_classes
+    ):
+        raise ProductionFeasibilityBlocked("commitment reachable errors exceed or omit its row")
+    if item.refusal_decision is RefusalDecision.REQUIRED and (
+        item.expected_answer_kind is not ExpectedAnswerKind.REFUSAL or not item.safe_partial_support
+    ):
+        raise ProductionFeasibilityBlocked(
+            "required-refusal commitment must preserve safe partial guidance"
+        )
+
+
+def _feasibility_clusters(
+    commitments: tuple[ProductionCandidateCommitmentV1, ...],
+) -> tuple[_FeasibilityCluster, ...]:
+    grouped: dict[str, list[ProductionAuthoringPlanItemV1]] = defaultdict(list)
+    for commitment in commitments:
+        grouped[commitment.item.isolation_cluster_id].append(commitment.item)
+    clusters: list[_FeasibilityCluster] = []
+    for cluster_id, raw_items in grouped.items():
+        items = tuple(sorted(raw_items, key=lambda item: item.candidate_id.encode("utf-8")))
+        locked_splits = {
+            parse_production_seed_namespace(item.seed_namespace).split_name
+            for item in items
+            if item.origin_class is CaseOrigin.DETERMINISTIC_SYNTHETIC
+            and item.seed_namespace is not None
+        }
+        if len(locked_splits) > 1:
+            raise ProductionFeasibilityBlocked(
+                "one atomic cluster has incompatible synthetic seed split constraints"
+            )
+        cluster_key = canonical_hash(
+            {
+                "isolation_cluster_id": cluster_id,
+                "candidate_ids": tuple(item.candidate_id for item in items),
+            }
+        ).removeprefix("sha256:")
+        clusters.append(
+            _FeasibilityCluster(
+                isolation_cluster_id=cluster_id,
+                items=items,
+                cluster_key=cluster_key,
+                preferred_rank=int(cluster_key, 16) % 3,
+                locked_rank=(
+                    tuple(split for split, _count in PROSPECTIVE_SPLIT_COUNTS).index(
+                        next(iter(locked_splits))
+                    )
+                    if locked_splits
+                    else None
+                ),
+            )
+        )
+    return tuple(
+        sorted(
+            clusters,
+            key=lambda cluster: (
+                cluster.cluster_key.encode("utf-8"),
+                cluster.isolation_cluster_id.encode("utf-8"),
+            ),
+        )
+    )
+
+
+def _feasibility_row_eligible(item: ProductionAuthoringPlanItemV1, row: CoverageRow) -> bool:
+    return (
+        item.capability_id == row.capability_id
+        and item.origin_class in row.case_origins
+        and item.scoring_profile in row.scorer_profiles
+        and item.authority_class in _authority_classes(row.answer_authorities)
+        and bool(set(item.authority_kinds).intersection(row.answer_authorities))
+    )
+
+
+def _cluster_has_cell_obligation(
+    cluster: _FeasibilityCluster,
+    row: CoverageRow,
+    family: str,
+) -> bool:
+    return any(
+        item.benchmark_family == family
+        and _feasibility_row_eligible(item, row)
+        and bool(set(item.adversarial_tags).intersection(row.adversarial_tags))
+        and bool(set(item.reachable_error_classes).intersection(row.error_classes))
+        for item in cluster.items
+    )
+
+
+def _cluster_has_c18_refusal(
+    cluster: _FeasibilityCluster,
+    family: str,
+) -> bool:
+    row = _row_by_capability("C18")
+    return any(
+        item.capability_id == "C18"
+        and item.benchmark_family == family
+        and _feasibility_row_eligible(item, row)
+        and item.refusal_decision is RefusalDecision.REQUIRED
+        and item.expected_answer_kind is ExpectedAnswerKind.REFUSAL
+        and item.safe_partial_support
+        for item in cluster.items
+    )
+
+
+def _anchor_feasibility_coverage(
+    clusters: tuple[_FeasibilityCluster, ...],
+) -> dict[int, int]:
+    targets = tuple(count for _split, count in PROSPECTIVE_SPLIT_COUNTS)
+    assignments: dict[int, int] = {}
+    counts = [0, 0, 0]
+    requirements = [
+        (rank, row, family)
+        for rank in range(3)
+        for row in COVERAGE_MATRIX
+        for family in row.benchmark_families
+    ]
+    requirements.sort(
+        key=lambda requirement: (
+            sum(
+                _cluster_has_cell_obligation(cluster, requirement[1], requirement[2])
+                and (cluster.locked_rank is None or cluster.locked_rank == requirement[0])
+                for cluster in clusters
+            ),
+            requirement[0],
+            requirement[1].capability_id,
+            requirement[2],
+        )
+    )
+
+    for rank, row, family in requirements:
+        if any(
+            assigned_rank == rank and _cluster_has_cell_obligation(clusters[index], row, family)
+            for index, assigned_rank in assignments.items()
+        ):
+            continue
+        options = [
+            index
+            for index, cluster in enumerate(clusters)
+            if index not in assignments
+            and (cluster.locked_rank is None or cluster.locked_rank == rank)
+            and counts[rank] + cluster.size <= targets[rank]
+            and _cluster_has_cell_obligation(cluster, row, family)
+        ]
+        if not options:
+            raise ProductionFeasibilityBlocked(
+                f"no eligible atomic cluster for {row.capability_id}x{family} in "
+                f"{PROSPECTIVE_SPLIT_COUNTS[rank][0].value}"
+            )
+        selected = min(
+            options,
+            key=lambda index: (
+                -sum(
+                    _cluster_has_cell_obligation(clusters[index], other_row, other_family)
+                    for other_row in COVERAGE_MATRIX
+                    for other_family in other_row.benchmark_families
+                ),
+                clusters[index].size,
+                0 if clusters[index].preferred_rank == rank else 1,
+                clusters[index].cluster_key.encode("utf-8"),
+            ),
+        )
+        assignments[selected] = rank
+        counts[rank] += clusters[selected].size
+
+    # C18 declares explicit refusal behavior for every frozen family in D/V/H.
+    for rank, (split, _target) in enumerate(PROSPECTIVE_SPLIT_COUNTS):
+        for family in _row_by_capability("C18").benchmark_families:
+            if any(
+                assigned_rank == rank and _cluster_has_c18_refusal(clusters[index], family)
+                for index, assigned_rank in assignments.items()
+            ):
+                continue
+            options = [
+                index
+                for index, cluster in enumerate(clusters)
+                if index not in assignments
+                and (cluster.locked_rank is None or cluster.locked_rank == rank)
+                and counts[rank] + cluster.size <= targets[rank]
+                and _cluster_has_c18_refusal(cluster, family)
+            ]
+            if not options:
+                raise ProductionFeasibilityBlocked(
+                    f"no eligible atomic refusal candidate for C18x{family} in {split.value}"
+                )
+            selected = min(
+                options,
+                key=lambda index: (
+                    clusters[index].size,
+                    0 if clusters[index].preferred_rank == rank else 1,
+                    clusters[index].cluster_key.encode("utf-8"),
+                ),
+            )
+            assignments[selected] = rank
+            counts[rank] += clusters[selected].size
+
+    for rank, (split, _target) in enumerate(PROSPECTIVE_SPLIT_COUNTS):
+        if any(
+            chosen_rank == rank
+            and any(
+                item.refusal_decision is not RefusalDecision.REQUIRED
+                and item.expected_answer_kind is not ExpectedAnswerKind.REFUSAL
+                for item in clusters[index].items
+            )
+            for index, chosen_rank in assignments.items()
+        ):
+            continue
+        options = [
+            index
+            for index, cluster in enumerate(clusters)
+            if index not in assignments
+            and (cluster.locked_rank is None or cluster.locked_rank == rank)
+            and counts[rank] + cluster.size <= targets[rank]
+            and any(
+                item.refusal_decision is not RefusalDecision.REQUIRED
+                and item.expected_answer_kind is not ExpectedAnswerKind.REFUSAL
+                for item in cluster.items
+            )
+        ]
+        if not options:
+            raise ProductionFeasibilityBlocked(
+                f"no answerable candidate can be assigned to {split.value}"
+            )
+        selected = min(
+            options,
+            key=lambda index: (
+                clusters[index].size,
+                0 if clusters[index].preferred_rank == rank else 1,
+                clusters[index].cluster_key.encode("utf-8"),
+            ),
+        )
+        assignments[selected] = rank
+        counts[rank] += clusters[selected].size
+
+    # The row-level tag/error obligations are separate from the cell intersection.
+    for rank, (split, _target) in enumerate(PROSPECTIVE_SPLIT_COUNTS):
+        for row in COVERAGE_MATRIX:
+            relevant = tuple(
+                item
+                for cluster_index, chosen_rank in assignments.items()
+                if chosen_rank == rank
+                for item in clusters[cluster_index].items
+                if _feasibility_row_eligible(item, row)
+            )
+            represented_tags = {tag for item in relevant for tag in item.adversarial_tags}
+            represented_errors = {
+                error for item in relevant for error in item.reachable_error_classes
+            }
+            missing = [("tag", tag) for tag in row.adversarial_tags if tag not in represented_tags]
+            missing.extend(
+                ("error", error) for error in row.error_classes if error not in represented_errors
+            )
+            for feature_kind, feature in missing:
+                if (
+                    feature in represented_tags
+                    if feature_kind == "tag"
+                    else feature in represented_errors
+                ):
+                    continue
+                options = [
+                    index
+                    for index, cluster in enumerate(clusters)
+                    if index not in assignments
+                    and (cluster.locked_rank is None or cluster.locked_rank == rank)
+                    and counts[rank] + cluster.size <= targets[rank]
+                    and any(
+                        _feasibility_row_eligible(item, row)
+                        and (
+                            feature in item.adversarial_tags
+                            if feature_kind == "tag"
+                            else feature in item.reachable_error_classes
+                        )
+                        for item in cluster.items
+                    )
+                ]
+                if not options:
+                    raise ProductionFeasibilityBlocked(
+                        f"no eligible atomic cluster for {row.capability_id} {feature_kind} "
+                        f"coverage in {split.value}"
+                    )
+                selected = min(
+                    options,
+                    key=lambda index: (
+                        clusters[index].size,
+                        0 if clusters[index].preferred_rank == rank else 1,
+                        clusters[index].cluster_key.encode("utf-8"),
+                    ),
+                )
+                assignments[selected] = rank
+                counts[rank] += clusters[selected].size
+                for item in clusters[selected].items:
+                    if _feasibility_row_eligible(item, row):
+                        represented_tags.update(item.adversarial_tags)
+                        represented_errors.update(item.reachable_error_classes)
+
+    for rank in (1, 2):
+        for error_class in CRITICAL_ERROR_CLASSES:
+            if any(
+                chosen_rank == rank
+                and any(
+                    _feasibility_row_eligible(item, _row_by_capability(item.capability_id))
+                    and error_class in item.reachable_error_classes
+                    for item in clusters[index].items
+                )
+                for index, chosen_rank in assignments.items()
+            ):
+                continue
+            options = [
+                index
+                for index, cluster in enumerate(clusters)
+                if index not in assignments
+                and (cluster.locked_rank is None or cluster.locked_rank == rank)
+                and counts[rank] + cluster.size <= targets[rank]
+                and any(
+                    error_class in item.reachable_error_classes
+                    and _feasibility_row_eligible(item, _row_by_capability(item.capability_id))
+                    for item in cluster.items
+                )
+            ]
+            if not options:
+                raise ProductionFeasibilityBlocked(
+                    f"critical error {error_class.value} is unavailable in "
+                    f"{PROSPECTIVE_SPLIT_COUNTS[rank][0].value}"
+                )
+            selected = min(
+                options,
+                key=lambda index: (
+                    clusters[index].size,
+                    0 if clusters[index].preferred_rank == rank else 1,
+                    clusters[index].cluster_key.encode("utf-8"),
+                ),
+            )
+            assignments[selected] = rank
+            counts[rank] += clusters[selected].size
+    return assignments
+
+
+def _fill_feasibility_counts(
+    clusters: tuple[_FeasibilityCluster, ...], anchored: dict[int, int]
+) -> tuple[int, ...]:
+    targets = tuple(count for _split, count in PROSPECTIVE_SPLIT_COUNTS)
+    anchored_counts = [0, 0, 0]
+    for index, rank in anchored.items():
+        anchored_counts[rank] += clusters[index].size
+    if any(count > target for count, target in zip(anchored_counts, targets, strict=True)):
+        raise ProductionFeasibilityBlocked("coverage anchors exceed exact split targets")
+    remaining = tuple(index for index in range(len(clusters)) if index not in anchored)
+    deficits = tuple(target - count for target, count in zip(targets, anchored_counts, strict=True))
+    if sum(deficits) != sum(clusters[index].size for index in remaining):
+        raise ProductionFeasibilityBlocked("coverage anchors do not leave exact remaining capacity")
+    if all(clusters[index].size == 1 for index in remaining):
+        assignments = dict(anchored)
+        left = list(deficits)
+        ordered = tuple(
+            index for index in remaining if clusters[index].locked_rank is not None
+        ) + tuple(index for index in remaining if clusters[index].locked_rank is None)
+        for index in ordered:
+            cluster = clusters[index]
+            ranks = (
+                (cluster.locked_rank,)
+                if cluster.locked_rank is not None
+                else tuple(
+                    sorted(
+                        range(3),
+                        key=lambda rank: (0 if rank == cluster.preferred_rank else 1, rank),
+                    )
+                )
+            )
+            selected = next((rank for rank in ranks if left[rank] > 0), None)
+            if selected is None:
+                raise ProductionFeasibilityBlocked("singleton clusters cannot fill exact counts")
+            assignments[index] = selected
+            left[selected] -= 1
+        if any(left):
+            raise ProductionFeasibilityBlocked("singleton clusters leave an exact-count deficit")
+        return tuple(assignments[index] for index in range(len(clusters)))
+
+    states: dict[tuple[int, int], tuple[tuple[int, int] | None, int | None]] = {
+        (0, 0): (None, None)
+    }
+    layers: list[dict[tuple[int, int], tuple[tuple[int, int] | None, int | None]]] = [states]
+    processed = 0
+    for index in remaining:
+        cluster = clusters[index]
+        processed += cluster.size
+        next_states: dict[tuple[int, int], tuple[tuple[int, int] | None, int | None]] = {}
+        ranks = (
+            (cluster.locked_rank,)
+            if cluster.locked_rank is not None
+            else tuple(
+                sorted(
+                    range(3), key=lambda rank: (0 if rank == cluster.preferred_rank else 1, rank)
+                )
+            )
+        )
+        for public_count, validation_count in sorted(states):
+            for rank in ranks:
+                public = public_count + (cluster.size if rank == 0 else 0)
+                validation = validation_count + (cluster.size if rank == 1 else 0)
+                hidden = processed - public - validation
+                if public <= deficits[0] and validation <= deficits[1] and hidden <= deficits[2]:
+                    next_states.setdefault(
+                        (public, validation), ((public_count, validation_count), rank)
+                    )
+        if not next_states:
+            raise ProductionFeasibilityBlocked("no exact atomic-cluster fill remains")
+        if len(next_states) > 250_000:
+            raise ProductionFeasibilityBlocked(
+                "bounded deterministic feasibility state budget exceeded"
+            )
+        states = next_states
+        layers.append(states)
+    state = (deficits[0], deficits[1])
+    if state not in states:
+        raise ProductionFeasibilityBlocked("atomic clusters cannot fill exact 260/87/87 targets")
+    assignments = dict(anchored)
+    for layer_index in range(len(remaining), 0, -1):
+        prior, chosen_rank = layers[layer_index][state]
+        assert prior is not None and chosen_rank is not None
+        assignments[remaining[layer_index - 1]] = chosen_rank
+        state = prior
+    return tuple(assignments[index] for index in range(len(clusters)))
+
+
+def validate_production_hard_feasibility(
+    commitments: tuple[ProductionCandidateCommitmentV1, ...],
+) -> ProductionFeasibilityReceiptV1:
+    """Prove a legal 260/87/87 allocation using pre-review commitments only."""
+
+    if len(commitments) != FINAL_TARGET_CASES:
+        raise ProductionFeasibilityBlocked(
+            "production feasibility requires exactly 434 commitments"
+        )
+    if any(not isinstance(item, ProductionCandidateCommitmentV1) for item in commitments):
+        raise TypeError("feasibility input must contain only production candidate commitments")
+    commitments = tuple(sorted(commitments, key=lambda item: item.candidate_id.encode("utf-8")))
+    candidate_ids = tuple(item.candidate_id for item in commitments)
+    payload_hashes = tuple(item.candidate_payload_hash for item in commitments)
+    if (
+        len(set(candidate_ids)) != FINAL_TARGET_CASES
+        or len(set(payload_hashes)) != FINAL_TARGET_CASES
+    ):
+        raise ProductionFeasibilityBlocked(
+            "production commitments require unique IDs and payload hashes"
+        )
+    for commitment in commitments:
+        _validate_feasibility_item(commitment.item)
+    validate_production_isolation(commitments)
+    clusters = _feasibility_clusters(commitments)
+    targets = tuple(count for _split, count in PROSPECTIVE_SPLIT_COUNTS)
+    for cluster in clusters:
+        if cluster.size > max(targets):
+            raise ProductionFeasibilityBlocked(
+                "atomic isolation cluster exceeds every split capacity"
+            )
+        if cluster.locked_rank is not None and cluster.size > targets[cluster.locked_rank]:
+            raise ProductionFeasibilityBlocked(
+                "synthetic seed lock exceeds its target split capacity"
+            )
+    anchors = _anchor_feasibility_coverage(clusters)
+    ranks = _fill_feasibility_counts(clusters, anchors)
+
+    cell_count_by_rank = [0, 0, 0]
+    tag_count_by_rank = [0, 0, 0]
+    error_count_by_rank = [0, 0, 0]
+    critical_count_by_rank = [0, 0, 0]
+    answerable_count_by_rank = [0, 0, 0]
+    c18_refusal_count_by_rank = [0, 0, 0]
+    actual_counts = [0, 0, 0]
+    for cluster, rank in zip(clusters, ranks, strict=True):
+        actual_counts[rank] += cluster.size
+    for rank in range(3):
+        assigned_clusters = tuple(
+            cluster
+            for cluster, assigned_rank in zip(clusters, ranks, strict=True)
+            if assigned_rank == rank
+        )
+        assigned_items = tuple(item for cluster in assigned_clusters for item in cluster.items)
+        answerable_count_by_rank[rank] = sum(
+            item.refusal_decision is not RefusalDecision.REQUIRED
+            and item.expected_answer_kind is not ExpectedAnswerKind.REFUSAL
+            for item in assigned_items
+        )
+        for row in COVERAGE_MATRIX:
+            for family in row.benchmark_families:
+                if any(
+                    _cluster_has_cell_obligation(cluster, row, family)
+                    for cluster in assigned_clusters
+                ):
+                    cell_count_by_rank[rank] += 1
+            relevant = tuple(
+                item for item in assigned_items if _feasibility_row_eligible(item, row)
+            )
+            tag_count_by_rank[rank] += len(
+                {tag for item in relevant for tag in item.adversarial_tags}.intersection(
+                    row.adversarial_tags
+                )
+            )
+            error_count_by_rank[rank] += len(
+                {error for item in relevant for error in item.reachable_error_classes}.intersection(
+                    row.error_classes
+                )
+            )
+        critical_count_by_rank[rank] = len(
+            {
+                error
+                for item in assigned_items
+                if _feasibility_row_eligible(item, _row_by_capability(item.capability_id))
+                for error in item.reachable_error_classes
+                if error in CRITICAL_ERROR_CLASSES
+            }
+        )
+        c18_refusal_count_by_rank[rank] = sum(
+            any(_cluster_has_c18_refusal(cluster, family) for cluster in assigned_clusters)
+            for family in _row_by_capability("C18").benchmark_families
+        )
+    if tuple(actual_counts) != targets:
+        raise ProductionFeasibilityBlocked("feasibility witness does not match exact split counts")
+    if any(count != 87 for count in cell_count_by_rank):
+        raise ProductionFeasibilityBlocked(
+            "feasibility witness misses a D/V/H capability-family cell"
+        )
+    expected_tags = sum(len(row.adversarial_tags) for row in COVERAGE_MATRIX)
+    expected_errors = sum(len(row.error_classes) for row in COVERAGE_MATRIX)
+    if any(count != expected_tags for count in tag_count_by_rank):
+        raise ProductionFeasibilityBlocked("feasibility witness misses a row-level adversarial tag")
+    if any(count != expected_errors for count in error_count_by_rank):
+        raise ProductionFeasibilityBlocked("feasibility witness misses a row-level reachable error")
+    critical_count = len(CRITICAL_ERROR_CLASSES)
+    if any(critical_count_by_rank[rank] < critical_count for rank in (1, 2)):
+        raise ProductionFeasibilityBlocked("protected split lacks critical-error eligibility")
+    if any(count < 1 for count in answerable_count_by_rank):
+        raise ProductionFeasibilityBlocked("a split lacks an answerable candidate")
+    if any(count != 14 for count in c18_refusal_count_by_rank):
+        raise ProductionFeasibilityBlocked("a split lacks explicit C18 refusal-family coverage")
+
+    size_counts: dict[int, int] = defaultdict(int)
+    for cluster in clusters:
+        size_counts[cluster.size] += 1
+    witness_digest = canonical_hash(
+        tuple(
+            (cluster.cluster_key, PROSPECTIVE_SPLIT_COUNTS[rank][0])
+            for cluster, rank in zip(clusters, ranks, strict=True)
+        )
+    )
+    provisional = ProductionFeasibilityReceiptV1(
+        status="PASS",
+        algorithm_id=PRODUCTION_FEASIBILITY_ALGORITHM,
+        candidate_count=FINAL_TARGET_CASES,
+        target_counts=PROSPECTIVE_SPLIT_COUNTS,
+        atomic_cluster_count=len(clusters),
+        cluster_size_distribution=tuple(sorted(size_counts.items())),
+        hard_cell_count_by_split=tuple(
+            (split, cell_count_by_rank[rank])
+            for rank, (split, _count) in enumerate(PROSPECTIVE_SPLIT_COUNTS)
+        ),
+        adversarial_tag_count_by_split=tuple(
+            (split, tag_count_by_rank[rank])
+            for rank, (split, _count) in enumerate(PROSPECTIVE_SPLIT_COUNTS)
+        ),
+        reachable_error_count_by_split=tuple(
+            (split, error_count_by_rank[rank])
+            for rank, (split, _count) in enumerate(PROSPECTIVE_SPLIT_COUNTS)
+        ),
+        protected_critical_error_count_by_split=tuple(
+            (PROSPECTIVE_SPLIT_COUNTS[rank][0], critical_count_by_rank[rank]) for rank in (1, 2)
+        ),
+        answerable_case_count_by_split=tuple(
+            (split, answerable_count_by_rank[rank])
+            for rank, (split, _count) in enumerate(PROSPECTIVE_SPLIT_COUNTS)
+        ),
+        c18_refusal_cell_count_by_split=tuple(
+            (split, c18_refusal_count_by_rank[rank])
+            for rank, (split, _count) in enumerate(PROSPECTIVE_SPLIT_COUNTS)
+        ),
+        commitments_digest=canonical_hash(commitments),
+        feasibility_witness_digest=witness_digest,
+        receipt_digest="sha256:" + "0" * 64,
+    )
+    return bind_production_feasibility_receipt(provisional)
+
+
 @register_serializable_type
 @dataclass(frozen=True, slots=True)
 class ProductionCandidateStoreReceiptV1:
@@ -753,25 +1492,32 @@ __all__ = [
     "PRODUCTION_BATCH_ID",
     "PRODUCTION_BATCH_MANIFEST_VERSION",
     "PRODUCTION_CANDIDATE_ID_PREFIX",
+    "PRODUCTION_FEASIBILITY_ALGORITHM",
     "PROSPECTIVE_SPLIT_COUNTS",
     "ProductionAuthoringPlanItemV1",
     "ProductionAuthoringPlanV1",
     "ProductionBatchManifestV1",
     "ProductionCandidateCommitmentV1",
     "ProductionCandidateStoreReceiptV1",
+    "ProductionFeasibilityBlocked",
+    "ProductionFeasibilityReceiptV1",
     "ProductionIsolationValidationV1",
     "bind_production_authoring_plan",
     "bind_production_batch_manifest",
     "bind_production_candidate_store_receipt",
+    "bind_production_feasibility_receipt",
     "build_production_candidate_commitment",
     "production_authoring_plan_digest",
     "production_batch_manifest_digest",
     "production_candidate_store_receipt_digest",
+    "production_feasibility_receipt_digest",
     "production_plan_item_from_packet",
     "validate_production_authoring_plan",
     "validate_production_batch_manifest",
     "validate_production_candidate_packet",
     "validate_production_candidate_set",
     "validate_production_candidate_store_receipt",
+    "validate_production_feasibility_receipt",
+    "validate_production_hard_feasibility",
     "validate_production_isolation",
 ]
