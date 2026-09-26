@@ -58,6 +58,15 @@ from dynamislm.benchmark.production_store import (
     write_external_production_json,
 )
 from dynamislm.benchmark.public_repository import validate_production_private_material_absent
+from dynamislm.benchmark.transient_storage import (
+    DEFAULT_TRANSIENT_CACHE_ROOT,
+    TRANSIENT_CACHE_MAX_BYTES,
+    TransientCacheCheckpointV1,
+    TransientCacheMeasurementV1,
+    TransientCachePeakTracker,
+    _enforce_transient_cache_limit,
+    measure_transient_cache_bytes,
+)
 from dynamislm.qualification.res115_authoring import _semantic_cell_candidate
 from dynamislm.serialization import canonical_json
 
@@ -674,3 +683,31 @@ def test_production_repository_leak_guard_rejects_question_answer_and_seed(
             ((field, secret),),
             repository_root=repository,
         )
+
+
+def test_transient_cache_bytes_and_process_rss_are_separate_metrics(tmp_path: Path) -> None:
+    cache = tmp_path / "cache"
+    nested = cache / "nested"
+    nested.mkdir(parents=True)
+    (cache / "first.bin").write_bytes(b"abc")
+    (nested / "second.bin").write_bytes(b"12345")
+    tracker = TransientCachePeakTracker(cache)
+    checkpoint = tracker.checkpoint("after-fixture-write")
+    assert checkpoint.transient_cache_bytes == measure_transient_cache_bytes(cache) == 8
+    with pytest.raises(ValueError, match="unique non-empty"):
+        tracker.checkpoint("after-fixture-write")
+    with pytest.raises(ValueError, match="2 GB hard limit"):
+        _enforce_transient_cache_limit(TRANSIENT_CACHE_MAX_BYTES + 1)
+
+    receipt = TransientCacheMeasurementV1(
+        cache_root=DEFAULT_TRANSIENT_CACHE_ROOT.as_posix(),
+        hard_limit_bytes=TRANSIENT_CACHE_MAX_BYTES,
+        checkpoints=(TransientCacheCheckpointV1("synthetic-metric-fixture", 8, 321.0),),
+        transient_cache_peak_bytes=8,
+        process_peak_rss_mb=321.0,
+    )
+    metrics = receipt.public_metrics()
+    assert metrics["TRANSIENT_CACHE_PEAK_MB"] == 0.000008
+    assert metrics["PROCESS_PEAK_RSS_MB"] == 321.0
+    assert metrics["TRANSIENT_CACHE_PEAK_MB"] != metrics["PROCESS_PEAK_RSS_MB"]
+    assert metrics["PROCESS_RSS_REPORTED_SEPARATELY"] == "YES"
