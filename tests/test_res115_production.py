@@ -553,6 +553,8 @@ def test_qualification_candidate_id_payload_seed_lineage_and_span_reuse_reject()
     ):
         with pytest.raises(ValueError, match=message):
             check(**(identity | change))
+    different_span = ("different-span-from-same-paper", "sha256:" + "e" * 64)
+    check(**(identity | {"evidence_span_identities": (different_span,)}))
 
 
 def test_production_question_exclusion_rejects_exact_normalized_and_shingle_clones() -> None:
