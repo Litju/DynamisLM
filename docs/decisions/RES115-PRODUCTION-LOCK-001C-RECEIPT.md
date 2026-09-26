@@ -57,7 +57,7 @@ The Git training/development exclusion manifest contains 101 IDs, hashes, and
 fingerprints, with no question text or seed values:
 
 - [Qualification training exclusions](../../reports/performance_science_eval/qualification_training_exclusions.json)
-- Manifest digest: `sha256:45aa4dfdcacbe90b1768800da5eee2695e680f3febdd758fb5885a23bbb2b350`
+- Manifest digest: `sha256:2bba820925ced3452268aeab5c3e7cd9cc347e1abb9763e113ac82287b4a8d43`
 
 Both the 001B qualification leak guard and the production private-material
 guard pass against Git history, index, and worktree.
