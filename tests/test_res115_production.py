@@ -4,6 +4,7 @@ import hashlib
 import subprocess
 from dataclasses import replace
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -27,7 +28,7 @@ from dynamislm.benchmark.contamination import (
     normalized_text_sha256,
 )
 from dynamislm.benchmark.coverage import COVERAGE_MATRIX
-from dynamislm.benchmark.pre_review import bind_candidate_review_packet
+from dynamislm.benchmark.pre_review import CandidateReviewPacket, bind_candidate_review_packet
 from dynamislm.benchmark.production import (
     PRODUCTION_AUTHORING_PROCESS_ID,
     PRODUCTION_BATCH_ID,
@@ -445,7 +446,9 @@ def test_production_receipts_write_only_under_external_production_root(tmp_path:
         )
 
 
-def _production_packet(question: str, *, candidate_id: str = "PSE-V1-CANDIDATE:test"):
+def _production_packet(
+    question: str, *, candidate_id: str = "PSE-V1-CANDIDATE:test"
+) -> CandidateReviewPacket:
     source = _semantic_cell_candidate("C01", "F01")
     contamination = replace(
         source.contamination,
@@ -516,6 +519,22 @@ def _qualification_exclusion(
     )
 
 
+def _run_exclusion_identity(values: dict[str, object]) -> None:
+    validate_production_exclusion_identity(
+        candidate_id=cast(str, values["candidate_id"]),
+        candidate_payload_hash=cast(str, values["candidate_payload_hash"]),
+        question=cast(str, values["question"]),
+        seed_blocks=cast(tuple[str, ...], values["seed_blocks"]),
+        seed_namespaces=cast(tuple[str, ...], values["seed_namespaces"]),
+        mutation_lineage_ids=cast(tuple[str, ...], values["mutation_lineage_ids"]),
+        mutation_seed_values=cast(tuple[int, ...], values["mutation_seed_values"]),
+        evidence_span_identities=cast(
+            tuple[tuple[str, str], ...], values["evidence_span_identities"]
+        ),
+        commitment=cast(QualificationExclusionCommitmentV1, values["commitment"]),
+    )
+
+
 def test_qualification_candidate_id_payload_seed_lineage_and_span_reuse_reject() -> None:
     exclusion = _qualification_exclusion(
         "private original question with enough synthetic text to test matching",
@@ -526,7 +545,6 @@ def test_qualification_candidate_id_payload_seed_lineage_and_span_reuse_reject()
         mutation_seed_values=(17,),
         evidence_spans=(("qualification-span:001", _SHA),),
     )
-    check = validate_production_exclusion_identity
     identity = {
         "candidate_id": "PSE-V1-CANDIDATE:synthetic-test",
         "candidate_payload_hash": "sha256:" + "d" * 64,
@@ -552,9 +570,9 @@ def test_qualification_candidate_id_payload_seed_lineage_and_span_reuse_reject()
         ({"evidence_span_identities": (("other-span", _SHA),)}, "evidence-span"),
     ):
         with pytest.raises(ValueError, match=message):
-            check(**(identity | change))
+            _run_exclusion_identity(identity | change)
     different_span = ("different-span-from-same-paper", "sha256:" + "e" * 64)
-    check(**(identity | {"evidence_span_identities": (different_span,)}))
+    _run_exclusion_identity(identity | {"evidence_span_identities": (different_span,)})
 
 
 def test_production_question_exclusion_rejects_exact_normalized_and_shingle_clones() -> None:
