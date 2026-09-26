@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import subprocess
 from dataclasses import replace
 from pathlib import Path
 
@@ -19,7 +20,14 @@ from dynamislm.benchmark.constants import (
     RefusalDecision,
     SplitName,
 )
+from dynamislm.benchmark.contamination import (
+    exact_13_token_shingles,
+    exact_shingle_digest,
+    fuzzy_fingerprint,
+    normalized_text_sha256,
+)
 from dynamislm.benchmark.coverage import COVERAGE_MATRIX
+from dynamislm.benchmark.pre_review import bind_candidate_review_packet
 from dynamislm.benchmark.production import (
     PRODUCTION_AUTHORING_PROCESS_ID,
     PRODUCTION_BATCH_ID,
@@ -34,10 +42,24 @@ from dynamislm.benchmark.production import (
     validate_production_hard_feasibility,
     validate_production_isolation,
 )
+from dynamislm.benchmark.production_exclusions import (
+    QUALIFICATION_001B_BATCH_ID,
+    QUALIFICATION_EXCLUSION_VERSION,
+    QualificationExclusionCandidateV1,
+    QualificationExclusionCommitmentV1,
+    QualificationTrainingExclusionManifestV1,
+    bind_qualification_exclusion_commitment,
+    build_qualification_training_exclusion_manifest,
+    validate_production_candidate_against_qualification_exclusion,
+    validate_production_exclusion_identity,
+)
 from dynamislm.benchmark.production_store import (
     read_external_production_json,
     write_external_production_json,
 )
+from dynamislm.benchmark.public_repository import validate_production_private_material_absent
+from dynamislm.qualification.res115_authoring import _semantic_cell_candidate
+from dynamislm.serialization import canonical_json
 
 _SHA = "sha256:" + "a" * 64
 
@@ -411,4 +433,244 @@ def test_production_receipts_write_only_under_external_production_root(tmp_path:
             "production/exclusions/inside.json",
             repository_root=repository_root,
             production_root=repository_root,
+        )
+
+
+def _production_packet(question: str, *, candidate_id: str = "PSE-V1-CANDIDATE:test"):
+    source = _semantic_cell_candidate("C01", "F01")
+    contamination = replace(
+        source.contamination,
+        protocol_template_id="test-protocol-template:001C",
+        expert_author_batch_id="test-expert-batch:001C",
+        normalized_text_sha256=normalized_text_sha256(question),
+        exact_shingle_digest=exact_shingle_digest(question),
+        fuzzy_fingerprint=fuzzy_fingerprint(question),
+    )
+    packet = replace(
+        source,
+        candidate_id=candidate_id,
+        question=question,
+        input=replace(source.input, question_text=question),
+        proposed_provenance=replace(
+            source.proposed_provenance,
+            author_id=PRODUCTION_AUTHORING_PROCESS_ID,
+        ),
+        contamination=contamination,
+        isolation=replace(
+            source.isolation,
+            source_family_id=contamination.source_family_id,
+            isolation_cluster_id="test-isolation-cluster:001C",
+        ),
+        candidate_payload_hash="sha256:" + "0" * 64,
+        proposed_approval_digest="sha256:" + "0" * 64,
+    )
+    return bind_candidate_review_packet(packet)
+
+
+def _qualification_exclusion(
+    question: str,
+    *,
+    candidate_id: str = "PSE-V1-QUALIFICATION:TEST:ORIGINAL",
+    payload_hash: str = "sha256:" + "b" * 64,
+    seed_blocks: tuple[str, ...] = (),
+    seed_namespaces: tuple[str, ...] = (),
+    mutation_lineage_ids: tuple[str, ...] = (),
+    mutation_seed_values: tuple[int, ...] = (),
+    evidence_spans: tuple[tuple[str, str], ...] = (),
+) -> QualificationExclusionCommitmentV1:
+    entry = QualificationExclusionCandidateV1(
+        candidate_id=candidate_id,
+        candidate_payload_hash=payload_hash,
+        question_text=question,
+        exact_question_sha256="sha256:" + hashlib.sha256(question.encode()).hexdigest(),
+        normalized_question_sha256=normalized_text_sha256(question),
+        question_13_token_shingle_hashes=tuple(sorted(exact_13_token_shingles(question))),
+        seed_blocks=seed_blocks,
+        seed_namespaces=seed_namespaces,
+        generator_seed_identities=(),
+        mutation_lineage_ids=mutation_lineage_ids,
+        mutation_seed_values=mutation_seed_values,
+        evidence_span_identities=evidence_spans,
+    )
+    return bind_qualification_exclusion_commitment(
+        QualificationExclusionCommitmentV1(
+            batch_id=QUALIFICATION_001B_BATCH_ID,
+            version=QUALIFICATION_EXCLUSION_VERSION,
+            qualification_manifest_digest=_SHA,
+            qualification_store_receipt_digest=_SHA,
+            authoring_plan_digest=_SHA,
+            seed_input_digest=_SHA,
+            candidate_count=1,
+            entries=(entry,),
+            commitment_digest="sha256:" + "0" * 64,
+        )
+    )
+
+
+def test_qualification_candidate_id_payload_seed_lineage_and_span_reuse_reject() -> None:
+    exclusion = _qualification_exclusion(
+        "private original question with enough synthetic text to test matching",
+        payload_hash="sha256:" + "c" * 64,
+        seed_blocks=("opaque-seed-block",),
+        seed_namespaces=("PSE-V1-QUALIFICATION/generator/opaque-seed-block",),
+        mutation_lineage_ids=("qualification-mutation-lineage",),
+        mutation_seed_values=(17,),
+        evidence_spans=(("qualification-span:001", _SHA),),
+    )
+    check = validate_production_exclusion_identity
+    identity = {
+        "candidate_id": "PSE-V1-CANDIDATE:synthetic-test",
+        "candidate_payload_hash": "sha256:" + "d" * 64,
+        "question": "independent question material for exclusion test",
+        "seed_blocks": (),
+        "seed_namespaces": (),
+        "mutation_lineage_ids": (),
+        "mutation_seed_values": (),
+        "evidence_span_identities": (),
+        "commitment": exclusion,
+    }
+    for change, message in (
+        ({"candidate_id": "PSE-V1-QUALIFICATION:TEST:ORIGINAL"}, "qualification IDs"),
+        ({"candidate_payload_hash": "sha256:" + "c" * 64}, "payload"),
+        ({"seed_blocks": ("opaque-seed-block",)}, "seed block"),
+        (
+            {"seed_namespaces": ("PSE-V1-QUALIFICATION/generator/opaque-seed-block",)},
+            "seed block",
+        ),
+        ({"mutation_lineage_ids": ("qualification-mutation-lineage",)}, "lineage"),
+        ({"mutation_seed_values": (17,)}, "mutation seed"),
+        ({"evidence_span_identities": (("qualification-span:001", _SHA),)}, "evidence-span"),
+        ({"evidence_span_identities": (("other-span", _SHA),)}, "evidence-span"),
+    ):
+        with pytest.raises(ValueError, match=message):
+            check(**(identity | change))
+
+
+def test_production_question_exclusion_rejects_exact_normalized_and_shingle_clones() -> None:
+    original = (
+        "synthetic lock test: alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu"
+    )
+    for question, excluded_question in (
+        (original, original),
+        (
+            "  SYNTHETIC lock test: alpha beta gamma delta epsilon zeta eta theta "
+            "iota kappa lambda mu  ",
+            original,
+        ),
+    ):
+        packet = _production_packet(question)
+        with pytest.raises(ValueError, match="canonical or normalized question"):
+            validate_production_candidate_against_qualification_exclusion(
+                packet,
+                _qualification_exclusion(excluded_question),
+            )
+
+    phrase = "one two three four five six seven eight nine ten eleven twelve thirteen fourteen"
+    packet = _production_packet(f"current prompt {phrase} current end")
+    with pytest.raises(ValueError, match="exact-shingle"):
+        validate_production_candidate_against_qualification_exclusion(
+            packet,
+            _qualification_exclusion(f"historical prompt {phrase} historical end"),
+        )
+
+
+def test_production_question_exclusion_uses_frozen_blocking_fuzzy_threshold() -> None:
+    tokens = [f"term{index:03d}" for index in range(104)]
+    changed = [
+        token.replace("term", "xerm") if index % 12 == 0 else token
+        for index, token in enumerate(tokens)
+    ]
+    original = " ".join(tokens)
+    near_clone = " ".join(changed)
+    assert not (exact_13_token_shingles(original) & exact_13_token_shingles(near_clone))
+    packet = _production_packet(near_clone)
+    with pytest.raises(ValueError, match="blocking fuzzy overlap"):
+        validate_production_candidate_against_qualification_exclusion(
+            packet,
+            _qualification_exclusion(original),
+        )
+
+
+def test_public_training_exclusion_has_digests_and_no_question_or_seed_text() -> None:
+    entries = tuple(
+        QualificationExclusionCandidateV1(
+            candidate_id=f"PSE-V1-QUALIFICATION:TEST:{index:03d}",
+            candidate_payload_hash="sha256:" + hashlib.sha256(str(index).encode()).hexdigest(),
+            question_text=f"synthetic private training exclusion question {index:03d}",
+            exact_question_sha256=(
+                "sha256:"
+                + hashlib.sha256(
+                    f"synthetic private training exclusion question {index:03d}".encode()
+                ).hexdigest()
+            ),
+            normalized_question_sha256=normalized_text_sha256(
+                f"synthetic private training exclusion question {index:03d}"
+            ),
+            question_13_token_shingle_hashes=(),
+            seed_blocks=(f"private-seed-block-{index:03d}",),
+            seed_namespaces=(f"private-seed-namespace-{index:03d}",),
+            generator_seed_identities=(),
+            mutation_lineage_ids=(),
+            mutation_seed_values=(),
+            evidence_span_identities=(),
+        )
+        for index in range(101)
+    )
+    commitment = bind_qualification_exclusion_commitment(
+        QualificationExclusionCommitmentV1(
+            batch_id=QUALIFICATION_001B_BATCH_ID,
+            version=QUALIFICATION_EXCLUSION_VERSION,
+            qualification_manifest_digest=_SHA,
+            qualification_store_receipt_digest=_SHA,
+            authoring_plan_digest=_SHA,
+            seed_input_digest=_SHA,
+            candidate_count=101,
+            entries=entries,
+            commitment_digest="sha256:" + "0" * 64,
+        )
+    )
+    public = build_qualification_training_exclusion_manifest(
+        commitment,
+        private_index_relative_path="production/exclusions/qualification-001B-private.json",
+        private_index_digest=_SHA,
+    )
+    serialized = canonical_json(public)
+    assert isinstance(public, QualificationTrainingExclusionManifestV1)
+    assert public.candidate_count == 101
+    assert "synthetic private training exclusion question" not in serialized
+    assert "private-seed-block" not in serialized
+    assert all(item.candidate_id.startswith("PSE-V1-QUALIFICATION:") for item in public.entries)
+
+
+@pytest.mark.parametrize(
+    ("field", "secret"),
+    (
+        ("production candidate question", "Synthetic private question phrase 001C"),
+        ("private production expected answer", "SYNTHETIC_EXPECTED_GOLD_001C"),
+        ("private production seed", "private-seed-value-001C"),
+    ),
+)
+def test_production_repository_leak_guard_rejects_question_answer_and_seed(
+    tmp_path: Path, field: str, secret: str
+) -> None:
+    repository = tmp_path / "public-repository"
+    repository.mkdir()
+    subprocess.run(("git", "init", str(repository)), check=True, capture_output=True)
+    subprocess.run(
+        ("git", "-C", str(repository), "config", "user.email", "test@example.com"), check=True
+    )
+    subprocess.run(("git", "-C", str(repository), "config", "user.name", "test"), check=True)
+    readme = repository / "README.md"
+    readme.write_text("synthetic leak guard fixture\n", encoding="utf-8")
+    subprocess.run(("git", "-C", str(repository), "add", "README.md"), check=True)
+    subprocess.run(
+        ("git", "-C", str(repository), "commit", "-m", "fixture"), check=True, capture_output=True
+    )
+    report = repository / "production-report.json"
+    report.write_text(f'{{"private":"{secret}"}}\n', encoding="utf-8")
+
+    with pytest.raises(ValueError, match=field):
+        validate_production_private_material_absent(
+            ((field, secret),),
+            repository_root=repository,
         )

@@ -16,6 +16,11 @@ from dynamislm.benchmark.production import (
     validate_production_candidate_set,
     validate_production_candidate_store_receipt,
 )
+from dynamislm.benchmark.production_exclusions import (
+    QualificationExclusionCommitmentV1,
+    validate_production_candidate_set_against_qualification_exclusion,
+    validate_qualification_exclusion_commitment,
+)
 from dynamislm.benchmark.qualification_store import (
     _atomic_write_bytes,
     _external_input_path,
@@ -94,10 +99,19 @@ def write_production_candidate_store(
     repository_root: str | Path,
     production_root: str | Path = DEFAULT_PRODUCTION_ROOT,
     source_resolver: SourceArtifactResolver | None = None,
+    qualification_exclusions: QualificationExclusionCommitmentV1,
 ) -> ProductionCandidateStoreReceiptV1:
     """Persist one exactly 434-packet batch outside Git using immutable bytes."""
 
     validate_production_authoring_plan(plan)
+    validate_qualification_exclusion_commitment(qualification_exclusions)
+    if plan.qualification_exclusion_digest != qualification_exclusions.commitment_digest:
+        raise ValueError("production plan is not bound to the sealed qualification exclusion")
+    validate_production_candidate_set_against_qualification_exclusion(
+        packets,
+        qualification_exclusions,
+        source_resolver=source_resolver,
+    )
     commitments = validate_production_candidate_set(packets, source_resolver=source_resolver)
     by_id = {item.candidate_id: item for item in commitments}
     if tuple(item.candidate_id for item in plan.items) != tuple(sorted(by_id)):
@@ -166,6 +180,7 @@ def write_production_candidate_store(
         repository_root=repo,
         production_root=root,
         source_resolver=source_resolver,
+        qualification_exclusions=qualification_exclusions,
     ) != tuple(sorted(packets, key=lambda item: item.candidate_id.encode("utf-8"))):
         raise ValueError("external production candidate store round trip failed")
     return receipt
@@ -177,8 +192,10 @@ def read_production_candidate_store(
     repository_root: str | Path,
     production_root: str | Path = DEFAULT_PRODUCTION_ROOT,
     source_resolver: SourceArtifactResolver | None = None,
+    qualification_exclusions: QualificationExclusionCommitmentV1,
 ) -> tuple[CandidateReviewPacket, ...]:
     validate_production_candidate_store_receipt(receipt)
+    validate_qualification_exclusion_commitment(qualification_exclusions)
     root, _repo = _safe_external_root(Path(production_root), Path(repository_root))
     relative = PurePosixPath(receipt.store_relative_path)
     directory = _external_input_path(root, relative)
@@ -192,6 +209,8 @@ def read_production_candidate_store(
     validate_production_authoring_plan(plan)
     if plan.plan_digest != receipt.authoring_plan_digest:
         raise ValueError("production candidate store is bound to a different authoring plan")
+    if plan.qualification_exclusion_digest != qualification_exclusions.commitment_digest:
+        raise ValueError("production plan is not bound to the sealed qualification exclusion")
     inventory: list[tuple[str, str, int]] = [(plan_relative, plan_file_digest, plan_bytes)]
     packets: list[CandidateReviewPacket] = []
     for candidate_id, expected_digest in receipt.candidate_file_digests:
@@ -214,6 +233,11 @@ def read_production_candidate_store(
         packets.append(packet)
         inventory.append((packet_relative.as_posix(), actual_digest, len(payload)))
     restored = tuple(packets)
+    validate_production_candidate_set_against_qualification_exclusion(
+        restored,
+        qualification_exclusions,
+        source_resolver=source_resolver,
+    )
     commitments = validate_production_candidate_set(restored, source_resolver=source_resolver)
     if tuple(item.item for item in commitments) != plan.items:
         raise ValueError("external production plan differs from candidate packet metadata")

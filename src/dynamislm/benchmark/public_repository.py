@@ -162,6 +162,37 @@ class QualificationRepositoryLeakGuardV1:
             raise ValueError("qualification leak evidence can only be constructed after PASS")
 
 
+@dataclass(frozen=True, slots=True)
+class ProductionRepositoryLeakGuardV1:
+    repository_head: str
+    candidate_count: int
+    private_pattern_count: int
+    history_blob_count: int
+    index_artifact_count: int
+    worktree_artifact_count: int
+    repository_artifact_digest: str
+    status: str = "PASS"
+
+    def __post_init__(self) -> None:
+        if not re.fullmatch(r"[0-9a-f]{40,64}", self.repository_head):
+            raise ValueError("production leak evidence must bind a Git HEAD")
+        if (
+            min(
+                self.candidate_count,
+                self.private_pattern_count,
+                self.history_blob_count,
+                self.index_artifact_count,
+                self.worktree_artifact_count,
+            )
+            < 0
+        ):
+            raise ValueError("production leak evidence counts cannot be negative")
+        if not re.fullmatch(r"sha256:[0-9a-f]{64}", self.repository_artifact_digest):
+            raise ValueError("production leak evidence requires an artifact inventory digest")
+        if self.status != "PASS":
+            raise ValueError("production leak evidence can only be constructed after PASS")
+
+
 def public_protected_case_commitments(
     cases: Iterable[BenchmarkCaseV1], benchmark_manifest: BenchmarkManifestV1
 ) -> tuple[ProtectedPublicCaseCommitmentV1, ...]:
@@ -642,6 +673,157 @@ def _working_paths(root: Path) -> Iterator[str]:
     for path_bytes in output.split(b"\0"):
         if path_bytes:
             yield os.fsdecode(path_bytes)
+
+
+def validate_production_private_material_absent(
+    private_material: Iterable[tuple[str, str | bytes]],
+    *,
+    repository_root: str | Path,
+    candidate_count: int = 0,
+) -> ProductionRepositoryLeakGuardV1:
+    """Scan history, index, and worktree for exact production private bytes."""
+
+    root = Path(repository_root).resolve()
+    repository_head = _git(root, "rev-parse", "HEAD").decode("ascii").strip()
+    patterns: dict[bytes, str] = {}
+    for label, value in private_material:
+        payload = value if isinstance(value, bytes) else value.encode("utf-8")
+        _add_pattern(patterns, payload, label)
+
+    artifact_inventory: dict[tuple[str, str], str] = {}
+    history_blob_count = 0
+    index_artifact_count = 0
+    worktree_artifact_count = 0
+    contents: list[tuple[str, str, bytes]] = []
+    for object_id, data in _all_history_blobs(root):
+        artifact_inventory[("HISTORY", object_id)] = _bytes_sha256(data)
+        contents.append(("HISTORY", object_id, data))
+        history_blob_count += 1
+    for object_id, relative_path in _index_blobs(root):
+        data = _git(root, "cat-file", "blob", object_id)
+        artifact_inventory[("INDEX", relative_path)] = _bytes_sha256(data)
+        contents.append(("INDEX", relative_path, data))
+        index_artifact_count += 1
+    for relative_path in _working_paths(root):
+        working_path = root / PurePosixPath(relative_path)
+        if working_path.is_symlink():
+            data = os.fsencode(os.readlink(working_path))
+        elif working_path.is_file():
+            data = working_path.read_bytes()
+        else:
+            continue
+        artifact_inventory[("WORKTREE", relative_path)] = _bytes_sha256(data)
+        contents.append(("WORKTREE", relative_path, data))
+        worktree_artifact_count += 1
+    for source, artifact_path, data in contents:
+        for pattern, label in patterns.items():
+            if pattern in data:
+                raise ValueError(f"{label} found in public Git {source} artifact {artifact_path}")
+    inventory_digest = canonical_hash(
+        tuple(
+            (source, path, digest)
+            for (source, path), digest in sorted(
+                artifact_inventory.items(),
+                key=lambda item: (item[0][0], item[0][1].encode("utf-8")),
+            )
+        )
+    )
+    return ProductionRepositoryLeakGuardV1(
+        repository_head=repository_head,
+        candidate_count=candidate_count,
+        private_pattern_count=len(patterns),
+        history_blob_count=history_blob_count,
+        index_artifact_count=index_artifact_count,
+        worktree_artifact_count=worktree_artifact_count,
+        repository_artifact_digest=inventory_digest,
+    )
+
+
+def validate_production_repository_boundary(
+    packets: Iterable[object],
+    plan: object,
+    store_receipt: object,
+    qualification_exclusions: object,
+    *,
+    repository_root: str | Path,
+    production_root: str | Path,
+    private_material: Iterable[tuple[str, str | bytes]] = (),
+) -> ProductionRepositoryLeakGuardV1:
+    """Verify an external production store and scan its private bytes against Git."""
+
+    from dynamislm.benchmark.pre_review import CandidateReviewPacket
+    from dynamislm.benchmark.production import (
+        ProductionAuthoringPlanV1,
+        ProductionCandidateStoreReceiptV1,
+        validate_production_authoring_plan,
+    )
+    from dynamislm.benchmark.production_exclusions import (
+        QualificationExclusionCommitmentV1,
+        validate_qualification_exclusion_commitment,
+    )
+    from dynamislm.benchmark.production_store import read_production_candidate_store
+
+    if not isinstance(plan, ProductionAuthoringPlanV1):
+        raise TypeError("plan must be ProductionAuthoringPlanV1")
+    if not isinstance(store_receipt, ProductionCandidateStoreReceiptV1):
+        raise TypeError("store_receipt must be ProductionCandidateStoreReceiptV1")
+    if not isinstance(qualification_exclusions, QualificationExclusionCommitmentV1):
+        raise TypeError("qualification exclusions must be typed")
+    materialized_packets = tuple(packets)
+    if len(materialized_packets) != plan.target_case_count or any(
+        not isinstance(packet, CandidateReviewPacket) for packet in materialized_packets
+    ):
+        raise ValueError("production leak scan requires the exact typed candidate batch")
+    typed_packets = cast(tuple[CandidateReviewPacket, ...], materialized_packets)
+    validate_production_authoring_plan(plan)
+    validate_qualification_exclusion_commitment(qualification_exclusions)
+    if (
+        store_receipt.authoring_plan_digest != plan.plan_digest
+        or plan.qualification_exclusion_digest != qualification_exclusions.commitment_digest
+    ):
+        raise ValueError("production leak scan bindings do not match the external batch")
+    restored = read_production_candidate_store(
+        store_receipt,
+        repository_root=repository_root,
+        production_root=production_root,
+        qualification_exclusions=qualification_exclusions,
+    )
+    expected = tuple(sorted(typed_packets, key=lambda item: item.candidate_id.encode("utf-8")))
+    if restored != expected:
+        raise ValueError("external production candidate store differs from the leak-scan set")
+
+    from dynamislm.benchmark.pre_review import candidate_payload_hash
+
+    private = list(private_material)
+    private.append(("private production authoring plan", canonical_json(plan)))
+    for packet in typed_packets:
+        if candidate_payload_hash(packet) != packet.candidate_payload_hash:
+            raise ValueError("production packet payload hash changed before leak scanning")
+        private.extend(
+            (
+                ("private production packet JSON", canonical_json(packet)),
+                ("production candidate question", packet.question),
+                (
+                    "private production expected answer",
+                    canonical_json(packet.proposed_expected_answer),
+                ),
+                ("private production input parameters", canonical_json(packet.input)),
+            )
+        )
+        for excerpt in packet.input.evidence_excerpts:
+            private.append(("private production evidence excerpt", excerpt.text))
+        provenance = packet.proposed_provenance
+        for name in ("seed_namespace", "seed_block"):
+            value = getattr(provenance, name)
+            if value is not None:
+                private.append((f"private production {name}", value))
+        if provenance.mutation_seed is not None:
+            private.append(("private production mutation seed", str(provenance.mutation_seed)))
+    return validate_production_private_material_absent(
+        private,
+        repository_root=repository_root,
+        candidate_count=len(typed_packets),
+    )
 
 
 def _bytes_sha256(data: bytes) -> str:
