@@ -16,6 +16,7 @@ from dynamislm.benchmark.constants import (
     PractitionerQuestionClass,
     RefusalDecision,
     ScoringProfile,
+    SplitName,
 )
 from dynamislm.benchmark.coverage import (
     COVERAGE_MATRIX,
@@ -39,6 +40,13 @@ QUALIFICATION_MANIFEST_VERSION = "pse-qualification-batch@1.0.0"
 AUTHORING_PLAN_VERSION = "pse-authoring-plan@1.0.0"
 _SHA256 = re.compile(r"sha256:[0-9a-f]{64}\Z")
 _SEED_BLOCK = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,127}\Z")
+_PRODUCTION_SEED_NAMESPACE = re.compile(
+    r"PSE-V1/(?P<split>PUBLIC_DEVELOPMENT|FROZEN_VALIDATION|HIDDEN_FINAL)/"
+    r"(?P<generator>[A-Za-z0-9][A-Za-z0-9._-]{0,127}):"
+    r"(?P<version>(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)"
+    r"(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?)@"
+    r"(?P<block>[A-Za-z0-9][A-Za-z0-9._/-]{0,127})\Z"
+)
 
 ACTIVE_SCORERS = (
     ScoringProfile.NUMERIC_TOLERANCE_V1,
@@ -491,12 +499,93 @@ def validate_authoring_plan(
 
 
 def validate_production_seed_namespace(seed_namespace: str) -> None:
-    """Reject qualification seeds without freezing any future production policy."""
+    """Retain the qualification boundary for legacy callers.
+
+    Production callers must use ``parse_production_seed_namespace`` so the
+    frozen split, registered generator version, and seed block are bound.
+    """
 
     if not isinstance(seed_namespace, str) or not seed_namespace.strip():
         raise ValueError("production seed namespace must be non-empty")
     if seed_namespace.startswith(QUALIFICATION_SEED_NAMESPACE_PREFIX):
         raise ValueError("qualification-only seed namespace cannot be used for production")
+
+
+@register_serializable_type
+@dataclass(frozen=True, slots=True)
+class ProductionSeedNamespaceV1:
+    split_name: SplitName
+    generator_id: str
+    generator_version: str
+    seed_block: str
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "split_name", SplitName(self.split_name))
+        for name in ("generator_id", "generator_version", "seed_block"):
+            if not getattr(self, name):
+                raise ValueError(f"production seed {name} must be non-empty")
+
+
+def production_seed_namespace(
+    split_name: SplitName,
+    generator_id: str,
+    generator_version: str,
+    seed_block: str,
+) -> str:
+    """Build a namespace with the exact split, generator version, and seed block."""
+
+    namespace = (
+        f"PSE-V1/{SplitName(split_name).value}/{generator_id}:{generator_version}@{seed_block}"
+    )
+    parsed = parse_production_seed_namespace(namespace)
+    if (parsed.generator_id, parsed.generator_version, parsed.seed_block) != (
+        generator_id,
+        generator_version,
+        seed_block,
+    ):
+        raise ValueError("production seed identity is malformed")
+    return namespace
+
+
+def parse_production_seed_namespace(seed_namespace: str) -> ProductionSeedNamespaceV1:
+    """Parse a strict split-qualified namespace; qualification is never accepted."""
+
+    if not isinstance(seed_namespace, str):
+        raise TypeError("production seed namespace must be text")
+    match = _PRODUCTION_SEED_NAMESPACE.fullmatch(seed_namespace)
+    if match is None:
+        if seed_namespace.startswith(QUALIFICATION_SEED_NAMESPACE_PREFIX) or (
+            "QUALIFICATION" in seed_namespace
+        ):
+            raise ValueError("qualification-only seed namespace cannot be used for production")
+        if seed_namespace.startswith("PSE-V1/PRODUCTION/"):
+            raise ValueError("generic production seed namespace is not split-qualified")
+        raise ValueError("malformed split-qualified production seed namespace")
+    return ProductionSeedNamespaceV1(
+        split_name=SplitName(match.group("split")),
+        generator_id=match.group("generator"),
+        generator_version=match.group("version"),
+        seed_block=match.group("block"),
+    )
+
+
+def validate_split_qualified_seed_namespace(
+    seed_namespace: str,
+    *,
+    split_name: SplitName,
+    generator_id: str,
+    generator_version: str,
+    seed_block: str,
+) -> ProductionSeedNamespaceV1:
+    parsed = parse_production_seed_namespace(seed_namespace)
+    if (
+        parsed.split_name,
+        parsed.generator_id,
+        parsed.generator_version,
+        parsed.seed_block,
+    ) != (SplitName(split_name), generator_id, generator_version, seed_block):
+        raise ValueError("production seed namespace differs from candidate generator/seed metadata")
+    return parsed
 
 
 @register_serializable_type
@@ -1137,6 +1226,7 @@ __all__ = [
     "AuthoringPlanV1",
     "AuthoringRecipeV1",
     "CandidateStoreReceiptV1",
+    "ProductionSeedNamespaceV1",
     "QualificationBatchManifestV1",
     "QualificationBatchValidation",
     "QualificationCandidateCommitmentV1",
@@ -1148,6 +1238,8 @@ __all__ = [
     "bind_qualification_batch_manifest",
     "bind_qualification_manifest_for_candidates",
     "candidate_store_receipt_digest",
+    "parse_production_seed_namespace",
+    "production_seed_namespace",
     "qualification_batch_manifest_digest",
     "question_classes_for_cell",
     "validate_authoring_plan",
@@ -1155,4 +1247,5 @@ __all__ = [
     "validate_candidate_store_receipt",
     "validate_qualification_batch",
     "validate_qualification_batch_manifest",
+    "validate_split_qualified_seed_namespace",
 ]

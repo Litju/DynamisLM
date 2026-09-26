@@ -67,6 +67,7 @@ from dynamislm.benchmark import (
     validate_res71_refusal_binding,
     validate_res71_runtime_binding,
     validate_split_assignment,
+    validate_synthetic_split_eligibility,
 )
 from dynamislm.benchmark.constants import (
     AuthorityKind,
@@ -482,6 +483,32 @@ def test_split_allocator_is_deterministic_exact_and_lineage_atomic() -> None:
     # The case set is provisional until manifests bind split hashes.
     with pytest.raises(ValueError, match="missing split manifest"):
         validate_split_assignment(allocated)
+
+
+def test_synthetic_final_split_must_match_its_locked_seed_namespace() -> None:
+    from dynamislm.benchmark.authoring import production_seed_namespace
+
+    case = next(
+        item
+        for item in build_synthetic_reference_fixture_cases()
+        if item.provenance.origin_class is CaseOrigin.DETERMINISTIC_SYNTHETIC
+    )
+    provenance = replace(
+        case.provenance,
+        seed_namespace=production_seed_namespace(
+            SplitName.PUBLIC_DEVELOPMENT,
+            case.provenance.generator_id or "",
+            case.provenance.generator_version or "",
+            case.provenance.seed_block or "",
+        ),
+    )
+    assigned_wrongly = replace(
+        case,
+        provenance=provenance,
+        split=replace(case.split, split_name=SplitName.HIDDEN_FINAL),
+    )
+    with pytest.raises(ValueError, match="assigned split differs"):
+        validate_synthetic_split_eligibility((assigned_wrongly,))
 
 
 def _build_full_coverage_qualification_cases() -> tuple[BenchmarkCaseV1, ...]:

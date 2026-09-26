@@ -21,12 +21,15 @@ from dynamislm.benchmark.authoring import (
     bind_authoring_plan,
     bind_candidate_store_receipt,
     bind_qualification_batch_manifest,
+    parse_production_seed_namespace,
+    production_seed_namespace,
     question_classes_for_cell,
     validate_authoring_plan,
     validate_authoring_recipe_registry,
     validate_production_seed_namespace,
     validate_qualification_batch_manifest,
     validate_qualification_commitment_coverage,
+    validate_split_qualified_seed_namespace,
 )
 from dynamislm.benchmark.constants import (
     CaseOrigin,
@@ -36,6 +39,7 @@ from dynamislm.benchmark.constants import (
     PractitionerQuestionClass,
     RefusalDecision,
     ScoringProfile,
+    SplitName,
 )
 from dynamislm.benchmark.contamination import (
     exact_shingle_digest,
@@ -547,6 +551,48 @@ def test_qualification_seed_is_rejected_at_a_production_boundary() -> None:
 
     # This mission deliberately does not reserve any future production namespaces.
     validate_production_seed_namespace("PSE-V1-FUTURE-UNRESOLVED/new-generator/block")
+
+
+def test_production_seed_namespace_binds_split_generator_version_and_block() -> None:
+    namespace = production_seed_namespace(
+        SplitName.HIDDEN_FINAL,
+        "res115.synthetic-refusal",
+        "1.0.0",
+        "block-001",
+    )
+    assert namespace == ("PSE-V1/HIDDEN_FINAL/res115.synthetic-refusal:1.0.0@block-001")
+    assert parse_production_seed_namespace(namespace).split_name is SplitName.HIDDEN_FINAL
+    validate_split_qualified_seed_namespace(
+        namespace,
+        split_name=SplitName.HIDDEN_FINAL,
+        generator_id="res115.synthetic-refusal",
+        generator_version="1.0.0",
+        seed_block="block-001",
+    )
+    for malformed in (
+        "PSE-V1-QUALIFICATION/generator/block-1",
+        "PSE-V1/PRODUCTION/generator@block-1",
+        "PSE-V1/HIDDEN_FINAL/generator/1.0.0@block-1",
+        "PSE-V1/HIDDEN_FINAL/generator:1.0.0@",
+    ):
+        with pytest.raises(ValueError):
+            parse_production_seed_namespace(malformed)
+    with pytest.raises(ValueError, match="differs"):
+        validate_split_qualified_seed_namespace(
+            namespace,
+            split_name=SplitName.HIDDEN_FINAL,
+            generator_id="another-generator",
+            generator_version="1.0.0",
+            seed_block="block-001",
+        )
+    with pytest.raises(ValueError, match="differs"):
+        validate_split_qualified_seed_namespace(
+            namespace,
+            split_name=SplitName.HIDDEN_FINAL,
+            generator_id="res115.synthetic-refusal",
+            generator_version="1.0.0",
+            seed_block="block-002",
+        )
 
 
 def test_generator_seed_collision_is_rejected_by_the_plan_validator() -> None:

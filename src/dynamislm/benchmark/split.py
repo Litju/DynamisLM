@@ -10,6 +10,7 @@ from dynamislm.benchmark.constants import (
     BENCHMARK_SEMANTIC_VERSION,
     SPLIT_ORDER,
     SPLIT_PROPORTIONS,
+    CaseOrigin,
     SplitName,
 )
 from dynamislm.benchmark.contracts import BenchmarkCaseV1
@@ -51,6 +52,7 @@ class _Cluster:
     generator_seed_blocks: tuple[str, ...]
     cluster_key: str
     preferred_rank: int
+    locked_rank: int | None
 
     @property
     def size(self) -> int:
@@ -87,7 +89,9 @@ def _isolation_values(case: BenchmarkCaseV1) -> tuple[str, ...]:
     return tuple(f"{kind}:{value}" for kind, value in case_isolation_values(case))
 
 
-def _union_find_clusters(cases: tuple[BenchmarkCaseV1, ...]) -> tuple[_Cluster, ...]:
+def _union_find_clusters(
+    cases: tuple[BenchmarkCaseV1, ...], *, require_seed_locks: bool = False
+) -> tuple[_Cluster, ...]:
     parent = list(range(len(cases)))
 
     def find(index: int) -> int:
@@ -123,6 +127,9 @@ def _union_find_clusters(cases: tuple[BenchmarkCaseV1, ...]) -> tuple[_Cluster, 
     groups: dict[int, list[int]] = defaultdict(list)
     for index in range(len(cases)):
         groups[find(index)].append(index)
+    if require_seed_locks:
+        from dynamislm.benchmark.authoring import parse_production_seed_namespace
+
     clusters: list[_Cluster] = []
     for indices in groups.values():
         ordered_indices = tuple(
@@ -154,6 +161,31 @@ def _union_find_clusters(cases: tuple[BenchmarkCaseV1, ...]) -> tuple[_Cluster, 
                 }
             )
         )
+        locked_ranks: set[int] = set()
+        if require_seed_locks:
+            for index in ordered_indices:
+                case = cases[index]
+                if case.provenance.origin_class is not CaseOrigin.DETERMINISTIC_SYNTHETIC:
+                    continue
+                parsed = parse_production_seed_namespace(case.provenance.seed_namespace or "")
+                if (
+                    parsed.generator_id,
+                    parsed.generator_version,
+                    parsed.seed_block,
+                ) != (
+                    case.provenance.generator_id,
+                    case.provenance.generator_version,
+                    case.provenance.seed_block,
+                ):
+                    raise SplitAllocationBlocked(
+                        "synthetic seed namespace differs from generator metadata"
+                    )
+                locked_ranks.add(SPLIT_ORDER.index(parsed.split_name))
+        if len(locked_ranks) > 1:
+            raise SplitAllocationBlocked(
+                "one atomic cluster contains synthetic seeds locked to different splits"
+            )
+        locked_rank = next(iter(locked_ranks)) if locked_ranks else None
         cluster_input = {
             "benchmark_version": BENCHMARK_SEMANTIC_VERSION,
             "isolation_cluster_id": isolation_id,
@@ -173,6 +205,7 @@ def _union_find_clusters(cases: tuple[BenchmarkCaseV1, ...]) -> tuple[_Cluster, 
                 generator_seed_blocks=generator_seed_blocks,
                 cluster_key=cluster_key,
                 preferred_rank=int(cluster_key, 16) % 3,
+                locked_rank=locked_rank,
             )
         )
     return tuple(
@@ -322,6 +355,10 @@ def _build_coverage_anchors(
             cluster_index
             for cluster_index, cluster in enumerate(clusters)
             if cluster_index not in assignments
+            and (
+                clusters[cluster_index].locked_rank is None
+                or clusters[cluster_index].locked_rank == rank
+            )
             and counts[rank] + cluster.size <= targets[SPLIT_ORDER[rank]]
             and _cluster_has_obligation(cluster, cases, row, family)
         ]
@@ -391,6 +428,10 @@ def _build_coverage_anchors(
                     cluster_index
                     for cluster_index, cluster in enumerate(clusters)
                     if cluster_index not in assignments
+                    and (
+                        clusters[cluster_index].locked_rank is None
+                        or clusters[cluster_index].locked_rank == rank
+                    )
                     and counts[rank] + cluster.size <= targets[SPLIT_ORDER[rank]]
                     and any(
                         any(
@@ -460,13 +501,17 @@ def _fill_exact_counts(
         direct = dict(anchored)
         for cluster_index in remaining:
             cluster = clusters[cluster_index]
-            rank_order = tuple(
-                sorted(
-                    range(3),
-                    key=lambda rank: (
-                        0 if rank == cluster.preferred_rank else 1,
-                        rank,
-                    ),
+            rank_order = (
+                (cluster.locked_rank,)
+                if cluster.locked_rank is not None
+                else tuple(
+                    sorted(
+                        range(3),
+                        key=lambda rank: (
+                            0 if rank == cluster.preferred_rank else 1,
+                            rank,
+                        ),
+                    )
                 )
             )
             selected = next((rank for rank in rank_order if remaining_deficits[rank] > 0), None)
@@ -488,13 +533,17 @@ def _fill_exact_counts(
         cluster = clusters[cluster_index]
         processed += cluster.size
         next_states: dict[tuple[int, int], tuple[tuple[int, int] | None, int | None]] = {}
-        rank_order = tuple(
-            sorted(
-                range(3),
-                key=lambda rank: (
-                    0 if rank == cluster.preferred_rank else 1,
-                    rank,
-                ),
+        rank_order = (
+            (cluster.locked_rank,)
+            if cluster.locked_rank is not None
+            else tuple(
+                sorted(
+                    range(3),
+                    key=lambda rank: (
+                        0 if rank == cluster.preferred_rank else 1,
+                        rank,
+                    ),
+                )
             )
         )
         for public_count, validation_count in sorted(states):
@@ -582,7 +631,9 @@ def allocate_splits(
     if any(case.split.split_name is not None for case in cases):
         raise SplitAllocationBlocked("allocator input must not contain pre-assigned splits")
     targets = target_counts(len(cases))
-    clusters = _union_find_clusters(cases)
+    if require_full_coverage:
+        validate_synthetic_split_eligibility(cases, require_assigned=False)
+    clusters = _union_find_clusters(cases, require_seed_locks=require_full_coverage)
     if sum(cluster.size for cluster in clusters) != len(cases):
         raise SplitAllocationBlocked("isolation clusters do not cover every case")
     if any(cluster.size > max(targets.values()) for cluster in clusters):
@@ -620,6 +671,8 @@ def allocate_splits(
     from dynamislm.benchmark.contamination import validate_source_family_isolation
 
     validate_source_family_isolation(result.cases)
+    if require_full_coverage:
+        validate_synthetic_split_eligibility(result.cases)
     if tuple(
         sum(1 for case in result.cases if case.split.split_name is split) for split in SPLIT_ORDER
     ) != tuple(targets[split] for split in SPLIT_ORDER):
@@ -647,10 +700,35 @@ def validate_split_assignment(cases: tuple[BenchmarkCaseV1, ...]) -> None:
     validate_source_family_isolation(cases)
 
 
+def validate_synthetic_split_eligibility(
+    cases: tuple[BenchmarkCaseV1, ...], *, require_assigned: bool = True
+) -> None:
+    """Require deterministic-synthetic split assignments to match locked seeds."""
+
+    from dynamislm.benchmark.authoring import parse_production_seed_namespace
+
+    for case in cases:
+        provenance = case.provenance
+        if provenance.origin_class is not CaseOrigin.DETERMINISTIC_SYNTHETIC:
+            continue
+        parsed = parse_production_seed_namespace(provenance.seed_namespace or "")
+        if (parsed.generator_id, parsed.generator_version, parsed.seed_block) != (
+            provenance.generator_id,
+            provenance.generator_version,
+            provenance.seed_block,
+        ):
+            raise ValueError("synthetic seed namespace differs from generator metadata")
+        if require_assigned and case.split.split_name is None:
+            raise ValueError("deterministic-synthetic case has no final split assignment")
+        if case.split.split_name is not None and case.split.split_name is not parsed.split_name:
+            raise ValueError("assigned split differs from deterministic-synthetic seed namespace")
+
+
 __all__ = [
     "SplitAllocationBlocked",
     "SplitAllocationResult",
     "allocate_splits",
     "target_counts",
     "validate_split_assignment",
+    "validate_synthetic_split_eligibility",
 ]

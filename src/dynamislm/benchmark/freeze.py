@@ -31,7 +31,10 @@ from dynamislm.benchmark.public_repository import (
     ProtectedRepositoryLeakGuardV1,
     validate_protected_repository_boundary,
 )
-from dynamislm.benchmark.split import validate_split_assignment
+from dynamislm.benchmark.split import (
+    validate_split_assignment,
+    validate_synthetic_split_eligibility,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -90,6 +93,7 @@ def validate_final_v1_freeze(
     if coverage.status != "PASS":
         raise ValueError(f"FINAL V1 freeze coverage is incomplete: {coverage.reason}")
     validate_split_assignment(cases)
+    validate_synthetic_split_eligibility(cases)
     validate_exclusion_completeness(cases, bundle.exclusion_manifest.entries)
 
     if exclusion_registry.entries != bundle.exclusion_manifest.entries:
