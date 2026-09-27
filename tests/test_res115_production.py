@@ -70,7 +70,7 @@ from dynamislm.benchmark.transient_storage import (
     measure_transient_cache_bytes,
 )
 from dynamislm.qualification.res115_authoring import _semantic_cell_candidate
-from dynamislm.serialization import canonical_json
+from dynamislm.serialization import canonical_hash, canonical_json
 
 _SHA = "sha256:" + "a" * 64
 
@@ -364,6 +364,58 @@ def test_exact_n434_feasibility_returns_aggregate_receipt_without_membership() -
         (split, 87) for split, _ in receipt.target_counts
     )
     assert not hasattr(receipt, "membership_map")
+
+
+def test_exact_shingle_colocation_edges_bind_same_split_feasibility() -> None:
+    commitments = _feasibility_fixture()
+    left, right = commitments[0], commitments[1]
+    assert left.item.isolation_cluster_id != right.item.isolation_cluster_id
+    edge = (min(left.candidate_id, right.candidate_id), max(left.candidate_id, right.candidate_id))
+    base = validate_production_hard_feasibility(commitments)
+    constrained = validate_production_hard_feasibility(
+        commitments,
+        exact_shingle_colocation_pairs=(edge,),
+    )
+
+    assert constrained.atomic_cluster_count == base.atomic_cluster_count - 1
+    assert constrained.exact_shingle_colocation_pair_count == 1
+    assert constrained.exact_shingle_colocation_digest == canonical_hash((edge,))
+    assert not hasattr(constrained, "membership_map")
+
+
+def test_exact_shingle_colocation_rejects_conflicting_split_qualified_seed_locks() -> None:
+    commitments = list(_feasibility_fixture())
+    original_ids = {
+        "PSE-V1-CANDIDATE:fixture:C08:F05:0",
+        "PSE-V1-CANDIDATE:fixture:C08:F06:0",
+    }
+    commitments = [item for item in commitments if item.candidate_id not in original_ids]
+    left = _item(
+        "PSE-V1-CANDIDATE:fixture:co-location-lock-a",
+        capability_id="C08",
+        benchmark_family="F05",
+        origin=CaseOrigin.DETERMINISTIC_SYNTHETIC,
+        generator_family="fixture-generator:lock-a",
+        cluster="fixture-lock:a",
+        seed_split=SplitName.PUBLIC_DEVELOPMENT,
+    )
+    right = _item(
+        "PSE-V1-CANDIDATE:fixture:co-location-lock-b",
+        capability_id="C08",
+        benchmark_family="F06",
+        origin=CaseOrigin.DETERMINISTIC_SYNTHETIC,
+        generator_family="fixture-generator:lock-b",
+        cluster="fixture-lock:b",
+        seed_split=SplitName.HIDDEN_FINAL,
+    )
+    commitments.extend((_commitment(left), _commitment(right)))
+    edge = (min(left.candidate_id, right.candidate_id), max(left.candidate_id, right.candidate_id))
+
+    with pytest.raises(ProductionFeasibilityBlocked, match="incompatible synthetic seed"):
+        validate_production_hard_feasibility(
+            tuple(commitments),
+            exact_shingle_colocation_pairs=(edge,),
+        )
 
 
 @pytest.mark.parametrize("delta", (-1, 1))
@@ -823,7 +875,11 @@ def _stub_production_store_validation(monkeypatch: pytest.MonkeyPatch) -> None:
         "validate_production_candidate_set_against_qualification_exclusion",
         lambda *_args, **_kwargs: None,
     )
-    monkeypatch.setattr(store, "validate_production_hard_feasibility", lambda _items: None)
+    monkeypatch.setattr(
+        store,
+        "validate_production_hard_feasibility",
+        lambda _items, **_kwargs: None,
+    )
     monkeypatch.setattr(
         store,
         "validate_production_candidate_set",
@@ -1068,22 +1124,10 @@ def test_production_candidate_store_rejects_conflicting_completed_rerun(
             "alpha  bravo charlie delta echo foxtrot golf hotel india juliet "
             "kilo lima mike november oscar",
         ),
-        (
-            "copper_moon cedar_field amber_track silver_gate teal_runner violet_marker "
-            "cobalt_shift jade_signal coral_phase indigo_test saffron_frame "
-            "graphite_device force_plate",
-            "copper_moon cedar_field amber_track silver_gate teal_runner violet_marker "
-            "cobalt_shift jade_signal coral_phase indigo_test saffron_frame "
-            "graphite_device force_plate unique_suffix",
-        ),
-        (
-            "alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima",
-            "alpha bravo charlie delta echo foxtrot golf hotel india julliet kilo lima",
-        ),
     ),
-    ids=("exact", "normalized", "13-token-shingle", "fuzzy"),
+    ids=("exact-question", "normalized-question"),
 )
-def test_production_duplication_audit_rejects_frozen_overlap_classes(
+def test_production_duplication_audit_rejects_exact_question_duplicates(
     first: str, second: str
 ) -> None:
     from dynamislm.benchmark.production import audit_production_duplicates
@@ -1096,6 +1140,121 @@ def test_production_duplication_audit_rejects_frozen_overlap_classes(
     )
     with pytest.raises(ValueError, match="duplication audit"):
         audit_production_duplicates(packets)
+
+
+def test_production_duplication_audit_rejects_exact_payload_duplicates() -> None:
+    from dynamislm.benchmark.production import audit_production_duplicates
+
+    packets, _exclusion, _plan = _store_roundtrip_fixture()
+    left = _production_packet("unrelated first payload", candidate_id=packets[0].candidate_id)
+    right = _production_packet("unrelated second payload", candidate_id=packets[1].candidate_id)
+    right = replace(right, candidate_payload_hash=left.candidate_payload_hash)
+    with pytest.raises(ValueError, match="duplication audit"):
+        audit_production_duplicates((left, right, *packets[2:]))
+
+
+def test_exact_13_token_only_overlap_is_pending_and_not_fuzzy_blocked() -> None:
+    from dynamislm.benchmark.production import audit_production_duplicates
+
+    packets, _exclusion, _plan = _store_roundtrip_fixture()
+    shared = (
+        "copper moon cedar field amber track silver gate teal runner "
+        "violet marker cobalt shift jade signal coral phase"
+    )
+    left = _production_packet(f"{shared} left marker", candidate_id=packets[0].candidate_id)
+    right = _production_packet(f"{shared} right marker", candidate_id=packets[1].candidate_id)
+    audit = audit_production_duplicates((left, right, *packets[2:]))
+
+    edge = tuple(sorted((left.candidate_id, right.candidate_id)))
+    assert audit.exact_payload_duplicate_pairs == 0
+    assert audit.exact_question_duplicate_pairs == 0
+    assert audit.normalized_question_duplicate_pairs == 0
+    assert audit.exact_13_token_overlap_pairs == 1
+    assert audit.blocking_fuzzy_overlap_pairs == 0
+    assert audit.unrelated_blocking_overlaps == 0
+    assert audit.exact_shingle_colocation_pairs == (edge,)
+
+
+def test_same_template_batch_origin_and_cluster_do_not_authorize_fuzzy_overlap() -> None:
+    from dynamislm.benchmark.production import audit_production_duplicates
+
+    packets, _exclusion, _plan = _store_roundtrip_fixture()
+    first = "alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima"
+    second = "alpha bravo charlie delta echo foxtrot golf hotel india julliet kilo lima"
+    left = _production_packet(first, candidate_id=packets[0].candidate_id)
+    right = _production_packet(second, candidate_id=packets[1].candidate_id)
+    assert left.proposed_provenance.origin_class is right.proposed_provenance.origin_class
+    assert left.contamination.expert_author_batch_id == right.contamination.expert_author_batch_id
+    assert left.contamination.protocol_template_id == right.contamination.protocol_template_id
+    assert left.isolation.isolation_cluster_id == right.isolation.isolation_cluster_id
+    with pytest.raises(ValueError, match="duplication audit"):
+        audit_production_duplicates((left, right, *packets[2:]))
+
+
+def test_frozen_fuzzy_thresholds_block_token_character_and_edit_only_matches() -> None:
+    import re
+    from random import Random
+
+    from dynamislm.benchmark.contamination import (
+        normalize_text,
+        normalized_edit_similarity_at_least,
+    )
+    from dynamislm.benchmark.production import _token_grams, audit_production_duplicates
+
+    def token_surface(seed: int) -> str:
+        rng = Random(seed)
+        return " ".join(rng.choice(("alpha", "bravo")) for _ in range(100))
+
+    token_pair = (token_surface(0), token_surface(3))
+    character_pair = (
+        "copper_moon cedar_field amber_track silver_gate teal_runner violet_marker "
+        "cobalt_shift jade_signal coral_phase indigo_test saffron_frame graphite_device "
+        "force_plate",
+        "copper_moon cedar_field amber_track silver_gate teal_runner violet_marker "
+        "cobalt_shift jade_signal coral_phase indigo_test saffron_frame graphite_devicx "
+        "force_plate",
+    )
+    edit_tokens = [f"term{index:03d}" for index in range(104)]
+    edit_pair = (
+        " ".join(edit_tokens),
+        " ".join(
+            token.replace("term", "xerm") if index % 12 == 0 else token
+            for index, token in enumerate(edit_tokens)
+        ),
+    )
+
+    def token_jaccard(left: str, right: str) -> float:
+        def tokenize(value: str) -> tuple[str, ...]:
+            return tuple(re.findall(r"\w+|[^\w\s]", normalize_text(value), flags=re.UNICODE))
+
+        first, second = _token_grams(tokenize(left)), _token_grams(tokenize(right))
+        union = first | second
+        return len(first & second) / len(union) if union else 1.0
+
+    def character_jaccard(left: str, right: str) -> float:
+        first_text, second_text = normalize_text(left), normalize_text(right)
+        first = {first_text[index : index + 5] for index in range(max(0, len(first_text) - 4))}
+        second = {second_text[index : index + 5] for index in range(max(0, len(second_text) - 4))}
+        union = first | second
+        return len(first & second) / len(union) if union else 1.0
+
+    assert token_jaccard(*token_pair) >= 0.85
+    assert not exact_13_token_shingles(token_pair[0]) & exact_13_token_shingles(token_pair[1])
+    assert character_jaccard(*character_pair) >= 0.85
+    assert not exact_13_token_shingles(character_pair[0]) & exact_13_token_shingles(
+        character_pair[1]
+    )
+    assert normalized_edit_similarity_at_least(
+        normalize_text(edit_pair[0]), normalize_text(edit_pair[1]), 0.90
+    )
+    assert not exact_13_token_shingles(edit_pair[0]) & exact_13_token_shingles(edit_pair[1])
+
+    packets, _exclusion, _plan = _store_roundtrip_fixture()
+    replaced = []
+    for index, question in enumerate((*token_pair, *character_pair, *edit_pair)):
+        replaced.append(_production_packet(question, candidate_id=packets[index].candidate_id))
+    with pytest.raises(ValueError, match="duplication audit"):
+        audit_production_duplicates((*replaced, *packets[6:]))
 
 
 def _declared_mutation_fixture(
@@ -1207,6 +1366,51 @@ def test_declared_parent_child_overlap_is_allowed_and_queued_parent_first() -> N
         "approval_timestamp",
         "decision",
     }.intersection(item.name for item in dataclass_fields(ProductionReviewQueueEntryV1))
+
+
+def test_valid_mutation_descendant_overlap_is_classified_as_authorized_lineage() -> None:
+    from dynamislm.benchmark.production import audit_production_duplicates
+
+    packets, _exclusion, _plan = _store_roundtrip_fixture()
+    root = _production_packet(
+        "alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima "
+        "mike november oscar papa quebec romeo sierra tango",
+        candidate_id=packets[0].candidate_id,
+    )
+    child = _declared_mutation_fixture(root, packets[1].candidate_id)
+    grandchild = _declared_mutation_fixture(child, packets[2].candidate_id)
+
+    audit = audit_production_duplicates((root, child, grandchild, *packets[3:]))
+
+    assert audit.unrelated_blocking_overlaps == 0
+    assert audit.exact_13_token_overlap_pairs == 0
+
+
+def test_forged_mutation_lineage_binding_is_rejected() -> None:
+    from dynamislm.benchmark.pre_review import bind_candidate_review_packet
+    from dynamislm.benchmark.production import audit_production_duplicates
+
+    packets, _exclusion, _plan = _store_roundtrip_fixture()
+    parent = _production_packet(
+        "alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima "
+        "mike november oscar papa quebec romeo sierra tango",
+        candidate_id=packets[0].candidate_id,
+    )
+    child = _declared_mutation_fixture(parent, packets[1].candidate_id)
+    assert child.parent_candidate_binding is not None
+    forged = replace(
+        child,
+        parent_candidate_binding=replace(
+            child.parent_candidate_binding,
+            mutation_lineage_id="PSE-V1-LINEAGE:forged",
+        ),
+        candidate_payload_hash="sha256:" + "0" * 64,
+        proposed_approval_digest="sha256:" + "0" * 64,
+    )
+    forged = bind_candidate_review_packet(forged)
+
+    with pytest.raises(ValueError, match="invalid parent/cluster binding"):
+        audit_production_duplicates((parent, forged, *packets[2:]))
 
 
 def test_banded_edit_threshold_matches_frozen_exact_similarity() -> None:

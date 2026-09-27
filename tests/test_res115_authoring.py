@@ -42,6 +42,7 @@ from dynamislm.benchmark.constants import (
     SplitName,
 )
 from dynamislm.benchmark.contamination import (
+    exact_13_token_shingles,
     exact_shingle_digest,
     fuzzy_fingerprint,
     normalized_text_sha256,
@@ -780,6 +781,461 @@ def test_live_res71_reference_lane_uses_all_twelve_cases_without_formula_gold() 
     assert len({packet.candidate_payload_hash for packet in packets}) == 12
     assert {reference.status for reference in get_reference_cases()} == set(ReferenceCaseStatus)
     validate_candidate_set(packets)
+
+
+def test_production_synthetic_question_surface_is_deterministic_and_scenario_specific() -> None:
+    from dynamislm.benchmark.production import PRODUCTION_SYNTHETIC_QUESTION_SURFACE_VARIANTS
+    from dynamislm.benchmark.production_authoring import (
+        _production_synthetic_question,
+        _scenario_ids,
+    )
+
+    questions = []
+    for family, _variant_id in PRODUCTION_SYNTHETIC_QUESTION_SURFACE_VARIANTS:
+        for index in range(3):
+            seed = hashlib.sha256(
+                f"RES-128-synthetic-scenario:{family}:{index}".encode()
+            ).hexdigest()
+            question = _production_synthetic_question(
+                _scenario_ids(seed),
+                family=family,
+            )
+            rerun = _production_synthetic_question(
+                _scenario_ids(seed),
+                family=family,
+            )
+            assert question.encode("utf-8") == rerun.encode("utf-8")
+            questions.append(question)
+
+    for index, question in enumerate(questions):
+        for other in questions[index + 1 :]:
+            assert not exact_13_token_shingles(question).intersection(
+                exact_13_token_shingles(other)
+            )
+
+
+def test_c07_comparability_surface_is_deterministic_and_scenario_specific() -> None:
+    from dynamislm.benchmark.production_authoring import (
+        _c07_mutation_question,
+        _c07_semantic_question,
+        _semantic_facts,
+    )
+
+    questions = []
+    for family in ("F04", "F06", "F13", "F14"):
+        for index in range(3):
+            seed = hashlib.sha256(f"RES-128-C07-scenario:{family}:{index}".encode()).hexdigest()
+            facts = _semantic_facts("C07", family, seed)
+            question = _c07_semantic_question(facts)
+            rerun = _c07_semantic_question(_semantic_facts("C07", family, seed))
+            assert question.encode("utf-8") == rerun.encode("utf-8")
+            questions.append(question)
+            for stage in (1, 2, 3):
+                token = "MUTX" + hashlib.sha256(f"{seed}:{stage}".encode()).hexdigest()[:10].upper()
+                mutation_question = _c07_mutation_question(
+                    facts,
+                    token=token,
+                    stage=stage,
+                )
+                assert mutation_question.encode("utf-8") == _c07_mutation_question(
+                    _semantic_facts("C07", family, seed),
+                    token=token,
+                    stage=stage,
+                ).encode("utf-8")
+                questions.append(mutation_question)
+
+    for index, question in enumerate(questions):
+        for other in questions[index + 1 :]:
+            assert not exact_13_token_shingles(question).intersection(
+                exact_13_token_shingles(other)
+            )
+
+
+def test_c01_c03_identity_surfaces_are_deterministic_and_scenario_specific() -> None:
+    from dynamislm.benchmark.production_authoring import (
+        _c01_semantic_question,
+        _c03_semantic_question,
+        _semantic_facts,
+    )
+
+    questions = []
+    for capability_id in ("C01", "C03"):
+        row = next(row for row in COVERAGE_MATRIX if row.capability_id == capability_id)
+        question_builder = (
+            _c01_semantic_question if capability_id == "C01" else _c03_semantic_question
+        )
+        for family in row.benchmark_families:
+            for index in range(3):
+                seed = hashlib.sha256(
+                    f"RES-128-{capability_id}-scenario:{family}:{index}".encode()
+                ).hexdigest()
+                facts = _semantic_facts(capability_id, family, seed)
+                question = question_builder(facts)
+                rerun = question_builder(_semantic_facts(capability_id, family, seed))
+                assert question.encode("utf-8") == rerun.encode("utf-8")
+                questions.append(question)
+
+    for index, question in enumerate(questions):
+        for other in questions[index + 1 :]:
+            assert not exact_13_token_shingles(question).intersection(
+                exact_13_token_shingles(other)
+            )
+
+
+def test_c09_claim_surfaces_are_deterministic_and_scenario_specific() -> None:
+    from dynamislm.benchmark.production_authoring import (
+        _c09_mutation_question,
+        _c09_semantic_question,
+        _semantic_facts,
+    )
+
+    families = next(row.benchmark_families for row in COVERAGE_MATRIX if row.capability_id == "C09")
+    questions = []
+    for family in families:
+        for index in range(3):
+            seed = hashlib.sha256(f"RES-128-C09-scenario:{family}:{index}".encode()).hexdigest()
+            facts = _semantic_facts("C09", family, seed)
+            semantic_question = _c09_semantic_question(facts)
+            assert semantic_question.encode("utf-8") == _c09_semantic_question(
+                _semantic_facts("C09", family, seed)
+            ).encode("utf-8")
+            questions.append(semantic_question)
+            for stage in (1, 2, 3):
+                token = "MUTX" + hashlib.sha256(f"{seed}:{stage}".encode()).hexdigest()[:10].upper()
+                mutation_question = _c09_mutation_question(facts, token=token, stage=stage)
+                assert mutation_question.encode("utf-8") == _c09_mutation_question(
+                    _semantic_facts("C09", family, seed), token=token, stage=stage
+                ).encode("utf-8")
+                questions.append(mutation_question)
+
+    for index, question in enumerate(questions):
+        for other in questions[index + 1 :]:
+            assert not exact_13_token_shingles(question).intersection(
+                exact_13_token_shingles(other)
+            )
+
+
+def test_c15_causal_mutation_surface_is_deterministic_and_scenario_specific() -> None:
+    from dynamislm.benchmark.production_authoring import (
+        _c15_mutation_question,
+        _semantic_facts,
+    )
+
+    families = next(row.benchmark_families for row in COVERAGE_MATRIX if row.capability_id == "C15")
+    questions = []
+    for family in families:
+        for index in range(3):
+            seed = hashlib.sha256(f"RES-128-C15-mutation:{family}:{index}".encode()).hexdigest()
+            context = _semantic_facts("C15", family, seed)
+            for stage in (1, 2, 3):
+                token = "MUTX" + hashlib.sha256(f"{seed}:{stage}".encode()).hexdigest()[:10].upper()
+                question = _c15_mutation_question(context, token=token, stage=stage)
+                assert question.encode("utf-8") == _c15_mutation_question(
+                    _semantic_facts("C15", family, seed),
+                    token=token,
+                    stage=stage,
+                ).encode("utf-8")
+                questions.append(question)
+
+    for index, question in enumerate(questions):
+        for other in questions[index + 1 :]:
+            assert not exact_13_token_shingles(question).intersection(
+                exact_13_token_shingles(other)
+            )
+
+
+def test_engine_question_surfaces_are_deterministic_and_scenario_specific() -> None:
+    from dynamislm.benchmark.production_authoring import (
+        _production_engine_numeric_question,
+        _production_engine_refusal_question,
+        _scenario_ids,
+    )
+
+    questions = []
+    for capability_id, families in (
+        ("C08", ("F05",)),
+        ("C16", ("F05", "F07", "F10", "F14")),
+    ):
+        for family in families:
+            for index in range(3):
+                seed = hashlib.sha256(
+                    f"RES-128-engine:{capability_id}:{family}:{index}".encode()
+                ).hexdigest()
+                facts = _scenario_ids(seed)
+                question = _production_engine_numeric_question(
+                    facts,
+                    capability_id=capability_id,
+                    family=family,
+                    reference_case_id=f"res71-engine-{family}",
+                    operation_id=f"operation-{family}",
+                )
+                assert question.encode("utf-8") == _production_engine_numeric_question(
+                    _scenario_ids(seed),
+                    capability_id=capability_id,
+                    family=family,
+                    reference_case_id=f"res71-engine-{family}",
+                    operation_id=f"operation-{family}",
+                ).encode("utf-8")
+                questions.append(question)
+    for family in ("F05", "F06"):
+        for index in range(3):
+            seed = hashlib.sha256(f"RES-128-engine-refusal:{family}:{index}".encode()).hexdigest()
+            question = _production_engine_refusal_question(
+                _scenario_ids(seed),
+                family=family,
+                reference_case_id=f"res71-refusal-{family}",
+                reference_family=f"refusal-family-{family}",
+            )
+            assert question.encode("utf-8") == _production_engine_refusal_question(
+                _scenario_ids(seed),
+                family=family,
+                reference_case_id=f"res71-refusal-{family}",
+                reference_family=f"refusal-family-{family}",
+            ).encode("utf-8")
+            questions.append(question)
+
+    for index, question in enumerate(questions):
+        for other in questions[index + 1 :]:
+            assert not exact_13_token_shingles(question).intersection(
+                exact_13_token_shingles(other)
+            )
+
+
+def test_source_question_surface_is_deterministic_and_scenario_specific() -> None:
+    from dynamislm.benchmark.production_authoring import _production_source_question
+    from dynamislm.qualification.res115_authoring import SourceCellSelectionV1, SourceSpanProposalV1
+
+    questions = []
+    for index in range(40):
+        capability_id = ("C13", "C14")[index % 2]
+        row = next(row for row in COVERAGE_MATRIX if row.capability_id == capability_id)
+        family = row.benchmark_families[index % len(row.benchmark_families)]
+        span_digest = "sha256:" + hashlib.sha256(f"synthetic-span:{index}".encode()).hexdigest()
+        selection = SourceCellSelectionV1(
+            pmcid=f"PMC{index % 7:04d}",
+            capability_id=capability_id,
+            benchmark_family=family,
+            applicability_scope=(
+                "DIRECT_TARGET_POPULATION_EVIDENCE"
+                if index % 2
+                else "INDIRECT_MEASUREMENT_EVIDENCE"
+            ),
+            source_family_id=f"synthetic-source-family:{index:03d}",
+            source_family_digest="sha256:" + hashlib.sha256(f"family:{index}".encode()).hexdigest(),
+            search_strata=(),
+            spans=(
+                SourceSpanProposalV1(
+                    span_digest=span_digest,
+                    locator="synthetic fixture span",
+                    text="",
+                    scope="",
+                    support_rules=(),
+                    support_tags=(),
+                ),
+            ),
+            population_clause_values=(),
+            direct_target=index % 2 == 1,
+        )
+        candidate_id = f"PSE-V1-CANDIDATE:SOURCE:synthetic:{index:03d}"
+        question = _production_source_question(selection, candidate_id)
+        assert question.encode("utf-8") == _production_source_question(
+            selection, candidate_id
+        ).encode("utf-8")
+        questions.append(question)
+
+    for index, question in enumerate(questions):
+        for other in questions[index + 1 :]:
+            assert not exact_13_token_shingles(question).intersection(
+                exact_13_token_shingles(other)
+            )
+
+
+def test_c18_refusal_surfaces_are_deterministic_and_scenario_specific() -> None:
+    from dynamislm.benchmark.production_authoring import (
+        _c18_mutation_question,
+        _c18_semantic_question,
+        _semantic_facts,
+    )
+
+    families = next(row.benchmark_families for row in COVERAGE_MATRIX if row.capability_id == "C18")
+    questions = []
+    for family in families:
+        for index in range(3):
+            seed = hashlib.sha256(f"RES-128-C18-scenario:{family}:{index}".encode()).hexdigest()
+            required_refusal = family == "F01"
+            facts = _semantic_facts("C18", family, seed, required_refusal=required_refusal)
+            semantic_question = _c18_semantic_question(
+                facts,
+                family=family,
+                required_refusal=required_refusal,
+            )
+            assert semantic_question.encode("utf-8") == _c18_semantic_question(
+                _semantic_facts("C18", family, seed, required_refusal=required_refusal),
+                family=family,
+                required_refusal=required_refusal,
+            ).encode("utf-8")
+            questions.append(semantic_question)
+            if family != "F01":
+                for stage in (1, 2, 3):
+                    token = (
+                        "MUTX" + hashlib.sha256(f"{seed}:{stage}".encode()).hexdigest()[:10].upper()
+                    )
+                    mutation_question = _c18_mutation_question(
+                        facts,
+                        family=family,
+                        token=token,
+                        stage=stage,
+                    )
+                    assert mutation_question.encode("utf-8") == _c18_mutation_question(
+                        _semantic_facts("C18", family, seed, required_refusal=required_refusal),
+                        family=family,
+                        token=token,
+                        stage=stage,
+                    ).encode("utf-8")
+                    questions.append(mutation_question)
+
+    for index, question in enumerate(questions):
+        for other in questions[index + 1 :]:
+            assert not exact_13_token_shingles(question).intersection(
+                exact_13_token_shingles(other)
+            )
+
+
+def test_c17_error_surfaces_are_deterministic_and_scenario_specific() -> None:
+    from dynamislm.benchmark.production_authoring import (
+        _c17_mutation_question,
+        _c17_semantic_question,
+        _semantic_facts,
+    )
+
+    families = next(row.benchmark_families for row in COVERAGE_MATRIX if row.capability_id == "C17")
+    questions = []
+    for family in families:
+        for index in range(3):
+            seed = hashlib.sha256(f"RES-128-C17-scenario:{family}:{index}".encode()).hexdigest()
+            facts = _semantic_facts("C17", family, seed)
+            candidate = _semantic_cell_candidate("C17", family)
+            facts["unsafe_response_claim"] = dict(candidate.input.structured_context.items())[
+                "unsafe_response_claim"
+            ]
+            semantic_question = _c17_semantic_question(facts)
+            assert semantic_question.encode("utf-8") == _c17_semantic_question(facts).encode(
+                "utf-8"
+            )
+            questions.append(((family, index), semantic_question))
+            for stage in (1, 2, 3):
+                token = "MUTX" + hashlib.sha256(f"{seed}:{stage}".encode()).hexdigest()[:10].upper()
+                mutation_question = _c17_mutation_question(facts, token=token, stage=stage)
+                assert mutation_question.encode("utf-8") == _c17_mutation_question(
+                    facts,
+                    token=token,
+                    stage=stage,
+                ).encode("utf-8")
+                questions.append(((family, index), mutation_question))
+
+    for index, (left_identity, question) in enumerate(questions):
+        for right_identity, other in questions[index + 1 :]:
+            if left_identity == right_identity:
+                continue  # Parent/descendant mutation overlap is an authorized lineage edge.
+            assert not exact_13_token_shingles(question).intersection(
+                exact_13_token_shingles(other)
+            )
+
+
+def test_identity_mutation_surface_is_deterministic_and_scenario_specific() -> None:
+    from dynamislm.benchmark.production_authoring import (
+        _identity_mutation_question,
+        _semantic_facts,
+    )
+
+    questions = []
+    for capability_id in ("C01", "C03", "C04"):
+        row = next(row for row in COVERAGE_MATRIX if row.capability_id == capability_id)
+        for family in row.benchmark_families:
+            for index in range(3):
+                seed = hashlib.sha256(
+                    f"RES-128-identity-mutation:{capability_id}:{family}:{index}".encode()
+                ).hexdigest()
+                facts = _semantic_facts(capability_id, family, seed)
+                for stage in (1, 2, 3):
+                    token = (
+                        "MUTX" + hashlib.sha256(f"{seed}:{stage}".encode()).hexdigest()[:10].upper()
+                    )
+                    question = _identity_mutation_question(
+                        facts,
+                        capability_id=capability_id,
+                        token=token,
+                        stage=stage,
+                    )
+                    rerun = _identity_mutation_question(
+                        _semantic_facts(capability_id, family, seed),
+                        capability_id=capability_id,
+                        token=token,
+                        stage=stage,
+                    )
+                    assert question.encode("utf-8") == rerun.encode("utf-8")
+                    questions.append(question)
+
+    for index, question in enumerate(questions):
+        for other in questions[index + 1 :]:
+            assert not exact_13_token_shingles(question).intersection(
+                exact_13_token_shingles(other)
+            )
+
+
+def test_all_semantic_question_surfaces_have_deterministic_scenario_variation() -> None:
+    from dynamislm.benchmark.production_authoring import (
+        _apply_adversarial_tag_focus,
+        _production_adversarial_tags,
+        _semantic_facts,
+        _semantic_question,
+        _semantic_slot_specs,
+    )
+
+    packet_by_cell = {}
+    questions = []
+    for candidate_id, capability_id, family, slot in _semantic_slot_specs():
+        key = (capability_id, family)
+        if key not in packet_by_cell:
+            packet_by_cell[key] = _semantic_cell_candidate(*key)
+        packet = packet_by_cell[key]
+        seed = hashlib.sha256(f"RES-128-semantic-surface:{candidate_id}".encode()).hexdigest()
+        required_refusal = capability_id == "C18" and family == "F01" and slot < 3
+        facts = _semantic_facts(
+            capability_id,
+            family,
+            seed,
+            required_refusal=required_refusal,
+        )
+        tags = _production_adversarial_tags(capability_id, family, slot=slot)
+        if capability_id == "C02":
+            facts["missing_protocol_fields"] = (
+                "device_identity",
+                "event_definition",
+                "phase_definition",
+                "threshold_definition",
+            )
+        if capability_id == "C17":
+            facts["unsafe_response_claim"] = dict(packet.input.structured_context.items())[
+                "unsafe_response_claim"
+            ]
+        question = _apply_adversarial_tag_focus(
+            _semantic_question(packet, facts),
+            tags,
+            scenario_id=str(facts["record"]),
+        )
+        assert question.encode("utf-8") == _apply_adversarial_tag_focus(
+            _semantic_question(packet, facts),
+            tags,
+            scenario_id=str(facts["record"]),
+        ).encode("utf-8")
+        questions.append(question)
+
+    for index, question in enumerate(questions):
+        for other in questions[index + 1 :]:
+            assert not exact_13_token_shingles(question).intersection(
+                exact_13_token_shingles(other)
+            )
 
 
 def test_forged_res71_result_view_is_rejected() -> None:

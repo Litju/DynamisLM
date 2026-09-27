@@ -39,6 +39,7 @@ from dynamislm.benchmark.production import (
     PRODUCTION_AUTHORING_PLAN_VERSION,
     PRODUCTION_AUTHORING_PROCESS_ID,
     PRODUCTION_BATCH_ID,
+    PRODUCTION_SYNTHETIC_QUESTION_SURFACE_VARIANTS,
     ProductionAuthoringPlanV1,
     ProductionCandidateCommitmentV1,
     ProductionDuplicationAuditV1,
@@ -73,6 +74,72 @@ from dynamislm.serialization import canonical_hash, register_serializable_type
 SYNTHETIC_GENERATOR_ID = "pse-v1-unregistered-operation-context"
 SYNTHETIC_GENERATOR_VERSION = "1.0.0"
 MAX_PRODUCTION_SOURCE_CASES = 40
+_SYNTHETIC_QUESTION_FOCUS = {
+    "F05": "is this unsupported rather than zero?",
+    "F06": "which live method is missing?",
+    "F13": "why cannot these inputs yield a value?",
+    "F14": "what safe partial response remains?",
+}
+if set(_SYNTHETIC_QUESTION_FOCUS) != {
+    family for family, _variant_id in PRODUCTION_SYNTHETIC_QUESTION_SURFACE_VARIANTS
+}:
+    raise ValueError("synthetic refusal surface variants differ from their authorized families")
+
+
+def _production_adversarial_tags(
+    capability_id: str,
+    family: str,
+    *,
+    slot: int | None = None,
+) -> tuple[str, ...]:
+    row = next(item for item in COVERAGE_MATRIX if item.capability_id == capability_id)
+    if capability_id in {"C01", "C02", "C03"}:
+        return tuple(sorted(row.adversarial_tags, key=lambda value: value.encode("utf-8")))
+    family_index = row.benchmark_families.index(family)
+    tag_index = family_index + (slot or 0)
+    return (row.adversarial_tags[tag_index % len(row.adversarial_tags)],)
+
+
+def _apply_adversarial_tag_focus(
+    question: str,
+    tags: tuple[str, ...],
+    *,
+    scenario_id: str,
+) -> str:
+    focus = (
+        "combined protocol field omissions"
+        if set(tags)
+        == {
+            "MISSING_DEVICE",
+            "MISSING_THRESHOLD",
+            "MISSING_EVENT",
+            "MISSING_PHASE",
+        }
+        else (
+            "multiple registered identity risks"
+            if len(tags) > 1
+            else (
+                tags[0].lower().replace("_", " ")
+                if len(tags) == 1
+                else ", ".join(tag.lower().replace("_", " ") for tag in tags)
+            )
+        )
+    )
+    return f"{question} For scenario {scenario_id}, assess {focus}."
+
+
+def _bind_production_adversarial_tags(
+    packet: CandidateReviewPacket,
+    tags: tuple[str, ...],
+) -> CandidateReviewPacket:
+    return bind_candidate_review_packet(
+        replace(
+            packet,
+            adversarial_tags=tags,
+            candidate_payload_hash="sha256:" + "0" * 64,
+            proposed_approval_digest="sha256:" + "0" * 64,
+        )
+    )
 
 
 @register_serializable_type
@@ -696,6 +763,22 @@ def _source_authoring_records(
     return tuple(sorted(records, key=lambda item: item.candidate_id.encode("utf-8")))
 
 
+def _production_source_question(selection: SourceCellSelectionV1, candidate_id: str) -> str:
+    span_id = selection.spans[0].span_digest[:12]
+    candidate_key = hashlib.sha256(candidate_id.encode("utf-8")).hexdigest()[:10].upper()
+    scope = selection.applicability_scope.lower().replace("_", " ")
+    tags = _production_adversarial_tags(selection.capability_id, selection.benchmark_family)
+    question = (
+        f"Source case {candidate_key} cites {selection.pmcid} span {span_id} for cell "
+        f"{selection.capability_id}:{selection.benchmark_family} under span {span_id}. "
+        f"Source family "
+        f"{selection.source_family_id} carries {scope} applicability for {candidate_key}. "
+        f"Extract the retained paragraph for span {span_id} and classify its target scope "
+        f"for {candidate_key}."
+    )
+    return _apply_adversarial_tag_focus(question, tags, scenario_id=candidate_key)
+
+
 def _author_source_packets(
     selections: tuple[SourceCellSelectionV1, ...],
     *,
@@ -725,12 +808,7 @@ def _author_source_packets(
             raise TypeError("source selection must be SourceCellSelectionV1")
         row = accepted_by_pmcid[selection.pmcid]
         candidate_id = _source_candidate_id(selection)
-        title = str(row.get("title") or selection.pmcid)
-        scope_label = selection.applicability_scope.lower().replace("_", " ")
-        question = (
-            f"Case {candidate_id[-10:]} cites {selection.pmcid} ({title}). "
-            f"Extract the exact retained paragraph and classify its {scope_label} applicability."
-        )
+        question = _production_source_question(selection, candidate_id)
         packet = _source_candidate_packet(
             selection,
             accepted_row=row,
@@ -741,6 +819,10 @@ def _author_source_packets(
             evidence_span_id_namespace="PRODUCTION",
             question_text=question,
             authoring_process_id=PRODUCTION_AUTHORING_PROCESS_ID,
+        )
+        packet = _bind_production_adversarial_tags(
+            packet,
+            _production_adversarial_tags(selection.capability_id, selection.benchmark_family),
         )
         packet_by_id[packet.candidate_id] = packet
     return tuple(
@@ -996,6 +1078,8 @@ def _semantic_facts(
             left_measurand=left,
             right_measurand=right,
             display_label_relation="SAME",
+            method_identity_relation="MISMATCH",
+            estimator_identity_relation="NOT_EQUIVALENT",
         )
     elif capability_id == "C04":
         facts.update(value_origin="PROVIDER_DERIVED", direct_measurement_flag=False)
@@ -1078,6 +1162,70 @@ def _semantic_facts(
     return facts
 
 
+def _c01_semantic_question(facts: dict[str, object]) -> str:
+    return (
+        f"{facts['team']} record {facts['record']} labels {facts['left_measurand']} as "
+        f"{facts['display_label']} for {facts['athlete']} at {facts['session']}. "
+        f"Compare {facts['right_measurand']} on {facts['device_identity']} for "
+        f"{facts['athlete']} under {facts['test_identity']} in {facts['record']}: "
+        f"relation {facts['typed_measurand_relation']}, "
+        f"estimator identity {facts['estimator_identity_relation']}. For {facts['record']}, "
+        "does the label prove one identity?"
+    )
+
+
+def _c03_semantic_question(facts: dict[str, object]) -> str:
+    return (
+        f"For {facts['athlete']} in {facts['team']}, record {facts['record']} assigns one "
+        f"display label to {facts['left_measurand']} and {facts['right_measurand']} at "
+        f"{facts['session']}. On {facts['device_identity']} for {facts['athlete']} at "
+        f"{facts['session']}, {facts['test_identity']} has display-label relation "
+        f"{facts['display_label_relation']} for {facts['record']}. Method relation "
+        f"{facts['method_identity_relation']} for {facts['athlete']}; estimator relation "
+        f"{facts['estimator_identity_relation']} for {facts['session']}. For {facts['record']}, "
+        "does the label establish one typed measurand?"
+    )
+
+
+def _c09_semantic_question(facts: dict[str, object]) -> str:
+    return (
+        f"{facts['team']} record {facts['record']} reports {facts['result_kind']} for "
+        f"{facts['athlete']} in {facts['session']}. Test {facts['test_identity']} on "
+        f"{facts['device_identity']} lacks comparable-change authority "
+        f"{facts['comparable_change_authority']} for {facts['record']}. "
+        f"Measurement-error authority {facts['measurement_error_authority']} and "
+        f"meaningfulness threshold {facts['meaningfulness_threshold']} for {facts['athlete']}. "
+        f"Can {facts['session']} support a meaningful-change claim?"
+    )
+
+
+def _c18_semantic_question(facts: dict[str, object], *, family: str, required_refusal: bool) -> str:
+    if family == "F01" and required_refusal:
+        return (
+            f"{facts['team']} identity card {facts['record']} for {facts['athlete']} at "
+            f"{facts['session']} has typed fields {facts['typed_identity_fields']}. For "
+            f"{facts['record']}, request {facts['test_identity']} in family {family} for "
+            f"{facts['athlete']} asks to report the registered "
+            f"identity for {facts['record']}. Should {facts['test_identity']} be refused? "
+            f"What remains safe for {facts['record']}?"
+        )
+    return (
+        f"{facts['team']} request {facts['record']} from {facts['athlete']} in "
+        f"{facts['session']} asks for {facts['test_identity']} under family {family}. "
+        f"Which claim is supportable for {facts['record']}, and what lower-level description "
+        "remains safe?"
+    )
+
+
+def _c17_semantic_question(facts: dict[str, object]) -> str:
+    return (
+        f"{facts['team']} draft {facts['record']} carries the attached unsafe claim for "
+        f"{facts['athlete']} at {facts['session']}. Check {facts['test_identity']} on "
+        f"{facts['device_identity']}; source origin is {facts['unsafe_response_origin']} for "
+        f"{facts['athlete']}. Which registered error and correction apply to {facts['record']}?"
+    )
+
+
 def _semantic_question(
     packet: CandidateReviewPacket,
     facts: dict[str, object],
@@ -1091,113 +1239,109 @@ def _semantic_question(
         facts["record"],
     )
     if c == "C01":
-        return (
-            f"{team} export {record} assigns label {facts['display_label']} to "
-            f"{facts['left_measurand']} from {device}. "
-            f"{athlete} record {facts['production_scenario_id']} uses that label for "
-            f"{facts['right_measurand']} under {test}; does one identity follow at {session}?"
-        )
+        return _c01_semantic_question(facts)
     if c == "C02":
+        raw_missing_fields = facts["missing_protocol_fields"]
+        if not isinstance(raw_missing_fields, tuple) or any(
+            not isinstance(value, str) for value in raw_missing_fields
+        ):
+            raise ValueError("protocol omissions must be a tuple of field identities")
+        missing_fields = tuple(value.replace("_", " ") for value in raw_missing_fields)
+        midpoint = (len(missing_fields) + 1) // 2
+        first_fields = " and ".join(missing_fields[:midpoint])
+        remaining_fields = " and ".join(missing_fields[midpoint:])
         return (
-            f"{team} protocol sheet {record} lists {test} on {device}, with "
-            f"{facts['missing_protocol_fields']} absent. "
-            f"{athlete} asks whether {session} identifies the recorded event."
+            f"{team} protocol {record} for {athlete} omits {first_fields}. At {session}, record "
+            f"{record} also omits {remaining_fields}. Test {test} on {device}; does it identify "
+            "the recorded event?"
         )
     if c == "C03":
-        return (
-            f"For {athlete} in {team}, record {record} gives {facts['left_measurand']} "
-            f"and {facts['right_measurand']} the same display label on {device}. "
-            f"Does that label resolve one measurand for {test} at {session}?"
-        )
+        return _c03_semantic_question(facts)
     if c == "C04":
         return (
-            f"{team} vendor export {record} labels a provider-derived {test} value for {athlete} "
-            f"as directly measured on {device}. Which origin is supported for {session}?"
+            f"{team} vendor export {record} supplies provider-derived {test} for {athlete} "
+            f"at {session}. Device {device} for {athlete} records value origin "
+            f"{facts['value_origin']} and direct-measurement flag "
+            f"{facts['direct_measurement_flag']} at {session} for {record}. "
+            "Which data origin is supported?"
         )
     if c == "C05":
         return (
-            f"{athlete} record {record} pairs {facts['source_unit_identity']} with target unit "
-            f"{facts['target_unit_identity']} for {test}; {team} lacks conversion provenance. "
-            f"Is a normalized output authorized for {session}?"
+            f"{athlete} record {record} reports {facts['source_unit_identity']} on {device} "
+            f"at {session}. For {record} and {athlete}, target {facts['target_unit_identity']} "
+            f"for {team} under {test}, conversion execution {facts['conversion_execution']} "
+            f"and provenance "
+            f"{facts['conversion_provenance']}. "
+            f"May {team} report a normalized output for {session}?"
         )
     if c == "C06":
         return (
-            f"{team} file {record} combines {test} observations from {device}; frame is "
-            f"{facts['coordinate_frame_relation']}, sign is {facts['sign_convention_relation']}, "
-            f"event alignment is {facts['event_boundary_relation']}. "
-            f"Can {athlete}'s values be combined at {session}?"
+            f"{team} file {record} joins {test} observations for {athlete} at {session}. "
+            f"On {device} for {athlete} in {session}, frame {facts['coordinate_frame_relation']} "
+            f"for {record} uses sign {facts['sign_convention_relation']}; event boundary "
+            f"{facts['event_boundary_relation']} for {athlete}. Are values for {record} "
+            "combinable?"
         )
     if c == "C07":
-        return (
-            f"{team} compares {test} records {record} and {facts['production_scenario_id']} "
-            f"for {athlete}; labels match but method and threshold differ, with bridge "
-            f"{facts['bridge_status']}. "
-            f"What registered pairwise state applies at {session}?"
-        )
+        return _c07_semantic_question(facts)
     if c == "C09":
-        return (
-            f"{athlete} has a reported numerical change in {team} record {record} for {test}, but "
-            f"comparable-change, measurement-error, and meaningfulness authority are absent. "
-            f"What is the strongest supported claim at {session}?"
-        )
+        return _c09_semantic_question(facts)
     if c == "C10":
         return (
-            f"{team} table {record} has {facts['support_shape']} for {test}; {athlete}'s analyst "
-            f"requests {facts['analysis_request']}; prerequisites are "
-            f"{facts['registered_prerequisite_status']}. "
-            f"Is that analysis class authorized for {session}?"
+            f"{team} table {record} has {facts['support_shape']} for {athlete} in {session}. "
+            f"Request {facts['analysis_request']} on {device} for {test}; prerequisite status "
+            f"{facts['registered_prerequisite_status']} in {record}. "
+            "Is that analysis class authorized?"
         )
     if c == "C11":
         return (
-            f"{team} file {record} contains {facts['unit_of_analysis']} observations "
-            f"for {athlete}, "
-            f"with repeated-measure key {facts['repeated_measure_key']}; request is "
-            f"{facts['requested_estimand_level']}. "
-            f"Can this support the requested inference about {test} at {session}?"
+            f"{team} file {record} contains {facts['unit_of_analysis']} observations for "
+            f"{athlete} at {session}. Repeated-measure key {facts['repeated_measure_key']} "
+            f"for {athlete} in {record}. Request {facts['requested_estimand_level']} for "
+            f"{record} using {test} on {device}; can {athlete} support within-athlete inference?"
         )
     if c == "C12":
         return (
-            f"{team} report {record} describes {test} change for {athlete}; "
-            "reliability assumptions "
-            f"are {facts['reliability_assumption_declaration']}, "
-            f"error scale {facts['measurement_error_scale']}, "
-            f"meaningfulness criterion {facts['meaningful_change_criterion']}. "
-            f"What is established at {session}?"
+            f"{team} report {record} describes {test} for {athlete} at {session}. Reliability "
+            f"declaration {facts['reliability_assumption_declaration']} on {device}; error scale "
+            f"{facts['measurement_error_scale']} for {record}. Meaningfulness criterion "
+            f"{facts['meaningful_change_criterion']} for {athlete}; what is established?"
         )
     if c == "C14":
         return (
-            f"{team} evidence card {record} is tagged {facts['evidence_class']} and permits "
-            f"{facts['permitted_use']} for {test}. {athlete}'s staff request a target norm; "
-            f"is that use authorized for {session}?"
+            f"{team} evidence card {record} is {facts['evidence_class']} for {test} on {device}; "
+            f"target norm authorized {facts['target_norm_authorized']} for {athlete}. Permitted "
+            f"use {facts['permitted_use']} in {session}; can this card support that target?"
         )
     if c == "C15":
         return (
-            f"{team} observational note {record} reports {test} with a training exposure "
-            f"for {athlete}; "
-            f"design is {facts['study_design']} and request is "
-            f"{facts['requested_relationship_claim']}. "
-            f"What relationship claim is supported at {session}?"
+            f"{team} observation {record} pairs {test} exposure with {athlete}'s change at "
+            f"{session}. Design {facts['study_design']} on {device} and request "
+            f"{facts['requested_relationship_claim']} for {record}. "
+            "What relationship is identified?"
         )
     if c == "C17":
-        return (
-            f"{team} draft {record} says: {facts['unsafe_response_claim']} "
-            f"{athlete}'s {test} record "
-            f"uses {device} in {session}. Classify the principal error and state the "
-            f"corrective boundary for {f}."
-        )
+        return _c17_semantic_question(facts)
     if c == "C18":
-        if f == "F01" and not facts.get("identity_fields_sufficient", True):
-            return (
-                f"{team} identity card {record} lacks typed measurand or event detail for {test}. "
-                f"{athlete} asks for the registered identity at {session}; "
-                "state whether refusal is required and what remains safe."
-            )
-        return (
-            f"{team} request {record} concerns {test} for {athlete} in {session}; "
-            f"registered family {f}. Can the claim be answered, and what lower-level "
-            f"description remains safe?"
+        return _c18_semantic_question(
+            facts,
+            family=f,
+            required_refusal=(f == "F01" and not facts.get("identity_fields_sufficient", True)),
         )
     raise ValueError(f"no question authoring operator for {c}/{f}")
+
+
+def _c07_semantic_question(facts: dict[str, object]) -> str:
+    return (
+        f"{facts['team']} record {facts['record']} compares {facts['left_label']} with "
+        f"{facts['right_label']} for {facts['athlete']} at {facts['session']}. "
+        f"Check {facts['test_identity']} on {facts['device_identity']} for "
+        f"{facts['athlete']} at {facts['session']}: method "
+        f"{facts['method_identity']}, threshold {facts['threshold_identity']}. "
+        f"Event {facts['event_identity']} in {facts['record']} for {facts['athlete']} "
+        f"has bridge status {facts['bridge_status']}. "
+        f"For {facts['record']}, is combining the pair supported?"
+    )
 
 
 def _difficulty_for_semantic(
@@ -1374,6 +1518,7 @@ def _author_semantic_packets(
     candidates = []
     for candidate_id, capability_id, family, slot in slots:
         seed = seeds[candidate_id]
+        adversarial_tags = _production_adversarial_tags(capability_id, family, slot=slot)
         required_refusal = capability_id == "C18" and family == "F01" and slot < 3
         facts = _semantic_facts(
             capability_id,
@@ -1381,6 +1526,13 @@ def _author_semantic_packets(
             seed,
             required_refusal=required_refusal,
         )
+        if capability_id == "C02":
+            facts["missing_protocol_fields"] = (
+                "device_identity",
+                "event_definition",
+                "phase_definition",
+                "threshold_definition",
+            )
         valid_question_classes = question_classes_for_cell(capability_id, family)
         question_class = valid_question_classes[slot % len(valid_question_classes)]
         if (capability_id, family) == ("C07", "F04") and slot == 0:
@@ -1390,10 +1542,14 @@ def _author_semantic_packets(
                 capability_id=capability_id,
                 family=family,
                 question_class=question_class,
-                question_text=(
-                    f"{facts['team']} pairing {facts['record']} carries the sealed same-label "
-                    f"method reference. {facts['athlete']} asks for the registered pairwise "
-                    f"state of {facts['test']} at {facts['session']}."
+                question_text=_apply_adversarial_tag_focus(
+                    (
+                        f"{facts['team']} pairing {facts['record']} carries the sealed same-label "
+                        f"method reference. {facts['athlete']} asks for the registered pairwise "
+                        f"state of {facts['test']} at {facts['session']}."
+                    ),
+                    adversarial_tags,
+                    scenario_id=str(facts["record"]),
                 ),
                 authoring_process_id=PRODUCTION_AUTHORING_PROCESS_ID,
                 production_source_family_id=f"PSE-V1-RES71-REFERENCE-FAMILY:{candidate_id}",
@@ -1401,6 +1557,7 @@ def _author_semantic_packets(
                     candidate_id
                 ].isolation_cluster_id,
             )
+            packet = _bind_production_adversarial_tags(packet, adversarial_tags)
             candidates.append(_place_expert_packet(packet, batch_by_candidate[candidate_id]))
             continue
         if (capability_id, family) == ("C15", "F12") and slot == 0:
@@ -1410,10 +1567,14 @@ def _author_semantic_packets(
                 capability_id=capability_id,
                 family=family,
                 question_class=question_class,
-                question_text=(
-                    f"{facts['team']} note {facts['record']} includes the sealed causal-claim "
-                    f"reference. {facts['athlete']} requests a causal interpretation for "
-                    f"{facts['test']} at {facts['session']}; state the registered boundary."
+                question_text=_apply_adversarial_tag_focus(
+                    (
+                        f"{facts['team']} note {facts['record']} includes the sealed causal-claim "
+                        f"reference. {facts['athlete']} requests a causal interpretation for "
+                        f"{facts['test']} at {facts['session']}; state the registered boundary."
+                    ),
+                    adversarial_tags,
+                    scenario_id=str(facts["record"]),
                 ),
                 authoring_process_id=PRODUCTION_AUTHORING_PROCESS_ID,
                 production_source_family_id=f"PSE-V1-RES71-REFERENCE-FAMILY:{candidate_id}",
@@ -1421,6 +1582,7 @@ def _author_semantic_packets(
                     candidate_id
                 ].isolation_cluster_id,
             )
+            packet = _bind_production_adversarial_tags(packet, adversarial_tags)
             candidates.append(_place_expert_packet(packet, batch_by_candidate[candidate_id]))
             continue
         if (capability_id, family) == ("C11", "F09") and slot == 0:
@@ -1430,10 +1592,14 @@ def _author_semantic_packets(
                 capability_id=capability_id,
                 family=family,
                 question_class=question_class,
-                question_text=(
-                    f"{facts['team']} support table {facts['record']} carries the sealed "
-                    f"between-to-within reference. For {facts['athlete']}, determine whether "
-                    f"{facts['test']} supports the requested estimand in {facts['session']}."
+                question_text=_apply_adversarial_tag_focus(
+                    (
+                        f"{facts['team']} support table {facts['record']} carries the sealed "
+                        f"between-to-within reference. For {facts['athlete']}, determine whether "
+                        f"{facts['test']} supports the requested estimand in {facts['session']}."
+                    ),
+                    adversarial_tags,
+                    scenario_id=str(facts["record"]),
                 ),
                 authoring_process_id=PRODUCTION_AUTHORING_PROCESS_ID,
                 production_source_family_id=f"PSE-V1-RES71-REFERENCE-FAMILY:{candidate_id}",
@@ -1441,6 +1607,7 @@ def _author_semantic_packets(
                     candidate_id
                 ].isolation_cluster_id,
             )
+            packet = _bind_production_adversarial_tags(packet, adversarial_tags)
             candidates.append(_place_expert_packet(packet, batch_by_candidate[candidate_id]))
             continue
 
@@ -1452,6 +1619,7 @@ def _author_semantic_packets(
             authoring_process_id=PRODUCTION_AUTHORING_PROCESS_ID,
             force_refusal=required_refusal,
         )
+        packet = replace(packet, adversarial_tags=adversarial_tags)
         context = dict(packet.input.structured_context.items())
         if capability_id == "C17":
             facts["unsafe_response_claim"] = context["unsafe_response_claim"]
@@ -1466,7 +1634,11 @@ def _author_semantic_packets(
                     expected_fields=expected_fields,
                 ),
             )
-        question = _semantic_question(packet, facts)
+        question = _apply_adversarial_tag_focus(
+            _semantic_question(packet, facts),
+            adversarial_tags,
+            scenario_id=str(facts["record"]),
+        )
         packet = _rebind_semantic_packet(
             packet,
             question=question,
@@ -1503,6 +1675,43 @@ def _place_expert_packet(
     )
 
 
+def _production_engine_numeric_question(
+    facts: dict[str, str],
+    *,
+    capability_id: str,
+    family: str,
+    reference_case_id: str,
+    operation_id: str,
+) -> str:
+    claim_limit = (
+        f"For {facts['record']}, no causal or cross-method inference follows."
+        if capability_id == "C16"
+        else f"For {facts['record']}, limit claims to operation {operation_id}."
+    )
+    tags = _production_adversarial_tags(capability_id, family)
+    question = (
+        f"{facts['team']} engine ticket {facts['record']} binds reference {reference_case_id} "
+        f"for {facts['athlete']} at {facts['session']}. Operation {operation_id} on "
+        f"{facts['device']} returns {facts['test']} for family {family}. Report the exact "
+        f"registered output for {facts['record']} to {facts['athlete']} during "
+        f"{facts['session']} under its live method. {claim_limit}"
+    )
+    return _apply_adversarial_tag_focus(question, tags, scenario_id=facts["record"])
+
+
+def _production_engine_refusal_question(
+    facts: dict[str, str], *, family: str, reference_case_id: str, reference_family: str
+) -> str:
+    tags = _production_adversarial_tags("C18", family)
+    question = (
+        f"{facts['team']} refusal ticket {facts['record']} for {facts['athlete']} binds "
+        f"reference {reference_case_id} at {facts['session']}. Family {family} uses "
+        f"reference family {reference_family} for {facts['test']} on {facts['device']}. "
+        f"State the exact refusal for {facts['record']}; which safe lower-level fact remains?"
+    )
+    return _apply_adversarial_tag_focus(question, tags, scenario_id=facts["record"])
+
+
 def _author_engine_packets(
     slots: tuple[tuple[str, str, str, int], ...],
     inputs: ProductionAuthoringInputsV1,
@@ -1533,11 +1742,11 @@ def _author_engine_packets(
                 "res71-nonfinite-unit-refusal" if family == "F06" else "res71-bpt-mpv-refusal"
             )
             reference = reference_by_id[reference_id]
-            question = (
-                f"{facts['team']} refusal ticket {facts['record']} binds {reference.case_id}. "
-                f"{facts['athlete']} requests {family} interpretation of {reference.family} "
-                f"at {facts['session']}; "
-                "state the exact registered refusal and the safe lower-level description."
+            question = _production_engine_refusal_question(
+                facts,
+                family=family,
+                reference_case_id=reference.case_id,
+                reference_family=reference.family,
             )
             packet = _reference_operation_refusal_candidate(
                 reference,
@@ -1556,6 +1765,10 @@ def _author_engine_packets(
                 production_source_family_id=f"PSE-V1-RES71-REFERENCE-FAMILY:{candidate_id}",
                 production_isolation_cluster_id=f"PSE-V1-ENGINE-CLUSTER:{candidate_id}",
             )
+            packet = _bind_production_adversarial_tags(
+                packet,
+                _production_adversarial_tags(capability_id, family, slot=slot),
+            )
             packets.append(packet)
             continue
 
@@ -1565,11 +1778,14 @@ def _author_engine_packets(
             else value_references[(slot + (0 if family == "F05" else 1)) % len(value_references)]
         )
         operation_id = reference.operation_id
-        question = (
-            f"{facts['team']} engine ticket {facts['record']} is bound to {reference.case_id} "
-            f"and operation {operation_id}. {facts['athlete']} asks for its exact "
-            f"registered output for {family} during {facts['session']}; keep the result "
-            "bound to the live method without unsupported claims."
+        if operation_id is None:
+            raise ValueError("production engine authoring requires a registered operation identity")
+        question = _production_engine_numeric_question(
+            facts,
+            capability_id=capability_id,
+            family=family,
+            reference_case_id=reference.case_id,
+            operation_id=operation_id,
         )
         prohibited_claims = (
             ("a causal effect or cross-method comparison from this deterministic output",)
@@ -1595,6 +1811,10 @@ def _author_engine_packets(
             production_isolation_cluster_id=f"PSE-V1-ENGINE-CLUSTER:{candidate_id}",
             prohibited_claims=prohibited_claims,
             claim_boundary_authority=capability_id == "C16",
+        )
+        packet = _bind_production_adversarial_tags(
+            packet,
+            _production_adversarial_tags(capability_id, family, slot=slot),
         )
         packets.append(packet)
     return tuple(sorted(packets, key=lambda item: item.candidate_id.encode("utf-8")))
@@ -1633,6 +1853,23 @@ def _production_synthetic_context(
     }
 
 
+def _production_synthetic_question(facts: dict[str, str], *, family: str) -> str:
+    question = (
+        f"For {facts['team']}, assess {facts['test']} on {facts['device']} with "
+        f"{facts['athlete']} during {facts['session']}. The supplied no-operation reference "
+        f"for {family} scenario {facts['record']} leaves {facts['test']} without a live method "
+        f"for {facts['athlete']}. "
+        f"{_SYNTHETIC_QUESTION_FOCUS[family]} For {facts['record']}, "
+        f"{facts['athlete']} receives no numeric "
+        f"result; give one safe next step for {facts['session']}."
+    )
+    return _apply_adversarial_tag_focus(
+        question,
+        _production_adversarial_tags("C08", family),
+        scenario_id=facts["record"],
+    )
+
+
 def _author_synthetic_packets(
     slots: tuple[tuple[str, str, SplitName], ...],
     inputs: ProductionAuthoringInputsV1,
@@ -1664,11 +1901,9 @@ def _author_synthetic_packets(
         )
         facts = _scenario_ids(seed_block)
         question_class = question_classes_for_cell("C08", family)[0]
-        question = (
-            f"{facts['team']} calculation request {facts['record']} names {reference.case_id} "
-            f"for {family}; {facts['athlete']} supplies only the exact registered synthetic input. "
-            f"Can a numerical result be produced for {facts['test']} at {facts['session']}? "
-            "State what remains safe."
+        question = _production_synthetic_question(
+            facts,
+            family=family,
         )
         packet = _semantic_reference_candidate(
             reference,
@@ -1697,8 +1932,136 @@ def _author_synthetic_packets(
             ),
             scenario_origin="SYNTHETIC_PRODUCTION_CONTEXT",
         )
+        packet = _bind_production_adversarial_tags(
+            packet,
+            _production_adversarial_tags("C08", family),
+        )
         packets.append(packet)
     return tuple(sorted(packets, key=lambda item: item.candidate_id.encode("utf-8")))
+
+
+def _c09_mutation_question(context: dict[str, object], *, token: str, stage: int) -> str:
+    claim_text = (
+        "as an effect caused by the intervention",
+        "to the intervention despite no causal identification",
+        "as meaningful improvement without a registered threshold",
+    )
+    if stage not in (1, 2, 3):
+        raise ValueError("C09 mutation stage is outside its frozen registry")
+    return (
+        f"{context['team']} mutation {token} frames {context['test_identity']} change for "
+        f"{context['athlete']} at {context['session_identity']} {claim_text[stage - 1]}. "
+        f"Record {context['production_scenario_id']} for {token} has comparable-change "
+        f"authority {context['comparable_change_authority']} for {token}. "
+        f"Measurement-error authority {context['measurement_error_authority']} for {token}; "
+        f"meaningfulness threshold {context['meaningfulness_threshold']} for {token} at "
+        f"{context['session_identity']}. What is the strongest supported claim for {token}?"
+    )
+
+
+def _c15_mutation_question(context: dict[str, object], *, token: str, stage: int) -> str:
+    focus = (
+        "presents the observed relationship as causal evidence",
+        "attributes the change to the recorded exposure",
+        "asks staff to report a causal effect from the study",
+    )
+    if stage not in (1, 2, 3):
+        raise ValueError("C15 mutation stage is outside its frozen registry")
+    return (
+        f"{context['team']} mutation {token} {focus[stage - 1]} for {context['athlete']} at "
+        f"{context['session_identity']}. Record {context['production_scenario_id']} for "
+        f"{token} has design {context['study_design']} and claim type "
+        f"{context['requested_relationship_claim']}. For {token}, what relationship is supported?"
+    )
+
+
+def _identity_mutation_question(
+    context: dict[str, object], *, capability_id: str, token: str, stage: int
+) -> str:
+    if capability_id == "C04":
+        focus = (
+            "labels a provider-derived value as directly measured",
+            "treats a vendor export as direct measurement evidence",
+            "uses a shared label to claim direct measurement origin",
+        )
+        identity = context["value_origin"]
+    else:
+        focus = (
+            "treats matching display labels as one measured identity",
+            "treats distinct measurands as equivalent under one label",
+            "accepts a display label as sufficient identity evidence",
+        )
+        identity = context["left_measurand"]
+    if stage not in (1, 2, 3):
+        raise ValueError("identity mutation stage is outside its frozen registry")
+    return (
+        f"{context['team']} mutation {token} {focus[stage - 1]} for {context['athlete']} at "
+        f"{context['session_identity']} with {token}. Record "
+        f"{context['production_scenario_id']} for {token} tags {identity} under "
+        f"{context['test_identity']} on {context['device_identity']} for {token}. "
+        f"Does the registered evidence support this claim for {context['production_scenario_id']}?"
+    )
+
+
+def _c07_mutation_question(context: dict[str, object], *, token: str, stage: int) -> str:
+    focus = (
+        "pools methods despite a threshold mismatch",
+        "treats matching labels as a registered bridge",
+        "combines an unregistered method and threshold pair",
+    )
+    if stage not in (1, 2, 3):
+        raise ValueError("C07 mutation stage is outside its frozen registry")
+    team = context.get("team") or context.get("synthetic_team_id") or "TEAMXUNKNOWN"
+    athlete = context.get("athlete") or context.get("synthetic_athlete_id") or "ATHXUNKNOWN"
+    session = context.get("session_identity") or "SESSXUNKNOWN"
+    test = context.get("test_identity") or context.get("scientific_family") or "TESTXUNKNOWN"
+    device = context.get("device_identity") or "DEVXUNKNOWN"
+    record = context.get("production_scenario_id") or context.get("record") or token
+    return (
+        f"{team} mutation {token} {focus[stage - 1]} for {test}, athlete {athlete} at "
+        f"{session}. Record {record} for {token} carries method "
+        f"{context.get('method_identity', 'UNRESOLVED')} "
+        f"for {token}, and threshold {context.get('threshold_identity', 'UNRESOLVED')} for "
+        f"{session}. Bridge {context.get('bridge_status', 'UNREGISTERED')} for {token} on "
+        f"{test} with {device}; "
+        f"for {token}, what pairwise state is supported?"
+    )
+
+
+def _c18_mutation_question(
+    context: dict[str, object], *, family: str, token: str, stage: int
+) -> str:
+    unsupported_request = (
+        "an unsupported target norm",
+        "a claim beyond the supplied evidence",
+        "an assumed value for missing evidence",
+    )
+    if stage not in (1, 2, 3):
+        raise ValueError("C18 mutation stage is outside its frozen registry")
+    return (
+        f"{context['team']} mutation {token} asks for {unsupported_request[stage - 1]} in "
+        f"family {family} for {context['athlete']} at {context['session_identity']}. "
+        f"Record {context['production_scenario_id']} for {token} contains "
+        f"{context['test_identity']} "
+        f"evidence only; for {token}, what must be refused? What safe fact remains for {token}?"
+    )
+
+
+def _c17_mutation_question(context: dict[str, object], *, token: str, stage: int) -> str:
+    target = (
+        "presents the attached statement as supported",
+        "treats the attached statement as the corrective action",
+        "asks staff to preserve the attached statement after review",
+    )
+    if stage not in (1, 2, 3):
+        raise ValueError("C17 mutation stage is outside its frozen registry")
+    return (
+        f"{context['team']} mutation {token} {target[stage - 1]} for {context['athlete']} "
+        f"at {context['session_identity']}. Draft {context['production_scenario_id']} for "
+        f"{token} has origin {context['unsafe_response_origin']}; {token} cites "
+        f"{context['test_identity']} on {context['device_identity']}. For {token}, identify "
+        "the registered error and corrective boundary."
+    )
 
 
 def _mutation_question(
@@ -1773,6 +2136,48 @@ def _mutation_question(
     }
     if operator_id not in questions or stage not in (1, 2, 3):
         raise ValueError("production mutation operator/stage is outside its frozen registry")
+    question = (
+        _identity_mutation_question(
+            context,
+            capability_id=parent.capability_id,
+            token=token,
+            stage=stage,
+        )
+        if parent.capability_id in {"C01", "C03", "C04"}
+        and operator_id == "measurement-identity-trap"
+        else (
+            _c07_mutation_question(context, token=token, stage=stage)
+            if parent.capability_id == "C07" and operator_id == "comparability-overreach"
+            else (
+                (
+                    _c09_mutation_question(context, token=token, stage=stage)
+                    if parent.capability_id == "C09"
+                    else _c15_mutation_question(context, token=token, stage=stage)
+                )
+                if parent.capability_id in {"C09", "C15"}
+                and operator_id == "claim-boundary-overreach"
+                else (
+                    _c18_mutation_question(
+                        context,
+                        family=parent.benchmark_family,
+                        token=token,
+                        stage=stage,
+                    )
+                    if parent.capability_id == "C18" and operator_id == "safe-partial-refusal-trap"
+                    else (
+                        _c17_mutation_question(context, token=token, stage=stage)
+                        if parent.capability_id == "C17" and operator_id == "error-correction-trap"
+                        else questions[operator_id][stage - 1]
+                    )
+                )
+            )
+        )
+    )
+    question = _apply_adversarial_tag_focus(
+        question,
+        parent.adversarial_tags,
+        scenario_id=str(record),
+    )
     context.update(
         {
             "production_mutation_token": token,
@@ -1781,7 +2186,7 @@ def _mutation_question(
             "adversarial_claim_injected": True,
         }
     )
-    return questions[operator_id][stage - 1], context
+    return question, context
 
 
 def _mutation_child(
@@ -2079,7 +2484,10 @@ def build_production_authoring_draft(
         source_resolver=source_resolver,
     )
     duplication = audit_production_duplicates(packets)
-    feasibility = validate_production_hard_feasibility(commitments)
+    feasibility = validate_production_hard_feasibility(
+        commitments,
+        exact_shingle_colocation_pairs=duplication.exact_shingle_colocation_pairs,
+    )
     queue = build_production_review_queue(packets)
     validate_production_review_queue(queue, packets)
 

@@ -557,10 +557,13 @@ def validate_production_batch(
     )
     if stored_packets != tuple(sorted(packets, key=lambda item: item.candidate_id.encode("utf-8"))):
         raise ValueError("reloaded production packets differ from the supplied in-memory set")
-    computed_feasibility = validate_production_hard_feasibility(commitments)
+    computed_audit = audit_production_duplicates(packets)
+    computed_feasibility = validate_production_hard_feasibility(
+        commitments,
+        exact_shingle_colocation_pairs=computed_audit.exact_shingle_colocation_pairs,
+    )
     if computed_feasibility != feasibility_receipt:
         raise ValueError("feasibility receipt differs from exact current commitments")
-    computed_audit = audit_production_duplicates(packets)
     if (
         computed_audit != duplication_audit
         or duplication_audit.audit_digest != production_duplication_audit_digest(duplication_audit)

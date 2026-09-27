@@ -14,6 +14,7 @@ from dynamislm.benchmark.production import (
     PRODUCTION_BATCH_ID,
     ProductionAuthoringPlanV1,
     ProductionCandidateStoreReceiptV1,
+    audit_production_duplicates,
     bind_production_candidate_store_receipt,
     production_candidate_store_receipt_digest,
     validate_production_authoring_plan,
@@ -179,7 +180,11 @@ def write_production_candidate_store(
         source_resolver=source_resolver,
     )
     commitments = validate_production_candidate_set(packets, source_resolver=source_resolver)
-    validate_production_hard_feasibility(commitments)
+    duplication = audit_production_duplicates(packets)
+    validate_production_hard_feasibility(
+        commitments,
+        exact_shingle_colocation_pairs=duplication.exact_shingle_colocation_pairs,
+    )
     by_id = {item.candidate_id: item for item in commitments}
     if tuple(item.candidate_id for item in plan.items) != tuple(sorted(by_id)):
         raise ValueError("production plan and candidate packets have different candidate IDs")

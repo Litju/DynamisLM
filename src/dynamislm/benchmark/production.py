@@ -54,8 +54,92 @@ PRODUCTION_CANDIDATE_ID_PREFIX = "PSE-V1-CANDIDATE:"
 PRODUCTION_BATCH_ID = "PSE-V1-PRODUCTION/RES-115-CASE-AUTHORING-001C"
 PRODUCTION_AUTHORING_PROCESS_ID = "agent-process:codex:RES-115-CASE-AUTHORING-001C"
 _QUALIFICATION_AUTHORING_PROCESS_ID = "agent-process:codex:RES-115-CASE-AUTHORING-001B"
-PRODUCTION_AUTHORING_PLAN_VERSION = "pse-production-authoring-plan@1.0.0"
+PRODUCTION_AUTHORING_PLAN_VERSION = "pse-production-authoring-plan@1.1.0"
 PRODUCTION_BATCH_MANIFEST_VERSION = "pse-production-batch@1.0.0"
+PRODUCTION_SYNTHETIC_QUESTION_SURFACE_VARIANTS = (
+    ("F05", "PSE-V1-C08-REFUSAL-SURFACE@1.0.0:UNSUPPORTED_VS_ZERO"),
+    ("F06", "PSE-V1-C08-REFUSAL-SURFACE@1.0.0:METHOD_EXECUTABILITY"),
+    ("F13", "PSE-V1-C08-REFUSAL-SURFACE@1.0.0:INPUT_APPLICABILITY"),
+    ("F14", "PSE-V1-C08-REFUSAL-SURFACE@1.0.0:SAFE_PARTIAL_ACTION"),
+)
+_SYNTHETIC_QUESTION_VARIANT_BY_FAMILY = dict(PRODUCTION_SYNTHETIC_QUESTION_SURFACE_VARIANTS)
+PRODUCTION_C01_QUESTION_SURFACE_VARIANT_ID = "PSE-V1-C01-MEASURAND-IDENTITY-SURFACE@1.0.0"
+PRODUCTION_C02_QUESTION_SURFACE_VARIANT_ID = "PSE-V1-C02-PROTOCOL-EXTRACTION-SURFACE@1.0.0"
+PRODUCTION_C03_QUESTION_SURFACE_VARIANT_ID = "PSE-V1-C03-DISPLAY-LABEL-SURFACE@1.0.0"
+PRODUCTION_C04_QUESTION_SURFACE_VARIANT_ID = "PSE-V1-C04-VALUE-ORIGIN-SURFACE@1.0.0"
+PRODUCTION_C05_QUESTION_SURFACE_VARIANT_ID = "PSE-V1-C05-UNIT-PROVENANCE-SURFACE@1.0.0"
+PRODUCTION_C06_QUESTION_SURFACE_VARIANT_ID = "PSE-V1-C06-FRAME-EVENT-SURFACE@1.0.0"
+PRODUCTION_C09_QUESTION_SURFACE_VARIANT_ID = "PSE-V1-C09-CHANGE-CLAIM-SURFACE@1.0.0"
+PRODUCTION_C10_QUESTION_SURFACE_VARIANT_ID = "PSE-V1-C10-ANALYSIS-SUPPORT-SURFACE@1.0.0"
+PRODUCTION_C11_QUESTION_SURFACE_VARIANT_ID = "PSE-V1-C11-LEVEL-OF-ANALYSIS-SURFACE@1.0.0"
+PRODUCTION_C12_QUESTION_SURFACE_VARIANT_ID = "PSE-V1-C12-RELIABILITY-UNCERTAINTY-SURFACE@1.0.0"
+PRODUCTION_C17_QUESTION_SURFACE_VARIANT_ID = "PSE-V1-C17-ERROR-CLASSIFICATION-SURFACE@1.0.0"
+PRODUCTION_C14_QUESTION_SURFACE_VARIANT_ID = "PSE-V1-C14-EVIDENCE-APPLICABILITY-SURFACE@1.0.0"
+PRODUCTION_C15_QUESTION_SURFACE_VARIANT_ID = "PSE-V1-C15-CAUSAL-BOUNDARY-SURFACE@1.0.0"
+PRODUCTION_C15_MUTATION_QUESTION_SURFACE_VARIANT_ID = "PSE-V1-C15-CAUSAL-MUTATION-SURFACE@1.0.0"
+PRODUCTION_ENGINE_QUESTION_SURFACE_VARIANT_ID = "PSE-V1-ENGINE-QUESTION-SURFACE@1.0.0"
+PRODUCTION_SOURCE_QUESTION_SURFACE_VARIANT_ID = "PSE-V1-SOURCE-QUESTION-SURFACE@1.0.0"
+PRODUCTION_ADVERSARIAL_TAG_FOCUS_SURFACE_VERSION = "PSE-V1-ADVERSARIAL-TAG-FOCUS@1.0.0"
+PRODUCTION_IDENTITY_MUTATION_QUESTION_SURFACE_VARIANT_ID = "PSE-V1-IDENTITY-MUTATION-SURFACE@1.0.0"
+PRODUCTION_C07_QUESTION_SURFACE_VARIANT_ID = "PSE-V1-C07-COMPARABILITY-SURFACE@1.0.0"
+PRODUCTION_C07_MUTATION_QUESTION_SURFACE_VARIANT_ID = (
+    "PSE-V1-C07-COMPARABILITY-MUTATION-SURFACE@1.0.0"
+)
+PRODUCTION_C17_MUTATION_QUESTION_SURFACE_VARIANT_ID = "PSE-V1-C17-ERROR-MUTATION-SURFACE@1.0.0"
+PRODUCTION_C09_MUTATION_QUESTION_SURFACE_VARIANT_ID = "PSE-V1-C09-CLAIM-MUTATION-SURFACE@1.0.0"
+PRODUCTION_C18_QUESTION_SURFACE_VARIANT_ID = "PSE-V1-C18-REFUSAL-SURFACE@1.0.0"
+PRODUCTION_C18_MUTATION_QUESTION_SURFACE_VARIANT_ID = "PSE-V1-C18-REFUSAL-MUTATION-SURFACE@1.0.0"
+_SEMANTIC_QUESTION_VARIANT_BY_CAPABILITY = {
+    "C01": PRODUCTION_C01_QUESTION_SURFACE_VARIANT_ID,
+    "C02": PRODUCTION_C02_QUESTION_SURFACE_VARIANT_ID,
+    "C03": PRODUCTION_C03_QUESTION_SURFACE_VARIANT_ID,
+    "C04": PRODUCTION_C04_QUESTION_SURFACE_VARIANT_ID,
+    "C05": PRODUCTION_C05_QUESTION_SURFACE_VARIANT_ID,
+    "C06": PRODUCTION_C06_QUESTION_SURFACE_VARIANT_ID,
+    "C09": PRODUCTION_C09_QUESTION_SURFACE_VARIANT_ID,
+    "C10": PRODUCTION_C10_QUESTION_SURFACE_VARIANT_ID,
+    "C11": PRODUCTION_C11_QUESTION_SURFACE_VARIANT_ID,
+    "C12": PRODUCTION_C12_QUESTION_SURFACE_VARIANT_ID,
+    "C17": PRODUCTION_C17_QUESTION_SURFACE_VARIANT_ID,
+    "C07": PRODUCTION_C07_QUESTION_SURFACE_VARIANT_ID,
+    "C14": PRODUCTION_C14_QUESTION_SURFACE_VARIANT_ID,
+    "C15": PRODUCTION_C15_QUESTION_SURFACE_VARIANT_ID,
+}
+
+
+def _production_question_surface_variant_id(
+    origin: CaseOrigin, capability_id: str, family: str
+) -> str | None:
+    surface_id: str | None = None
+    if origin is CaseOrigin.DETERMINISTIC_SYNTHETIC and capability_id == "C08":
+        surface_id = _SYNTHETIC_QUESTION_VARIANT_BY_FAMILY.get(family)
+    elif origin is CaseOrigin.ADVERSARIAL_MUTATION:
+        surface_id = {
+            "C01": PRODUCTION_IDENTITY_MUTATION_QUESTION_SURFACE_VARIANT_ID,
+            "C03": PRODUCTION_IDENTITY_MUTATION_QUESTION_SURFACE_VARIANT_ID,
+            "C04": PRODUCTION_IDENTITY_MUTATION_QUESTION_SURFACE_VARIANT_ID,
+            "C07": PRODUCTION_C07_MUTATION_QUESTION_SURFACE_VARIANT_ID,
+            "C09": PRODUCTION_C09_MUTATION_QUESTION_SURFACE_VARIANT_ID,
+            "C15": PRODUCTION_C15_MUTATION_QUESTION_SURFACE_VARIANT_ID,
+            "C17": PRODUCTION_C17_MUTATION_QUESTION_SURFACE_VARIANT_ID,
+            "C18": PRODUCTION_C18_MUTATION_QUESTION_SURFACE_VARIANT_ID,
+        }.get(capability_id)
+    elif origin is CaseOrigin.DETERMINISTIC_ENGINE_DERIVED:
+        surface_id = PRODUCTION_ENGINE_QUESTION_SURFACE_VARIANT_ID
+    elif origin is CaseOrigin.SOURCE_BACKED_EVIDENCE_EXTRACTION:
+        surface_id = PRODUCTION_SOURCE_QUESTION_SURFACE_VARIANT_ID
+    elif origin is CaseOrigin.EXPERT_AUTHORED_SEMANTIC:
+        if capability_id == "C18":
+            surface_id = PRODUCTION_C18_QUESTION_SURFACE_VARIANT_ID
+        else:
+            surface_id = _SEMANTIC_QUESTION_VARIANT_BY_CAPABILITY.get(capability_id)
+    return (
+        f"{surface_id}:{PRODUCTION_ADVERSARIAL_TAG_FOCUS_SURFACE_VERSION}"
+        if surface_id is not None
+        else None
+    )
+
+
 FINAL_TARGET_CASES = 434
 PROSPECTIVE_SPLIT_COUNTS = (
     (SplitName.PUBLIC_DEVELOPMENT, 260),
@@ -131,6 +215,7 @@ class ProductionAuthoringPlanItemV1:
     expected_answer_kind: ExpectedAnswerKind
     safe_partial_support: bool
     difficulty: DifficultyLevel
+    question_surface_variant_id: str | None = None
 
     def __post_init__(self) -> None:
         _candidate_id(self.candidate_id)
@@ -196,6 +281,7 @@ class ProductionAuthoringPlanItemV1:
             "seed_block",
             "mutation_lineage_id",
             "parent_candidate_id",
+            "question_surface_variant_id",
         ):
             _optional_text(getattr(self, name), name)
         if self.expert_author_batch_id in {
@@ -326,6 +412,13 @@ def validate_production_authoring_plan(plan: ProductionAuthoringPlanV1) -> None:
         recipe = recipe_by_id.get(item.recipe_id)
         if recipe is None or recipe.recipe_version != item.recipe_version:
             raise ValueError("production plan references an unknown authoring recipe")
+        expected_surface_variant = _production_question_surface_variant_id(
+            item.origin_class,
+            item.capability_id,
+            item.benchmark_family,
+        )
+        if item.question_surface_variant_id != expected_surface_variant:
+            raise ValueError("production plan question surface variant is stale or unauthorized")
         if (recipe.capability_id, recipe.benchmark_family) != (
             item.capability_id,
             item.benchmark_family,
@@ -478,6 +571,11 @@ def production_plan_item_from_packet(
             )
         ),
         difficulty=packet.difficulty.level,
+        question_surface_variant_id=_production_question_surface_variant_id(
+            provenance.origin_class,
+            packet.capability_id,
+            packet.benchmark_family,
+        ),
     )
 
 
@@ -664,7 +762,7 @@ def validate_production_isolation(
     )
 
 
-PRODUCTION_FEASIBILITY_ALGORITHM = "PSE-V1-PRE-REVIEW-FEASIBILITY@1.0.0"
+PRODUCTION_FEASIBILITY_ALGORITHM = "PSE-V1-PRE-REVIEW-FEASIBILITY@1.1.0"
 
 
 class ProductionFeasibilityBlocked(ValueError):  # noqa: N818 - status is part of the gate contract
@@ -699,6 +797,8 @@ class ProductionFeasibilityReceiptV1:
     protected_critical_error_count_by_split: tuple[tuple[SplitName, int], ...]
     answerable_case_count_by_split: tuple[tuple[SplitName, int], ...]
     c18_refusal_cell_count_by_split: tuple[tuple[SplitName, int], ...]
+    exact_shingle_colocation_pair_count: int
+    exact_shingle_colocation_digest: str
     commitments_digest: str
     feasibility_witness_digest: str
     receipt_digest: str
@@ -712,6 +812,8 @@ class ProductionFeasibilityReceiptV1:
             raise ValueError("feasibility receipt must bind exact 260/87/87 targets")
         if self.atomic_cluster_count < 1:
             raise ValueError("feasibility receipt requires atomic clusters")
+        if self.exact_shingle_colocation_pair_count < 0:
+            raise ValueError("exact-shingle co-location pair count cannot be negative")
         if (
             sum(count for _size, count in self.cluster_size_distribution)
             != self.atomic_cluster_count
@@ -760,6 +862,7 @@ class ProductionFeasibilityReceiptV1:
             if name == "answerable" and any(count < 1 for _split, count in values):
                 raise ValueError("each split requires at least one answerable candidate")
         for name in (
+            "exact_shingle_colocation_digest",
             "commitments_digest",
             "feasibility_witness_digest",
             "receipt_digest",
@@ -828,13 +931,49 @@ def _validate_feasibility_item(item: ProductionAuthoringPlanItemV1) -> None:
 
 def _feasibility_clusters(
     commitments: tuple[ProductionCandidateCommitmentV1, ...],
+    *,
+    exact_shingle_colocation_pairs: tuple[tuple[str, str], ...] = (),
 ) -> tuple[_FeasibilityCluster, ...]:
-    grouped: dict[str, list[ProductionAuthoringPlanItemV1]] = defaultdict(list)
+    items_by_id = {item.candidate_id: item for item in (c.item for c in commitments)}
+    parent = {candidate_id: candidate_id for candidate_id in items_by_id}
+
+    def find(candidate_id: str) -> str:
+        root = candidate_id
+        while parent[root] != root:
+            root = parent[root]
+        while parent[candidate_id] != candidate_id:
+            next_id = parent[candidate_id]
+            parent[candidate_id] = root
+            candidate_id = next_id
+        return root
+
+    def union(left: str, right: str) -> None:
+        left_root, right_root = find(left), find(right)
+        if left_root != right_root:
+            first, second = sorted((left_root, right_root), key=lambda value: value.encode("utf-8"))
+            parent[second] = first
+
+    by_isolation_cluster: dict[str, list[str]] = defaultdict(list)
     for commitment in commitments:
-        grouped[commitment.item.isolation_cluster_id].append(commitment.item)
+        by_isolation_cluster[commitment.item.isolation_cluster_id].append(commitment.candidate_id)
+    for candidate_ids in by_isolation_cluster.values():
+        for candidate_id in candidate_ids[1:]:
+            union(candidate_ids[0], candidate_id)
+    for left, right in exact_shingle_colocation_pairs:
+        union(left, right)
+
+    grouped: dict[str, list[ProductionAuthoringPlanItemV1]] = defaultdict(list)
+    for candidate_id, item in items_by_id.items():
+        grouped[find(candidate_id)].append(item)
     clusters: list[_FeasibilityCluster] = []
-    for cluster_id, raw_items in grouped.items():
+    for raw_items in grouped.values():
         items = tuple(sorted(raw_items, key=lambda item: item.candidate_id.encode("utf-8")))
+        isolation_cluster_ids = tuple(
+            sorted(
+                {item.isolation_cluster_id for item in items},
+                key=lambda value: value.encode("utf-8"),
+            )
+        )
         locked_splits = {
             parse_production_seed_namespace(item.seed_namespace).split_name
             for item in items
@@ -845,12 +984,23 @@ def _feasibility_clusters(
             raise ProductionFeasibilityBlocked(
                 "one atomic cluster has incompatible synthetic seed split constraints"
             )
-        cluster_key = canonical_hash(
+        cluster_key_payload = (
             {
-                "isolation_cluster_id": cluster_id,
+                "isolation_cluster_id": isolation_cluster_ids[0],
                 "candidate_ids": tuple(item.candidate_id for item in items),
             }
-        ).removeprefix("sha256:")
+            if len(isolation_cluster_ids) == 1
+            else {
+                "co_located_isolation_cluster_ids": isolation_cluster_ids,
+                "candidate_ids": tuple(item.candidate_id for item in items),
+            }
+        )
+        cluster_key = canonical_hash(cluster_key_payload).removeprefix("sha256:")
+        cluster_id = (
+            isolation_cluster_ids[0]
+            if len(isolation_cluster_ids) == 1
+            else "co-located:" + canonical_hash(isolation_cluster_ids).removeprefix("sha256:")
+        )
         clusters.append(
             _FeasibilityCluster(
                 isolation_cluster_id=cluster_id,
@@ -921,232 +1071,211 @@ def _anchor_feasibility_coverage(
     clusters: tuple[_FeasibilityCluster, ...],
 ) -> dict[int, int]:
     targets = tuple(count for _split, count in PROSPECTIVE_SPLIT_COUNTS)
-    assignments: dict[int, int] = {}
-    counts = [0, 0, 0]
-    requirements = [
-        (rank, row, family)
-        for rank in range(3)
-        for row in COVERAGE_MATRIX
-        for family in row.benchmark_families
-    ]
-    requirements.sort(
-        key=lambda requirement: (
-            sum(
-                _cluster_has_cell_obligation(cluster, requirement[1], requirement[2])
-                and (cluster.locked_rank is None or cluster.locked_rank == requirement[0])
-                for cluster in clusters
-            ),
-            requirement[0],
-            requirement[1].capability_id,
-            requirement[2],
+    assignments: dict[int, int] = {
+        index: cluster.locked_rank
+        for index, cluster in enumerate(clusters)
+        if cluster.locked_rank is not None
+    }
+    used = [0, 0, 0]
+    for index, rank in assignments.items():
+        used[rank] += clusters[index].size
+    if any(used[rank] > targets[rank] for rank in range(3)):
+        raise ProductionFeasibilityBlocked("split-locked clusters exceed an exact split capacity")
+
+    requirements: list[tuple[int, str, CoverageRow | None, str | None, object | None, int]] = []
+    for rank in range(3):
+        for row in COVERAGE_MATRIX:
+            requirements.extend(
+                (rank, "cell", row, family, None, 1) for family in row.benchmark_families
+            )
+        requirements.extend(
+            (rank, "c18", _row_by_capability("C18"), family, None, 1)
+            for family in _row_by_capability("C18").benchmark_families
         )
+        requirements.append((rank, "answerable", None, None, None, 1))
+        requirements.extend(
+            (rank, "tag", row, None, tag, 1)
+            for row in COVERAGE_MATRIX
+            for tag in row.adversarial_tags
+        )
+        requirements.extend(
+            (rank, "error", row, None, error, 1)
+            for row in COVERAGE_MATRIX
+            for error in row.error_classes
+        )
+    requirements.extend(
+        (rank, "critical", None, None, error, 2)
+        for rank in (1, 2)
+        for error in CRITICAL_ERROR_CLASSES
     )
 
-    for rank, row, family in requirements:
-        if any(
-            assigned_rank == rank and _cluster_has_cell_obligation(clusters[index], row, family)
-            for index, assigned_rank in assignments.items()
-        ):
-            continue
-        options = [
-            index
-            for index, cluster in enumerate(clusters)
-            if index not in assignments
-            and (cluster.locked_rank is None or cluster.locked_rank == rank)
-            and counts[rank] + cluster.size <= targets[rank]
-            and _cluster_has_cell_obligation(cluster, row, family)
-        ]
-        if not options:
-            raise ProductionFeasibilityBlocked(
-                f"no eligible atomic cluster for {row.capability_id}x{family} in "
-                f"{PROSPECTIVE_SPLIT_COUNTS[rank][0].value}"
-            )
-        selected = min(
-            options,
-            key=lambda index: (
-                -sum(
-                    _cluster_has_cell_obligation(clusters[index], other_row, other_family)
-                    for other_row in COVERAGE_MATRIX
-                    for other_family in other_row.benchmark_families
-                ),
-                clusters[index].size,
-                0 if clusters[index].preferred_rank == rank else 1,
-                clusters[index].cluster_key.encode("utf-8"),
-            ),
-        )
-        assignments[selected] = rank
-        counts[rank] += clusters[selected].size
-
-    # C18 declares explicit refusal behavior for every frozen family in D/V/H.
-    for rank, (split, _target) in enumerate(PROSPECTIVE_SPLIT_COUNTS):
-        for family in _row_by_capability("C18").benchmark_families:
-            if any(
-                assigned_rank == rank and _cluster_has_c18_refusal(clusters[index], family)
-                for index, assigned_rank in assignments.items()
-            ):
-                continue
-            options = [
-                index
-                for index, cluster in enumerate(clusters)
-                if index not in assignments
-                and (cluster.locked_rank is None or cluster.locked_rank == rank)
-                and counts[rank] + cluster.size <= targets[rank]
-                and _cluster_has_c18_refusal(cluster, family)
-            ]
-            if not options:
-                raise ProductionFeasibilityBlocked(
-                    f"no eligible atomic refusal candidate for C18x{family} in {split.value}"
-                )
-            selected = min(
-                options,
-                key=lambda index: (
-                    clusters[index].size,
-                    0 if clusters[index].preferred_rank == rank else 1,
-                    clusters[index].cluster_key.encode("utf-8"),
-                ),
-            )
-            assignments[selected] = rank
-            counts[rank] += clusters[selected].size
-
-    for rank, (split, _target) in enumerate(PROSPECTIVE_SPLIT_COUNTS):
-        if any(
-            chosen_rank == rank
-            and any(
-                item.refusal_decision is not RefusalDecision.REQUIRED
-                and item.expected_answer_kind is not ExpectedAnswerKind.REFUSAL
-                for item in clusters[index].items
-            )
-            for index, chosen_rank in assignments.items()
-        ):
-            continue
-        options = [
-            index
-            for index, cluster in enumerate(clusters)
-            if index not in assignments
-            and (cluster.locked_rank is None or cluster.locked_rank == rank)
-            and counts[rank] + cluster.size <= targets[rank]
-            and any(
+    def covers(
+        cluster: _FeasibilityCluster,
+        requirement: tuple[int, str, CoverageRow | None, str | None, object | None, int],
+    ) -> bool:
+        _rank, kind, row, family, feature, _demand = requirement
+        if kind == "cell":
+            assert row is not None and family is not None
+            return _cluster_has_cell_obligation(cluster, row, family)
+        if kind == "c18":
+            assert family is not None
+            return _cluster_has_c18_refusal(cluster, family)
+        if kind == "answerable":
+            return any(
                 item.refusal_decision is not RefusalDecision.REQUIRED
                 and item.expected_answer_kind is not ExpectedAnswerKind.REFUSAL
                 for item in cluster.items
             )
-        ]
-        if not options:
-            raise ProductionFeasibilityBlocked(
-                f"no answerable candidate can be assigned to {split.value}"
+        if kind == "tag":
+            assert row is not None
+            return any(
+                _feasibility_row_eligible(item, row) and feature in item.adversarial_tags
+                for item in cluster.items
             )
-        selected = min(
+        if kind == "error":
+            assert row is not None
+            return any(
+                _feasibility_row_eligible(item, row) and feature in item.reachable_error_classes
+                for item in cluster.items
+            )
+        assert kind == "critical" and isinstance(feature, ErrorClass)
+        return any(
+            _feasibility_row_eligible(item, _row_by_capability(item.capability_id))
+            and feature in item.reachable_error_classes
+            for item in cluster.items
+        )
+
+    def failure_message(
+        requirement: tuple[int, str, CoverageRow | None, str | None, object | None, int],
+    ) -> str:
+        rank, kind, row, family, feature, _demand = requirement
+        split = PROSPECTIVE_SPLIT_COUNTS[rank][0].value
+        if kind == "cell":
+            assert row is not None and family is not None
+            return f"no eligible atomic cluster for {row.capability_id}x{family} in {split}"
+        if kind == "c18":
+            assert family is not None
+            return f"no eligible atomic refusal candidate for C18x{family} in {split}"
+        if kind == "answerable":
+            return f"no answerable candidate can be assigned to {split}"
+        if kind in {"tag", "error"}:
+            assert row is not None
+            return f"no eligible atomic cluster for {row.capability_id} {kind} coverage in {split}"
+        return f"critical error {getattr(feature, 'value', feature)} is unavailable in {split}"
+
+    candidates_by_requirement = tuple(
+        (
+            requirement,
+            tuple(index for index, cluster in enumerate(clusters) if covers(cluster, requirement)),
+        )
+        for requirement in requirements
+    )
+    if any(
+        len(candidates) < requirement[5] for requirement, candidates in candidates_by_requirement
+    ):
+        requirement = next(
+            requirement
+            for requirement, candidates in candidates_by_requirement
+            if len(candidates) < requirement[5]
+        )
+        raise ProductionFeasibilityBlocked(failure_message(requirement))
+
+    split_priority = {1: 0, 2: 1, 0: 2}
+    kind_priority = {"cell": 0, "c18": 1, "critical": 2, "tag": 3, "error": 4, "answerable": 5}
+    failures: list[str] = []
+    seen: set[tuple[tuple[int, int], ...]] = set()
+    attempts = 0
+
+    def search(current: dict[int, int], counts: list[int]) -> dict[int, int] | None:
+        nonlocal attempts
+        attempts += 1
+        # ponytail: bounded deterministic search; raise the cap if the frozen batch grows.
+        if attempts > 250_000:
+            raise ProductionFeasibilityBlocked(
+                "bounded deterministic feasibility anchor search state budget exceeded"
+            )
+        state = tuple(sorted(current.items()))
+        if state in seen:
+            return None
+        seen.add(state)
+
+        choices = []
+        for requirement, candidates in candidates_by_requirement:
+            rank, kind, row, family, feature, demand = requirement
+            covered = sum(
+                assigned_rank == rank and index in candidates
+                for index, assigned_rank in current.items()
+            )
+            need = demand - covered
+            if need <= 0:
+                continue
+            options = tuple(
+                index
+                for index in candidates
+                if index not in current
+                and (clusters[index].locked_rank is None or clusters[index].locked_rank == rank)
+                and counts[rank] + clusters[index].size <= targets[rank]
+            )
+            if len(options) < need:
+                failures.append(failure_message(requirement))
+                return None
+            slack = len(options) - need
+            choices.append(
+                (
+                    (
+                        slack,
+                        len(options),
+                        split_priority[rank],
+                        kind_priority[kind],
+                        row.capability_id if row is not None else "",
+                        family or "",
+                        str(getattr(feature, "value", feature) or ""),
+                    ),
+                    requirement,
+                    options,
+                )
+            )
+
+        if not choices:
+            try:
+                _fill_feasibility_counts(clusters, current)
+            except ProductionFeasibilityBlocked as exc:
+                failures.append(str(exc))
+                return None
+            return current
+
+        _key, requirement, options = min(choices, key=lambda item: item[0])
+        rank = requirement[0]
+        other_options = tuple(
+            (other_requirement, indices)
+            for _other_key, other_requirement, indices in choices
+            if other_requirement[0] == rank
+        )
+        ordered_options = sorted(
             options,
             key=lambda index: (
+                -sum(index in indices for _other_requirement, indices in other_options),
                 clusters[index].size,
                 0 if clusters[index].preferred_rank == rank else 1,
                 clusters[index].cluster_key.encode("utf-8"),
             ),
         )
-        assignments[selected] = rank
-        counts[rank] += clusters[selected].size
+        for index in ordered_options:
+            next_current = dict(current)
+            next_current[index] = rank
+            next_counts = counts.copy()
+            next_counts[rank] += clusters[index].size
+            result = search(next_current, next_counts)
+            if result is not None:
+                return result
+        return None
 
-    # The row-level tag/error obligations are separate from the cell intersection.
-    for rank, (split, _target) in enumerate(PROSPECTIVE_SPLIT_COUNTS):
-        for row in COVERAGE_MATRIX:
-            relevant = tuple(
-                item
-                for cluster_index, chosen_rank in assignments.items()
-                if chosen_rank == rank
-                for item in clusters[cluster_index].items
-                if _feasibility_row_eligible(item, row)
-            )
-            represented_tags = {tag for item in relevant for tag in item.adversarial_tags}
-            represented_errors = {
-                error for item in relevant for error in item.reachable_error_classes
-            }
-            missing = [("tag", tag) for tag in row.adversarial_tags if tag not in represented_tags]
-            missing.extend(
-                ("error", error) for error in row.error_classes if error not in represented_errors
-            )
-            for feature_kind, feature in missing:
-                if (
-                    feature in represented_tags
-                    if feature_kind == "tag"
-                    else feature in represented_errors
-                ):
-                    continue
-                options = [
-                    index
-                    for index, cluster in enumerate(clusters)
-                    if index not in assignments
-                    and (cluster.locked_rank is None or cluster.locked_rank == rank)
-                    and counts[rank] + cluster.size <= targets[rank]
-                    and any(
-                        _feasibility_row_eligible(item, row)
-                        and (
-                            feature in item.adversarial_tags
-                            if feature_kind == "tag"
-                            else feature in item.reachable_error_classes
-                        )
-                        for item in cluster.items
-                    )
-                ]
-                if not options:
-                    raise ProductionFeasibilityBlocked(
-                        f"no eligible atomic cluster for {row.capability_id} {feature_kind} "
-                        f"coverage in {split.value}"
-                    )
-                selected = min(
-                    options,
-                    key=lambda index: (
-                        clusters[index].size,
-                        0 if clusters[index].preferred_rank == rank else 1,
-                        clusters[index].cluster_key.encode("utf-8"),
-                    ),
-                )
-                assignments[selected] = rank
-                counts[rank] += clusters[selected].size
-                for item in clusters[selected].items:
-                    if _feasibility_row_eligible(item, row):
-                        represented_tags.update(item.adversarial_tags)
-                        represented_errors.update(item.reachable_error_classes)
-
-    for rank in (1, 2):
-        for error_class in CRITICAL_ERROR_CLASSES:
-            if any(
-                chosen_rank == rank
-                and any(
-                    _feasibility_row_eligible(item, _row_by_capability(item.capability_id))
-                    and error_class in item.reachable_error_classes
-                    for item in clusters[index].items
-                )
-                for index, chosen_rank in assignments.items()
-            ):
-                continue
-            options = [
-                index
-                for index, cluster in enumerate(clusters)
-                if index not in assignments
-                and (cluster.locked_rank is None or cluster.locked_rank == rank)
-                and counts[rank] + cluster.size <= targets[rank]
-                and any(
-                    error_class in item.reachable_error_classes
-                    and _feasibility_row_eligible(item, _row_by_capability(item.capability_id))
-                    for item in cluster.items
-                )
-            ]
-            if not options:
-                raise ProductionFeasibilityBlocked(
-                    f"critical error {error_class.value} is unavailable in "
-                    f"{PROSPECTIVE_SPLIT_COUNTS[rank][0].value}"
-                )
-            selected = min(
-                options,
-                key=lambda index: (
-                    clusters[index].size,
-                    0 if clusters[index].preferred_rank == rank else 1,
-                    clusters[index].cluster_key.encode("utf-8"),
-                ),
-            )
-            assignments[selected] = rank
-            counts[rank] += clusters[selected].size
-    return assignments
+    result = search(assignments, used)
+    if result is None:
+        raise ProductionFeasibilityBlocked(
+            failures[-1] if failures else "coverage anchors have no exact-capacity witness"
+        )
+    return result
 
 
 def _fill_feasibility_counts(
@@ -1238,6 +1367,8 @@ def _fill_feasibility_counts(
 
 def validate_production_hard_feasibility(
     commitments: tuple[ProductionCandidateCommitmentV1, ...],
+    *,
+    exact_shingle_colocation_pairs: tuple[tuple[str, str], ...] = (),
 ) -> ProductionFeasibilityReceiptV1:
     """Prove a legal 260/87/87 allocation using pre-review commitments only."""
 
@@ -1257,10 +1388,36 @@ def validate_production_hard_feasibility(
         raise ProductionFeasibilityBlocked(
             "production commitments require unique IDs and payload hashes"
         )
+    candidate_id_set = set(candidate_ids)
+    if not isinstance(exact_shingle_colocation_pairs, tuple) or any(
+        not isinstance(pair, tuple)
+        or len(pair) != 2
+        or any(not isinstance(candidate_id, str) for candidate_id in pair)
+        for pair in exact_shingle_colocation_pairs
+    ):
+        raise ProductionFeasibilityBlocked("exact-shingle co-location constraints are malformed")
+    if any(
+        left == right
+        or left.encode("utf-8") >= right.encode("utf-8")
+        or left not in candidate_id_set
+        or right not in candidate_id_set
+        for left, right in exact_shingle_colocation_pairs
+    ) or exact_shingle_colocation_pairs != tuple(
+        sorted(
+            set(exact_shingle_colocation_pairs),
+            key=lambda pair: (pair[0].encode("utf-8"), pair[1].encode("utf-8")),
+        )
+    ):
+        raise ProductionFeasibilityBlocked(
+            "exact-shingle co-location constraints are not canonical"
+        )
     for commitment in commitments:
         _validate_feasibility_item(commitment.item)
     validate_production_isolation(commitments)
-    clusters = _feasibility_clusters(commitments)
+    clusters = _feasibility_clusters(
+        commitments,
+        exact_shingle_colocation_pairs=exact_shingle_colocation_pairs,
+    )
     targets = tuple(count for _split, count in PROSPECTIVE_SPLIT_COUNTS)
     for cluster in clusters:
         if cluster.size > max(targets):
@@ -1402,6 +1559,8 @@ def validate_production_hard_feasibility(
             for rank, (split, _count) in enumerate(PROSPECTIVE_SPLIT_COUNTS)
         ),
         commitments_digest=canonical_hash(commitments),
+        exact_shingle_colocation_pair_count=len(exact_shingle_colocation_pairs),
+        exact_shingle_colocation_digest=canonical_hash(exact_shingle_colocation_pairs),
         feasibility_witness_digest=witness_digest,
         receipt_digest="sha256:" + "0" * 64,
     )
@@ -1793,9 +1952,10 @@ class ProductionDuplicationAuditV1:
     blocking_fuzzy_overlap_pairs: int
     unrelated_blocking_overlaps: int
     audit_digest: str
+    exact_shingle_colocation_pairs: tuple[tuple[str, str], ...] = ()
 
     def __post_init__(self) -> None:
-        if self.algorithm_id != "PSE-V1-INTRA-DUPLICATION-AUDIT@1.0.0":
+        if self.algorithm_id != "PSE-V1-INTRA-DUPLICATION-AUDIT@1.1.0":
             raise ValueError("unsupported production duplication audit algorithm")
         if self.candidate_count != FINAL_TARGET_CASES:
             raise ValueError("duplication audit must bind exactly 434 candidates")
@@ -1805,12 +1965,30 @@ class ProductionDuplicationAuditV1:
                 self.exact_payload_duplicate_pairs,
                 self.exact_question_duplicate_pairs,
                 self.normalized_question_duplicate_pairs,
-                self.exact_13_token_overlap_pairs,
                 self.blocking_fuzzy_overlap_pairs,
                 self.unrelated_blocking_overlaps,
             )
         ):
             raise ValueError("production duplication audit cannot contain blocking overlaps")
+        if self.exact_13_token_overlap_pairs != len(self.exact_shingle_colocation_pairs):
+            raise ValueError("exact-shingle count differs from pending co-location constraints")
+        if any(
+            not isinstance(pair, tuple)
+            or len(pair) != 2
+            or any(not isinstance(candidate_id, str) for candidate_id in pair)
+            for pair in self.exact_shingle_colocation_pairs
+        ):
+            raise ValueError("exact-shingle co-location pairs are malformed")
+        if any(
+            left == right or left.encode("utf-8") >= right.encode("utf-8")
+            for left, right in self.exact_shingle_colocation_pairs
+        ) or self.exact_shingle_colocation_pairs != tuple(
+            sorted(
+                set(self.exact_shingle_colocation_pairs),
+                key=lambda pair: (pair[0].encode("utf-8"), pair[1].encode("utf-8")),
+            )
+        ):
+            raise ValueError("exact-shingle co-location pairs must be unique and canonical")
         for name in ("candidate_set_digest", "audit_digest"):
             if _SHA256.fullmatch(getattr(self, name)) is None:
                 raise ValueError(f"{name} must be a SHA-256 digest")
@@ -1835,7 +2013,7 @@ def _token_grams(tokens: tuple[str, ...], width: int = 5) -> frozenset[tuple[str
 def audit_production_duplicates(
     packets: tuple[CandidateReviewPacket, ...],
 ) -> ProductionDuplicationAuditV1:
-    """Reject frozen V1 exact and fuzzy question overlaps outside parent-child edges."""
+    """Reject exact duplicates and fuzzy-only overlaps; retain exact-shingle constraints."""
 
     if len(packets) != FINAL_TARGET_CASES:
         raise ValueError("production duplication audit requires exactly 434 packets")
@@ -1926,12 +2104,33 @@ def audit_production_duplicates(
 
     for candidate_id in by_id:
         visit(candidate_id)
-    direct_parent_pairs = {
-        frozenset((item.candidate_id, item.parent_candidate_binding.parent_candidate_id))
-        for item in packets
-        if item.parent_candidate_binding is not None
-    }
+
+    def is_lineage_ancestor(ancestor_id: str, descendant_id: str) -> bool:
+        current = descendant_id
+        lineage_ids: set[str] = set()
+        while current in parent_by_child:
+            child = by_id[current]
+            lineage_id = child.proposed_provenance.mutation_lineage_id
+            if lineage_id is None:
+                return False
+            lineage_ids.add(lineage_id)
+            current = parent_by_child[current]
+            if current == ancestor_id:
+                ancestor = by_id[ancestor_id]
+                return (
+                    len(lineage_ids) == 1
+                    and ancestor.isolation.isolation_cluster_id
+                    == child.isolation.isolation_cluster_id
+                    and ancestor.contamination.source_family_id
+                    == child.contamination.source_family_id
+                )
+        return False
+
+    def is_authorized_mutation_pair(left_id: str, right_id: str) -> bool:
+        return is_lineage_ancestor(left_id, right_id) or is_lineage_ancestor(right_id, left_id)
+
     exact_payload = exact_question = normalized = shingles = fuzzy = blocking = 0
+    exact_shingle_colocation_pairs: list[tuple[str, str]] = []
     ordered = tuple(sorted(packets, key=lambda item: item.candidate_id.encode("utf-8")))
     source_span_candidates: dict[tuple[str, str], list[CandidateReviewPacket]] = defaultdict(list)
     for packet in ordered:
@@ -1944,7 +2143,7 @@ def audit_production_duplicates(
             continue
         for index, left in enumerate(span_packets):
             for right in span_packets[index + 1 :]:
-                if frozenset((left.candidate_id, right.candidate_id)) not in direct_parent_pairs:
+                if not is_authorized_mutation_pair(left.candidate_id, right.candidate_id):
                     raise ValueError("unrelated production candidates reuse an exact source span")
     metrics = {}
     for packet in ordered:
@@ -1967,24 +2166,28 @@ def audit_production_duplicates(
             left.candidate_id
         ]
         for right in ordered[index + 1 :]:
-            if frozenset((left.candidate_id, right.candidate_id)) in direct_parent_pairs:
+            if is_authorized_mutation_pair(left.candidate_id, right.candidate_id):
                 continue
             right_normalized, right_shingles, right_token_grams, right_char_grams, right_text = (
                 metrics[right.candidate_id]
             )
-            pair_blocked = False
-            if left.candidate_payload_hash == right.candidate_payload_hash:
+            exact_payload_duplicate = left.candidate_payload_hash == right.candidate_payload_hash
+            exact_question_duplicate = left.question == right.question
+            normalized_question_duplicate = left_normalized == right_normalized
+            exact_shingle_overlap = bool(left_shingles.intersection(right_shingles))
+            if exact_payload_duplicate:
                 exact_payload += 1
-                pair_blocked = True
-            if left.question == right.question:
+            if exact_question_duplicate:
                 exact_question += 1
-                pair_blocked = True
-            if left_normalized == right_normalized:
+            if normalized_question_duplicate:
                 normalized += 1
-                pair_blocked = True
-            if left_shingles.intersection(right_shingles):
+            if exact_payload_duplicate or exact_question_duplicate or normalized_question_duplicate:
+                blocking += 1
+                continue
+            if exact_shingle_overlap:
                 shingles += 1
-                pair_blocked = True
+                exact_shingle_colocation_pairs.append((left.candidate_id, right.candidate_id))
+                continue
             token_union = left_token_grams | right_token_grams
             token_similarity = (
                 len(left_token_grams & right_token_grams) / len(token_union) if token_union else 1.0
@@ -1999,15 +2202,14 @@ def audit_production_duplicates(
                 or normalized_edit_similarity_at_least(left_text, right_text, 0.90)
             ):
                 fuzzy += 1
-                pair_blocked = True
-            blocking += pair_blocked
+                blocking += 1
     if blocking:
         raise ValueError(f"unrelated production duplication audit found {blocking} blocking pairs")
     candidate_set_digest = canonical_hash(
         tuple((item.candidate_id, item.candidate_payload_hash) for item in ordered)
     )
     provisional = ProductionDuplicationAuditV1(
-        algorithm_id="PSE-V1-INTRA-DUPLICATION-AUDIT@1.0.0",
+        algorithm_id="PSE-V1-INTRA-DUPLICATION-AUDIT@1.1.0",
         candidate_count=FINAL_TARGET_CASES,
         candidate_set_digest=candidate_set_digest,
         exact_payload_duplicate_pairs=exact_payload,
@@ -2017,6 +2219,7 @@ def audit_production_duplicates(
         blocking_fuzzy_overlap_pairs=fuzzy,
         unrelated_blocking_overlaps=blocking,
         audit_digest="sha256:" + "0" * 64,
+        exact_shingle_colocation_pairs=tuple(exact_shingle_colocation_pairs),
     )
     return replace(provisional, audit_digest=production_duplication_audit_digest(provisional))
 
