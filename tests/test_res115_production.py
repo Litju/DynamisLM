@@ -4,7 +4,7 @@ import hashlib
 import subprocess
 from dataclasses import replace
 from pathlib import Path
-from typing import cast
+from typing import Literal, cast
 
 import pytest
 
@@ -34,6 +34,7 @@ from dynamislm.benchmark.production import (
     PRODUCTION_BATCH_ID,
     PRODUCTION_BATCH_MANIFEST_VERSION,
     ProductionAuthoringPlanItemV1,
+    ProductionAuthoringPlanV1,
     ProductionBatchManifestV1,
     ProductionCandidateCommitmentV1,
     ProductionFeasibilityBlocked,
@@ -731,3 +732,675 @@ def test_transient_cache_bytes_and_process_rss_are_separate_metrics(tmp_path: Pa
     assert metrics["PROCESS_PEAK_RSS_MB"] == 321.0
     assert metrics["TRANSIENT_CACHE_PEAK_MB"] != metrics["PROCESS_PEAK_RSS_MB"]
     assert metrics["PROCESS_RSS_REPORTED_SEPARATELY"] == "YES"
+
+
+def _store_roundtrip_fixture() -> tuple[
+    tuple[CandidateReviewPacket, ...],
+    QualificationExclusionCommitmentV1,
+    ProductionAuthoringPlanV1,
+]:
+    from dynamislm.benchmark.authoring import authoring_recipe_registry_digest
+    from dynamislm.benchmark.coverage import coverage_manifest_digest
+    from dynamislm.benchmark.production import (
+        PRODUCTION_AUTHORING_PLAN_VERSION,
+        ProductionAuthoringPlanV1,
+        bind_production_authoring_plan,
+        production_plan_item_from_packet,
+    )
+
+    exclusion = _qualification_exclusion("synthetic storage exclusion fixture")
+    packets = tuple(
+        _production_packet(
+            " ".join(
+                hashlib.sha256(f"storage-fixture:{candidate}:{word}".encode()).hexdigest()[:10]
+                for word in range(18)
+            ),
+            candidate_id=f"PSE-V1-CANDIDATE:store:{candidate:03d}",
+        )
+        for candidate in range(434)
+    )
+    items = tuple(production_plan_item_from_packet(packet) for packet in packets)
+    return (
+        packets,
+        exclusion,
+        bind_production_authoring_plan(
+            ProductionAuthoringPlanV1(
+                batch_id=PRODUCTION_BATCH_ID,
+                plan_version=PRODUCTION_AUTHORING_PLAN_VERSION,
+                authoring_process_id=PRODUCTION_AUTHORING_PROCESS_ID,
+                target_case_count=434,
+                coverage_matrix_digest=coverage_manifest_digest(),
+                recipe_registry_digest=authoring_recipe_registry_digest(),
+                qualification_exclusion_digest=exclusion.commitment_digest,
+                items=items,
+                plan_digest="sha256:" + "0" * 64,
+            )
+        ),
+    )
+
+
+def _bounded_semantic_packet_fixture(
+    packets: tuple[CandidateReviewPacket, ...],
+) -> tuple[CandidateReviewPacket, ...]:
+    clustered = []
+    for index, packet in enumerate(packets):
+        batch = index // 2
+        family_id = f"fixture-source-family:{packet.candidate_id}"
+        clustered.append(
+            bind_candidate_review_packet(
+                replace(
+                    packet,
+                    contamination=replace(
+                        packet.contamination,
+                        source_family_id=family_id,
+                        expert_author_batch_id=f"fixture-bounded-batch:{batch:03d}",
+                        protocol_template_id=f"fixture-template:{batch:03d}",
+                    ),
+                    isolation=replace(
+                        packet.isolation,
+                        source_family_id=family_id,
+                        isolation_cluster_id=f"fixture-semantic-cluster:{batch:03d}",
+                    ),
+                    candidate_payload_hash="sha256:" + "0" * 64,
+                    proposed_approval_digest="sha256:" + "0" * 64,
+                )
+            )
+        )
+    return tuple(clustered)
+
+
+def _stub_production_store_validation(monkeypatch: pytest.MonkeyPatch) -> None:
+    import dynamislm.benchmark.production_store as store
+    from dynamislm.benchmark.production import (
+        ProductionCandidateCommitmentV1,
+        production_plan_item_from_packet,
+    )
+
+    monkeypatch.setattr(store, "validate_production_authoring_plan", lambda _plan: None)
+    monkeypatch.setattr(store, "validate_qualification_exclusion_commitment", lambda _item: None)
+    monkeypatch.setattr(
+        store,
+        "validate_production_candidate_set_against_qualification_exclusion",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(store, "validate_production_hard_feasibility", lambda _items: None)
+    monkeypatch.setattr(
+        store,
+        "validate_production_candidate_set",
+        lambda packets, **_kwargs: tuple(
+            sorted(
+                (
+                    ProductionCandidateCommitmentV1(
+                        production_plan_item_from_packet(packet),
+                        packet.candidate_payload_hash,
+                    )
+                    for packet in packets
+                ),
+                key=lambda item: item.candidate_id.encode("utf-8"),
+            )
+        ),
+    )
+
+
+def test_production_manifest_rejects_forged_self_consistent_component_digest() -> None:
+    from dataclasses import replace as dataclass_replace
+
+    from dynamislm.benchmark.production import (
+        PRODUCTION_BATCH_MANIFEST_VERSION,
+        ProductionBatchManifestV1,
+        bind_production_batch_manifest,
+        validate_production_batch_manifest_bindings,
+    )
+
+    manifest = bind_production_batch_manifest(
+        ProductionBatchManifestV1(
+            batch_id=PRODUCTION_BATCH_ID,
+            manifest_version=PRODUCTION_BATCH_MANIFEST_VERSION,
+            authoring_process_id=PRODUCTION_AUTHORING_PROCESS_ID,
+            authoring_plan_digest=_SHA,
+            candidate_store_receipt_digest=_SHA,
+            qualification_exclusion_digest=_SHA,
+            feasibility_receipt_digest=_SHA,
+            candidate_count=434,
+            human_approval_count=0,
+            final_case_count=0,
+            split_assignment_count=0,
+            protected_store_count=0,
+            manifest_digest="sha256:" + "0" * 64,
+        )
+    )
+    validate_production_batch_manifest_bindings(
+        manifest,
+        authoring_plan_digest=_SHA,
+        candidate_store_receipt_digest=_SHA,
+        qualification_exclusion_digest=_SHA,
+        feasibility_receipt_digest=_SHA,
+    )
+    forged = bind_production_batch_manifest(
+        dataclass_replace(
+            manifest,
+            candidate_store_receipt_digest="sha256:" + "c" * 64,
+            manifest_digest="sha256:" + "0" * 64,
+        )
+    )
+    with pytest.raises(ValueError, match="exact artifact"):
+        validate_production_batch_manifest_bindings(
+            forged,
+            authoring_plan_digest=_SHA,
+            candidate_store_receipt_digest=_SHA,
+            qualification_exclusion_digest=_SHA,
+            feasibility_receipt_digest=_SHA,
+        )
+
+
+def test_production_review_queue_is_decision_free_and_deterministic() -> None:
+    from dataclasses import fields as dataclass_fields
+
+    from dynamislm.benchmark.production import (
+        ProductionReviewQueueEntryV1,
+        build_production_review_queue,
+        validate_production_review_queue,
+    )
+
+    packets, _exclusion, _plan = _store_roundtrip_fixture()
+    queue = build_production_review_queue(packets)
+    validate_production_review_queue(queue, packets)
+    assert len(queue.entries) == 434
+    assert not {
+        "reviewer_id",
+        "reviewer_identity",
+        "approval_timestamp",
+        "decision",
+    }.intersection(item.name for item in dataclass_fields(ProductionReviewQueueEntryV1))
+    assert queue == build_production_review_queue(packets)
+
+
+def test_production_candidate_store_recovers_staging_and_roundtrips_434_packets(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import dynamislm.benchmark.production_store as store
+
+    packets, exclusion, plan = _store_roundtrip_fixture()
+    _stub_production_store_validation(monkeypatch)
+    repository = tmp_path / "repo"
+    repository.mkdir()
+    production_root = tmp_path / "external"
+    batch_key = hashlib.sha256(PRODUCTION_BATCH_ID.encode()).hexdigest()[:24]
+    final_store = production_root / "production" / "candidates" / batch_key
+    receipt_path = production_root / "production" / "receipts" / f"{batch_key}.json"
+
+    def fixture_write_bytes(path: Path, data: bytes) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(data)
+
+    def interrupt_after_plan(path: Path, data: bytes) -> None:
+        fixture_write_bytes(path, data)
+        if path.name == "authoring-plan.json":
+            raise RuntimeError("synthetic interrupted staging")
+
+    monkeypatch.setattr(store, "_atomic_write_bytes", interrupt_after_plan)
+    with pytest.raises(RuntimeError, match="interrupted staging"):
+        store.write_production_candidate_store(
+            packets,
+            plan,
+            repository_root=repository,
+            production_root=production_root,
+            qualification_exclusions=exclusion,
+        )
+    assert not final_store.exists()
+    assert not receipt_path.exists()
+
+    monkeypatch.setattr(store, "_atomic_write_bytes", fixture_write_bytes)
+    receipt = store.write_production_candidate_store(
+        packets,
+        plan,
+        repository_root=repository,
+        production_root=production_root,
+        qualification_exclusions=exclusion,
+    )
+    restored = store.read_production_candidate_store(
+        receipt,
+        repository_root=repository,
+        production_root=production_root,
+        qualification_exclusions=exclusion,
+    )
+    assert len(restored) == 434
+    assert restored == packets
+    assert (
+        store.write_production_candidate_store(
+            packets,
+            plan,
+            repository_root=repository,
+            production_root=production_root,
+            qualification_exclusions=exclusion,
+        )
+        == receipt
+    )
+    assert not (production_root / "production" / "staging" / batch_key).exists()
+
+
+def test_production_candidate_store_rejects_conflicting_completed_rerun(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from dataclasses import replace as dataclass_replace
+
+    import dynamislm.benchmark.production_store as store
+    from dynamislm.benchmark.authoring import authoring_recipe_registry_digest
+    from dynamislm.benchmark.coverage import coverage_manifest_digest
+    from dynamislm.benchmark.pre_review import bind_candidate_review_packet
+    from dynamislm.benchmark.production import (
+        PRODUCTION_AUTHORING_PLAN_VERSION,
+        ProductionAuthoringPlanV1,
+        bind_production_authoring_plan,
+        production_plan_item_from_packet,
+    )
+
+    packets, exclusion, plan = _store_roundtrip_fixture()
+    _stub_production_store_validation(monkeypatch)
+    repository = tmp_path / "repo"
+    repository.mkdir()
+    production_root = tmp_path / "external"
+    receipt = store.write_production_candidate_store(
+        packets,
+        plan,
+        repository_root=repository,
+        production_root=production_root,
+        qualification_exclusions=exclusion,
+    )
+    altered_packet = packets[0]
+    altered_packet = bind_candidate_review_packet(
+        dataclass_replace(
+            altered_packet,
+            question=altered_packet.question + " changed metadata",
+            input=dataclass_replace(
+                altered_packet.input,
+                question_text=altered_packet.question + " changed metadata",
+            ),
+            candidate_payload_hash="sha256:" + "0" * 64,
+            proposed_approval_digest="sha256:" + "0" * 64,
+        )
+    )
+    altered_packets = tuple(sorted((altered_packet, *packets[1:]), key=lambda p: p.candidate_id))
+    altered_plan = bind_production_authoring_plan(
+        ProductionAuthoringPlanV1(
+            batch_id=PRODUCTION_BATCH_ID,
+            plan_version=PRODUCTION_AUTHORING_PLAN_VERSION,
+            authoring_process_id=PRODUCTION_AUTHORING_PROCESS_ID,
+            target_case_count=434,
+            coverage_matrix_digest=coverage_manifest_digest(),
+            recipe_registry_digest=authoring_recipe_registry_digest(),
+            qualification_exclusion_digest=exclusion.commitment_digest,
+            items=tuple(production_plan_item_from_packet(packet) for packet in altered_packets),
+            plan_digest="sha256:" + "0" * 64,
+        )
+    )
+    with pytest.raises(ValueError, match="conflicts with the exact rerun"):
+        store.write_production_candidate_store(
+            altered_packets,
+            altered_plan,
+            repository_root=repository,
+            production_root=production_root,
+            qualification_exclusions=exclusion,
+        )
+    assert (
+        store.read_production_candidate_store(
+            receipt,
+            repository_root=repository,
+            production_root=production_root,
+            qualification_exclusions=exclusion,
+        )
+        == packets
+    )
+
+
+@pytest.mark.parametrize(
+    ("first", "second"),
+    (
+        (
+            "alpha bravo charlie delta echo foxtrot golf hotel india juliet "
+            "kilo lima mike november oscar",
+            "alpha bravo charlie delta echo foxtrot golf hotel india juliet "
+            "kilo lima mike november oscar",
+        ),
+        (
+            "Alpha bravo charlie delta echo foxtrot golf hotel india juliet "
+            "kilo lima mike november oscar",
+            "alpha  bravo charlie delta echo foxtrot golf hotel india juliet "
+            "kilo lima mike november oscar",
+        ),
+        (
+            "copper_moon cedar_field amber_track silver_gate teal_runner violet_marker "
+            "cobalt_shift jade_signal coral_phase indigo_test saffron_frame "
+            "graphite_device force_plate",
+            "copper_moon cedar_field amber_track silver_gate teal_runner violet_marker "
+            "cobalt_shift jade_signal coral_phase indigo_test saffron_frame "
+            "graphite_device force_plate unique_suffix",
+        ),
+        (
+            "alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima",
+            "alpha bravo charlie delta echo foxtrot golf hotel india julliet kilo lima",
+        ),
+    ),
+    ids=("exact", "normalized", "13-token-shingle", "fuzzy"),
+)
+def test_production_duplication_audit_rejects_frozen_overlap_classes(
+    first: str, second: str
+) -> None:
+    from dynamislm.benchmark.production import audit_production_duplicates
+
+    packets, _exclusion, _plan = _store_roundtrip_fixture()
+    packets = (
+        _production_packet(first, candidate_id=packets[0].candidate_id),
+        _production_packet(second, candidate_id=packets[1].candidate_id),
+        *packets[2:],
+    )
+    with pytest.raises(ValueError, match="duplication audit"):
+        audit_production_duplicates(packets)
+
+
+def _declared_mutation_fixture(
+    parent: CandidateReviewPacket, child_id: str
+) -> CandidateReviewPacket:
+    from dynamislm.benchmark.constants import AuthorityKind
+    from dynamislm.benchmark.contracts import AuthorityBinding
+    from dynamislm.benchmark.pre_review import (
+        CandidateParentBinding,
+        candidate_scientific_projection,
+    )
+
+    child_question = parent.question + " bravo sentinel"
+    lineage = "PSE-V1-LINEAGE:synthetic-review-fixture"
+    parent_binding = CandidateParentBinding(
+        parent_candidate_id=parent.candidate_id,
+        parent_candidate_version=parent.candidate_version,
+        parent_candidate_payload_hash=parent.candidate_payload_hash,
+        parent_origin_class=parent.proposed_provenance.origin_class,
+        mutation_lineage_id=lineage,
+    )
+    parent_authority = AuthorityBinding(
+        authority_kind=AuthorityKind.MUTATION_PARENT.value,
+        source_reference_id=parent.candidate_id,
+        version=parent.candidate_version,
+        digest=parent.candidate_payload_hash,
+        governed_field_ids=("provenance.parent_case_hash",),
+    )
+    child = _production_packet(child_question, candidate_id=child_id)
+    child = replace(
+        child,
+        input=replace(child.input, question_text=child_question),
+        authority=(*child.authority, parent_authority),
+        parent_candidate_binding=parent_binding,
+        proposed_provenance=replace(
+            child.proposed_provenance,
+            origin_class=CaseOrigin.ADVERSARIAL_MUTATION,
+            mutation_lineage_id=lineage,
+            parent_origin_class=parent.proposed_provenance.origin_class,
+            mutation_operator="synthetic-fixture-question-extension",
+            mutation_version="1.0.0",
+            mutation_seed=4096,
+            changed_fields=(),
+            authority_lineage=tuple(
+                sorted({*child.proposed_provenance.authority_lineage, parent.candidate_id})
+            ),
+        ),
+        contamination=replace(
+            child.contamination,
+            source_family_id=parent.contamination.source_family_id,
+            expert_author_batch_id=parent.contamination.expert_author_batch_id,
+            protocol_template_id=parent.contamination.protocol_template_id,
+        ),
+        isolation=parent.isolation,
+        candidate_payload_hash="sha256:" + "0" * 64,
+        proposed_approval_digest="sha256:" + "0" * 64,
+    )
+    parent_projection = candidate_scientific_projection(parent)
+    child_projection = candidate_scientific_projection(child)
+    changed_fields = tuple(
+        sorted(
+            (
+                name
+                for name in parent_projection
+                if parent_projection[name] != child_projection[name]
+            ),
+            key=lambda value: value.encode("utf-8"),
+        )
+    )
+    child = replace(
+        child,
+        proposed_provenance=replace(
+            child.proposed_provenance,
+            changed_fields=changed_fields,
+        ),
+    )
+    return bind_candidate_review_packet(child)
+
+
+def test_declared_parent_child_overlap_is_allowed_and_queued_parent_first() -> None:
+    from dataclasses import fields as dataclass_fields
+
+    from dynamislm.benchmark.production import (
+        ProductionReviewQueueEntryV1,
+        audit_production_duplicates,
+        build_production_review_queue,
+    )
+
+    packets, _exclusion, _plan = _store_roundtrip_fixture()
+    parent_question = (
+        "alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima "
+        "mike november oscar papa quebec romeo sierra tango"
+    )
+    parent = _production_packet(parent_question, candidate_id=packets[0].candidate_id)
+    child = _declared_mutation_fixture(parent, packets[1].candidate_id)
+    packets = (parent, child, *packets[2:])
+    audit = audit_production_duplicates(packets)
+    queue = build_production_review_queue(packets)
+    queue_entries = {item.candidate_id: item for item in queue.entries}
+
+    assert audit.unrelated_blocking_overlaps == 0
+    assert (
+        queue_entries[parent.candidate_id].deterministic_order
+        < queue_entries[child.candidate_id].deterministic_order
+    )
+    assert queue_entries[child.candidate_id].mutation_parent_dependency == parent.candidate_id
+    assert not {
+        "reviewer_id",
+        "approval_timestamp",
+        "decision",
+    }.intersection(item.name for item in dataclass_fields(ProductionReviewQueueEntryV1))
+
+
+def test_banded_edit_threshold_matches_frozen_exact_similarity() -> None:
+    from random import Random
+
+    from dynamislm.benchmark.contamination import (
+        normalized_edit_similarity,
+        normalized_edit_similarity_at_least,
+    )
+
+    rng = Random(126)
+    alphabet = "abcdef ghijklm nopqrstuvwxyz"
+    for length in (8, 9, 10, 19, 20, 63, 128):
+        for _ in range(20):
+            left = "".join(rng.choice(alphabet) for _ in range(length))
+            chars = list(left)
+            for _edit in range(max(1, length // 12)):
+                position = rng.randrange(len(chars))
+                chars[position] = rng.choice(alphabet)
+            right = "".join(chars)
+            assert normalized_edit_similarity_at_least(left, right, 0.90) == (
+                normalized_edit_similarity(left, right) >= 0.90
+            )
+
+
+@pytest.mark.parametrize(
+    "origin",
+    (
+        CaseOrigin.SOURCE_BACKED_EVIDENCE_EXTRACTION,
+        CaseOrigin.DETERMINISTIC_ENGINE_DERIVED,
+        CaseOrigin.DETERMINISTIC_SYNTHETIC,
+    ),
+)
+def test_nonsemantic_production_origins_reject_legacy_author_batch(origin: CaseOrigin) -> None:
+    from dynamislm.benchmark.production import validate_production_candidate_packet
+
+    packet = _production_packet("origin scoped metadata fixture")
+    invalid = bind_candidate_review_packet(
+        replace(
+            packet,
+            proposed_provenance=replace(packet.proposed_provenance, origin_class=origin),
+            contamination=replace(
+                packet.contamination,
+                expert_author_batch_id="agent-process:codex:RES-115-CASE-AUTHORING-001B",
+            ),
+            candidate_payload_hash="sha256:" + "0" * 64,
+            proposed_approval_digest="sha256:" + "0" * 64,
+        )
+    )
+    with pytest.raises(ValueError, match="expert author batch"):
+        validate_production_candidate_packet(invalid)
+
+
+def test_semantic_production_packet_requires_bounded_batch_not_process_identity() -> None:
+    from dynamislm.benchmark.production import validate_production_candidate_packet
+
+    packet = _production_packet("bounded semantic metadata fixture")
+    validate_production_candidate_packet(packet)
+    for global_id in (
+        PRODUCTION_AUTHORING_PROCESS_ID,
+        "agent-process:codex:RES-115-CASE-AUTHORING-001B",
+    ):
+        invalid = bind_candidate_review_packet(
+            replace(
+                packet,
+                contamination=replace(
+                    packet.contamination,
+                    expert_author_batch_id=global_id,
+                ),
+                candidate_payload_hash="sha256:" + "0" * 64,
+                proposed_approval_digest="sha256:" + "0" * 64,
+            )
+        )
+        with pytest.raises(ValueError, match="global authoring process identity"):
+            validate_production_candidate_packet(invalid)
+
+
+def test_author_id_does_not_create_a_shared_source_or_engine_isolation_cluster() -> None:
+    source = _item(
+        "PSE-V1-CANDIDATE:shared-author-source",
+        capability_id="C13",
+        benchmark_family="F01",
+        origin=CaseOrigin.SOURCE_BACKED_EVIDENCE_EXTRACTION,
+        cluster="cluster:source",
+    )
+    engine = _item(
+        "PSE-V1-CANDIDATE:shared-author-engine",
+        capability_id="C16",
+        benchmark_family="F05",
+        origin=CaseOrigin.DETERMINISTIC_ENGINE_DERIVED,
+        cluster="cluster:engine",
+    )
+
+    assert source.author_id == engine.author_id
+    assert (
+        validate_production_isolation(
+            (_commitment(source), _commitment(engine))
+        ).atomic_cluster_count
+        == 2
+    )
+
+
+def test_shared_semantic_batch_cannot_cross_declared_clusters() -> None:
+    one = _item("PSE-V1-CANDIDATE:batch-one", cluster="cluster:one")
+    two = _item("PSE-V1-CANDIDATE:batch-two", cluster="cluster:two")
+
+    with pytest.raises(ValueError, match="expert-author-batch fragmented"):
+        validate_production_isolation((_commitment(one), _commitment(two, "b")))
+
+
+def test_semantic_mutation_inherits_parent_batch_and_template() -> None:
+    from dynamislm.benchmark.production import validate_production_candidate_set
+
+    packets, _exclusion, _plan = _store_roundtrip_fixture()
+    packets = _bounded_semantic_packet_fixture(packets)
+    parent = packets[0]
+    child = _declared_mutation_fixture(parent, packets[1].candidate_id)
+    commitments = validate_production_candidate_set((parent, child, *packets[2:]))
+
+    assert len(commitments) == 434
+    assert child.contamination.expert_author_batch_id == parent.contamination.expert_author_batch_id
+    assert child.contamination.protocol_template_id == parent.contamination.protocol_template_id
+
+
+@pytest.mark.parametrize("field", ("expert_author_batch_id", "protocol_template_id"))
+def test_semantic_mutation_cannot_change_parent_batch_or_template(
+    field: Literal["expert_author_batch_id", "protocol_template_id"],
+) -> None:
+    from dynamislm.benchmark.production import validate_production_candidate_set
+
+    packets, _exclusion, _plan = _store_roundtrip_fixture()
+    packets = _bounded_semantic_packet_fixture(packets)
+    parent = packets[0]
+    child = _declared_mutation_fixture(parent, packets[1].candidate_id)
+    contamination = (
+        replace(
+            child.contamination,
+            expert_author_batch_id=f"different-{field}:001C",
+        )
+        if field == "expert_author_batch_id"
+        else replace(
+            child.contamination,
+            protocol_template_id=f"different-{field}:001C",
+        )
+    )
+    child = bind_candidate_review_packet(
+        replace(
+            child,
+            contamination=contamination,
+            candidate_payload_hash="sha256:" + "0" * 64,
+            proposed_approval_digest="sha256:" + "0" * 64,
+        )
+    )
+
+    with pytest.raises(ValueError, match="preserve parent expert-author batch and template"):
+        validate_production_candidate_set((parent, child, *packets[2:]))
+
+
+def test_nonsemantic_mutation_does_not_invent_an_expert_batch() -> None:
+    from dynamislm.benchmark.production import _validate_production_mutation_isolation_metadata
+
+    parent = _production_packet("synthetic parent isolation fixture")
+    parent = bind_candidate_review_packet(
+        replace(
+            parent,
+            proposed_provenance=replace(
+                parent.proposed_provenance,
+                origin_class=CaseOrigin.DETERMINISTIC_ENGINE_DERIVED,
+            ),
+            contamination=replace(
+                parent.contamination,
+                expert_author_batch_id=None,
+                protocol_template_id=None,
+            ),
+            candidate_payload_hash="sha256:" + "0" * 64,
+            proposed_approval_digest="sha256:" + "0" * 64,
+        )
+    )
+    child = _declared_mutation_fixture(parent, "PSE-V1-CANDIDATE:mutation-no-batch")
+
+    _validate_production_mutation_isolation_metadata((parent, child))
+    assert child.contamination.expert_author_batch_id is None
+    assert child.contamination.protocol_template_id is None
+
+
+def test_repaired_434_packet_set_passes_production_isolation() -> None:
+    from dynamislm.benchmark.production import (
+        validate_production_candidate_set,
+        validate_production_isolation,
+    )
+
+    packets, _exclusion, _plan = _store_roundtrip_fixture()
+    packets = _bounded_semantic_packet_fixture(packets)
+    commitments = validate_production_candidate_set(packets)
+    validation = validate_production_isolation(commitments)
+    assert validation.candidate_count == 434
+    assert validation.status == "PASS"

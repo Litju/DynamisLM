@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import heapq
 import re
 from collections import defaultdict
 from dataclasses import dataclass, fields, replace
@@ -28,6 +29,12 @@ from dynamislm.benchmark.constants import (
     ScoringProfile,
     SplitName,
 )
+from dynamislm.benchmark.contamination import (
+    exact_13_token_shingles,
+    normalize_text,
+    normalized_edit_similarity_at_least,
+    normalized_text_sha256,
+)
 from dynamislm.benchmark.coverage import (
     COVERAGE_MATRIX,
     CoverageRow,
@@ -35,6 +42,7 @@ from dynamislm.benchmark.coverage import (
 )
 from dynamislm.benchmark.pre_review import (
     CandidateReviewPacket,
+    candidate_scientific_projection,
     validate_candidate_review_packet,
     validate_candidate_set,
 )
@@ -45,6 +53,7 @@ from dynamislm.serialization import canonical_hash, register_serializable_type
 PRODUCTION_CANDIDATE_ID_PREFIX = "PSE-V1-CANDIDATE:"
 PRODUCTION_BATCH_ID = "PSE-V1-PRODUCTION/RES-115-CASE-AUTHORING-001C"
 PRODUCTION_AUTHORING_PROCESS_ID = "agent-process:codex:RES-115-CASE-AUTHORING-001C"
+_QUALIFICATION_AUTHORING_PROCESS_ID = "agent-process:codex:RES-115-CASE-AUTHORING-001B"
 PRODUCTION_AUTHORING_PLAN_VERSION = "pse-production-authoring-plan@1.0.0"
 PRODUCTION_BATCH_MANIFEST_VERSION = "pse-production-batch@1.0.0"
 FINAL_TARGET_CASES = 434
@@ -189,6 +198,11 @@ class ProductionAuthoringPlanItemV1:
             "parent_candidate_id",
         ):
             _optional_text(getattr(self, name), name)
+        if self.expert_author_batch_id in {
+            PRODUCTION_AUTHORING_PROCESS_ID,
+            _QUALIFICATION_AUTHORING_PROCESS_ID,
+        }:
+            raise ValueError("global authoring process identity cannot be an expert author batch")
         if (
             self.origin_class
             in {
@@ -203,10 +217,20 @@ class ProductionAuthoringPlanItemV1:
         if self.origin_class is CaseOrigin.EXPERT_AUTHORED_SEMANTIC:
             if self.expert_author_batch_id is None:
                 raise ValueError("expert semantic candidate requires a bounded author batch")
-            if self.expert_author_batch_id == PRODUCTION_AUTHORING_PROCESS_ID:
-                raise ValueError("global 001C process identity cannot be an expert author batch")
             if not self.protocol_template_ids:
                 raise ValueError("template-driven semantic candidate requires protocol/template ID")
+        elif (
+            self.origin_class
+            in {
+                CaseOrigin.SOURCE_BACKED_EVIDENCE_EXTRACTION,
+                CaseOrigin.DETERMINISTIC_ENGINE_DERIVED,
+                CaseOrigin.DETERMINISTIC_SYNTHETIC,
+            }
+            and self.expert_author_batch_id is not None
+        ):
+            raise ValueError(
+                "non-semantic production candidate cannot carry an expert author batch"
+            )
         synthetic_fields = (
             self.generator_id,
             self.generator_version,
@@ -366,13 +390,17 @@ def production_plan_item_from_packet(
     authority_class_candidates = _authority_classes(authority_kinds)
     if not authority_class_candidates:
         raise ValueError("production candidate has no registered authority class")
-    authority_class = sorted(authority_class_candidates, key=lambda item: item.encode("utf-8"))[0]
     recipes = {
         (item.capability_id, item.benchmark_family): item for item in AUTHORING_RECIPE_REGISTRY
     }
     recipe = recipes.get((packet.capability_id, packet.benchmark_family))
     if recipe is None:
         raise ValueError("production candidate cell has no frozen authoring recipe")
+    allowed_authority_classes = _authority_classes(recipe.authority_kinds)
+    eligible_authority_classes = authority_class_candidates.intersection(allowed_authority_classes)
+    if not eligible_authority_classes:
+        raise ValueError("production candidate has no authority class permitted for its cell")
+    authority_class = sorted(eligible_authority_classes, key=lambda item: item.encode("utf-8"))[0]
     source_document_ids = tuple(
         sorted(
             {
@@ -453,6 +481,61 @@ def production_plan_item_from_packet(
     )
 
 
+def validate_production_origin_isolation_metadata(packet: CandidateReviewPacket) -> None:
+    """Validate production authorship and origin-scoped isolation identities."""
+
+    origin = packet.proposed_provenance.origin_class
+    contamination = packet.contamination
+    batch_id = contamination.expert_author_batch_id
+    if batch_id in {PRODUCTION_AUTHORING_PROCESS_ID, _QUALIFICATION_AUTHORING_PROCESS_ID}:
+        raise ValueError("global authoring process identity cannot be an expert author batch")
+    if (
+        origin
+        in {
+            CaseOrigin.EXPERT_AUTHORED_SEMANTIC,
+            CaseOrigin.SOURCE_BACKED_EVIDENCE_EXTRACTION,
+        }
+        and packet.proposed_provenance.author_id != PRODUCTION_AUTHORING_PROCESS_ID
+    ):
+        raise ValueError("production semantic/source material must remain agent-authored")
+    if origin is CaseOrigin.EXPERT_AUTHORED_SEMANTIC:
+        if batch_id is None:
+            raise ValueError("expert semantic candidate requires a bounded author batch")
+        if contamination.protocol_template_id is None:
+            raise ValueError("template-driven semantic candidate requires protocol/template ID")
+    elif (
+        origin
+        in {
+            CaseOrigin.SOURCE_BACKED_EVIDENCE_EXTRACTION,
+            CaseOrigin.DETERMINISTIC_ENGINE_DERIVED,
+            CaseOrigin.DETERMINISTIC_SYNTHETIC,
+        }
+        and batch_id is not None
+    ):
+        raise ValueError(f"{origin.value} production candidate cannot carry an expert author batch")
+
+
+def _validate_production_mutation_isolation_metadata(
+    packets: tuple[CandidateReviewPacket, ...],
+) -> None:
+    by_id = {packet.candidate_id: packet for packet in packets}
+    for child in packets:
+        binding = child.parent_candidate_binding
+        if binding is None:
+            continue
+        parent = by_id.get(binding.parent_candidate_id)
+        if parent is None:
+            continue  # Candidate-set validation reports the missing parent first.
+        if (
+            child.contamination.expert_author_batch_id
+            != parent.contamination.expert_author_batch_id
+            or child.contamination.protocol_template_id != parent.contamination.protocol_template_id
+        ):
+            raise ValueError(
+                "mutation must preserve parent expert-author batch and template metadata"
+            )
+
+
 def validate_production_candidate_packet(
     packet: CandidateReviewPacket,
     *,
@@ -463,15 +546,7 @@ def validate_production_candidate_packet(
     if not isinstance(packet, CandidateReviewPacket):
         raise TypeError("packet must be CandidateReviewPacket")
     _candidate_id(packet.candidate_id)
-    if (
-        packet.proposed_provenance.origin_class
-        in {
-            CaseOrigin.SOURCE_BACKED_EVIDENCE_EXTRACTION,
-            CaseOrigin.EXPERT_AUTHORED_SEMANTIC,
-        }
-        and packet.proposed_provenance.author_id != PRODUCTION_AUTHORING_PROCESS_ID
-    ):
-        raise ValueError("production semantic/source material must remain agent-authored")
+    validate_production_origin_isolation_metadata(packet)
     has_source = bool(packet.source_evidence_refs or packet.input.evidence_excerpts)
     if has_source and source_resolver is None:
         raise ValueError("production source candidate requires the sealed Phase-A source resolver")
@@ -1249,6 +1324,20 @@ def validate_production_hard_feasibility(
                 if error in CRITICAL_ERROR_CLASSES
             }
         )
+        if rank in (1, 2):
+            for error in CRITICAL_ERROR_CLASSES:
+                eligible_clusters = sum(
+                    any(
+                        error in item.reachable_error_classes
+                        and _feasibility_row_eligible(item, _row_by_capability(item.capability_id))
+                        for item in cluster.items
+                    )
+                    for cluster in assigned_clusters
+                )
+                if eligible_clusters < 2:
+                    raise ProductionFeasibilityBlocked(
+                        "protected split requires two independent clusters for every critical error"
+                    )
         c18_refusal_count_by_rank[rank] = sum(
             any(_cluster_has_c18_refusal(cluster, family) for cluster in assigned_clusters)
             for family in _row_by_capability("C18").benchmark_families
@@ -1454,12 +1543,490 @@ def validate_production_batch_manifest(manifest: ProductionBatchManifestV1) -> N
         raise ValueError("production batch manifest digest mismatch")
 
 
-def validate_production_candidate_set(
+def validate_production_batch_manifest_bindings(
+    manifest: ProductionBatchManifestV1,
+    *,
+    authoring_plan_digest: str,
+    candidate_store_receipt_digest: str,
+    qualification_exclusion_digest: str,
+    feasibility_receipt_digest: str,
+) -> None:
+    """Reject self-consistent manifests whose component digests name other artifacts."""
+
+    validate_production_batch_manifest(manifest)
+    expected = (
+        authoring_plan_digest,
+        candidate_store_receipt_digest,
+        qualification_exclusion_digest,
+        feasibility_receipt_digest,
+    )
+    observed = (
+        manifest.authoring_plan_digest,
+        manifest.candidate_store_receipt_digest,
+        manifest.qualification_exclusion_digest,
+        manifest.feasibility_receipt_digest,
+    )
+    if observed != expected:
+        raise ValueError("production manifest component digest differs from its exact artifact")
+
+
+_REVIEW_EXPERTISE_BY_CAPABILITY = {
+    "C01": "MEASUREMENT_IDENTITY",
+    "C02": "PROTOCOL_EXTRACTION",
+    "C03": "MEASUREMENT_IDENTITY",
+    "C04": "VALUE_PROVENANCE",
+    "C05": "UNITS_AND_NORMALIZATION",
+    "C06": "FRAME_AND_EVENT_DEFINITIONS",
+    "C07": "COMPARABILITY",
+    "C08": "ENGINE_OUTPUTS",
+    "C09": "LONGITUDINAL_CLAIMS",
+    "C10": "STATISTICAL_DESIGN",
+    "C11": "POPULATION_STRUCTURE",
+    "C12": "RELIABILITY_AND_UNCERTAINTY",
+    "C13": "SOURCE_EVIDENCE",
+    "C14": "EVIDENCE_APPLICABILITY",
+    "C15": "CAUSAL_INFERENCE",
+    "C16": "ENGINE_BOUNDARIES",
+    "C17": "SCIENTIFIC_ERROR_TAXONOMY",
+    "C18": "REFUSAL_AND_SAFE_PARTIAL",
+}
+
+
+@register_serializable_type
+@dataclass(frozen=True, slots=True)
+class ProductionReviewQueueEntryV1:
+    candidate_id: str
+    candidate_payload_hash: str
+    proposed_approval_digest: str
+    review_batch_id: str
+    deterministic_order: int
+    required_reviewer_expertise_category: str
+    mutation_parent_dependency: str | None
+
+    def __post_init__(self) -> None:
+        _candidate_id(self.candidate_id)
+        for name in ("candidate_payload_hash", "proposed_approval_digest"):
+            if _SHA256.fullmatch(getattr(self, name)) is None:
+                raise ValueError(f"{name} must be a SHA-256 digest")
+        if not self.review_batch_id.startswith("PSE-V1-REVIEW-BATCH:"):
+            raise ValueError("review batch ID must use the production review namespace")
+        if self.deterministic_order < 1:
+            raise ValueError("review order must be a positive one-based index")
+        if self.required_reviewer_expertise_category not in set(
+            _REVIEW_EXPERTISE_BY_CAPABILITY.values()
+        ):
+            raise ValueError("review queue has an unknown expertise category")
+        if self.mutation_parent_dependency is not None:
+            _candidate_id(self.mutation_parent_dependency)
+
+
+@register_serializable_type
+@dataclass(frozen=True, slots=True)
+class ProductionReviewQueueV1:
+    batch_id: str
+    candidate_count: int
+    entries: tuple[ProductionReviewQueueEntryV1, ...]
+    queue_digest: str
+
+    def __post_init__(self) -> None:
+        if self.batch_id != PRODUCTION_BATCH_ID:
+            raise ValueError("review queue must bind the 001C production batch")
+        if self.candidate_count != FINAL_TARGET_CASES or len(self.entries) != FINAL_TARGET_CASES:
+            raise ValueError("review queue must contain exactly 434 candidates")
+        if any(not isinstance(item, ProductionReviewQueueEntryV1) for item in self.entries):
+            raise ValueError("review queue requires typed entries")
+        ids = tuple(item.candidate_id for item in self.entries)
+        if len(set(ids)) != FINAL_TARGET_CASES:
+            raise ValueError("review queue candidate IDs must be unique")
+        if tuple(item.deterministic_order for item in self.entries) != tuple(
+            range(1, FINAL_TARGET_CASES + 1)
+        ):
+            raise ValueError("review queue order must be contiguous and deterministic")
+        if _SHA256.fullmatch(self.queue_digest) is None:
+            raise ValueError("review queue digest must be a SHA-256 digest")
+
+
+def production_review_queue_digest(queue: ProductionReviewQueueV1) -> str:
+    return canonical_hash(
+        {
+            item.name: getattr(queue, item.name)
+            for item in fields(queue)
+            if item.name != "queue_digest"
+        }
+    )
+
+
+def bind_production_review_queue(queue: ProductionReviewQueueV1) -> ProductionReviewQueueV1:
+    return replace(queue, queue_digest=production_review_queue_digest(queue))
+
+
+def _review_group_key(
+    packet: CandidateReviewPacket,
+    item: ProductionAuthoringPlanItemV1,
+) -> tuple[str, ...]:
+    expertise = _REVIEW_EXPERTISE_BY_CAPABILITY[packet.capability_id]
+    provenance = packet.proposed_provenance
+    if provenance.origin_class is CaseOrigin.ADVERSARIAL_MUTATION:
+        kind, value = "mutation-lineage", provenance.mutation_lineage_id or ""
+    elif provenance.origin_class is CaseOrigin.SOURCE_BACKED_EVIDENCE_EXTRACTION:
+        kind, value = "source-family", item.source_family_id
+    elif provenance.origin_class is CaseOrigin.EXPERT_AUTHORED_SEMANTIC:
+        kind, value = "author-batch", item.expert_author_batch_id or ""
+    elif provenance.origin_class is CaseOrigin.DETERMINISTIC_ENGINE_DERIVED:
+        kind, value = "reference-case", provenance.engine_reference_case_id or ""
+    else:
+        kind, value = "generator", provenance.generator_family or ""
+    return expertise, item.authority_class, kind, value
+
+
+def _review_batch_id(group_key: tuple[str, ...]) -> str:
+    return "PSE-V1-REVIEW-BATCH:" + canonical_hash(group_key).removeprefix("sha256:")[:20]
+
+
+MAX_REVIEW_BATCH_SIZE = 12
+
+
+def build_production_review_queue(
+    packets: tuple[CandidateReviewPacket, ...],
+) -> ProductionReviewQueueV1:
+    """Build a deterministic, decision-free queue with parent-before-child ordering."""
+
+    if len(packets) != FINAL_TARGET_CASES:
+        raise ValueError("review queue requires exactly 434 candidate packets")
+    by_id = {packet.candidate_id: packet for packet in packets}
+    if len(by_id) != FINAL_TARGET_CASES:
+        raise ValueError("review queue candidate IDs must be unique")
+    items = {packet.candidate_id: production_plan_item_from_packet(packet) for packet in packets}
+    parent_by_child = {
+        packet.candidate_id: packet.parent_candidate_binding.parent_candidate_id
+        for packet in packets
+        if packet.parent_candidate_binding is not None
+    }
+    grouped = {
+        candidate_id: _review_group_key(packet, items[candidate_id])
+        for candidate_id, packet in by_id.items()
+    }
+    grouped_members: dict[tuple[str, ...], list[str]] = defaultdict(list)
+    for candidate_id, group_key in grouped.items():
+        grouped_members[group_key].append(candidate_id)
+    batch_by_id: dict[str, str] = {}
+    for group_key, member_ids in grouped_members.items():
+        ordered_members = sorted(member_ids, key=lambda value: value.encode("utf-8"))
+        for chunk_index, offset in enumerate(range(0, len(ordered_members), MAX_REVIEW_BATCH_SIZE)):
+            batch_id = _review_batch_id((*group_key, f"chunk:{chunk_index:03d}"))
+            for candidate_id in ordered_members[offset : offset + MAX_REVIEW_BATCH_SIZE]:
+                batch_by_id[candidate_id] = batch_id
+    children: dict[str, list[str]] = defaultdict(list)
+    indegree = dict.fromkeys(by_id, 0)
+    for child_id, parent_id in parent_by_child.items():
+        if parent_id not in by_id:
+            raise ValueError("review queue mutation parent is absent from the production batch")
+        children[parent_id].append(child_id)
+        indegree[child_id] += 1
+
+    ready = [
+        (batch_by_id[candidate_id], candidate_id)
+        for candidate_id, degree in indegree.items()
+        if degree == 0
+    ]
+    heapq.heapify(ready)
+    ordered: list[str] = []
+    while ready:
+        _batch, candidate_id = heapq.heappop(ready)
+        ordered.append(candidate_id)
+        for child_id in sorted(children[candidate_id], key=lambda value: value.encode("utf-8")):
+            indegree[child_id] -= 1
+            if indegree[child_id] == 0:
+                heapq.heappush(ready, (batch_by_id[child_id], child_id))
+    if len(ordered) != FINAL_TARGET_CASES:
+        raise ValueError("review queue mutation dependencies contain a cycle")
+
+    entries = tuple(
+        ProductionReviewQueueEntryV1(
+            candidate_id=candidate_id,
+            candidate_payload_hash=by_id[candidate_id].candidate_payload_hash,
+            proposed_approval_digest=by_id[candidate_id].proposed_approval_digest,
+            review_batch_id=batch_by_id[candidate_id],
+            deterministic_order=order,
+            required_reviewer_expertise_category=_REVIEW_EXPERTISE_BY_CAPABILITY[
+                by_id[candidate_id].capability_id
+            ],
+            mutation_parent_dependency=parent_by_child.get(candidate_id),
+        )
+        for order, candidate_id in enumerate(ordered, start=1)
+    )
+    return bind_production_review_queue(
+        ProductionReviewQueueV1(
+            batch_id=PRODUCTION_BATCH_ID,
+            candidate_count=FINAL_TARGET_CASES,
+            entries=entries,
+            queue_digest="sha256:" + "0" * 64,
+        )
+    )
+
+
+def validate_production_review_queue(
+    queue: ProductionReviewQueueV1,
+    packets: tuple[CandidateReviewPacket, ...],
+) -> None:
+    if queue.queue_digest != production_review_queue_digest(queue):
+        raise ValueError("production review queue digest mismatch")
+    if queue != build_production_review_queue(packets):
+        raise ValueError("production review queue differs from deterministic packet bindings")
+    by_id = {item.candidate_id: item for item in queue.entries}
+    for item in queue.entries:
+        parent = item.mutation_parent_dependency
+        if parent is not None and by_id[parent].deterministic_order >= item.deterministic_order:
+            raise ValueError("mutation review queue child must follow its parent")
+
+
+@register_serializable_type
+@dataclass(frozen=True, slots=True)
+class ProductionDuplicationAuditV1:
+    algorithm_id: str
+    candidate_count: int
+    candidate_set_digest: str
+    exact_payload_duplicate_pairs: int
+    exact_question_duplicate_pairs: int
+    normalized_question_duplicate_pairs: int
+    exact_13_token_overlap_pairs: int
+    blocking_fuzzy_overlap_pairs: int
+    unrelated_blocking_overlaps: int
+    audit_digest: str
+
+    def __post_init__(self) -> None:
+        if self.algorithm_id != "PSE-V1-INTRA-DUPLICATION-AUDIT@1.0.0":
+            raise ValueError("unsupported production duplication audit algorithm")
+        if self.candidate_count != FINAL_TARGET_CASES:
+            raise ValueError("duplication audit must bind exactly 434 candidates")
+        if any(
+            value != 0
+            for value in (
+                self.exact_payload_duplicate_pairs,
+                self.exact_question_duplicate_pairs,
+                self.normalized_question_duplicate_pairs,
+                self.exact_13_token_overlap_pairs,
+                self.blocking_fuzzy_overlap_pairs,
+                self.unrelated_blocking_overlaps,
+            )
+        ):
+            raise ValueError("production duplication audit cannot contain blocking overlaps")
+        for name in ("candidate_set_digest", "audit_digest"):
+            if _SHA256.fullmatch(getattr(self, name)) is None:
+                raise ValueError(f"{name} must be a SHA-256 digest")
+
+
+def production_duplication_audit_digest(audit: ProductionDuplicationAuditV1) -> str:
+    return canonical_hash(
+        {
+            item.name: getattr(audit, item.name)
+            for item in fields(audit)
+            if item.name != "audit_digest"
+        }
+    )
+
+
+def _token_grams(tokens: tuple[str, ...], width: int = 5) -> frozenset[tuple[str, ...]]:
+    return frozenset(
+        tuple(tokens[index : index + width]) for index in range(max(0, len(tokens) - width + 1))
+    )
+
+
+def audit_production_duplicates(
+    packets: tuple[CandidateReviewPacket, ...],
+) -> ProductionDuplicationAuditV1:
+    """Reject frozen V1 exact and fuzzy question overlaps outside parent-child edges."""
+
+    if len(packets) != FINAL_TARGET_CASES:
+        raise ValueError("production duplication audit requires exactly 434 packets")
+    if len({item.candidate_id for item in packets}) != FINAL_TARGET_CASES:
+        raise ValueError("production duplication audit requires unique candidate IDs")
+    by_id = {item.candidate_id: item for item in packets}
+    parent_by_child: dict[str, str] = {}
+    lineage_clusters: dict[str, str] = {}
+    for child in packets:
+        binding = child.parent_candidate_binding
+        if binding is None:
+            if child.proposed_provenance.origin_class is CaseOrigin.ADVERSARIAL_MUTATION:
+                raise ValueError("mutation overlap exemption requires a declared exact parent")
+            continue
+        parent = by_id.get(binding.parent_candidate_id)
+        provenance = child.proposed_provenance
+        if (
+            parent is None
+            or provenance.origin_class is not CaseOrigin.ADVERSARIAL_MUTATION
+            or binding.parent_candidate_version != parent.candidate_version
+            or binding.parent_candidate_payload_hash != parent.candidate_payload_hash
+            or binding.parent_origin_class is not parent.proposed_provenance.origin_class
+            or provenance.parent_origin_class is not parent.proposed_provenance.origin_class
+            or binding.mutation_lineage_id != provenance.mutation_lineage_id
+            or (
+                parent.proposed_provenance.origin_class is CaseOrigin.ADVERSARIAL_MUTATION
+                and provenance.mutation_lineage_id != parent.proposed_provenance.mutation_lineage_id
+            )
+            or parent.isolation
+            != replace(child.isolation, allocation_stratum=parent.isolation.allocation_stratum)
+            or parent.contamination.source_family_id != child.contamination.source_family_id
+        ):
+            raise ValueError("mutation overlap exemption has an invalid parent/cluster binding")
+        parent_authority = tuple(
+            item
+            for item in parent.authority
+            if any(
+                governed in {"expected_answer", "refusal_expectation", "claim_contract"}
+                or governed.startswith("expected_answer.")
+                for governed in item.governed_field_ids
+            )
+        )
+        if not parent_authority or any(item not in child.authority for item in parent_authority):
+            raise ValueError("mutation overlap exemption dropped primary parent authority")
+        parent_authority_bindings = tuple(
+            item for item in child.authority if item.authority_kind == "MUTATION_PARENT"
+        )
+        if (
+            len(parent_authority_bindings) != 1
+            or parent_authority_bindings[0].source_reference_id != parent.candidate_id
+            or parent_authority_bindings[0].version != parent.candidate_version
+            or parent_authority_bindings[0].digest != parent.candidate_payload_hash
+        ):
+            raise ValueError("mutation overlap exemption lacks exact parent authority")
+        parent_projection = candidate_scientific_projection(parent)
+        child_projection = candidate_scientific_projection(child)
+        changed_fields = tuple(
+            sorted(
+                (
+                    field
+                    for field in parent_projection
+                    if parent_projection[field] != child_projection[field]
+                ),
+                key=lambda value: value.encode("utf-8"),
+            )
+        )
+        if not changed_fields or provenance.changed_fields != changed_fields:
+            raise ValueError("mutation overlap exemption has an invalid scientific delta")
+        lineage = provenance.mutation_lineage_id or ""
+        cluster = lineage_clusters.setdefault(lineage, child.isolation.isolation_cluster_id)
+        if cluster != child.isolation.isolation_cluster_id:
+            raise ValueError("mutation overlap exemption fragments its lineage cluster")
+        parent_by_child[child.candidate_id] = parent.candidate_id
+
+    visitation: dict[str, int] = {}
+
+    def visit(candidate_id: str) -> None:
+        state = visitation.get(candidate_id, 0)
+        if state == 1:
+            raise ValueError("mutation duplicate-audit graph contains a cycle")
+        if state == 2:
+            return
+        visitation[candidate_id] = 1
+        parent_id = parent_by_child.get(candidate_id)
+        if parent_id is not None:
+            visit(parent_id)
+        visitation[candidate_id] = 2
+
+    for candidate_id in by_id:
+        visit(candidate_id)
+    direct_parent_pairs = {
+        frozenset((item.candidate_id, item.parent_candidate_binding.parent_candidate_id))
+        for item in packets
+        if item.parent_candidate_binding is not None
+    }
+    exact_payload = exact_question = normalized = shingles = fuzzy = blocking = 0
+    ordered = tuple(sorted(packets, key=lambda item: item.candidate_id.encode("utf-8")))
+    source_span_candidates: dict[tuple[str, str], list[CandidateReviewPacket]] = defaultdict(list)
+    for packet in ordered:
+        for excerpt in packet.input.evidence_excerpts:
+            source_span_candidates[
+                (excerpt.document_identity.document_id, excerpt.span_identity.span_digest)
+            ].append(packet)
+    for span_packets in source_span_candidates.values():
+        if len(span_packets) < 2:
+            continue
+        for index, left in enumerate(span_packets):
+            for right in span_packets[index + 1 :]:
+                if frozenset((left.candidate_id, right.candidate_id)) not in direct_parent_pairs:
+                    raise ValueError("unrelated production candidates reuse an exact source span")
+    metrics = {}
+    for packet in ordered:
+        question = packet.question
+        normalized_text = normalize_text(question)
+        tokens = tuple(re.findall(r"\w+|[^\w\s]", normalized_text, flags=re.UNICODE))
+        char_grams = frozenset(
+            normalized_text[index : index + 5] for index in range(max(0, len(normalized_text) - 4))
+        )
+        metrics[packet.candidate_id] = (
+            normalized_text_sha256(question),
+            exact_13_token_shingles(question),
+            _token_grams(tokens),
+            char_grams,
+            normalized_text,
+        )
+    # ponytail: O(n^2) is bounded at 434 records; use an inverted index if the batch grows.
+    for index, left in enumerate(ordered):
+        left_normalized, left_shingles, left_token_grams, left_char_grams, left_text = metrics[
+            left.candidate_id
+        ]
+        for right in ordered[index + 1 :]:
+            if frozenset((left.candidate_id, right.candidate_id)) in direct_parent_pairs:
+                continue
+            right_normalized, right_shingles, right_token_grams, right_char_grams, right_text = (
+                metrics[right.candidate_id]
+            )
+            pair_blocked = False
+            if left.candidate_payload_hash == right.candidate_payload_hash:
+                exact_payload += 1
+                pair_blocked = True
+            if left.question == right.question:
+                exact_question += 1
+                pair_blocked = True
+            if left_normalized == right_normalized:
+                normalized += 1
+                pair_blocked = True
+            if left_shingles.intersection(right_shingles):
+                shingles += 1
+                pair_blocked = True
+            token_union = left_token_grams | right_token_grams
+            token_similarity = (
+                len(left_token_grams & right_token_grams) / len(token_union) if token_union else 1.0
+            )
+            char_union = left_char_grams | right_char_grams
+            char_similarity = (
+                len(left_char_grams & right_char_grams) / len(char_union) if char_union else 1.0
+            )
+            if (
+                token_similarity >= 0.85
+                or char_similarity >= 0.85
+                or normalized_edit_similarity_at_least(left_text, right_text, 0.90)
+            ):
+                fuzzy += 1
+                pair_blocked = True
+            blocking += pair_blocked
+    if blocking:
+        raise ValueError(f"unrelated production duplication audit found {blocking} blocking pairs")
+    candidate_set_digest = canonical_hash(
+        tuple((item.candidate_id, item.candidate_payload_hash) for item in ordered)
+    )
+    provisional = ProductionDuplicationAuditV1(
+        algorithm_id="PSE-V1-INTRA-DUPLICATION-AUDIT@1.0.0",
+        candidate_count=FINAL_TARGET_CASES,
+        candidate_set_digest=candidate_set_digest,
+        exact_payload_duplicate_pairs=exact_payload,
+        exact_question_duplicate_pairs=exact_question,
+        normalized_question_duplicate_pairs=normalized,
+        exact_13_token_overlap_pairs=shingles,
+        blocking_fuzzy_overlap_pairs=fuzzy,
+        unrelated_blocking_overlaps=blocking,
+        audit_digest="sha256:" + "0" * 64,
+    )
+    return replace(provisional, audit_digest=production_duplication_audit_digest(provisional))
+
+
+def _validate_production_candidate_set_and_commitments(
     packets: tuple[CandidateReviewPacket, ...],
     *,
     source_resolver: SourceArtifactResolver | None = None,
 ) -> tuple[ProductionCandidateCommitmentV1, ...]:
-    """Validate exact production IDs and pending packets, then bind commitments."""
+    """Validate packets/topology and derive commitments before the isolation gate."""
 
     if len(packets) != FINAL_TARGET_CASES:
         raise ValueError("production candidate set must contain exactly 434 packets")
@@ -1470,6 +2037,7 @@ def validate_production_candidate_set(
     for packet in packets:
         validate_production_candidate_packet(packet, source_resolver=source_resolver)
     validate_candidate_set(packets, source_resolver=source_resolver)
+    _validate_production_mutation_isolation_metadata(packets)
     commitments = tuple(
         sorted(
             (
@@ -1480,6 +2048,20 @@ def validate_production_candidate_set(
             ),
             key=lambda item: item.candidate_id.encode("utf-8"),
         )
+    )
+    return commitments
+
+
+def validate_production_candidate_set(
+    packets: tuple[CandidateReviewPacket, ...],
+    *,
+    source_resolver: SourceArtifactResolver | None = None,
+) -> tuple[ProductionCandidateCommitmentV1, ...]:
+    """Validate the exact production set, including split-isolation dependencies."""
+
+    commitments = _validate_production_candidate_set_and_commitments(
+        packets,
+        source_resolver=source_resolver,
     )
     validate_production_isolation(commitments)
     return commitments
@@ -1499,25 +2081,36 @@ __all__ = [
     "ProductionBatchManifestV1",
     "ProductionCandidateCommitmentV1",
     "ProductionCandidateStoreReceiptV1",
+    "ProductionDuplicationAuditV1",
     "ProductionFeasibilityBlocked",
     "ProductionFeasibilityReceiptV1",
     "ProductionIsolationValidationV1",
+    "ProductionReviewQueueEntryV1",
+    "ProductionReviewQueueV1",
+    "audit_production_duplicates",
     "bind_production_authoring_plan",
     "bind_production_batch_manifest",
     "bind_production_candidate_store_receipt",
     "bind_production_feasibility_receipt",
+    "bind_production_review_queue",
     "build_production_candidate_commitment",
+    "build_production_review_queue",
     "production_authoring_plan_digest",
     "production_batch_manifest_digest",
     "production_candidate_store_receipt_digest",
+    "production_duplication_audit_digest",
     "production_feasibility_receipt_digest",
     "production_plan_item_from_packet",
+    "production_review_queue_digest",
     "validate_production_authoring_plan",
     "validate_production_batch_manifest",
+    "validate_production_batch_manifest_bindings",
     "validate_production_candidate_packet",
     "validate_production_candidate_set",
     "validate_production_candidate_store_receipt",
     "validate_production_feasibility_receipt",
     "validate_production_hard_feasibility",
     "validate_production_isolation",
+    "validate_production_origin_isolation_metadata",
+    "validate_production_review_queue",
 ]

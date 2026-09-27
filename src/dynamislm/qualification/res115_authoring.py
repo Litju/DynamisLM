@@ -140,6 +140,21 @@ _TARGET_USE_BY_SCOPE = {
 }
 _RES71_REFERENCES = tuple(get_reference_cases())
 _REFERENCE_DIGESTS = {item.case_id: canonical_hash(item) for item in _RES71_REFERENCES}
+
+
+def _production_authoring_engine_references() -> tuple[ReferenceCase, ReferenceCase, ReferenceCase]:
+    references_by_id = {item.case_id: item for item in _RES71_REFERENCES}
+    return (
+        references_by_id["res71-cmj-flight-time-v2-gold"],
+        references_by_id["res71-cmj-rfd-refusal"],
+        references_by_id["res71-bpt-generic-power-refusal"],
+    )
+
+
+def _production_authoring_test_identity(index: int) -> str:
+    return ("CMJ", "DJ", "IMTP", "VBT", "RSA", "COD", "30_15_IFT")[index % 7]
+
+
 _BASE_SEMANTIC_CITATIONS = (
     "docs/decisions/RES21-DR-001-performance-science-eval-v1.md",
     "docs/architecture/SCIENTIFIC_CONSTITUTION_V2.md",
@@ -1108,6 +1123,10 @@ def _source_candidate_packet(
     resolver: SourceArtifactResolver,
     source_scope_by_document_id: Mapping[str, str],
     enforce_production_validator: bool,
+    candidate_id: str | None = None,
+    evidence_span_id_namespace: str = "QUALIFICATION",
+    question_text: str | None = None,
+    authoring_process_id: str = AUTHORING_PROCESS_ID,
 ) -> CandidateReviewPacket:
     artifact = _mapping(
         accepted_row.get("retained_source_artifact"),
@@ -1142,7 +1161,10 @@ def _source_candidate_packet(
     excerpts: list[EvidenceExcerpt] = []
     source_refs: list[EvidenceReference] = []
     for proposal in selection.spans:
-        span_id = f"PSE-EVIDENCE:QUALIFICATION:{selection.pmcid}:{proposal.span_digest[-12:]}"
+        span_id = (
+            f"PSE-EVIDENCE:{evidence_span_id_namespace}:"
+            f"{selection.pmcid}:{proposal.span_digest[-12:]}"
+        )
         span = EvidenceSpanIdentity(
             span_id=span_id,
             document_id=document_id,
@@ -1183,7 +1205,7 @@ def _source_candidate_packet(
             )
         )
 
-    candidate_id = (
+    candidate_id = candidate_id or (
         f"{QUALIFICATION_CANDIDATE_ID_PREFIX}SRC:{selection.capability_id}:"
         f"{selection.benchmark_family}:{selection.pmcid}"
     )
@@ -1244,6 +1266,8 @@ def _source_candidate_packet(
         )
         difficulty = DifficultyLevel.MEDIUM
         difficulty_rationale = "Phase-A scope class constrains the source extraction claim"
+    if question_text is not None:
+        question = question_text
 
     span_texts = tuple(excerpt.text for excerpt in excerpts)
     source_scopes = tuple(excerpt.scope for excerpt in excerpts)
@@ -1403,6 +1427,7 @@ def _source_candidate_packet(
         difficulty=difficulty,
         difficulty_rationale=difficulty_rationale,
         adversarial_tags=(row.adversarial_tags[0],),
+        authoring_process_id=authoring_process_id,
     )
     if enforce_production_validator:
         validate_res115_candidate_for_authoring(packet)
@@ -1862,6 +1887,7 @@ def _expert_rubric_binding(
     comparability: ComparabilityContract,
     scoring: ScoringContract,
     prior_authorities: tuple[AuthorityBinding, ...],
+    authoring_process_id: str = AUTHORING_PROCESS_ID,
     frozen_citations: tuple[str, ...] = (),
 ) -> tuple[AuthorityBinding, str]:
     rubric_id = f"PSE-RES115-RUBRIC:{candidate_id}"
@@ -1869,7 +1895,7 @@ def _expert_rubric_binding(
         {
             "rubric_id": rubric_id,
             "rubric_version": "1.0.0",
-            "authoring_process": AUTHORING_PROCESS_ID,
+            "authoring_process": authoring_process_id,
             "question": question,
             "input_context": input_contract.structured_context,
             "expected_answer": answer,
@@ -1992,12 +2018,13 @@ def _bind_candidate(
     mutation_seed: int | None = None,
     changed_fields: tuple[str, ...] = (),
     parent_origin_class: CaseOrigin | None = None,
+    authoring_process_id: str = AUTHORING_PROCESS_ID,
 ) -> CandidateReviewPacket:
     effective_family_id = source_family_id or f"PSE-QUALIFICATION-FAMILY:{candidate_id}"
     effective_cluster_id = isolation_cluster_id or f"PSE-QUALIFICATION-CLUSTER:{candidate_id}"
     effective_allocation_stratum = allocation_stratum or f"{capability_id}:{family}"
     provenance = ProposedCaseProvenance(
-        author_id=AUTHORING_PROCESS_ID,
+        author_id=authoring_process_id,
         rubric_digest=rubric_digest,
         review_scope=review_scope,
         origin_class=origin,
@@ -2134,6 +2161,8 @@ def _semantic_cell_candidate(
     *,
     question_class: PractitionerQuestionClass | None = None,
     candidate_id: str | None = None,
+    authoring_process_id: str = AUTHORING_PROCESS_ID,
+    force_refusal: bool = False,
 ) -> CandidateReviewPacket:
     """Author a bounded semantic scenario from the registered capability operator."""
 
@@ -2401,7 +2430,7 @@ def _semantic_cell_candidate(
         }
         prohibited_claims = ("the unsupported claim in the vignette",)
     elif capability_id == "C18":
-        if family == "F01":
+        if family == "F01" and not force_refusal:
             context.update(
                 {
                     "typed_identity_fields": "COMPLETE_AND_MATCHING",
@@ -2431,6 +2460,7 @@ def _semantic_cell_candidate(
         else:
             refusal_class, reason_code = _REFUSAL_BOUNDARIES[family]
             missing_information = {
+                "F01": ("registered typed measurand identity and event definition",),
                 "F02": ("device identity and event definition",),
                 "F03": ("registered metric definition",),
                 "F04": ("pairwise method identity or registered bridge",),
@@ -2548,6 +2578,7 @@ def _semantic_cell_candidate(
         comparability=comparability,
         scoring=scoring,
         prior_authorities=(policy_binding,),
+        authoring_process_id=authoring_process_id,
         frozen_citations=(
             *_BASE_SEMANTIC_CITATIONS,
             *_CAPABILITY_AUTHORITY_CITATIONS.get(capability_id, ()),
@@ -2593,6 +2624,7 @@ def _semantic_cell_candidate(
         difficulty=DifficultyLevel.MEDIUM,
         difficulty_rationale=f"bounded {capability_id}/{family} authority scenario",
         adversarial_tags=(row.adversarial_tags[0],),
+        authoring_process_id=authoring_process_id,
     )
 
 
@@ -2798,9 +2830,18 @@ def _semantic_reference_candidate(
     required_refusal: bool,
     seed_block: str | None = None,
     generated_context: Mapping[str, object] | None = None,
+    authoring_process_id: str = AUTHORING_PROCESS_ID,
+    question_text: str | None = None,
+    production_source_family_id: str | None = None,
+    production_isolation_cluster_id: str | None = None,
+    seed_namespace: str | None = None,
+    generator_definition: SyntheticGeneratorDefinitionV1 | None = None,
+    generator_registry_digest: str | None = None,
+    generated_synthetic_context: Mapping[str, object] | None = None,
+    scenario_origin: str = "SYNTHETIC_QUALIFICATION_CONTEXT",
 ) -> CandidateReviewPacket:
     row = _row(capability_id)
-    question = (
+    question = question_text or (
         f"{_QUESTION_PROMPTS[question_class]} The supplied synthetic {reference.family} "
         f"context is bound to a RES-71 {reference.status.value} reference case."
     )
@@ -2823,7 +2864,7 @@ def _semantic_reference_candidate(
     context = dict(generated_context or {})
     context.update(
         {
-            "scenario_origin": "SYNTHETIC_QUALIFICATION_CONTEXT",
+            "scenario_origin": scenario_origin,
             "reference_input": _reference_input_values(reference),
             "requested_operation": reference.synthetic_input[0].value
             if reference.synthetic_input
@@ -2857,6 +2898,7 @@ def _semantic_reference_candidate(
         comparability=_not_applicable_comparability(),
         scoring=scoring,
         prior_authorities=primary_authority,
+        authoring_process_id=authoring_process_id,
         frozen_citations=(
             *_BASE_SEMANTIC_CITATIONS,
             *_CAPABILITY_AUTHORITY_CITATIONS.get(capability_id, ()),
@@ -2869,32 +2911,34 @@ def _semantic_reference_candidate(
         else CaseOrigin.EXPERT_AUTHORED_SEMANTIC
     )
     generator: SyntheticGeneratorDefinitionV1 | None = None
-    seed_namespace: str | None = None
     contamination_seed_namespace: str | None = None
+    active_generator_digest: str | None = None
     if seed_block is not None:
-        seed_namespace = (
+        seed_namespace = seed_namespace or (
             f"{QUALIFICATION_SEED_NAMESPACE_PREFIX}"
             f"res115-unregistered-operation-context/{seed_block}"
         )
-        generator = RES115_SYNTHETIC_GENERATORS[0]
+        generator = generator_definition or RES115_SYNTHETIC_GENERATORS[0]
+        active_generator_digest = generator_registry_digest or RES115_SYNTHETIC_GENERATOR_DIGEST
         authority = (
             *authority,
             AuthorityBinding(
                 AuthorityKind.GENERATOR.value,
                 generator.generator_id,
                 generator.version,
-                RES115_SYNTHETIC_GENERATOR_DIGEST,
+                active_generator_digest,
                 ("input.structured_context", "expected_answer"),
             ),
         )
         contamination_seed_namespace = seed_namespace
         context = dict(input_contract.structured_context.items())
         context.update(
-            generate_synthetic_unregistered_operation_context(reference, seed_block=seed_block)
+            generated_synthetic_context
+            or generate_synthetic_unregistered_operation_context(reference, seed_block=seed_block)
         )
         input_contract = replace(input_contract, structured_context=context)
     provenance = ProposedCaseProvenance(
-        author_id=AUTHORING_PROCESS_ID,
+        author_id=authoring_process_id,
         rubric_digest=rubric_digest,
         review_scope="Exact RES-71 refusal contract classification; no human approval created.",
         origin_class=origin,
@@ -2920,11 +2964,11 @@ def _semantic_reference_candidate(
         generator_family=generator.generator_family if generator is not None else None,
         seed_namespace=seed_namespace,
         seed_block=seed_block,
-        generator_registry_digest=(
-            RES115_SYNTHETIC_GENERATOR_DIGEST if generator is not None else None
-        ),
+        generator_registry_digest=(active_generator_digest if generator is not None else None),
     )
-    source_family_id = f"PSE-QUALIFICATION-REFERENCE-FAMILY:{reference.case_id}"
+    source_family_id = production_source_family_id or (
+        f"PSE-QUALIFICATION-REFERENCE-FAMILY:{reference.case_id}"
+    )
     contamination = _candidate_contamination(
         candidate_id=candidate_id,
         question=question,
@@ -2958,7 +3002,8 @@ def _semantic_reference_candidate(
         contamination=contamination,
         isolation=CandidateIsolationMetadata(
             source_family_id=source_family_id,
-            isolation_cluster_id=f"PSE-QUALIFICATION-REFERENCE-CLUSTER:{reference.case_id}",
+            isolation_cluster_id=production_isolation_cluster_id
+            or f"PSE-QUALIFICATION-REFERENCE-CLUSTER:{reference.case_id}",
             allocation_stratum=f"{capability_id}:{family}",
         ),
         difficulty=DifficultyBinding(
@@ -2978,6 +3023,13 @@ def _reference_numeric_candidate(
     family: str,
     question_class: PractitionerQuestionClass,
     extra_context: Mapping[str, object] | None = None,
+    question_text: str | None = None,
+    authoring_process_id: str = AUTHORING_PROCESS_ID,
+    result_reference_prefix: str = "PSE-V1-QUALIFICATION-RESULT:",
+    production_source_family_id: str | None = None,
+    production_isolation_cluster_id: str | None = None,
+    prohibited_claims: tuple[str, ...] = (),
+    claim_boundary_authority: bool = False,
 ) -> CandidateReviewPacket:
     if reference.status is not ReferenceCaseStatus.VALUE or reference.operation_id is None:
         raise ValueError("numeric reference candidate requires a registered VALUE case")
@@ -2996,7 +3048,7 @@ def _reference_numeric_candidate(
         raise ValueError("RES-71 numeric reference case has more than one output unit")
     output_unit = next(iter(output_units)) if output_units else None
     tolerance_unit = output_unit if output_unit is not None else "RES71_REFERENCE_UNIT_UNSPECIFIED"
-    question = (
+    question = question_text or (
         f"{_QUESTION_PROMPTS[question_class]} Report the registered {reference.family} "
         "result exactly as supplied; do not recompute it or promote its claim level."
     )
@@ -3013,12 +3065,23 @@ def _reference_numeric_candidate(
         structured_context=context,
         deterministic_results=(result_view,),
     )
+    input_contract = replace(
+        input_contract,
+        deterministic_results=tuple(
+            replace(
+                result,
+                result_reference_id=f"{result_reference_prefix}{candidate_id}",
+            )
+            for result in input_contract.deterministic_results
+        ),
+    )
     expected = ExpectedStructuredAnswer(
         kind=ExpectedAnswerKind.NUMERIC_RESULT,
         required_field_ids=fields,
         expected_fields=values,
         reference_case_id=reference.case_id,
         expected_operation_id=reference.operation_id,
+        prohibited_claims=prohibited_claims,
         safe_lower_level_descriptions=(
             "The value is the exact registered RES-71 result for this synthetic reference input.",
         ),
@@ -3051,24 +3114,41 @@ def _reference_numeric_candidate(
         prohibited_claims=expected.prohibited_claims,
         attribution_overrides={
             field_id: ErrorClass.INVENTED_NUMERICAL_SCIENCE for field_id in fields
-        },
+        }
+        | (
+            {
+                "__over_refusal__": ErrorClass.CAUSAL_OVERCLAIM,
+                "__prohibited_claim__": ErrorClass.FALSE_SCIENTIFIC_ACCEPTANCE,
+            }
+            if prohibited_claims
+            else {}
+        ),
     )
     authorities = _operation_authorities(reference)
+    if claim_boundary_authority:
+        authorities = (
+            *authorities,
+            _live_authority(
+                AuthorityKind.RES70_CLAIM,
+                ("expected_answer", "claim_contract", "refusal_expectation"),
+            ),
+        )
     tolerance = ToleranceContract(
         field_ids=fields,
         unit=tolerance_unit,
         absolute_tolerance=float(reference.tolerance_absolute or 0.0),
         relative_tolerance=float(reference.tolerance_relative or 0.0),
     )
-    rubric_digest = canonical_hash(
-        {
-            "numeric_authority": "exact RES-71 expected values and tolerances",
-            "reference_case": reference,
-            "question": question,
-        }
-    )
+    rubric_payload = {
+        "numeric_authority": "exact RES-71 expected values and tolerances",
+        "reference_case": reference,
+        "question": question,
+    }
+    if prohibited_claims:
+        rubric_payload["prohibited_claims"] = prohibited_claims
+    rubric_digest = canonical_hash(rubric_payload)
     provenance = ProposedCaseProvenance(
-        author_id=AUTHORING_PROCESS_ID,
+        author_id=authoring_process_id,
         rubric_digest=rubric_digest,
         review_scope="Expected numeric gold copied directly from get_reference_case().",
         origin_class=CaseOrigin.DETERMINISTIC_ENGINE_DERIVED,
@@ -3082,7 +3162,9 @@ def _reference_numeric_candidate(
         engine_reference_digest=reference_digest,
         engine_registry_digest=operation.operation_inventory_digest,
     )
-    source_family_id = f"PSE-QUALIFICATION-REFERENCE-FAMILY:{reference.case_id}"
+    source_family_id = production_source_family_id or (
+        f"PSE-QUALIFICATION-REFERENCE-FAMILY:{reference.case_id}"
+    )
     contamination = _candidate_contamination(
         candidate_id=candidate_id,
         question=question,
@@ -3110,7 +3192,8 @@ def _reference_numeric_candidate(
         contamination=contamination,
         isolation=CandidateIsolationMetadata(
             source_family_id=source_family_id,
-            isolation_cluster_id=f"PSE-QUALIFICATION-REFERENCE-CLUSTER:{reference.case_id}",
+            isolation_cluster_id=production_isolation_cluster_id
+            or f"PSE-QUALIFICATION-REFERENCE-CLUSTER:{reference.case_id}",
             allocation_stratum=f"{capability_id}:{family}",
         ),
         difficulty=DifficultyBinding(
@@ -3129,12 +3212,17 @@ def _reference_operation_refusal_candidate(
     capability_id: str,
     family: str,
     question_class: PractitionerQuestionClass,
+    question_text: str | None = None,
+    extra_context: Mapping[str, object] | None = None,
+    authoring_process_id: str = AUTHORING_PROCESS_ID,
+    production_source_family_id: str | None = None,
+    production_isolation_cluster_id: str | None = None,
 ) -> CandidateReviewPacket:
     if reference.status is not ReferenceCaseStatus.REFUSAL or reference.operation_id is None:
         raise ValueError("engine refusal lane requires an operation-bound RES-71 REFUSAL case")
     operation = bind_res71_operation(reference.operation_id, reference_case_id=reference.case_id)
     operation_authorities = _operation_authorities(reference)
-    question = (
+    question = question_text or (
         f"{_QUESTION_PROMPTS[question_class]} State the refusal attached to this exact "
         "registered reference; keep the available input facts visible."
     )
@@ -3147,11 +3235,12 @@ def _reference_operation_refusal_candidate(
         question=question,
         safe_description=safe_description,
     )
-    context = {
+    context: dict[str, object] = {
         "scenario_origin": "SYNTHETIC_RES71_REFERENCE_INPUT",
         "reference_input": _reference_input_values(reference),
         "scientific_family": reference.family,
     }
+    context.update(extra_context or {})
     input_contract = InputContract(
         modality=(InputModality.TEXT, InputModality.STRUCTURED_MEASUREMENT_RECORD),
         question_text=question,
@@ -3194,6 +3283,7 @@ def _reference_operation_refusal_candidate(
         comparability=_not_applicable_comparability(),
         scoring=scoring,
         prior_authorities=operation_authorities,
+        authoring_process_id=authoring_process_id,
     )
     authorities = (*operation_authorities, rubric_binding)
     claim = _claim_contract(
@@ -3202,7 +3292,7 @@ def _reference_operation_refusal_candidate(
         safe_lower_claim_levels=("OBSERVED_VALUE",),
     )
     provenance = ProposedCaseProvenance(
-        author_id=AUTHORING_PROCESS_ID,
+        author_id=authoring_process_id,
         rubric_digest=rubric_digest,
         review_scope="RES-71 refusal class/reasons are copied exactly; safe wording is proposed.",
         origin_class=CaseOrigin.DETERMINISTIC_ENGINE_DERIVED,
@@ -3216,7 +3306,9 @@ def _reference_operation_refusal_candidate(
         engine_reference_digest=_REFERENCE_DIGESTS[reference.case_id],
         engine_registry_digest=operation.operation_inventory_digest,
     )
-    source_family_id = f"PSE-QUALIFICATION-REFERENCE-FAMILY:{reference.case_id}"
+    source_family_id = production_source_family_id or (
+        f"PSE-QUALIFICATION-REFERENCE-FAMILY:{reference.case_id}"
+    )
     packet = CandidateReviewPacket(
         benchmark_version="PerformanceScience-Eval@1.0.0",
         schema_version="pse-case-schema@1.1.0",
@@ -3243,7 +3335,8 @@ def _reference_operation_refusal_candidate(
         ),
         isolation=CandidateIsolationMetadata(
             source_family_id=source_family_id,
-            isolation_cluster_id=f"PSE-QUALIFICATION-REFERENCE-CLUSTER:{reference.case_id}",
+            isolation_cluster_id=production_isolation_cluster_id
+            or f"PSE-QUALIFICATION-REFERENCE-CLUSTER:{reference.case_id}",
             allocation_stratum=f"{capability_id}:{family}",
         ),
         difficulty=DifficultyBinding(DifficultyLevel.MEDIUM, "exact registered refusal reference"),
@@ -3259,11 +3352,15 @@ def _reference_comparability_candidate(
     capability_id: str,
     family: str,
     question_class: PractitionerQuestionClass,
+    question_text: str | None = None,
+    authoring_process_id: str = AUTHORING_PROCESS_ID,
+    production_source_family_id: str | None = None,
+    production_isolation_cluster_id: str | None = None,
 ) -> CandidateReviewPacket:
     if reference.status is not ReferenceCaseStatus.COMPARABILITY:
         raise ValueError("comparability reference builder requires COMPARABILITY status")
     requested_state = ComparabilityState(reference.expected_comparability_state or "")
-    question = (
+    question = question_text or (
         f"{_QUESTION_PROMPTS[question_class]} Apply the exact supplied pairwise comparison facts."
     )
     expected_fields = {
@@ -3333,10 +3430,11 @@ def _reference_comparability_candidate(
         comparability=comparability,
         scoring=scoring,
         prior_authorities=(reference_binding, comparability_binding),
+        authoring_process_id=authoring_process_id,
     )
     authorities = (reference_binding, comparability_binding, rubric_binding)
     provenance = ProposedCaseProvenance(
-        author_id=AUTHORING_PROCESS_ID,
+        author_id=authoring_process_id,
         rubric_digest=rubric_digest,
         review_scope=(
             "RES-71 comparison reference and RES-70 comparator authority; proposed rubric."
@@ -3347,7 +3445,9 @@ def _reference_comparability_candidate(
         derivation_status="EXACT_RES71_COMPARABILITY_REFERENCE_AND_RES70_RUBRIC_BOUND",
         derivation_edges=(),
     )
-    source_family_id = f"PSE-QUALIFICATION-REFERENCE-FAMILY:{reference.case_id}"
+    source_family_id = production_source_family_id or (
+        f"PSE-QUALIFICATION-REFERENCE-FAMILY:{reference.case_id}"
+    )
     packet = CandidateReviewPacket(
         benchmark_version="PerformanceScience-Eval@1.0.0",
         schema_version="pse-case-schema@1.1.0",
@@ -3374,7 +3474,8 @@ def _reference_comparability_candidate(
         ),
         isolation=CandidateIsolationMetadata(
             source_family_id=source_family_id,
-            isolation_cluster_id=f"PSE-QUALIFICATION-REFERENCE-CLUSTER:{reference.case_id}",
+            isolation_cluster_id=production_isolation_cluster_id
+            or f"PSE-QUALIFICATION-REFERENCE-CLUSTER:{reference.case_id}",
             allocation_stratum=f"{capability_id}:{family}",
         ),
         difficulty=DifficultyBinding(
@@ -3392,6 +3493,10 @@ def _reference_claim_candidate(
     capability_id: str,
     family: str,
     question_class: PractitionerQuestionClass,
+    question_text: str | None = None,
+    authoring_process_id: str = AUTHORING_PROCESS_ID,
+    production_source_family_id: str | None = None,
+    production_isolation_cluster_id: str | None = None,
 ) -> CandidateReviewPacket:
     if reference.status is not ReferenceCaseStatus.CLAIM_AUTHORITY:
         raise ValueError("claim-authority reference builder requires CLAIM_AUTHORITY status")
@@ -3405,7 +3510,7 @@ def _reference_claim_candidate(
         ),
         "the requested scientific claim",
     )
-    question = f"{_QUESTION_PROMPTS[question_class]} Evaluate: {requested_claim}."
+    question = question_text or f"{_QUESTION_PROMPTS[question_class]} Evaluate: {requested_claim}."
     refusal_class = RefusalClass(reference.expected_refusal_class or "")
     reason_codes = reference.expected_reason_codes
     expected_fields = {
@@ -3487,10 +3592,11 @@ def _reference_claim_candidate(
         comparability=_not_applicable_comparability(),
         scoring=scoring,
         prior_authorities=tuple(extra_authorities),
+        authoring_process_id=authoring_process_id,
     )
     authorities = (*extra_authorities, rubric_binding)
     provenance = ProposedCaseProvenance(
-        author_id=AUTHORING_PROCESS_ID,
+        author_id=authoring_process_id,
         rubric_digest=rubric_digest,
         review_scope="RES-71 claim-authority reference plus current RES-70 claim boundary.",
         origin_class=CaseOrigin.EXPERT_AUTHORED_SEMANTIC,
@@ -3499,7 +3605,9 @@ def _reference_claim_candidate(
         derivation_status="EXACT_RES71_CLAIM_REFERENCE_AND_RES70_RUBRIC_BOUND",
         derivation_edges=(),
     )
-    source_family_id = f"PSE-QUALIFICATION-REFERENCE-FAMILY:{reference.case_id}"
+    source_family_id = production_source_family_id or (
+        f"PSE-QUALIFICATION-REFERENCE-FAMILY:{reference.case_id}"
+    )
     packet = CandidateReviewPacket(
         benchmark_version="PerformanceScience-Eval@1.0.0",
         schema_version="pse-case-schema@1.1.0",
@@ -3526,7 +3634,8 @@ def _reference_claim_candidate(
         ),
         isolation=CandidateIsolationMetadata(
             source_family_id=source_family_id,
-            isolation_cluster_id=f"PSE-QUALIFICATION-REFERENCE-CLUSTER:{reference.case_id}",
+            isolation_cluster_id=production_isolation_cluster_id
+            or f"PSE-QUALIFICATION-REFERENCE-CLUSTER:{reference.case_id}",
             allocation_stratum=f"{capability_id}:{family}",
         ),
         difficulty=DifficultyBinding(DifficultyLevel.MEDIUM, "claim authority boundary reference"),

@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import datetime as datetime_module
 import hashlib
+import math
 import re
 import unicodedata
-from collections import defaultdict
+from collections import Counter, defaultdict
 from dataclasses import dataclass
 
 from dynamislm.benchmark.constants import (
@@ -134,6 +135,59 @@ def normalized_edit_similarity(left: str, right: str) -> float:
         previous = current
     distance = previous[-1]
     return 1.0 - (distance / max(len(a), len(b)))
+
+
+def normalized_edit_similarity_at_least(
+    left: str,
+    right: str,
+    threshold: float,
+) -> bool:
+    """Test an edit-similarity threshold exactly without filling the full DP matrix."""
+
+    if not 0.0 <= threshold <= 1.0:
+        raise ValueError("normalized edit threshold must be between zero and one")
+    a = normalize_text(left)
+    b = normalize_text(right)
+    maximum_length = max(len(a), len(b))
+    if maximum_length == 0:
+        return True
+    maximum_distance = math.floor((1.0 - threshold) * maximum_length + 1e-12)
+    if abs(len(a) - len(b)) > maximum_distance:
+        return False
+    if a == b:
+        return True
+    if not a or not b:
+        return False
+    left_counts = Counter(a)
+    right_counts = Counter(b)
+    if (
+        sum(
+            abs(left_counts[char] - right_counts[char])
+            for char in left_counts.keys() | right_counts.keys()
+        )
+        // 2
+        > maximum_distance
+    ):
+        return False
+
+    infinity = maximum_distance + 1
+    previous = [index if index <= maximum_distance else infinity for index in range(len(b) + 1)]
+    for left_index, left_char in enumerate(a, start=1):
+        current = [infinity] * (len(b) + 1)
+        if left_index <= maximum_distance:
+            current[0] = left_index
+        start = max(1, left_index - maximum_distance)
+        end = min(len(b), left_index + maximum_distance)
+        for right_index in range(start, end + 1):
+            current[right_index] = min(
+                previous[right_index] + 1,
+                current[right_index - 1] + 1,
+                previous[right_index - 1] + (left_char != b[right_index - 1]),
+            )
+        if min(current) > maximum_distance:
+            return False
+        previous = current
+    return previous[-1] <= maximum_distance
 
 
 def fuzzy_fingerprint(text: str) -> str:
@@ -861,12 +915,14 @@ def audit_contamination(
         token_score = token_5gram_jaccard(candidate.text, artifact.text)
         character_score = character_5gram_jaccard(candidate.text, artifact.text)
         normalized_matched_text = normalize_text(artifact.text)
-        edit_score = (
-            normalized_edit_similarity(candidate.text, artifact.text)
-            if max(len(normalized_candidate_text), len(normalized_matched_text)) >= 10
-            else 0.0
-        )
-        if token_score >= 0.85 or character_score >= 0.85 or edit_score >= 0.90:
+        if (
+            token_score >= 0.85
+            or character_score >= 0.85
+            or (
+                max(len(normalized_candidate_text), len(normalized_matched_text)) >= 10
+                and normalized_edit_similarity_at_least(candidate.text, artifact.text, 0.90)
+            )
+        ):
             fuzzy_matches.append(entry.artifact_id)
         candidate_splits = set(candidate.benchmark_split_names or (candidate.split_name,))
         if entry.source_family_id == candidate.source_family_id and candidate_splits.isdisjoint(
@@ -1259,6 +1315,7 @@ __all__ = [
     "jaccard",
     "normalize_text",
     "normalized_edit_similarity",
+    "normalized_edit_similarity_at_least",
     "normalized_text_sha256",
     "overlap_disposition_hash",
     "required_exclusion_artifact_ids",
