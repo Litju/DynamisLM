@@ -255,7 +255,7 @@ def test_mutation_descendants_remain_in_the_hash_propagation_scope() -> None:
 
 
 def test_parent_payload_change_rebinds_mutation_descendant_hashes() -> None:
-    from dynamislm.benchmark.pre_review import bind_candidate_review_packet
+    from dynamislm.benchmark.pre_review import CandidateReviewPacket, bind_candidate_review_packet
     from dynamislm.benchmark.production import PRODUCTION_BATCH_ID
     from dynamislm.benchmark.production_authoring import (
         PRODUCTION_SYNTHETIC_GENERATOR_DIGEST,
@@ -291,7 +291,7 @@ def test_parent_payload_change_rebinds_mutation_descendant_hashes() -> None:
     )
     parent = _author_semantic_packets(((parent_id, "C01", "F01", 0),), parent_input)[0]
 
-    def rebind(parent_packet, batch: str):
+    def rebind(parent_packet: CandidateReviewPacket, batch: str) -> CandidateReviewPacket:
         return bind_candidate_review_packet(
             replace(
                 parent_packet,
