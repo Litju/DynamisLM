@@ -4,7 +4,13 @@
 MISSION=RES-223-PRODUCTION-TOPOLOGY-REPAIR-001
 STATUS=BLOCKED
 ENTRY_HEAD=f6b872daa75190b8174c227490027c881b2c0dee
-FINAL_HEAD=79904ed1da9c0f5f351330b878b4570d035c8a48
+IMPLEMENTATION_HEAD=79904ed1da9c0f5f351330b878b4570d035c8a48
+RECEIPT_BINDING_HEAD=7cfbb7a73a91090c86d728d68c0614224f60cf9e
+
+`IMPLEMENTATION_HEAD` identifies the commit containing the RES-223 topology
+repair and its final code changes. `RECEIPT_BINDING_HEAD` identifies the later
+commit that updated this receipt to bind it to that implementation. They are
+different commits by design; neither value rewrites history.
 
 RES222_BASE_EXACT_BEFORE=INFEASIBLE
 RES222_COLOCATION_EXACT_BEFORE=INFEASIBLE
