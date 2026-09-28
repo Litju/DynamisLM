@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 import secrets
 from collections import Counter, defaultdict
@@ -43,14 +44,14 @@ from dynamislm.benchmark.production import (
     ProductionAuthoringPlanV1,
     ProductionCandidateCommitmentV1,
     ProductionDuplicationAuditV1,
-    ProductionFeasibilityReceiptV1,
+    ProductionExactFeasibilityReceiptV2,
     ProductionReviewQueueV1,
     _validate_production_candidate_set_and_commitments,
     audit_production_duplicates,
     bind_production_authoring_plan,
     build_production_review_queue,
     validate_production_authoring_plan,
-    validate_production_hard_feasibility,
+    validate_production_exact_feasibility,
     validate_production_isolation,
     validate_production_origin_isolation_metadata,
     validate_production_review_queue,
@@ -74,6 +75,13 @@ from dynamislm.serialization import canonical_hash, register_serializable_type
 SYNTHETIC_GENERATOR_ID = "pse-v1-unregistered-operation-context"
 SYNTHETIC_GENERATOR_VERSION = "1.0.0"
 MAX_PRODUCTION_SOURCE_CASES = 40
+_RES128_FINAL_AUDIT_SHA256 = "8484aa99e4463717eddebb5b13b968f56884decccd380c932207294e586c1adc"
+_RES128_CANDIDATE_SET_DIGEST = (
+    "sha256:2db2bdce3ce73023a638461c4ca8dcf215dcb490cd1c6aba96715176a80294c2"
+)
+_RES128_COLOCATION_EDGE_DIGEST = (
+    "sha256:922c19b9243f7a6cd56c22463db826607c1980edea9bb9b394feab0c5fcd02a4"
+)
 _SYNTHETIC_QUESTION_FOCUS = {
     "F05": "is this unsupported rather than zero?",
     "F06": "which live method is missing?",
@@ -273,7 +281,7 @@ class ProductionAuthoringDraftV1:
     plan: ProductionAuthoringPlanV1
     inputs: ProductionAuthoringInputsV1
     commitments: tuple[ProductionCandidateCommitmentV1, ...]
-    feasibility_receipt: ProductionFeasibilityReceiptV1
+    feasibility_receipt: ProductionExactFeasibilityReceiptV2
     review_queue: ProductionReviewQueueV1
     duplication_audit: ProductionDuplicationAuditV1
 
@@ -1007,6 +1015,39 @@ def _new_or_resume_private_inputs(
     if restored != inputs:
         raise ValueError("external production authoring input round trip failed")
     return restored
+
+
+def _validate_res128_feasibility_baseline(
+    duplication: ProductionDuplicationAuditV1,
+    *,
+    production_root: Path,
+) -> None:
+    path = production_root / "production/diagnostics/RES-128-final-audit.private.json"
+    try:
+        payload = path.read_bytes()
+        audit = json.loads(payload)
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("sealed RES-128 final audit is unavailable or invalid") from exc
+    if hashlib.sha256(payload).hexdigest() != _RES128_FINAL_AUDIT_SHA256:
+        raise ValueError("sealed RES-128 final audit hash differs from RES-222 authority")
+    if (
+        audit.get("schema") != "RES-128-final-audit@2"
+        or audit.get("production_candidate_count") != FINAL_TARGET_CASES
+        or audit.get("current_candidate_set_digest") != _RES128_CANDIDATE_SET_DIGEST
+        or duplication.candidate_set_digest != _RES128_CANDIDATE_SET_DIGEST
+        or audit.get("retained_exact_shingle_pairs") != 81
+        or audit.get("exact_shingle_colocation_pair_digest") != _RES128_COLOCATION_EDGE_DIGEST
+        or canonical_hash(duplication.exact_shingle_colocation_pairs)
+        != _RES128_COLOCATION_EDGE_DIGEST
+        or audit.get("exact_shingle_colocation_component_count") != 170
+        or audit.get("exact_shingle_colocation_component_size_histogram")
+        != {"1": 43, "2": 91, "3": 1, "4": 5, "5": 18, "8": 12}
+        or audit.get("no_candidate_split_membership_persisted") is not True
+        or audit.get("production_candidate_store_promoted") != "NO"
+    ):
+        raise ValueError(
+            "production candidate or retained co-location content differs from RES-128"
+        )
 
 
 def _scenario_ids(seed: str) -> dict[str, str]:
@@ -2477,17 +2518,40 @@ def build_production_authoring_draft(
     }
     if counts != expected_counts:
         raise ValueError(f"production origin counts differ from the authored target: {counts}")
-    validate_production_isolation(commitments)
+    validate_production_isolation(
+        commitments,
+        defer_split_lock_conflicts=True,
+        enforce_public_capacity=False,
+    )
     validate_production_candidate_set_against_qualification_exclusion(
         packets,
         exclusion,
         source_resolver=source_resolver,
     )
     duplication = audit_production_duplicates(packets)
-    feasibility = validate_production_hard_feasibility(
+    _validate_res128_feasibility_baseline(duplication, production_root=production_root)
+    exact_result = validate_production_exact_feasibility(
         commitments,
         exact_shingle_colocation_pairs=duplication.exact_shingle_colocation_pairs,
     )
+    feasibility = exact_result.receipt
+    feasibility_key = hashlib.sha256(PRODUCTION_BATCH_ID.encode("utf-8")).hexdigest()[:24]
+    write_external_production_json(
+        feasibility,
+        f"production/receipts/{feasibility_key}-exact-feasibility-v2.json",
+        repository_root=repository_root,
+        production_root=production_root,
+    )
+    write_external_production_json(
+        exact_result.private_diagnostic,
+        "production/diagnostics/RES-222-exact-feasibility.private.json",
+        repository_root=repository_root,
+        production_root=production_root,
+    )
+    if feasibility.status != "FEASIBLE":
+        raise ValueError(
+            f"exact production feasibility is {feasibility.status}; see private evidence"
+        )
     queue = build_production_review_queue(packets)
     validate_production_review_queue(queue, packets)
 

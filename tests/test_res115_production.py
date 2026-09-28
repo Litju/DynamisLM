@@ -4,6 +4,7 @@ import hashlib
 import subprocess
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Literal, cast
 
 import pytest
@@ -14,6 +15,7 @@ from dynamislm.benchmark.authoring import (
     question_classes_for_cell,
 )
 from dynamislm.benchmark.constants import (
+    CRITICAL_ERROR_CLASSES,
     CaseOrigin,
     DifficultyLevel,
     ErrorClass,
@@ -37,10 +39,13 @@ from dynamislm.benchmark.production import (
     ProductionAuthoringPlanV1,
     ProductionBatchManifestV1,
     ProductionCandidateCommitmentV1,
+    ProductionExactFeasibilityReceiptV2,
     ProductionFeasibilityBlocked,
     ProductionFeasibilityReceiptV1,
     bind_production_batch_manifest,
     validate_production_batch_manifest,
+    validate_production_exact_feasibility,
+    validate_production_exact_feasibility_receipt,
     validate_production_hard_feasibility,
     validate_production_isolation,
 )
@@ -275,6 +280,29 @@ def _feasibility_fixture(
     return tuple(_commitment(item) for item in items)
 
 
+def _cross_cell_exact_shingle_pairs(
+    commitments: tuple[ProductionCandidateCommitmentV1, ...],
+) -> tuple[tuple[str, str], ...]:
+    by_cell: dict[tuple[str, str], list[str]] = {}
+    for commitment in commitments:
+        item = commitment.item
+        by_cell.setdefault((item.capability_id, item.benchmark_family), []).append(
+            item.candidate_id
+        )
+    cells = sorted(by_cell)
+    pairs = tuple(
+        sorted(
+            (
+                min(by_cell[cells[index]][replica], by_cell[cells[index + 1]][replica]),
+                max(by_cell[cells[index]][replica], by_cell[cells[index + 1]][replica]),
+            )
+            for index in range(0, 54, 2)
+            for replica in range(3)
+        )
+    )
+    return pairs
+
+
 def test_production_candidate_namespace_rejects_qualification_ids() -> None:
     with pytest.raises(ValueError, match="PSE-V1-CANDIDATE"):
         _item("PSE-V1-QUALIFICATION:copy")
@@ -366,6 +394,27 @@ def test_exact_n434_feasibility_returns_aggregate_receipt_without_membership() -
     assert not hasattr(receipt, "membership_map")
 
 
+def test_v1_feasibility_receipt_cannot_be_reloaded_as_exact_v2(tmp_path: Path) -> None:
+    receipt = validate_production_hard_feasibility(_feasibility_fixture())
+    repository = tmp_path / "repo"
+    repository.mkdir()
+    production_root = tmp_path / "external"
+    write_external_production_json(
+        receipt,
+        "production/receipts/legacy-feasibility.json",
+        repository_root=repository,
+        production_root=production_root,
+    )
+
+    with pytest.raises(ValueError, match="external production JSON"):
+        read_external_production_json(
+            "production/receipts/legacy-feasibility.json",
+            ProductionExactFeasibilityReceiptV2,
+            repository_root=repository,
+            production_root=production_root,
+        )
+
+
 def test_exact_shingle_colocation_edges_bind_same_split_feasibility() -> None:
     commitments = _feasibility_fixture()
     left, right = commitments[0], commitments[1]
@@ -447,6 +496,302 @@ def test_hard_feasibility_rejects_unreachable_critical_error_protection_and_exac
         )
     with pytest.raises(ProductionFeasibilityBlocked):
         validate_production_hard_feasibility(_feasibility_fixture(paired_clusters=True))
+
+
+def test_exact_oracle_survives_legacy_c03_f04_block_and_covers_frozen_contract(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import dynamislm.benchmark.production as production
+
+    commitments = _feasibility_fixture()
+    pairs = _cross_cell_exact_shingle_pairs(commitments)
+    legacy = production.validate_production_legacy_feasibility
+
+    def block_legacy_base(
+        values: tuple[ProductionCandidateCommitmentV1, ...],
+        *,
+        exact_shingle_colocation_pairs: tuple[tuple[str, str], ...] = (),
+        diagnostic_anchor_requirements: dict[int, str] | None = None,
+        diagnostic_component_ranks: dict[str, int] | None = None,
+    ) -> ProductionFeasibilityReceiptV1:
+        if not exact_shingle_colocation_pairs:
+            raise ProductionFeasibilityBlocked(
+                "no eligible atomic cluster for C03xF04 in PUBLIC_DEVELOPMENT"
+            )
+        return legacy(
+            values,
+            exact_shingle_colocation_pairs=exact_shingle_colocation_pairs,
+            diagnostic_anchor_requirements=diagnostic_anchor_requirements,
+            diagnostic_component_ranks=diagnostic_component_ranks,
+        )
+
+    monkeypatch.setattr(production, "validate_production_legacy_feasibility", block_legacy_base)
+    result = validate_production_exact_feasibility(
+        commitments,
+        exact_shingle_colocation_pairs=pairs,
+    )
+    receipt = result.receipt
+
+    assert isinstance(receipt, ProductionExactFeasibilityReceiptV2)
+    assert receipt.status == "FEASIBLE"
+    assert receipt.legacy_base_status == "BLOCKED"
+    assert receipt.base_status == receipt.colocation_status == "FEASIBLE"
+    assert receipt.exact_shingle_colocation_pair_count == 81
+    assert receipt.exact_shingle_colocation_digest == canonical_hash(pairs)
+    assert receipt.base_component_count == 434
+    assert receipt.co_location_component_count == 353
+    assert receipt.co_location_component_size_distribution == ((1, 272), (2, 81))
+    assert receipt.c03_f04_eligible_component_count == 3
+    assert receipt.c03_f04_public_feasible_component_count == 3
+    assert receipt.canonical_self_reduction_status == "PASS"
+    assert receipt.canonical_witness_digest is not None
+    assert receipt.hard_cell_count_by_split == tuple(
+        (split, 87) for split, _ in receipt.target_counts
+    )
+    assert receipt.c18_refusal_cell_count_by_split == tuple(
+        (split, 14) for split, _ in receipt.target_counts
+    )
+    assert receipt.protected_critical_error_count_by_split == tuple(
+        (split, len(CRITICAL_ERROR_CLASSES)) for split, _ in receipt.target_counts[1:]
+    )
+    assert receipt.feasibility_membership_persisted is False
+    assert not hasattr(receipt, "membership_map")
+    validate_production_exact_feasibility_receipt(receipt)
+    from dynamislm.benchmark.production import bind_production_exact_feasibility_receipt
+    from dynamislm.benchmark.production_batch import _validate_exact_feasibility_match
+
+    forged = replace(receipt, base_model_digest="sha256:" + "0" * 64)
+    with pytest.raises(ValueError, match="receipt digest mismatch"):
+        validate_production_exact_feasibility_receipt(forged)
+    stale = bind_production_exact_feasibility_receipt(
+        replace(receipt, base_model_digest="sha256:" + "1" * 64)
+    )
+    with pytest.raises(ValueError, match="stale against current commitments"):
+        _validate_exact_feasibility_match(stale, receipt)
+
+    trace = result.private_diagnostic["c03_f04_trace"]
+    assert isinstance(trace, tuple)
+    assert len(trace) == 3
+    assert all(
+        {
+            "component_key",
+            "scientific_isolation_cluster_ids",
+            "candidate_ids",
+            "component_size",
+            "expert_author_batch_ids",
+            "protocol_template_ids",
+            "partner_capability_family_cells",
+            "mutation_descendants",
+            "mutation_lineage_ids",
+            "split_locks",
+            "legacy_preferred_rank",
+            "legacy_greedy_assigned",
+            "legacy_assigned_for",
+        }.issubset(entry)
+        for entry in trace
+    )
+    assert result.private_diagnostic["c03_f04_greedy_false_negative"] is True
+
+
+def test_exact_canonical_self_reduction_ignores_arbitrary_solver_assignments(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import dynamislm.benchmark.production as production
+
+    solutions = ((0, 1), (0, 2), (1, 0))
+
+    def run(
+        ordered_solutions: tuple[tuple[int, ...], ...],
+    ) -> tuple[tuple[str, tuple[int, ...] | None], list[tuple[int, ...]]]:
+        observed: list[tuple[int, ...]] = []
+
+        def fake_solve(
+            _component_count: int,
+            _constraints: tuple[object, ...],
+            *,
+            fixed: dict[int, int] | None = None,
+            hint: tuple[int, ...] | None = None,
+            solved_ranks: list[int] | None = None,
+            **_kwargs: object,
+        ) -> str:
+            del hint
+            assignment = next(
+                (
+                    candidate
+                    for candidate in ordered_solutions
+                    if all(candidate[index] == rank for index, rank in (fixed or {}).items())
+                ),
+                None,
+            )
+            if assignment is None:
+                return "INFEASIBLE"
+            observed.append(assignment)
+            if solved_ranks is not None:
+                solved_ranks.extend(assignment)
+            return "FEASIBLE"
+
+        monkeypatch.setattr(production, "_exact_completion_status", fake_solve)
+        return production._canonical_split_ranks(2, (), (2, 2)), observed
+
+    first, first_assignments = run(solutions)
+    second, second_assignments = run(tuple(reversed(solutions)))
+    assert first == second == ("PASS", (0, 1))
+    assert first_assignments[0] != second_assignments[0]
+
+
+def test_unknown_exact_completion_is_blocked(monkeypatch: pytest.MonkeyPatch) -> None:
+    import dynamislm.benchmark.production as production
+
+    monkeypatch.setattr(production, "_exact_completion_status", lambda *_args, **_kwargs: "UNKNOWN")
+    assert production._canonical_split_ranks(1, (), (0,)) == ("BLOCKED", None)
+
+
+def test_exact_unknown_status_stays_blocked_and_base_colocation_are_independent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import dynamislm.benchmark.production as production
+
+    commitments = _feasibility_fixture()
+    pairs = _cross_cell_exact_shingle_pairs(commitments)
+    calls = 0
+
+    def unknown_status(*_args: object, **_kwargs: object) -> str:
+        nonlocal calls
+        calls += 1
+        return "UNKNOWN"
+
+    monkeypatch.setattr(production, "_exact_completion_status", unknown_status)
+    receipt = validate_production_exact_feasibility(
+        commitments,
+        exact_shingle_colocation_pairs=pairs,
+    ).receipt
+
+    assert receipt.status == "BLOCKED"
+    assert receipt.base_status == receipt.colocation_status == "UNKNOWN"
+    assert receipt.canonical_self_reduction_status == "NOT_RUN"
+    assert receipt.canonical_witness_digest is None
+    assert calls == 2 + receipt.c03_f04_eligible_component_count
+
+
+def test_base_infeasible_with_feasible_colocation_is_an_implementation_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import dynamislm.benchmark.production as production
+
+    commitments = _feasibility_fixture()
+    pairs = _cross_cell_exact_shingle_pairs(commitments)
+    statuses = iter(("INFEASIBLE", "FEASIBLE"))
+    monkeypatch.setattr(
+        production,
+        "_exact_completion_status",
+        lambda *_args, **_kwargs: next(statuses),
+    )
+
+    with pytest.raises(RuntimeError, match="base model is infeasible"):
+        validate_production_exact_feasibility(
+            commitments,
+            exact_shingle_colocation_pairs=pairs,
+        )
+
+
+def test_exact_conflict_reduction_is_deterministic_and_rechecked() -> None:
+    from dynamislm.benchmark.production import _ExactConstraint, _reduce_exact_conflict
+
+    conflict = _ExactConstraint(
+        "SYNTHETIC_LOCK:component",
+        terms=((0, 0, 1), (0, 2, 1)),
+        lower=2,
+        upper=2,
+    )
+    assert _reduce_exact_conflict(
+        1,
+        (conflict,),
+        structural_group_ids=("COLOCATION:component-a:component-b",),
+    ) == ("COLOCATION:component-a:component-b", "SYNTHETIC_LOCK:component")
+
+
+def test_exact_model_names_each_frozen_coverage_requirement() -> None:
+    from dynamislm.benchmark.production import (
+        PROSPECTIVE_SPLIT_COUNTS,
+        _exact_requirement_constraints,
+        _feasibility_clusters,
+    )
+
+    commitments = _feasibility_fixture()
+    components = _feasibility_clusters(commitments)
+    constraints = _exact_requirement_constraints(components, components)
+    by_id = {item.group_id: item for item in constraints}
+    row = next(item for item in COVERAGE_MATRIX if item.capability_id == "C03")
+    tag = row.adversarial_tags[0]
+    error = row.error_classes[0]
+
+    assert len([group for group in constraints if group.group_id.startswith("CELL:")]) == 87 * 3
+    assert (
+        len([group for group in constraints if group.group_id.startswith("C18_REFUSAL:")]) == 14 * 3
+    )
+    assert f"CELL:C03:F04:{SplitName.PUBLIC_DEVELOPMENT.value}" in by_id
+    assert f"ROW_TAG:C03:{tag}:{SplitName.FROZEN_VALIDATION.value}" in by_id
+    assert f"ROW_ERROR:C03:{error.value}:{SplitName.HIDDEN_FINAL.value}" in by_id
+    assert f"ANSWERABLE:{SplitName.PUBLIC_DEVELOPMENT.value}" in by_id
+    critical = next(
+        group
+        for group in constraints
+        if group.group_id.startswith(f"CRITICAL:{CRITICAL_ERROR_CLASSES[0].value}:")
+    )
+    assert critical.lower == 2
+    assert len(critical.terms) >= 2
+    assert tuple(
+        group.group_id for group in constraints if group.group_id.startswith("COUNT:")
+    ) == tuple(sorted(f"COUNT:{split.value}={count}" for split, count in PROSPECTIVE_SPLIT_COUNTS))
+
+
+def test_incompatible_synthetic_locks_are_exactly_infeasible() -> None:
+    from dynamislm.benchmark.production import (
+        _exact_completion_status,
+        _exact_requirement_constraints,
+        _feasibility_clusters,
+    )
+
+    commitments = list(_feasibility_fixture())
+    excluded = {
+        "PSE-V1-CANDIDATE:fixture:C08:F05:0",
+        "PSE-V1-CANDIDATE:fixture:C08:F06:0",
+    }
+    commitments = [item for item in commitments if item.candidate_id not in excluded]
+    left = _item(
+        "PSE-V1-CANDIDATE:fixture:exact-lock-a",
+        capability_id="C08",
+        benchmark_family="F05",
+        origin=CaseOrigin.DETERMINISTIC_SYNTHETIC,
+        generator_family="fixture-generator:exact-lock-a",
+        cluster="fixture-exact-lock:a",
+        seed_split=SplitName.PUBLIC_DEVELOPMENT,
+    )
+    right = _item(
+        "PSE-V1-CANDIDATE:fixture:exact-lock-b",
+        capability_id="C08",
+        benchmark_family="F06",
+        origin=CaseOrigin.DETERMINISTIC_SYNTHETIC,
+        generator_family="fixture-generator:exact-lock-b",
+        cluster="fixture-exact-lock:b",
+        seed_split=SplitName.HIDDEN_FINAL,
+    )
+    commitments.extend((_commitment(left), _commitment(right)))
+    edge = (min(left.candidate_id, right.candidate_id), max(left.candidate_id, right.candidate_id))
+    components = _feasibility_clusters(
+        tuple(commitments),
+        exact_shingle_colocation_pairs=(edge,),
+        allow_incompatible_locks=True,
+    )
+    constraints = _exact_requirement_constraints(components, components)
+    lock = next(
+        item
+        for item in constraints
+        if item.group_id.startswith("SYNTHETIC_LOCK:") and item.lower == 2
+    )
+
+    assert lock.lower == lock.upper == 2
+    assert _exact_completion_status(len(components), (lock,)) == "INFEASIBLE"
 
 
 def test_production_receipts_write_only_under_external_production_root(tmp_path: Path) -> None:
@@ -877,8 +1222,13 @@ def _stub_production_store_validation(monkeypatch: pytest.MonkeyPatch) -> None:
     )
     monkeypatch.setattr(
         store,
-        "validate_production_hard_feasibility",
-        lambda _items, **_kwargs: None,
+        "validate_production_exact_feasibility",
+        lambda _items, **_kwargs: SimpleNamespace(receipt=SimpleNamespace(status="FEASIBLE")),
+    )
+    monkeypatch.setattr(
+        store,
+        "write_external_production_json",
+        lambda *_args, **_kwargs: ("", _SHA, 0),
     )
     monkeypatch.setattr(
         store,
@@ -969,6 +1319,34 @@ def test_production_review_queue_is_decision_free_and_deterministic() -> None:
         "decision",
     }.intersection(item.name for item in dataclass_fields(ProductionReviewQueueEntryV1))
     assert queue == build_production_review_queue(packets)
+
+
+def test_production_candidate_store_refuses_blocked_exact_feasibility(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import dynamislm.benchmark.production_store as store
+
+    packets, exclusion, plan = _store_roundtrip_fixture()
+    _stub_production_store_validation(monkeypatch)
+    monkeypatch.setattr(
+        store,
+        "validate_production_exact_feasibility",
+        lambda _items, **_kwargs: SimpleNamespace(receipt=SimpleNamespace(status="BLOCKED")),
+    )
+    repository = tmp_path / "repo"
+    repository.mkdir()
+    production_root = tmp_path / "external"
+
+    with pytest.raises(ValueError, match="exact production feasibility is BLOCKED"):
+        store.write_production_candidate_store(
+            packets,
+            plan,
+            repository_root=repository,
+            production_root=production_root,
+            qualification_exclusions=exclusion,
+        )
+    assert not production_root.exists()
 
 
 def test_production_candidate_store_recovers_staging_and_roundtrips_434_packets(

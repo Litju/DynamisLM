@@ -32,7 +32,7 @@ from dynamislm.benchmark.production import (
     ProductionCandidateCommitmentV1,
     ProductionCandidateStoreReceiptV1,
     ProductionDuplicationAuditV1,
-    ProductionFeasibilityReceiptV1,
+    ProductionExactFeasibilityReceiptV2,
     ProductionReviewQueueV1,
     audit_production_duplicates,
     validate_production_authoring_plan,
@@ -40,8 +40,8 @@ from dynamislm.benchmark.production import (
     validate_production_batch_manifest_bindings,
     validate_production_candidate_set,
     validate_production_candidate_store_receipt,
-    validate_production_feasibility_receipt,
-    validate_production_hard_feasibility,
+    validate_production_exact_feasibility,
+    validate_production_exact_feasibility_receipt,
     validate_production_review_queue,
 )
 from dynamislm.benchmark.production_exclusions import (
@@ -64,6 +64,16 @@ from dynamislm.serialization import canonical_hash
 
 def production_batch_key() -> str:
     return hashlib.sha256(PRODUCTION_BATCH_ID.encode("utf-8")).hexdigest()[:24]
+
+
+def _validate_exact_feasibility_match(
+    persisted: ProductionExactFeasibilityReceiptV2,
+    recomputed: ProductionExactFeasibilityReceiptV2,
+) -> None:
+    validate_production_exact_feasibility_receipt(persisted)
+    validate_production_exact_feasibility_receipt(recomputed)
+    if persisted != recomputed:
+        raise ValueError("exact feasibility receipt is stale against current commitments")
 
 
 @dataclass(frozen=True, slots=True)
@@ -210,7 +220,7 @@ def _validate_quality(
     packets: tuple[CandidateReviewPacket, ...],
     commitments: tuple[ProductionCandidateCommitmentV1, ...],
     source_resolver: SourceArtifactResolver,
-    feasibility: ProductionFeasibilityReceiptV1,
+    feasibility: ProductionExactFeasibilityReceiptV2,
     queue: ProductionReviewQueueV1,
 ) -> _ProductionQuality:
     if len(packets) != FINAL_TARGET_CASES:
@@ -450,7 +460,7 @@ def validate_production_batch(
     packets: tuple[CandidateReviewPacket, ...],
     candidate_store_receipt: ProductionCandidateStoreReceiptV1,
     qualification_exclusions: QualificationExclusionCommitmentV1,
-    feasibility_receipt: ProductionFeasibilityReceiptV1,
+    feasibility_receipt: ProductionExactFeasibilityReceiptV2,
     manifest: ProductionBatchManifestV1,
     source_resolver: SourceArtifactResolver,
     review_queue: ProductionReviewQueueV1,
@@ -474,8 +484,8 @@ def validate_production_batch(
             candidate_store_receipt,
         ),
         (
-            f"production/receipts/{key}-feasibility.json",
-            ProductionFeasibilityReceiptV1,
+            f"production/receipts/{key}-exact-feasibility-v2.json",
+            ProductionExactFeasibilityReceiptV2,
             feasibility_receipt,
         ),
         (f"production/manifests/{key}.json", ProductionBatchManifestV1, manifest),
@@ -509,12 +519,19 @@ def validate_production_batch(
     validate_production_authoring_plan(plan)
     validate_production_candidate_store_receipt(candidate_store_receipt)
     validate_qualification_exclusion_commitment(qualification_exclusions)
-    validate_production_feasibility_receipt(feasibility_receipt)
+    validate_production_exact_feasibility_receipt(feasibility_receipt)
+    if feasibility_receipt.status != "FEASIBLE":
+        raise ValueError("production batch requires FEASIBLE exact allocation evidence")
     validate_production_batch_manifest(manifest)
     validate_production_candidate_set_against_qualification_exclusion(
         packets, qualification_exclusions, source_resolver=source_resolver
     )
-    commitments = validate_production_candidate_set(packets, source_resolver=source_resolver)
+    commitments = validate_production_candidate_set(
+        packets,
+        source_resolver=source_resolver,
+        defer_split_lock_conflicts=True,
+        enforce_public_capacity=False,
+    )
     if (
         tuple(item.candidate_id for item in plan.items)
         != tuple(item.candidate_id for item in commitments)
@@ -558,12 +575,11 @@ def validate_production_batch(
     if stored_packets != tuple(sorted(packets, key=lambda item: item.candidate_id.encode("utf-8"))):
         raise ValueError("reloaded production packets differ from the supplied in-memory set")
     computed_audit = audit_production_duplicates(packets)
-    computed_feasibility = validate_production_hard_feasibility(
+    computed_feasibility = validate_production_exact_feasibility(
         commitments,
         exact_shingle_colocation_pairs=computed_audit.exact_shingle_colocation_pairs,
-    )
-    if computed_feasibility != feasibility_receipt:
-        raise ValueError("feasibility receipt differs from exact current commitments")
+    ).receipt
+    _validate_exact_feasibility_match(feasibility_receipt, computed_feasibility)
     if (
         computed_audit != duplication_audit
         or duplication_audit.audit_digest != production_duplication_audit_digest(duplication_audit)

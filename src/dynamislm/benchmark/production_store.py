@@ -20,7 +20,7 @@ from dynamislm.benchmark.production import (
     validate_production_authoring_plan,
     validate_production_candidate_set,
     validate_production_candidate_store_receipt,
-    validate_production_hard_feasibility,
+    validate_production_exact_feasibility,
 )
 from dynamislm.benchmark.production_exclusions import (
     QualificationExclusionCommitmentV1,
@@ -179,11 +179,24 @@ def write_production_candidate_store(
         qualification_exclusions,
         source_resolver=source_resolver,
     )
-    commitments = validate_production_candidate_set(packets, source_resolver=source_resolver)
+    commitments = validate_production_candidate_set(
+        packets,
+        source_resolver=source_resolver,
+        defer_split_lock_conflicts=True,
+        enforce_public_capacity=False,
+    )
     duplication = audit_production_duplicates(packets)
-    validate_production_hard_feasibility(
+    exact_feasibility = validate_production_exact_feasibility(
         commitments,
         exact_shingle_colocation_pairs=duplication.exact_shingle_colocation_pairs,
+    ).receipt
+    if exact_feasibility.status != "FEASIBLE":
+        raise ValueError(f"exact production feasibility is {exact_feasibility.status}")
+    write_external_production_json(
+        exact_feasibility,
+        f"production/receipts/{_batch_key(PRODUCTION_BATCH_ID)}-exact-feasibility-v2.json",
+        repository_root=repository_root,
+        production_root=production_root,
     )
     by_id = {item.candidate_id: item for item in commitments}
     if tuple(item.candidate_id for item in plan.items) != tuple(sorted(by_id)):
@@ -452,7 +465,12 @@ def read_production_candidate_store(
         qualification_exclusions,
         source_resolver=source_resolver,
     )
-    commitments = validate_production_candidate_set(restored, source_resolver=source_resolver)
+    commitments = validate_production_candidate_set(
+        restored,
+        source_resolver=source_resolver,
+        defer_split_lock_conflicts=True,
+        enforce_public_capacity=False,
+    )
     if tuple(item.item for item in commitments) != plan.items:
         raise ValueError("external production plan differs from candidate packet metadata")
     if (

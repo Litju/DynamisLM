@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import heapq
 import re
-from collections import defaultdict
+from collections import Counter, defaultdict
 from dataclasses import dataclass, fields, replace
 from pathlib import PurePosixPath
+from typing import TypedDict
 
 from dynamislm.benchmark.authoring import (
     _AUTHORITY_CLASS_BY_KIND,
@@ -703,6 +704,9 @@ def _isolation_values(item: ProductionAuthoringPlanItemV1) -> tuple[tuple[str, s
 
 def validate_production_isolation(
     commitments: tuple[ProductionCandidateCommitmentV1, ...],
+    *,
+    defer_split_lock_conflicts: bool = False,
+    enforce_public_capacity: bool = True,
 ) -> ProductionIsolationValidationV1:
     """Require each declared identity to resolve to one atomic cluster."""
 
@@ -739,10 +743,12 @@ def validate_production_isolation(
             generator_locks[item.generator_family or ""].add(parsed.split_name)
     if any(len(batches) > 1 for batches in template_batches.values()):
         raise ValueError("one shared protocol/template was fragmented across expert batches")
-    if any(len(splits) > 1 for splits in generator_locks.values()):
+    if not defer_split_lock_conflicts and any(
+        len(splits) > 1 for splits in generator_locks.values()
+    ):
         raise ValueError("generator family conflicts with split-qualified seed namespaces")
     for cluster_id, members in cluster_members.items():
-        if len(members) > 260:
+        if enforce_public_capacity and len(members) > 260:
             raise ValueError(f"atomic cluster {cluster_id} exceeds the public target capacity")
     for item in items:
         if (
@@ -892,6 +898,199 @@ def validate_production_feasibility_receipt(receipt: ProductionFeasibilityReceip
         raise ValueError("production feasibility receipt digest mismatch")
 
 
+PRODUCTION_EXACT_FEASIBILITY_ALGORITHM = "PSE-V1-PRE-REVIEW-EXACT-FEASIBILITY@2.0.0"
+PRODUCTION_EXACT_SOLVER_FAMILY = "CP-SAT"
+PRODUCTION_EXACT_SOLVER_VERSION = "9.15.6755"
+
+
+class _ProductionExactSolverConfig(TypedDict):
+    max_time_in_seconds: float
+    num_search_workers: int
+    random_seed: int
+    cp_model_presolve: bool
+    randomize_search: bool
+
+
+PRODUCTION_EXACT_SOLVER_CONFIG: _ProductionExactSolverConfig = {
+    "max_time_in_seconds": 60.0,
+    "num_search_workers": 1,
+    "random_seed": 0,
+    "cp_model_presolve": True,
+    "randomize_search": False,
+}
+
+
+@register_serializable_type
+@dataclass(frozen=True, slots=True)
+class ProductionExactFeasibilityReceiptV2:
+    status: str
+    algorithm_id: str
+    candidate_count: int
+    target_counts: tuple[tuple[SplitName, int], ...]
+    base_component_count: int
+    base_component_inventory_digest: str
+    co_location_component_count: int
+    co_location_component_inventory_digest: str
+    co_location_component_size_distribution: tuple[tuple[int, int], ...]
+    exact_shingle_colocation_pair_count: int
+    exact_shingle_colocation_digest: str
+    commitments_digest: str
+    solver_family: str
+    solver_version: str
+    solver_config_digest: str
+    base_model_digest: str
+    colocation_model_digest: str
+    base_status: str
+    colocation_status: str
+    legacy_base_status: str
+    canonical_self_reduction_status: str
+    canonical_witness_digest: str | None
+    hard_cell_count_by_split: tuple[tuple[SplitName, int], ...]
+    adversarial_tag_count_by_split: tuple[tuple[SplitName, int], ...]
+    reachable_error_count_by_split: tuple[tuple[SplitName, int], ...]
+    protected_critical_error_count_by_split: tuple[tuple[SplitName, int], ...]
+    answerable_case_count_by_split: tuple[tuple[SplitName, int], ...]
+    c18_refusal_cell_count_by_split: tuple[tuple[SplitName, int], ...]
+    c03_f04_eligible_component_count: int
+    c03_f04_public_feasible_component_count: int
+    c03_f04_diagnostic_digest: str
+    feasibility_membership_persisted: bool
+    receipt_digest: str
+
+    def __post_init__(self) -> None:
+        if self.status not in {"FEASIBLE", "INFEASIBLE", "BLOCKED"}:
+            raise ValueError("exact feasibility status is invalid")
+        if self.algorithm_id != PRODUCTION_EXACT_FEASIBILITY_ALGORITHM:
+            raise ValueError("exact feasibility receipt has the wrong algorithm ID")
+        if (
+            self.candidate_count != FINAL_TARGET_CASES
+            or self.target_counts != PROSPECTIVE_SPLIT_COUNTS
+        ):
+            raise ValueError("exact feasibility receipt must bind the frozen 434-case targets")
+        if self.base_component_count < 1 or self.co_location_component_count < 1:
+            raise ValueError("exact feasibility receipt requires allocation components")
+        if self.exact_shingle_colocation_pair_count != _RETAINED_EXACT_SHINGLE_PAIR_COUNT:
+            raise ValueError(
+                "exact feasibility receipt must bind all 81 retained co-location pairs"
+            )
+        if (
+            sum(count for _size, count in self.co_location_component_size_distribution)
+            != self.co_location_component_count
+            or sum(size * count for size, count in self.co_location_component_size_distribution)
+            != FINAL_TARGET_CASES
+        ):
+            raise ValueError("co-location component distribution is inconsistent")
+        if self.solver_family != PRODUCTION_EXACT_SOLVER_FAMILY:
+            raise ValueError("exact feasibility receipt has the wrong solver family")
+        if self.solver_version != PRODUCTION_EXACT_SOLVER_VERSION:
+            raise ValueError("exact feasibility receipt has the wrong solver version")
+        if self.base_status not in {"FEASIBLE", "INFEASIBLE", "UNKNOWN"} or (
+            self.colocation_status not in {"FEASIBLE", "INFEASIBLE", "UNKNOWN"}
+        ):
+            raise ValueError("exact feasibility solver status is invalid")
+        if self.legacy_base_status not in {"PASS", "BLOCKED"}:
+            raise ValueError("legacy diagnostic status is invalid")
+        if self.canonical_self_reduction_status not in {"PASS", "NOT_RUN"}:
+            raise ValueError("canonical self-reduction status is invalid")
+        if self.c03_f04_eligible_component_count < 0 or not (
+            0
+            <= self.c03_f04_public_feasible_component_count
+            <= self.c03_f04_eligible_component_count
+        ):
+            raise ValueError("C03xF04 diagnostic counts are invalid")
+        if self.feasibility_membership_persisted:
+            raise ValueError("exact feasibility must not persist split membership")
+        for name in (
+            "base_component_inventory_digest",
+            "co_location_component_inventory_digest",
+            "exact_shingle_colocation_digest",
+            "commitments_digest",
+            "solver_config_digest",
+            "base_model_digest",
+            "colocation_model_digest",
+            "c03_f04_diagnostic_digest",
+            "receipt_digest",
+        ):
+            if _SHA256.fullmatch(getattr(self, name)) is None:
+                raise ValueError(f"{name} must be a SHA-256 digest")
+        if (
+            self.canonical_witness_digest is not None
+            and _SHA256.fullmatch(self.canonical_witness_digest) is None
+        ):
+            raise ValueError("canonical witness digest must be a SHA-256 digest")
+        if self.status != "FEASIBLE" and self.canonical_witness_digest is not None:
+            raise ValueError("non-feasible exact receipt cannot contain a canonical witness")
+        if self.status == "FEASIBLE":
+            if (
+                self.base_status != "FEASIBLE"
+                or self.colocation_status != "FEASIBLE"
+                or self.canonical_self_reduction_status != "PASS"
+                or self.canonical_witness_digest is None
+            ):
+                raise ValueError("feasible exact receipt lacks complete solver evidence")
+            for name, values, expected in (
+                ("cell", self.hard_cell_count_by_split, 87),
+                (
+                    "tag",
+                    self.adversarial_tag_count_by_split,
+                    sum(len(row.adversarial_tags) for row in COVERAGE_MATRIX),
+                ),
+                (
+                    "error",
+                    self.reachable_error_count_by_split,
+                    sum(len(row.error_classes) for row in COVERAGE_MATRIX),
+                ),
+                ("answerable", self.answerable_case_count_by_split, None),
+                ("C18 refusal", self.c18_refusal_cell_count_by_split, 14),
+            ):
+                if tuple(split for split, _ in values) != tuple(
+                    split for split, _ in PROSPECTIVE_SPLIT_COUNTS
+                ):
+                    raise ValueError(f"exact feasibility {name} counts have wrong split coverage")
+                if expected is not None and any(count != expected for _split, count in values):
+                    raise ValueError(f"exact feasibility {name} counts violate the frozen target")
+                if name == "answerable" and any(count < 1 for _split, count in values):
+                    raise ValueError("exact feasibility answerability coverage is incomplete")
+            if tuple(split for split, _ in self.protected_critical_error_count_by_split) != (
+                SplitName.FROZEN_VALIDATION,
+                SplitName.HIDDEN_FINAL,
+            ) or any(
+                count != len(CRITICAL_ERROR_CLASSES)
+                for _split, count in self.protected_critical_error_count_by_split
+            ):
+                raise ValueError("protected critical-error coverage is incomplete")
+        elif self.status == "INFEASIBLE" and "INFEASIBLE" not in {
+            self.base_status,
+            self.colocation_status,
+        }:
+            raise ValueError("infeasible receipt lacks an exact infeasibility result")
+
+
+def production_exact_feasibility_receipt_digest(
+    receipt: ProductionExactFeasibilityReceiptV2,
+) -> str:
+    return canonical_hash(
+        {
+            item.name: getattr(receipt, item.name)
+            for item in fields(receipt)
+            if item.name != "receipt_digest"
+        }
+    )
+
+
+def bind_production_exact_feasibility_receipt(
+    receipt: ProductionExactFeasibilityReceiptV2,
+) -> ProductionExactFeasibilityReceiptV2:
+    return replace(receipt, receipt_digest=production_exact_feasibility_receipt_digest(receipt))
+
+
+def validate_production_exact_feasibility_receipt(
+    receipt: ProductionExactFeasibilityReceiptV2,
+) -> None:
+    if receipt.receipt_digest != production_exact_feasibility_receipt_digest(receipt):
+        raise ValueError("exact production feasibility receipt digest mismatch")
+
+
 def _row_by_capability(capability_id: str) -> CoverageRow:
     return next(row for row in COVERAGE_MATRIX if row.capability_id == capability_id)
 
@@ -933,6 +1132,7 @@ def _feasibility_clusters(
     commitments: tuple[ProductionCandidateCommitmentV1, ...],
     *,
     exact_shingle_colocation_pairs: tuple[tuple[str, str], ...] = (),
+    allow_incompatible_locks: bool = False,
 ) -> tuple[_FeasibilityCluster, ...]:
     items_by_id = {item.candidate_id: item for item in (c.item for c in commitments)}
     parent = {candidate_id: candidate_id for candidate_id in items_by_id}
@@ -980,7 +1180,7 @@ def _feasibility_clusters(
             if item.origin_class is CaseOrigin.DETERMINISTIC_SYNTHETIC
             and item.seed_namespace is not None
         }
-        if len(locked_splits) > 1:
+        if len(locked_splits) > 1 and not allow_incompatible_locks:
             raise ProductionFeasibilityBlocked(
                 "one atomic cluster has incompatible synthetic seed split constraints"
             )
@@ -1011,7 +1211,7 @@ def _feasibility_clusters(
                     tuple(split for split, _count in PROSPECTIVE_SPLIT_COUNTS).index(
                         next(iter(locked_splits))
                     )
-                    if locked_splits
+                    if len(locked_splits) == 1
                     else None
                 ),
             )
@@ -1069,6 +1269,8 @@ def _cluster_has_c18_refusal(
 
 def _anchor_feasibility_coverage(
     clusters: tuple[_FeasibilityCluster, ...],
+    *,
+    selected_requirements: dict[int, str] | None = None,
 ) -> dict[int, int]:
     targets = tuple(count for _split, count in PROSPECTIVE_SPLIT_COUNTS)
     assignments: dict[int, int] = {
@@ -1263,6 +1465,8 @@ def _anchor_feasibility_coverage(
         for index in ordered_options:
             next_current = dict(current)
             next_current[index] = rank
+            if selected_requirements is not None:
+                selected_requirements.setdefault(index, _feasibility_requirement_id(requirement))
             next_counts = counts.copy()
             next_counts[rank] += clusters[index].size
             result = search(next_current, next_counts)
@@ -1276,6 +1480,27 @@ def _anchor_feasibility_coverage(
             failures[-1] if failures else "coverage anchors have no exact-capacity witness"
         )
     return result
+
+
+def _feasibility_requirement_id(
+    requirement: tuple[int, str, CoverageRow | None, str | None, object | None, int],
+) -> str:
+    rank, kind, row, family, feature, _demand = requirement
+    split = PROSPECTIVE_SPLIT_COUNTS[rank][0].value
+    if kind == "cell":
+        assert row is not None and family is not None
+        return f"CELL:{row.capability_id}:{family}:{split}"
+    if kind == "c18":
+        assert family is not None
+        return f"C18_REFUSAL:{family}:{split}"
+    if kind in {"tag", "error"}:
+        assert row is not None
+        prefix = "ROW_TAG" if kind == "tag" else "ROW_ERROR"
+        value = str(getattr(feature, "value", feature))
+        return f"{prefix}:{row.capability_id}:{value}:{split}"
+    if kind == "critical":
+        return f"CRITICAL:{getattr(feature, 'value', feature)}:{split}"
+    return f"ANSWERABLE:{split}"
 
 
 def _fill_feasibility_counts(
@@ -1365,12 +1590,14 @@ def _fill_feasibility_counts(
     return tuple(assignments[index] for index in range(len(clusters)))
 
 
-def validate_production_hard_feasibility(
+def validate_production_legacy_feasibility(
     commitments: tuple[ProductionCandidateCommitmentV1, ...],
     *,
     exact_shingle_colocation_pairs: tuple[tuple[str, str], ...] = (),
+    diagnostic_anchor_requirements: dict[int, str] | None = None,
+    diagnostic_component_ranks: dict[str, int] | None = None,
 ) -> ProductionFeasibilityReceiptV1:
-    """Prove a legal 260/87/87 allocation using pre-review commitments only."""
+    """Run the frozen V1 greedy-anchor/DP comparator for diagnostics only."""
 
     if len(commitments) != FINAL_TARGET_CASES:
         raise ProductionFeasibilityBlocked(
@@ -1428,8 +1655,15 @@ def validate_production_hard_feasibility(
             raise ProductionFeasibilityBlocked(
                 "synthetic seed lock exceeds its target split capacity"
             )
-    anchors = _anchor_feasibility_coverage(clusters)
+    anchors = _anchor_feasibility_coverage(
+        clusters,
+        selected_requirements=diagnostic_anchor_requirements,
+    )
     ranks = _fill_feasibility_counts(clusters, anchors)
+    if diagnostic_component_ranks is not None:
+        diagnostic_component_ranks.update(
+            (cluster.cluster_key, rank) for cluster, rank in zip(clusters, ranks, strict=True)
+        )
 
     cell_count_by_rank = [0, 0, 0]
     tag_count_by_rank = [0, 0, 0]
@@ -1565,6 +1799,849 @@ def validate_production_hard_feasibility(
         receipt_digest="sha256:" + "0" * 64,
     )
     return bind_production_feasibility_receipt(provisional)
+
+
+def validate_production_hard_feasibility(
+    commitments: tuple[ProductionCandidateCommitmentV1, ...],
+    *,
+    exact_shingle_colocation_pairs: tuple[tuple[str, str], ...] = (),
+) -> ProductionFeasibilityReceiptV1:
+    """Compatibility name for the legacy V1 diagnostic allocator."""
+
+    return validate_production_legacy_feasibility(
+        commitments,
+        exact_shingle_colocation_pairs=exact_shingle_colocation_pairs,
+    )
+
+
+_RETAINED_EXACT_SHINGLE_PAIR_COUNT = 81
+
+
+@dataclass(frozen=True, slots=True)
+class _ExactConstraint:
+    group_id: str
+    terms: tuple[tuple[int, int, int], ...] = ()
+    lower: int | None = None
+    upper: int | None = None
+    equalities: tuple[tuple[int, int], ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class _ExactFeasibilityResult:
+    receipt: ProductionExactFeasibilityReceiptV2
+    private_diagnostic: dict[str, object]
+
+
+def _split_lock_ranks(cluster: _FeasibilityCluster) -> tuple[int, ...]:
+    split_order = tuple(split for split, _count in PROSPECTIVE_SPLIT_COUNTS)
+    locks = {
+        parse_production_seed_namespace(item.seed_namespace).split_name
+        for item in cluster.items
+        if item.origin_class is CaseOrigin.DETERMINISTIC_SYNTHETIC
+        and item.seed_namespace is not None
+    }
+    return tuple(rank for rank, split in enumerate(split_order) if split in locks)
+
+
+def _exact_requirement_constraints(
+    base_components: tuple[_FeasibilityCluster, ...],
+    independent_components: tuple[_FeasibilityCluster, ...],
+) -> tuple[_ExactConstraint, ...]:
+    constraints: list[_ExactConstraint] = []
+
+    def at_least_one(group_id: str, indices: tuple[int, ...], rank: int, demand: int = 1) -> None:
+        constraints.append(
+            _ExactConstraint(
+                group_id=group_id,
+                terms=tuple((index, rank, 1) for index in indices),
+                lower=demand,
+            )
+        )
+
+    for rank, (split, target) in enumerate(PROSPECTIVE_SPLIT_COUNTS):
+        constraints.append(
+            _ExactConstraint(
+                group_id=f"COUNT:{split.value}={target}",
+                terms=tuple(
+                    (index, rank, component.size) for index, component in enumerate(base_components)
+                ),
+                lower=target,
+                upper=target,
+            )
+        )
+        at_least_one(
+            f"ANSWERABLE:{split.value}",
+            tuple(
+                index
+                for index, component in enumerate(base_components)
+                if any(
+                    item.refusal_decision is not RefusalDecision.REQUIRED
+                    and item.expected_answer_kind is not ExpectedAnswerKind.REFUSAL
+                    for item in component.items
+                )
+            ),
+            rank,
+        )
+        for row in COVERAGE_MATRIX:
+            for family in row.benchmark_families:
+                at_least_one(
+                    f"CELL:{row.capability_id}:{family}:{split.value}",
+                    tuple(
+                        index
+                        for index, component in enumerate(base_components)
+                        if _cluster_has_cell_obligation(component, row, family)
+                    ),
+                    rank,
+                )
+            for tag in row.adversarial_tags:
+                at_least_one(
+                    f"ROW_TAG:{row.capability_id}:{tag}:{split.value}",
+                    tuple(
+                        index
+                        for index, component in enumerate(base_components)
+                        if any(
+                            _feasibility_row_eligible(item, row) and tag in item.adversarial_tags
+                            for item in component.items
+                        )
+                    ),
+                    rank,
+                )
+            for error in row.error_classes:
+                at_least_one(
+                    f"ROW_ERROR:{row.capability_id}:{error.value}:{split.value}",
+                    tuple(
+                        index
+                        for index, component in enumerate(base_components)
+                        if any(
+                            _feasibility_row_eligible(item, row)
+                            and error in item.reachable_error_classes
+                            for item in component.items
+                        )
+                    ),
+                    rank,
+                )
+        for family in _row_by_capability("C18").benchmark_families:
+            at_least_one(
+                f"C18_REFUSAL:{family}:{split.value}",
+                tuple(
+                    index
+                    for index, component in enumerate(base_components)
+                    if _cluster_has_c18_refusal(component, family)
+                ),
+                rank,
+            )
+
+    base_index_by_candidate = {
+        item.candidate_id: index
+        for index, component in enumerate(base_components)
+        for item in component.items
+    }
+    split_order = tuple(split for split, _count in PROSPECTIVE_SPLIT_COUNTS)
+    for component_index, component in enumerate(base_components):
+        locks = _split_lock_ranks(component)
+        if locks:
+            constraints.append(
+                _ExactConstraint(
+                    group_id=f"SYNTHETIC_LOCK:{component.cluster_key}",
+                    terms=tuple((component_index, rank, 1) for rank in locks),
+                    lower=len(locks),
+                    upper=len(locks),
+                )
+            )
+
+    for rank in range(3):
+        for error in CRITICAL_ERROR_CLASSES:
+            qualifying: list[int] = []
+            for independent_component in independent_components:
+                base_indices = tuple(
+                    sorted(
+                        {
+                            base_index_by_candidate[item.candidate_id]
+                            for item in independent_component.items
+                        }
+                    )
+                )
+                if any(
+                    _feasibility_row_eligible(item, _row_by_capability(item.capability_id))
+                    and error in item.reachable_error_classes
+                    for item in independent_component.items
+                ):
+                    # Co-location equalities make every member share this split.
+                    qualifying.append(base_indices[0])
+            if rank in (1, 2):
+                at_least_one(
+                    f"CRITICAL:{error.value}:{split_order[rank].value}",
+                    tuple(qualifying),
+                    rank,
+                    demand=2,
+                )
+
+    return tuple(sorted(constraints, key=lambda item: item.group_id.encode("utf-8")))
+
+
+def _exact_colocation_constraints(
+    base_components: tuple[_FeasibilityCluster, ...],
+    pairs: tuple[tuple[str, str], ...],
+) -> tuple[_ExactConstraint, ...]:
+    index_by_candidate = {
+        item.candidate_id: index
+        for index, component in enumerate(base_components)
+        for item in component.items
+    }
+    paired_components: dict[tuple[int, int], set[tuple[int, int]]] = defaultdict(set)
+    for left_id, right_id in pairs:
+        left, right = index_by_candidate[left_id], index_by_candidate[right_id]
+        if left != right:
+            paired_components[(min(left, right), max(left, right))].add((left, right))
+    return tuple(
+        _ExactConstraint(
+            group_id=(
+                f"COLOCATION:{base_components[left].cluster_key}:"
+                f"{base_components[right].cluster_key}"
+            ),
+            equalities=tuple(sorted(edges)),
+        )
+        for (left, right), edges in sorted(
+            paired_components.items(),
+            key=lambda item: (
+                base_components[item[0][0]].cluster_key,
+                base_components[item[0][1]].cluster_key,
+            ),
+        )
+    )
+
+
+def _exact_colocation_group_ids(
+    base_components: tuple[_FeasibilityCluster, ...],
+    pairs: tuple[tuple[str, str], ...],
+) -> tuple[str, ...]:
+    return tuple(
+        constraint.group_id for constraint in _exact_colocation_constraints(base_components, pairs)
+    )
+
+
+def _exact_model_digest(
+    commitments_digest: str,
+    components: tuple[_FeasibilityCluster, ...],
+    constraints: tuple[_ExactConstraint, ...],
+    *,
+    edge_digest: str,
+) -> str:
+    return canonical_hash(
+        {
+            "algorithm_id": PRODUCTION_EXACT_FEASIBILITY_ALGORITHM,
+            "commitments_digest": commitments_digest,
+            "component_inventory": tuple((item.cluster_key, item.size) for item in components),
+            "constraints": tuple(
+                (item.group_id, item.terms, item.lower, item.upper, item.equalities)
+                for item in constraints
+            ),
+            "co_location_edge_digest": edge_digest,
+            "co_location_edge_reason": "RETAINED_EXACT_SHINGLE",
+            "solver_config_digest": canonical_hash(PRODUCTION_EXACT_SOLVER_CONFIG),
+            "solver_family": PRODUCTION_EXACT_SOLVER_FAMILY,
+            "solver_version": PRODUCTION_EXACT_SOLVER_VERSION,
+        }
+    )
+
+
+def _exact_completion_status(
+    component_count: int,
+    constraints: tuple[_ExactConstraint, ...],
+    *,
+    active_group_ids: frozenset[str] | None = None,
+    fixed: dict[int, int] | None = None,
+    hint: tuple[int, ...] | None = None,
+    solved_ranks: list[int] | None = None,
+) -> str:
+    try:
+        from importlib.metadata import version
+
+        from ortools.sat.python import cp_model
+    except ImportError as exc:
+        raise ProductionFeasibilityBlocked(
+            "exact production feasibility requires the pinned OR-Tools benchmark dependency"
+        ) from exc
+    if version("ortools") != PRODUCTION_EXACT_SOLVER_VERSION:
+        raise RuntimeError(
+            f"exact production feasibility requires OR-Tools {PRODUCTION_EXACT_SOLVER_VERSION}"
+        )
+
+    model = cp_model.CpModel()
+    variables = tuple(
+        tuple(model.new_bool_var(f"x_{index}_{rank}") for rank in range(3))
+        for index in range(component_count)
+    )
+    for row in variables:
+        model.add_exactly_one(row)
+    for constraint in constraints:
+        if active_group_ids is not None and constraint.group_id not in active_group_ids:
+            continue
+        if constraint.equalities:
+            for left, right in constraint.equalities:
+                for rank in range(3):
+                    model.add(variables[left][rank] == variables[right][rank])
+            continue
+        if not constraint.terms:
+            model.add_bool_or([])
+            continue
+        expression = sum(
+            coefficient * variables[index][rank] for index, rank, coefficient in constraint.terms
+        )
+        if constraint.lower is not None and constraint.upper == constraint.lower:
+            model.add(expression == constraint.lower)
+        else:
+            if constraint.lower is not None:
+                model.add(expression >= constraint.lower)
+            if constraint.upper is not None:
+                model.add(expression <= constraint.upper)
+    for index, rank in (fixed or {}).items():
+        model.add(variables[index][rank] == 1)
+    if hint is not None:
+        if len(hint) != component_count or any(rank not in range(3) for rank in hint):
+            raise ValueError("exact solver hint is not a complete split assignment")
+        hinted = list(hint)
+        for index, rank in (fixed or {}).items():
+            hinted[index] = rank
+        for index, rank in enumerate(hinted):
+            for split_rank in range(3):
+                model.add_hint(variables[index][split_rank], int(split_rank == rank))
+
+    solver = cp_model.CpSolver()
+    solver.parameters.max_time_in_seconds = PRODUCTION_EXACT_SOLVER_CONFIG["max_time_in_seconds"]
+    solver.parameters.num_search_workers = PRODUCTION_EXACT_SOLVER_CONFIG["num_search_workers"]
+    solver.parameters.random_seed = PRODUCTION_EXACT_SOLVER_CONFIG["random_seed"]
+    solver.parameters.cp_model_presolve = PRODUCTION_EXACT_SOLVER_CONFIG["cp_model_presolve"]
+    solver.parameters.randomize_search = PRODUCTION_EXACT_SOLVER_CONFIG["randomize_search"]
+    status = solver.solve(model)
+    if status in (cp_model.FEASIBLE, cp_model.OPTIMAL):
+        if solved_ranks is not None:
+            solved_ranks.extend(
+                next(rank for rank in range(3) if solver.value(variables[index][rank]))
+                for index in range(component_count)
+            )
+        return "FEASIBLE"
+    if status == cp_model.INFEASIBLE:
+        return "INFEASIBLE"
+    if status == cp_model.UNKNOWN:
+        return "UNKNOWN"
+    raise RuntimeError(f"CP-SAT returned unexpected status {solver.status_name(status)}")
+
+
+def _reduce_exact_conflict(
+    component_count: int,
+    constraints: tuple[_ExactConstraint, ...],
+    *,
+    structural_group_ids: tuple[str, ...] = (),
+) -> tuple[str, ...]:
+    remaining = {item.group_id for item in constraints}
+    changed = True
+    while changed:
+        changed = False
+        for group_id in sorted(remaining, key=str.encode):
+            trial = remaining - {group_id}
+            status = _exact_completion_status(
+                component_count,
+                constraints,
+                active_group_ids=frozenset(trial),
+            )
+            if status == "INFEASIBLE":
+                remaining = trial
+                changed = True
+    report = tuple(sorted(remaining, key=str.encode))
+    if (
+        _exact_completion_status(
+            component_count,
+            constraints,
+            active_group_ids=frozenset(report),
+        )
+        != "INFEASIBLE"
+    ):
+        raise RuntimeError("reduced exact-feasibility conflict did not recheck as infeasible")
+    return tuple(sorted((*report, *structural_group_ids), key=str.encode))
+
+
+def _canonical_split_ranks(
+    component_count: int,
+    constraints: tuple[_ExactConstraint, ...],
+    initial_hint: tuple[int, ...],
+) -> tuple[str, tuple[int, ...] | None]:
+    fixed: dict[int, int] = {}
+    selected: list[int] = []
+    hint = initial_hint
+    for index in range(component_count):
+        for rank in range(3):
+            trial = {**fixed, index: rank}
+            solved_ranks: list[int] = []
+            status = _exact_completion_status(
+                component_count,
+                constraints,
+                fixed=trial,
+                hint=hint,
+                solved_ranks=solved_ranks,
+            )
+            if status == "UNKNOWN":
+                return "BLOCKED", None
+            if status == "FEASIBLE":
+                fixed = trial
+                selected.append(rank)
+                hint = tuple(solved_ranks)
+                break
+        else:
+            raise RuntimeError("canonical self-reduction lost a proven feasible completion")
+    return "PASS", tuple(selected)
+
+
+def _exact_aggregate_evidence(
+    base_components: tuple[_FeasibilityCluster, ...],
+    independent_components: tuple[_FeasibilityCluster, ...],
+    base_ranks: tuple[int, ...],
+) -> dict[str, tuple[tuple[SplitName, int], ...]]:
+    targets = tuple(count for _split, count in PROSPECTIVE_SPLIT_COUNTS)
+    actual_counts = [0, 0, 0]
+    for component, rank in zip(base_components, base_ranks, strict=True):
+        actual_counts[rank] += component.size
+    if tuple(actual_counts) != targets:
+        raise RuntimeError("CP-SAT canonical witness violates exact split counts")
+
+    cells = [0, 0, 0]
+    tags = [0, 0, 0]
+    errors = [0, 0, 0]
+    critical = [0, 0, 0]
+    answerable = [0, 0, 0]
+    c18 = [0, 0, 0]
+    rank_by_candidate = {
+        item.candidate_id: rank
+        for component, rank in zip(base_components, base_ranks, strict=True)
+        for item in component.items
+    }
+    for rank in range(3):
+        assigned = tuple(
+            component
+            for index, component in enumerate(base_components)
+            if base_ranks[index] == rank
+        )
+        assigned_items = tuple(item for component in assigned for item in component.items)
+        answerable[rank] = sum(
+            item.refusal_decision is not RefusalDecision.REQUIRED
+            and item.expected_answer_kind is not ExpectedAnswerKind.REFUSAL
+            for item in assigned_items
+        )
+        for row in COVERAGE_MATRIX:
+            for family in row.benchmark_families:
+                cells[rank] += any(
+                    _cluster_has_cell_obligation(component, row, family) for component in assigned
+                )
+            eligible = tuple(
+                item for item in assigned_items if _feasibility_row_eligible(item, row)
+            )
+            tags[rank] += len(
+                {tag for item in eligible for tag in item.adversarial_tags}.intersection(
+                    row.adversarial_tags
+                )
+            )
+            errors[rank] += len(
+                {error for item in eligible for error in item.reachable_error_classes}.intersection(
+                    row.error_classes
+                )
+            )
+        for error in CRITICAL_ERROR_CLASSES:
+            independent_count = sum(
+                any(
+                    rank_by_candidate[item.candidate_id] == rank
+                    and _feasibility_row_eligible(item, _row_by_capability(item.capability_id))
+                    and error in item.reachable_error_classes
+                    for item in component.items
+                )
+                for component in independent_components
+            )
+            if rank in (1, 2) and independent_count < 2:
+                raise RuntimeError("canonical witness misses critical-error component redundancy")
+            critical[rank] += independent_count > 0
+        c18[rank] = sum(
+            any(_cluster_has_c18_refusal(component, family) for component in assigned)
+            for family in _row_by_capability("C18").benchmark_families
+        )
+
+    def split_pairs(
+        values: list[int], ranks: tuple[int, ...] = (0, 1, 2)
+    ) -> tuple[tuple[SplitName, int], ...]:
+        return tuple((PROSPECTIVE_SPLIT_COUNTS[rank][0], values[rank]) for rank in ranks)
+
+    expected_tags = sum(len(row.adversarial_tags) for row in COVERAGE_MATRIX)
+    expected_errors = sum(len(row.error_classes) for row in COVERAGE_MATRIX)
+    if (
+        any(count != 87 for count in cells)
+        or any(count != expected_tags for count in tags)
+        or any(count != expected_errors for count in errors)
+        or any(count < 1 for count in answerable)
+        or any(count != 14 for count in c18)
+    ):
+        raise RuntimeError("CP-SAT canonical witness misses a frozen coverage obligation")
+    return {
+        "hard_cell_count_by_split": split_pairs(cells),
+        "adversarial_tag_count_by_split": split_pairs(tags),
+        "reachable_error_count_by_split": split_pairs(errors),
+        "protected_critical_error_count_by_split": split_pairs(critical, (1, 2)),
+        "answerable_case_count_by_split": split_pairs(answerable),
+        "c18_refusal_cell_count_by_split": split_pairs(c18),
+    }
+
+
+def validate_production_exact_feasibility(
+    commitments: tuple[ProductionCandidateCommitmentV1, ...],
+    *,
+    exact_shingle_colocation_pairs: tuple[tuple[str, str], ...],
+) -> _ExactFeasibilityResult:
+    """Run base/co-location CP-SAT models and canonicalize a prospective witness."""
+
+    if len(commitments) != FINAL_TARGET_CASES:
+        raise ProductionFeasibilityBlocked("exact feasibility requires exactly 434 commitments")
+    if any(not isinstance(item, ProductionCandidateCommitmentV1) for item in commitments):
+        raise TypeError("exact feasibility input must contain production commitments")
+    commitments = tuple(sorted(commitments, key=lambda item: item.candidate_id.encode("utf-8")))
+    candidate_ids = tuple(item.candidate_id for item in commitments)
+    if (
+        len(set(candidate_ids)) != FINAL_TARGET_CASES
+        or len({item.candidate_payload_hash for item in commitments}) != FINAL_TARGET_CASES
+    ):
+        raise ProductionFeasibilityBlocked("exact feasibility commitments are not unique")
+    candidate_id_set = set(candidate_ids)
+    if (
+        not isinstance(exact_shingle_colocation_pairs, tuple)
+        or len(exact_shingle_colocation_pairs) != _RETAINED_EXACT_SHINGLE_PAIR_COUNT
+        or any(
+            not isinstance(pair, tuple)
+            or len(pair) != 2
+            or any(not isinstance(candidate_id, str) for candidate_id in pair)
+            for pair in exact_shingle_colocation_pairs
+        )
+        or any(
+            left == right
+            or left.encode("utf-8") >= right.encode("utf-8")
+            or left not in candidate_id_set
+            or right not in candidate_id_set
+            for left, right in exact_shingle_colocation_pairs
+        )
+        or exact_shingle_colocation_pairs
+        != tuple(
+            sorted(
+                set(exact_shingle_colocation_pairs),
+                key=lambda pair: (pair[0].encode("utf-8"), pair[1].encode("utf-8")),
+            )
+        )
+    ):
+        raise ProductionFeasibilityBlocked(
+            "exact feasibility requires the 81 canonical retained co-location pairs"
+        )
+    for commitment in commitments:
+        _validate_feasibility_item(commitment.item)
+    validate_production_isolation(
+        commitments,
+        defer_split_lock_conflicts=True,
+        enforce_public_capacity=False,
+    )
+    base_components = _feasibility_clusters(
+        commitments,
+        allow_incompatible_locks=True,
+    )
+    colocation_components = _feasibility_clusters(
+        commitments,
+        exact_shingle_colocation_pairs=exact_shingle_colocation_pairs,
+        allow_incompatible_locks=True,
+    )
+    base_index_by_candidate = {
+        item.candidate_id: index
+        for index, component in enumerate(base_components)
+        for item in component.items
+    }
+    base_indices_by_colocation_component = tuple(
+        tuple(sorted({base_index_by_candidate[item.candidate_id] for item in component.items}))
+        for component in colocation_components
+    )
+    base_constraints = _exact_requirement_constraints(base_components, base_components)
+    colocation_constraints = _exact_requirement_constraints(
+        colocation_components,
+        colocation_components,
+    )
+    commitments_digest = canonical_hash(commitments)
+    edge_digest = canonical_hash(exact_shingle_colocation_pairs)
+    base_inventory_digest = canonical_hash(
+        tuple((component.cluster_key, component.size) for component in base_components)
+    )
+    colocation_inventory_digest = canonical_hash(
+        tuple((component.cluster_key, component.size) for component in colocation_components)
+    )
+    base_model_digest = _exact_model_digest(
+        commitments_digest,
+        base_components,
+        base_constraints,
+        edge_digest=canonical_hash(()),
+    )
+    colocation_model_digest = _exact_model_digest(
+        commitments_digest,
+        colocation_components,
+        colocation_constraints,
+        edge_digest=edge_digest,
+    )
+    legacy_selected: dict[int, str] = {}
+    legacy_ranks_by_key: dict[str, int] = {}
+    legacy_failure: str | None = None
+    try:
+        validate_production_legacy_feasibility(
+            commitments,
+            diagnostic_anchor_requirements=legacy_selected,
+            diagnostic_component_ranks=legacy_ranks_by_key,
+        )
+        legacy_status = "PASS"
+    except ValueError as exc:
+        legacy_status = "BLOCKED"
+        legacy_failure = str(exc)
+    legacy_hint = (
+        tuple(legacy_ranks_by_key[component.cluster_key] for component in base_components)
+        if legacy_status == "PASS" and len(legacy_ranks_by_key) == len(base_components)
+        else None
+    )
+    colocation_legacy_ranks: dict[str, int] = {}
+    try:
+        validate_production_legacy_feasibility(
+            commitments,
+            exact_shingle_colocation_pairs=exact_shingle_colocation_pairs,
+            diagnostic_component_ranks=colocation_legacy_ranks,
+        )
+        colocation_legacy_status = "PASS"
+    except ValueError:
+        colocation_legacy_status = "BLOCKED"
+    if legacy_hint is None and colocation_legacy_status == "PASS":
+        colocated_rank_by_candidate = {
+            item.candidate_id: colocation_legacy_ranks[component.cluster_key]
+            for component in colocation_components
+            for item in component.items
+        }
+        legacy_hint = tuple(
+            colocated_rank_by_candidate[component.items[0].candidate_id]
+            for component in base_components
+        )
+    base_solution: list[int] = []
+    base_status = _exact_completion_status(
+        len(base_components),
+        base_constraints,
+        hint=legacy_hint,
+        solved_ranks=base_solution,
+    )
+    colocation_hint = (
+        tuple(colocation_legacy_ranks[component.cluster_key] for component in colocation_components)
+        if colocation_legacy_status == "PASS"
+        and len(colocation_legacy_ranks) == len(colocation_components)
+        else None
+    )
+    co_location_source = tuple(base_solution) if base_status == "FEASIBLE" else legacy_hint
+    if colocation_hint is None and co_location_source is not None:
+        hinted_ranks: list[int] = []
+        for indices in base_indices_by_colocation_component:
+            counts = Counter(co_location_source[index] for index in indices)
+            rank = max(
+                range(3), key=lambda candidate_rank: (counts[candidate_rank], -candidate_rank)
+            )
+            hinted_ranks.append(rank)
+        colocation_hint = tuple(hinted_ranks)
+    colocation_solution: list[int] = []
+    colocation_status = _exact_completion_status(
+        len(colocation_components),
+        colocation_constraints,
+        hint=colocation_hint,
+        solved_ranks=colocation_solution,
+    )
+    if base_status == "INFEASIBLE" and colocation_status == "FEASIBLE":
+        raise RuntimeError("co-location exact model is feasible while its base model is infeasible")
+
+    c03_row = _row_by_capability("C03")
+    split_order = tuple(split for split, _count in PROSPECTIVE_SPLIT_COUNTS)
+    c03_f04_trace: list[dict[str, object]] = []
+    c03_public_feasible = 0
+    c03_unknown = False
+    for index, component in enumerate(base_components):
+        if not _cluster_has_cell_obligation(component, c03_row, "F04"):
+            continue
+        forced_status = _exact_completion_status(
+            len(base_components),
+            base_constraints,
+            fixed={index: 0},
+            hint=tuple(base_solution) if base_status == "FEASIBLE" else legacy_hint,
+        )
+        c03_public_feasible += forced_status == "FEASIBLE"
+        c03_unknown |= forced_status == "UNKNOWN"
+        c03_f04_trace.append(
+            {
+                "component_key": component.cluster_key,
+                "scientific_isolation_cluster_ids": tuple(
+                    sorted({item.isolation_cluster_id for item in component.items})
+                ),
+                "candidate_ids": tuple(item.candidate_id for item in component.items),
+                "component_size": component.size,
+                "expert_author_batch_ids": tuple(
+                    sorted(
+                        {
+                            item.expert_author_batch_id
+                            for item in component.items
+                            if item.expert_author_batch_id
+                        }
+                    )
+                ),
+                "protocol_template_ids": tuple(
+                    sorted(
+                        {entry for item in component.items for entry in item.protocol_template_ids}
+                    )
+                ),
+                "partner_capability_family_cells": tuple(
+                    sorted(
+                        {
+                            (item.capability_id, item.benchmark_family)
+                            for item in component.items
+                            if (item.capability_id, item.benchmark_family) != ("C03", "F04")
+                        }
+                    )
+                ),
+                "mutation_descendants": tuple(
+                    item.candidate_id
+                    for item in component.items
+                    if item.parent_candidate_id is not None
+                ),
+                "mutation_lineage_ids": tuple(
+                    sorted(
+                        {
+                            item.mutation_lineage_id
+                            for item in component.items
+                            if item.mutation_lineage_id
+                        }
+                    )
+                ),
+                "split_locks": tuple(
+                    split_order[rank].value for rank in _split_lock_ranks(component)
+                ),
+                "legacy_preferred_rank": component.preferred_rank,
+                "legacy_greedy_assigned": index in legacy_selected,
+                "legacy_assigned_for": legacy_selected.get(index),
+                "exact_base_public_completion_status": forced_status,
+            }
+        )
+
+    c03_digest = canonical_hash(tuple(c03_f04_trace))
+    base_conflicts = (
+        _reduce_exact_conflict(len(base_components), base_constraints)
+        if base_status == "INFEASIBLE"
+        else ()
+    )
+    colocation_conflicts = (
+        _reduce_exact_conflict(
+            len(colocation_components),
+            colocation_constraints,
+            structural_group_ids=_exact_colocation_group_ids(
+                base_components,
+                exact_shingle_colocation_pairs,
+            ),
+        )
+        if colocation_status == "INFEASIBLE"
+        else ()
+    )
+    overall_status = (
+        "INFEASIBLE"
+        if "INFEASIBLE" in {base_status, colocation_status}
+        else "BLOCKED"
+        if "UNKNOWN" in {base_status, colocation_status} or c03_unknown
+        else "FEASIBLE"
+    )
+    canonical_status = "NOT_RUN"
+    witness_digest: str | None = None
+    aggregates: dict[str, tuple[tuple[SplitName, int], ...]] = {
+        "hard_cell_count_by_split": (),
+        "adversarial_tag_count_by_split": (),
+        "reachable_error_count_by_split": (),
+        "protected_critical_error_count_by_split": (),
+        "answerable_case_count_by_split": (),
+        "c18_refusal_cell_count_by_split": (),
+    }
+    if overall_status == "FEASIBLE":
+        self_reduction_status, canonical_ranks = _canonical_split_ranks(
+            len(colocation_components),
+            colocation_constraints,
+            tuple(colocation_solution),
+        )
+        if self_reduction_status == "PASS" and canonical_ranks is not None:
+            canonical_status = "PASS"
+            witness_digest = canonical_hash(
+                tuple(
+                    (component.cluster_key, PROSPECTIVE_SPLIT_COUNTS[rank][0])
+                    for component, rank in zip(
+                        colocation_components,
+                        canonical_ranks,
+                        strict=True,
+                    )
+                )
+            )
+            aggregates = _exact_aggregate_evidence(
+                colocation_components,
+                colocation_components,
+                canonical_ranks,
+            )
+        else:
+            canonical_status = "NOT_RUN"
+            overall_status = "BLOCKED"
+
+    provisional = ProductionExactFeasibilityReceiptV2(
+        status=overall_status,
+        algorithm_id=PRODUCTION_EXACT_FEASIBILITY_ALGORITHM,
+        candidate_count=FINAL_TARGET_CASES,
+        target_counts=PROSPECTIVE_SPLIT_COUNTS,
+        base_component_count=len(base_components),
+        base_component_inventory_digest=base_inventory_digest,
+        co_location_component_count=len(colocation_components),
+        co_location_component_inventory_digest=colocation_inventory_digest,
+        co_location_component_size_distribution=tuple(
+            sorted(Counter(component.size for component in colocation_components).items())
+        ),
+        exact_shingle_colocation_pair_count=len(exact_shingle_colocation_pairs),
+        exact_shingle_colocation_digest=edge_digest,
+        commitments_digest=commitments_digest,
+        solver_family=PRODUCTION_EXACT_SOLVER_FAMILY,
+        solver_version=PRODUCTION_EXACT_SOLVER_VERSION,
+        solver_config_digest=canonical_hash(PRODUCTION_EXACT_SOLVER_CONFIG),
+        base_model_digest=base_model_digest,
+        colocation_model_digest=colocation_model_digest,
+        base_status=base_status,
+        colocation_status=colocation_status,
+        legacy_base_status=legacy_status,
+        canonical_self_reduction_status=canonical_status,
+        canonical_witness_digest=witness_digest,
+        c03_f04_eligible_component_count=len(c03_f04_trace),
+        c03_f04_public_feasible_component_count=c03_public_feasible,
+        c03_f04_diagnostic_digest=c03_digest,
+        feasibility_membership_persisted=False,
+        receipt_digest="sha256:" + "0" * 64,
+        **aggregates,
+    )
+    receipt = bind_production_exact_feasibility_receipt(provisional)
+    diagnostic: dict[str, object] = {
+        "algorithm_id": PRODUCTION_EXACT_FEASIBILITY_ALGORITHM,
+        "base_status": base_status,
+        "colocation_status": colocation_status,
+        "legacy_base_status": legacy_status,
+        "legacy_failure": legacy_failure,
+        "legacy_colocation_status": colocation_legacy_status,
+        "base_model_digest": base_model_digest,
+        "colocation_model_digest": colocation_model_digest,
+        "base_conflict_groups": base_conflicts,
+        "colocation_conflict_groups": colocation_conflicts,
+        "colocation_edge_reason": "RETAINED_EXACT_SHINGLE",
+        "colocation_structural_group_ids": _exact_colocation_group_ids(
+            base_components,
+            exact_shingle_colocation_pairs,
+        ),
+        "c03_f04_greedy_false_negative": c03_public_feasible > 0,
+        "c03_f04_trace": tuple(c03_f04_trace),
+        "receipt_digest": receipt.receipt_digest,
+    }
+    return _ExactFeasibilityResult(receipt=receipt, private_diagnostic=diagnostic)
 
 
 @register_serializable_type
@@ -2259,6 +3336,8 @@ def validate_production_candidate_set(
     packets: tuple[CandidateReviewPacket, ...],
     *,
     source_resolver: SourceArtifactResolver | None = None,
+    defer_split_lock_conflicts: bool = False,
+    enforce_public_capacity: bool = True,
 ) -> tuple[ProductionCandidateCommitmentV1, ...]:
     """Validate the exact production set, including split-isolation dependencies."""
 
@@ -2266,7 +3345,11 @@ def validate_production_candidate_set(
         packets,
         source_resolver=source_resolver,
     )
-    validate_production_isolation(commitments)
+    validate_production_isolation(
+        commitments,
+        defer_split_lock_conflicts=defer_split_lock_conflicts,
+        enforce_public_capacity=enforce_public_capacity,
+    )
     return commitments
 
 
@@ -2277,6 +3360,10 @@ __all__ = [
     "PRODUCTION_BATCH_ID",
     "PRODUCTION_BATCH_MANIFEST_VERSION",
     "PRODUCTION_CANDIDATE_ID_PREFIX",
+    "PRODUCTION_EXACT_FEASIBILITY_ALGORITHM",
+    "PRODUCTION_EXACT_SOLVER_CONFIG",
+    "PRODUCTION_EXACT_SOLVER_FAMILY",
+    "PRODUCTION_EXACT_SOLVER_VERSION",
     "PRODUCTION_FEASIBILITY_ALGORITHM",
     "PROSPECTIVE_SPLIT_COUNTS",
     "ProductionAuthoringPlanItemV1",
@@ -2285,6 +3372,7 @@ __all__ = [
     "ProductionCandidateCommitmentV1",
     "ProductionCandidateStoreReceiptV1",
     "ProductionDuplicationAuditV1",
+    "ProductionExactFeasibilityReceiptV2",
     "ProductionFeasibilityBlocked",
     "ProductionFeasibilityReceiptV1",
     "ProductionIsolationValidationV1",
@@ -2294,6 +3382,7 @@ __all__ = [
     "bind_production_authoring_plan",
     "bind_production_batch_manifest",
     "bind_production_candidate_store_receipt",
+    "bind_production_exact_feasibility_receipt",
     "bind_production_feasibility_receipt",
     "bind_production_review_queue",
     "build_production_candidate_commitment",
@@ -2302,6 +3391,7 @@ __all__ = [
     "production_batch_manifest_digest",
     "production_candidate_store_receipt_digest",
     "production_duplication_audit_digest",
+    "production_exact_feasibility_receipt_digest",
     "production_feasibility_receipt_digest",
     "production_plan_item_from_packet",
     "production_review_queue_digest",
@@ -2311,9 +3401,12 @@ __all__ = [
     "validate_production_candidate_packet",
     "validate_production_candidate_set",
     "validate_production_candidate_store_receipt",
+    "validate_production_exact_feasibility",
+    "validate_production_exact_feasibility_receipt",
     "validate_production_feasibility_receipt",
     "validate_production_hard_feasibility",
     "validate_production_isolation",
+    "validate_production_legacy_feasibility",
     "validate_production_origin_isolation_metadata",
     "validate_production_review_queue",
 ]
