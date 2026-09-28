@@ -2053,6 +2053,7 @@ def _exact_completion_status(
     fixed: dict[int, int] | None = None,
     hint: tuple[int, ...] | None = None,
     solved_ranks: list[int] | None = None,
+    max_time_in_seconds: float | None = None,
 ) -> str:
     try:
         from importlib.metadata import version
@@ -2108,7 +2109,11 @@ def _exact_completion_status(
                 model.add_hint(variables[index][split_rank], int(split_rank == rank))
 
     solver = cp_model.CpSolver()
-    solver.parameters.max_time_in_seconds = PRODUCTION_EXACT_SOLVER_CONFIG["max_time_in_seconds"]
+    solver.parameters.max_time_in_seconds = (
+        PRODUCTION_EXACT_SOLVER_CONFIG["max_time_in_seconds"]
+        if max_time_in_seconds is None
+        else max_time_in_seconds
+    )
     solver.parameters.num_search_workers = PRODUCTION_EXACT_SOLVER_CONFIG["num_search_workers"]
     solver.parameters.random_seed = PRODUCTION_EXACT_SOLVER_CONFIG["random_seed"]
     solver.parameters.cp_model_presolve = PRODUCTION_EXACT_SOLVER_CONFIG["cp_model_presolve"]
@@ -2292,6 +2297,10 @@ def validate_production_exact_feasibility(
     commitments: tuple[ProductionCandidateCommitmentV1, ...],
     *,
     exact_shingle_colocation_pairs: tuple[tuple[str, str], ...],
+    defer_colocation_conflict_reduction: bool = False,
+    use_legacy_hint: bool = True,
+    hint_search_seconds: float | None = None,
+    run_c03_f04_diagnostic: bool = True,
 ) -> _ExactFeasibilityResult:
     """Run base/co-location CP-SAT models and canonicalize a prospective witness."""
 
@@ -2387,40 +2396,202 @@ def validate_production_exact_feasibility(
     legacy_selected: dict[int, str] = {}
     legacy_ranks_by_key: dict[str, int] = {}
     legacy_failure: str | None = None
-    try:
-        validate_production_legacy_feasibility(
-            commitments,
-            diagnostic_anchor_requirements=legacy_selected,
-            diagnostic_component_ranks=legacy_ranks_by_key,
+    if use_legacy_hint:
+        try:
+            validate_production_legacy_feasibility(
+                commitments,
+                diagnostic_anchor_requirements=legacy_selected,
+                diagnostic_component_ranks=legacy_ranks_by_key,
+            )
+            legacy_status = "PASS"
+        except ValueError as exc:
+            legacy_status = "BLOCKED"
+            legacy_failure = str(exc)
+        legacy_hint = (
+            tuple(legacy_ranks_by_key[component.cluster_key] for component in base_components)
+            if legacy_status == "PASS" and len(legacy_ranks_by_key) == len(base_components)
+            else None
         )
-        legacy_status = "PASS"
-    except ValueError as exc:
+        colocation_legacy_ranks: dict[str, int] = {}
+        try:
+            validate_production_legacy_feasibility(
+                commitments,
+                exact_shingle_colocation_pairs=exact_shingle_colocation_pairs,
+                diagnostic_component_ranks=colocation_legacy_ranks,
+            )
+            colocation_legacy_status = "PASS"
+        except ValueError:
+            colocation_legacy_status = "BLOCKED"
+        if legacy_hint is None and colocation_legacy_status == "PASS":
+            colocated_rank_by_candidate = {
+                item.candidate_id: colocation_legacy_ranks[component.cluster_key]
+                for component in colocation_components
+                for item in component.items
+            }
+            legacy_hint = tuple(
+                colocated_rank_by_candidate[component.items[0].candidate_id]
+                for component in base_components
+            )
+    else:
         legacy_status = "BLOCKED"
-        legacy_failure = str(exc)
-    legacy_hint = (
-        tuple(legacy_ranks_by_key[component.cluster_key] for component in base_components)
-        if legacy_status == "PASS" and len(legacy_ranks_by_key) == len(base_components)
-        else None
-    )
-    colocation_legacy_ranks: dict[str, int] = {}
-    try:
-        validate_production_legacy_feasibility(
-            commitments,
-            exact_shingle_colocation_pairs=exact_shingle_colocation_pairs,
-            diagnostic_component_ranks=colocation_legacy_ranks,
+        legacy_failure = (
+            "legacy search omitted; deterministic component ranks are CP-SAT hints only"
         )
-        colocation_legacy_status = "PASS"
-    except ValueError:
         colocation_legacy_status = "BLOCKED"
-    if legacy_hint is None and colocation_legacy_status == "PASS":
-        colocated_rank_by_candidate = {
-            item.candidate_id: colocation_legacy_ranks[component.cluster_key]
-            for component in colocation_components
-            for item in component.items
-        }
-        legacy_hint = tuple(
-            colocated_rank_by_candidate[component.items[0].candidate_id]
-            for component in base_components
+        legacy_hint = tuple(component.preferred_rank for component in base_components)
+        colocation_legacy_ranks = {}
+    colocation_hint = (
+        tuple(colocation_legacy_ranks[component.cluster_key] for component in colocation_components)
+        if use_legacy_hint
+        and colocation_legacy_status == "PASS"
+        and len(colocation_legacy_ranks) == len(colocation_components)
+        else tuple(component.preferred_rank for component in colocation_components)
+    )
+    hint_generation_status = "NOT_RUN"
+    hint_generation_model = "NOT_RUN"
+    base_hint_status = "NOT_RUN"
+    colocation_hint_status = "NOT_RUN"
+    colocation_count_cell_status = "NOT_RUN"
+    if hint_search_seconds is not None:
+        if hint_search_seconds <= 0:
+            raise ValueError("exact feasibility hint-search time must be positive")
+        base_hint_ranks: list[int] = []
+        base_hint_constraints = tuple(
+            constraint for constraint in base_constraints if constraint.group_id.startswith("CELL:")
+        )
+        base_hint_status = _exact_completion_status(
+            len(base_components),
+            base_hint_constraints,
+            hint=legacy_hint,
+            solved_ranks=base_hint_ranks,
+            max_time_in_seconds=hint_search_seconds,
+        )
+        if base_hint_status == "FEASIBLE":
+            legacy_hint = tuple(base_hint_ranks)
+            colocation_hint = tuple(
+                max(
+                    range(3),
+                    key=lambda rank: (
+                        sum(base_hint_ranks[index] == rank for index in indices),
+                        -rank,
+                    ),
+                )
+                for indices in base_indices_by_colocation_component
+            )
+        colocation_hint_ranks: list[int] = []
+        colocation_hint_constraints = tuple(
+            constraint
+            for constraint in colocation_constraints
+            if constraint.group_id.startswith("CELL:")
+        )
+        colocation_hint_status = _exact_completion_status(
+            len(colocation_components),
+            colocation_hint_constraints,
+            hint=colocation_hint,
+            solved_ranks=colocation_hint_ranks,
+            max_time_in_seconds=hint_search_seconds,
+        )
+        if colocation_hint_status == "FEASIBLE":
+            colocation_hint = tuple(colocation_hint_ranks)
+            rank_by_candidate = {
+                item.candidate_id: rank
+                for component, rank in zip(
+                    colocation_components,
+                    colocation_hint_ranks,
+                    strict=True,
+                )
+                for item in component.items
+            }
+            legacy_hint = tuple(
+                rank_by_candidate[component.items[0].candidate_id] for component in base_components
+            )
+        colocation_count_cell_ranks: list[int] = []
+        colocation_count_cell_constraints = tuple(
+            constraint
+            for constraint in colocation_constraints
+            if constraint.group_id.startswith(("COUNT:", "CELL:", "SYNTHETIC_LOCK:"))
+        )
+        colocation_count_cell_status = _exact_completion_status(
+            len(colocation_components),
+            colocation_count_cell_constraints,
+            hint=colocation_hint,
+            solved_ranks=colocation_count_cell_ranks,
+            max_time_in_seconds=hint_search_seconds,
+        )
+        if colocation_count_cell_status == "FEASIBLE":
+            colocation_hint = tuple(colocation_count_cell_ranks)
+            rank_by_candidate = {
+                item.candidate_id: rank
+                for component, rank in zip(
+                    colocation_components,
+                    colocation_count_cell_ranks,
+                    strict=True,
+                )
+                for item in component.items
+            }
+            legacy_hint = tuple(
+                rank_by_candidate[component.items[0].candidate_id] for component in base_components
+            )
+        colocation_count_ranks: list[int] = []
+        colocation_count_constraints = tuple(
+            constraint
+            for constraint in colocation_constraints
+            if constraint.group_id.startswith(("COUNT:", "SYNTHETIC_LOCK:"))
+        )
+        colocation_count_status = _exact_completion_status(
+            len(colocation_components),
+            colocation_count_constraints,
+            hint=colocation_hint,
+            solved_ranks=colocation_count_ranks,
+            max_time_in_seconds=hint_search_seconds,
+        )
+        if colocation_count_status == "FEASIBLE":
+            colocation_hint = tuple(colocation_count_ranks)
+            rank_by_candidate = {
+                item.candidate_id: rank
+                for component, rank in zip(
+                    colocation_components,
+                    colocation_count_ranks,
+                    strict=True,
+                )
+                for item in component.items
+            }
+            legacy_hint = tuple(
+                rank_by_candidate[component.items[0].candidate_id] for component in base_components
+            )
+        colocation_noncritical_ranks: list[int] = []
+        colocation_noncritical_constraints = tuple(
+            constraint
+            for constraint in colocation_constraints
+            if not constraint.group_id.startswith("CRITICAL:")
+        )
+        colocation_noncritical_status = _exact_completion_status(
+            len(colocation_components),
+            colocation_noncritical_constraints,
+            hint=colocation_hint,
+            solved_ranks=colocation_noncritical_ranks,
+            max_time_in_seconds=hint_search_seconds,
+        )
+        if colocation_noncritical_status == "FEASIBLE":
+            colocation_hint = tuple(colocation_noncritical_ranks)
+            rank_by_candidate = {
+                item.candidate_id: rank
+                for component, rank in zip(
+                    colocation_components,
+                    colocation_noncritical_ranks,
+                    strict=True,
+                )
+                for item in component.items
+            }
+            legacy_hint = tuple(
+                rank_by_candidate[component.items[0].candidate_id] for component in base_components
+            )
+        hint_generation_model = "PROGRESSIVE_COLOCATION_RELAXATIONS_HINT_ONLY"
+        hint_generation_status = (
+            f"BASE_CELLS={base_hint_status};COLOCATION_CELLS={colocation_hint_status};"
+            f"COLOCATION_COUNTS_CELLS={colocation_count_cell_status};"
+            f"COLOCATION_COUNTS={colocation_count_status};"
+            f"COLOCATION_NONCRITICAL={colocation_noncritical_status}"
         )
     base_solution: list[int] = []
     base_status = _exact_completion_status(
@@ -2429,14 +2600,15 @@ def validate_production_exact_feasibility(
         hint=legacy_hint,
         solved_ranks=base_solution,
     )
-    colocation_hint = (
-        tuple(colocation_legacy_ranks[component.cluster_key] for component in colocation_components)
-        if colocation_legacy_status == "PASS"
-        and len(colocation_legacy_ranks) == len(colocation_components)
-        else None
-    )
-    co_location_source = tuple(base_solution) if base_status == "FEASIBLE" else legacy_hint
-    if colocation_hint is None and co_location_source is not None:
+    if base_status == "FEASIBLE" and (
+        (
+            hint_search_seconds is not None
+            and colocation_hint_status != "FEASIBLE"
+            and colocation_count_cell_status != "FEASIBLE"
+        )
+        or (hint_search_seconds is None and colocation_legacy_status != "PASS")
+    ):
+        co_location_source = tuple(base_solution)
         hinted_ranks: list[int] = []
         for indices in base_indices_by_colocation_component:
             counts = Counter(co_location_source[index] for index in indices)
@@ -2460,7 +2632,7 @@ def validate_production_exact_feasibility(
     c03_f04_trace: list[dict[str, object]] = []
     c03_public_feasible = 0
     c03_unknown = False
-    for index, component in enumerate(base_components):
+    for index, component in enumerate(base_components) if run_c03_f04_diagnostic else ():
         if not _cluster_has_cell_obligation(component, c03_row, "F04"):
             continue
         forced_status = _exact_completion_status(
@@ -2532,6 +2704,11 @@ def validate_production_exact_feasibility(
         if base_status == "INFEASIBLE"
         else ()
     )
+    colocation_reduction_deferred = (
+        defer_colocation_conflict_reduction
+        and base_status == "INFEASIBLE"
+        and colocation_status == "INFEASIBLE"
+    )
     colocation_conflicts = (
         _reduce_exact_conflict(
             len(colocation_components),
@@ -2541,7 +2718,7 @@ def validate_production_exact_feasibility(
                 exact_shingle_colocation_pairs,
             ),
         )
-        if colocation_status == "INFEASIBLE"
+        if colocation_status == "INFEASIBLE" and not colocation_reduction_deferred
         else ()
     )
     overall_status = (
@@ -2632,6 +2809,9 @@ def validate_production_exact_feasibility(
         "colocation_model_digest": colocation_model_digest,
         "base_conflict_groups": base_conflicts,
         "colocation_conflict_groups": colocation_conflicts,
+        "colocation_conflict_reduction_deferred": colocation_reduction_deferred,
+        "hint_generation_status": hint_generation_status,
+        "hint_generation_model": hint_generation_model,
         "colocation_edge_reason": "RETAINED_EXACT_SHINGLE",
         "colocation_structural_group_ids": _exact_colocation_group_ids(
             base_components,

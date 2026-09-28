@@ -6,6 +6,7 @@ import hashlib
 import os
 import re
 import shutil
+import tempfile
 from dataclasses import dataclass, fields, replace
 from pathlib import Path, PurePosixPath
 
@@ -133,6 +134,52 @@ def write_external_production_json(
     path = _external_output_path(root, relative)
     payload = (canonical_json(value) + "\n").encode("utf-8")
     _atomic_write_bytes(path, payload)
+    digest = "sha256:" + hashlib.sha256(payload).hexdigest()
+    return relative.as_posix(), digest, len(payload)
+
+
+def replace_external_production_json(
+    value: object,
+    relative_path: str,
+    *,
+    expected_digest: str,
+    repository_root: str | Path,
+    production_root: str | Path = DEFAULT_PRODUCTION_ROOT,
+) -> tuple[str, str, int]:
+    """Atomically replace one external JSON file only when its preimage is unchanged."""
+
+    relative = _safe_relative_path(relative_path)
+    root, _repo = _safe_external_root(Path(production_root), Path(repository_root))
+    path = _external_output_path(root, relative)
+    if path.is_symlink() or not path.is_file():
+        raise ValueError("external production replacement target is not a regular file")
+    before = path.read_bytes()
+    before_digest = "sha256:" + hashlib.sha256(before).hexdigest()
+    if before_digest != expected_digest:
+        raise ValueError("external production replacement preimage digest mismatch")
+    payload = (canonical_json(value) + "\n").encode("utf-8")
+    temporary_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="wb", dir=path.parent, prefix=f".{path.name}.", suffix=".tmp", delete=False
+        ) as temporary:
+            temporary_path = Path(temporary.name)
+            temporary.write(payload)
+            temporary.flush()
+            os.fsync(temporary.fileno())
+        if path.is_symlink() or hashlib.sha256(
+            path.read_bytes()
+        ).hexdigest() != before_digest.removeprefix("sha256:"):
+            raise ValueError("external production replacement target changed during update")
+        os.replace(temporary_path, path)
+        directory_fd = os.open(path.parent, os.O_RDONLY)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
+    finally:
+        if temporary_path is not None and temporary_path.exists():
+            temporary_path.unlink()
     digest = "sha256:" + hashlib.sha256(payload).hexdigest()
     return relative.as_posix(), digest, len(payload)
 

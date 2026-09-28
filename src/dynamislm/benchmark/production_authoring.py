@@ -64,9 +64,18 @@ from dynamislm.benchmark.production_exclusions import (
 from dynamislm.benchmark.production_store import (
     DEFAULT_PRODUCTION_ROOT,
     read_external_production_json,
+    replace_external_production_json,
     write_external_production_json,
 )
 from dynamislm.benchmark.res115_authoring import build_res115_source_artifact_resolver
+from dynamislm.benchmark.res223_topology import (
+    RES223_PLAN_PATH,
+    apply_repair_actions,
+    bind_repair_plan,
+    read_repair_plan,
+    validate_topology_only_packet_change,
+    write_repair_plan,
+)
 from dynamislm.benchmark.source_artifacts import SourceArtifactResolver
 from dynamislm.qualification import ReferenceCase
 from dynamislm.qualification.res115_authoring import SourceCellSelectionV1
@@ -961,10 +970,11 @@ def _new_or_resume_private_inputs(
     mutation_lineages: tuple[ProductionMutationLineageInputV1, ...],
     repository_root: str | Path,
     production_root: str | Path,
-) -> ProductionAuthoringInputsV1:
+    allow_blocked_plan: bool = False,
+) -> tuple[ProductionAuthoringInputsV1, ProductionAuthoringInputsV1 | None]:
     path = "production/authoring_plan/private_inputs.json"
     try:
-        persisted, _digest, _size = read_external_production_json(
+        persisted, persisted_file_digest, _size = read_external_production_json(
             path,
             ProductionAuthoringInputsV1,
             repository_root=repository_root,
@@ -982,12 +992,71 @@ def _new_or_resume_private_inputs(
             or tuple(candidate_id for candidate_id, _seed in persisted.mutation_seed_blocks)
             != mutation_ids
             or persisted.source_selections != source_records
-            or persisted.expert_batches != expert_batches
             or persisted.mutation_lineages != mutation_lineages
             or persisted.input_digest != production_authoring_input_digest(persisted)
         ):
             raise ValueError("conflicting external production authoring inputs")
-        return persisted
+        plan_path = Path(production_root) / RES223_PLAN_PATH
+        if not plan_path.exists():
+            if persisted.expert_batches != expert_batches:
+                raise ValueError("external production batches changed without RES-223 authority")
+            return persisted, None
+        plan = read_repair_plan(production_root)
+        if plan["status"] == "BLOCKED" and (
+            not allow_blocked_plan
+            or tuple(plan["selected_action_ids"]) != tuple(plan["applied_action_ids"])
+        ):
+            raise ValueError("RES-223 has no authorized topology-only repair")
+        seeds = dict(persisted.scenario_seeds)
+        previous_batches = apply_repair_actions(
+            expert_batches,
+            seeds,
+            plan,
+            tuple(plan["applied_action_ids"]),
+            mutation_lineages=mutation_lineages,
+        )
+        if persisted.expert_batches != previous_batches:
+            raise ValueError("private authoring inputs do not match applied RES-223 actions")
+        selected_batches = apply_repair_actions(
+            expert_batches,
+            seeds,
+            plan,
+            tuple(plan["selected_action_ids"]),
+            mutation_lineages=mutation_lineages,
+        )
+        if selected_batches == persisted.expert_batches:
+            return persisted, None
+        updated = replace(
+            persisted,
+            expert_batches=selected_batches,
+            input_digest="sha256:" + "0" * 64,
+        )
+        updated = replace(updated, input_digest=production_authoring_input_digest(updated))
+        replace_external_production_json(
+            updated,
+            path,
+            expected_digest=persisted_file_digest,
+            repository_root=repository_root,
+            production_root=production_root,
+        )
+        updated_plan = bind_repair_plan(
+            {**plan, "applied_action_ids": tuple(plan["selected_action_ids"])}
+        )
+        write_repair_plan(
+            updated_plan,
+            production_root,
+            repository_root=repository_root,
+            expected_plan_digest=plan["plan_digest"],
+        )
+        restored, _digest, _size = read_external_production_json(
+            path,
+            ProductionAuthoringInputsV1,
+            repository_root=repository_root,
+            production_root=production_root,
+        )
+        if restored != updated:
+            raise ValueError("RES-223 private authoring input migration did not round trip")
+        return restored, persisted
     provisional = ProductionAuthoringInputsV1(
         batch_id=PRODUCTION_BATCH_ID,
         synthetic_generator_registry_digest=PRODUCTION_SYNTHETIC_GENERATOR_DIGEST,
@@ -1014,12 +1083,13 @@ def _new_or_resume_private_inputs(
     )
     if restored != inputs:
         raise ValueError("external production authoring input round trip failed")
-    return restored
+    return restored, None
 
 
 def _validate_res128_feasibility_baseline(
     duplication: ProductionDuplicationAuditV1,
     *,
+    repository_root: Path,
     production_root: Path,
 ) -> None:
     path = production_root / "production/diagnostics/RES-128-final-audit.private.json"
@@ -1030,20 +1100,70 @@ def _validate_res128_feasibility_baseline(
         raise ValueError("sealed RES-128 final audit is unavailable or invalid") from exc
     if hashlib.sha256(payload).hexdigest() != _RES128_FINAL_AUDIT_SHA256:
         raise ValueError("sealed RES-128 final audit hash differs from RES-222 authority")
-    if (
+    immutable_baseline_invalid = (
         audit.get("schema") != "RES-128-final-audit@2"
         or audit.get("production_candidate_count") != FINAL_TARGET_CASES
         or audit.get("current_candidate_set_digest") != _RES128_CANDIDATE_SET_DIGEST
-        or duplication.candidate_set_digest != _RES128_CANDIDATE_SET_DIGEST
         or audit.get("retained_exact_shingle_pairs") != 81
         or audit.get("exact_shingle_colocation_pair_digest") != _RES128_COLOCATION_EDGE_DIGEST
-        or canonical_hash(duplication.exact_shingle_colocation_pairs)
-        != _RES128_COLOCATION_EDGE_DIGEST
         or audit.get("exact_shingle_colocation_component_count") != 170
         or audit.get("exact_shingle_colocation_component_size_histogram")
         != {"1": 43, "2": 91, "3": 1, "4": 5, "5": 18, "8": 12}
         or audit.get("no_candidate_split_membership_persisted") is not True
         or audit.get("production_candidate_store_promoted") != "NO"
+    )
+    if immutable_baseline_invalid:
+        raise ValueError("sealed RES-128 baseline differs from its authoritative entry")
+    plan_path = production_root / RES223_PLAN_PATH
+    if plan_path.exists():
+        repair_plan = read_repair_plan(production_root)
+        if repair_plan["applied_action_ids"]:
+            if (
+                duplication.candidate_set_digest == _RES128_CANDIDATE_SET_DIGEST
+                or duplication.candidate_count != FINAL_TARGET_CASES
+                or duplication.exact_payload_duplicate_pairs != 0
+                or duplication.exact_question_duplicate_pairs != 0
+                or duplication.normalized_question_duplicate_pairs != 0
+                or duplication.blocking_fuzzy_overlap_pairs != 0
+                or duplication.unrelated_blocking_overlaps != 0
+                or len(duplication.exact_shingle_colocation_pairs) != 81
+                or canonical_hash(duplication.exact_shingle_colocation_pairs)
+                != _RES128_COLOCATION_EDGE_DIGEST
+            ):
+                raise ValueError("RES-128 duplication gate failed after RES-223 topology change")
+            report = {
+                "schema": "RES-128-RES223-RERUN@1",
+                "baseline_audit_sha256": _RES128_FINAL_AUDIT_SHA256,
+                "baseline_candidate_set_digest": _RES128_CANDIDATE_SET_DIGEST,
+                "current_candidate_set_digest": duplication.candidate_set_digest,
+                "candidate_count": duplication.candidate_count,
+                "exact_payload_duplicate_pairs": duplication.exact_payload_duplicate_pairs,
+                "exact_question_duplicate_pairs": duplication.exact_question_duplicate_pairs,
+                "normalized_question_duplicate_pairs": (
+                    duplication.normalized_question_duplicate_pairs
+                ),
+                "blocking_fuzzy_overlap_pairs": duplication.blocking_fuzzy_overlap_pairs,
+                "unrelated_blocking_overlaps": duplication.unrelated_blocking_overlaps,
+                "retained_exact_shingle_pairs": len(duplication.exact_shingle_colocation_pairs),
+                "retained_exact_shingle_pair_digest": canonical_hash(
+                    duplication.exact_shingle_colocation_pairs
+                ),
+                "exact_overlap_dispositions_created": 0,
+                "production_store_promoted": "NO",
+                "final_split_allocation_performed": "NO",
+            }
+            write_external_production_json(
+                report,
+                f"production/diagnostics/RES-128-final-audit-res223-{repair_plan['iteration']:03d}.private.json",
+                repository_root=repository_root,
+                production_root=production_root,
+            )
+            return
+    if (
+        duplication.candidate_set_digest != _RES128_CANDIDATE_SET_DIGEST
+        or len(duplication.exact_shingle_colocation_pairs) != 81
+        or canonical_hash(duplication.exact_shingle_colocation_pairs)
+        != _RES128_COLOCATION_EDGE_DIGEST
     ):
         raise ValueError(
             "production candidate or retained co-location content differs from RES-128"
@@ -2414,6 +2534,7 @@ def build_production_authoring_draft(
     *,
     repository_root: str | Path,
     production_root: str | Path = DEFAULT_PRODUCTION_ROOT,
+    _diagnostic_only: bool = False,
 ) -> tuple[ProductionAuthoringDraftV1, QualificationExclusionCommitmentV1]:
     """Author, validate, and plan the full external-only 434-packet production batch."""
 
@@ -2459,7 +2580,7 @@ def build_production_authoring_draft(
         expert_batches=expert_batches,
         mutation_lineages=mutation_lineages,
     )
-    inputs = _new_or_resume_private_inputs(
+    inputs, prior_inputs = _new_or_resume_private_inputs(
         scenario_ids=scenario_ids,
         synthetic_ids=synthetic_ids,
         mutation_ids=mutation_ids,
@@ -2468,8 +2589,14 @@ def build_production_authoring_draft(
         mutation_lineages=mutation_lineages,
         repository_root=repository_root,
         production_root=production_root,
+        allow_blocked_plan=_diagnostic_only,
     )
     semantic = _author_semantic_packets(semantic_slots, inputs)
+    if prior_inputs is not None:
+        validate_topology_only_packet_change(
+            _author_semantic_packets(semantic_slots, prior_inputs),
+            semantic,
+        )
     engine = _author_engine_packets(engine_slots, inputs)
     synthetic = _author_synthetic_packets(synthetic_slots, inputs)
     source = _author_source_packets(source_selections, source_resolver=source_resolver)
@@ -2529,22 +2656,39 @@ def build_production_authoring_draft(
         source_resolver=source_resolver,
     )
     duplication = audit_production_duplicates(packets)
-    _validate_res128_feasibility_baseline(duplication, production_root=production_root)
+    _validate_res128_feasibility_baseline(
+        duplication,
+        repository_root=repository_root,
+        production_root=production_root,
+    )
+    repair_plan_path = production_root / RES223_PLAN_PATH
+    repair_plan = read_repair_plan(production_root) if repair_plan_path.exists() else None
     exact_result = validate_production_exact_feasibility(
         commitments,
         exact_shingle_colocation_pairs=duplication.exact_shingle_colocation_pairs,
+        defer_colocation_conflict_reduction=bool(repair_plan and repair_plan["applied_action_ids"]),
+        use_legacy_hint=not bool(repair_plan and repair_plan["applied_action_ids"]),
+        hint_search_seconds=300.0 if repair_plan and repair_plan["applied_action_ids"] else None,
+        run_c03_f04_diagnostic=not bool(repair_plan and repair_plan["applied_action_ids"]),
     )
     feasibility = exact_result.receipt
     feasibility_key = hashlib.sha256(PRODUCTION_BATCH_ID.encode("utf-8")).hexdigest()[:24]
+    receipt_path = f"production/receipts/{feasibility_key}-exact-feasibility-v2.json"
+    diagnostic_path = "production/diagnostics/RES-222-exact-feasibility.private.json"
+    if repair_plan and repair_plan["applied_action_ids"]:
+        receipt_path = (
+            f"production/receipts/RES-223-exact-feasibility-{repair_plan['iteration']:03d}-v2.json"
+        )
+        diagnostic_path = repair_plan["exact_result_path"]
     write_external_production_json(
         feasibility,
-        f"production/receipts/{feasibility_key}-exact-feasibility-v2.json",
+        receipt_path,
         repository_root=repository_root,
         production_root=production_root,
     )
     write_external_production_json(
         exact_result.private_diagnostic,
-        "production/diagnostics/RES-222-exact-feasibility.private.json",
+        diagnostic_path,
         repository_root=repository_root,
         production_root=production_root,
     )
