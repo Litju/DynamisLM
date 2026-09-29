@@ -1986,3 +1986,174 @@ def test_repaired_434_packet_set_passes_production_isolation() -> None:
     validation = validate_production_isolation(commitments)
     assert validation.candidate_count == 434
     assert validation.status == "PASS"
+
+
+def test_res224_private_telemetry_is_serializable_without_membership() -> None:
+    import json
+
+    from dynamislm.benchmark.production import _exact_completion_status, _ExactConstraint
+
+    telemetry: dict[str, object] = {}
+    log: list[str] = []
+    status = _exact_completion_status(
+        1,
+        (_ExactConstraint("CELL:C01:F01:PUBLIC_DEVELOPMENT", ((0, 0, 1),), lower=1),),
+        active_group_ids=frozenset({"CELL:C01:F01:PUBLIC_DEVELOPMENT"}),
+        telemetry=telemetry,
+        solve_log=log,
+        solve_label="RES224_TELEMETRY_TEST",
+        max_time_in_seconds=5,
+        log_search_progress=True,
+    )
+
+    serialized = json.dumps(telemetry, sort_keys=True)
+    assert status == "FEASIBLE"
+    assert telemetry["status"] in {"FEASIBLE", "OPTIMAL"}
+    assert telemetry["presolved_variable_count"] == 0
+    log_digest = telemetry["solve_log_digest"]
+    assert isinstance(log_digest, str) and log_digest.startswith("sha256:")
+    assert log and "Presolved satisfaction model" in log[0]
+    assert "candidate_ids" not in serialized
+    assert "split_membership" not in serialized
+    assert "rank_assignment" not in serialized
+
+
+def test_res224_canonical_model_proto_digest_is_stable() -> None:
+    from dynamislm.benchmark.production import (
+        _build_exact_cp_model,
+        _exact_cp_model_proto,
+        _ExactConstraint,
+    )
+
+    constraints = (_ExactConstraint("CELL:C01:F01:PUBLIC_DEVELOPMENT", ((0, 0, 1),), lower=1),)
+    first, _ = _build_exact_cp_model(1, constraints)
+    second, _ = _build_exact_cp_model(1, constraints)
+    assert _exact_cp_model_proto(first) == _exact_cp_model_proto(second)
+
+
+def test_res224_constraint_ladder_and_hint_ablation_keep_hard_model_identity() -> None:
+    from dynamislm.benchmark.production import (
+        _build_exact_cp_model,
+        _exact_completion_status,
+        _exact_cp_model_proto,
+        _ExactConstraint,
+    )
+
+    constraints = (
+        _ExactConstraint("CELL:C01:F01:PUBLIC_DEVELOPMENT", ((0, 0, 1),), lower=1),
+        _ExactConstraint("COUNT:PUBLIC_DEVELOPMENT=1", ((0, 0, 1),), lower=1, upper=1),
+    )
+    ladder_digests = []
+    for active in (
+        frozenset({"CELL:C01:F01:PUBLIC_DEVELOPMENT"}),
+        frozenset({"CELL:C01:F01:PUBLIC_DEVELOPMENT", "COUNT:PUBLIC_DEVELOPMENT=1"}),
+    ):
+        model, _ = _build_exact_cp_model(1, constraints, active_group_ids=active)
+        ladder_digests.append(hashlib.sha256(_exact_cp_model_proto(model)).hexdigest())
+    assert ladder_digests[0] != ladder_digests[1]
+
+    no_hint: dict[str, object] = {}
+    with_hint: dict[str, object] = {}
+    _exact_completion_status(1, constraints, telemetry=no_hint, max_time_in_seconds=5)
+    _exact_completion_status(
+        1,
+        constraints,
+        hint=(0,),
+        telemetry=with_hint,
+        max_time_in_seconds=5,
+    )
+    assert no_hint["constraint_set_digest"] == with_hint["constraint_set_digest"]
+    assert no_hint["model_proto_digest"] != with_hint["model_proto_digest"]
+
+
+def test_res224_multiworker_witness_is_independently_checked() -> None:
+    from scripts.res224_probes import _check_rank_assignment
+
+    from dynamislm.benchmark.production import _exact_completion_status, _ExactConstraint
+
+    constraints = (
+        _ExactConstraint("CELL:C01:F01:PUBLIC_DEVELOPMENT", ((0, 0, 1),), lower=1),
+        _ExactConstraint("COUNT:PUBLIC_DEVELOPMENT=1", ((0, 0, 1),), lower=1, upper=1),
+    )
+    ranks: list[int] = []
+    status = _exact_completion_status(
+        1,
+        constraints,
+        solved_ranks=ranks,
+        max_time_in_seconds=5,
+        num_search_workers=8,
+        default_search=True,
+    )
+    assert status == "FEASIBLE"
+    _check_rank_assignment(tuple(ranks), 1, constraints)
+    with pytest.raises(ValueError, match="lower bound"):
+        _check_rank_assignment((1,), 1, constraints)
+    with pytest.raises(ValueError, match="component ranks"):
+        _check_rank_assignment((3,), 1, constraints)
+
+
+def test_res224_proof_import_rejects_model_or_proof_digest_mismatch() -> None:
+    from scripts.res224_probes import _sha256, _validate_artifact_binding
+
+    model = b"p cnf 1 1\n1 0\n"
+    proof = b"-1 0\n0\n"
+    _validate_artifact_binding(model, _sha256(model), proof, _sha256(proof))
+    with pytest.raises(ValueError, match="different or empty model"):
+        _validate_artifact_binding(model, _sha256(b"different"), proof, _sha256(proof))
+    with pytest.raises(ValueError, match="proof artifact digest"):
+        _validate_artifact_binding(model, _sha256(model), proof, _sha256(b"different"))
+
+
+def test_res224_exchangeability_signatures_partition_real_components() -> None:
+    from scripts.res224_probes import _exchangeability_classes
+
+    from dynamislm.benchmark.production import (
+        _exact_requirement_constraints,
+        _feasibility_clusters,
+    )
+
+    commitments = _feasibility_fixture()
+    pairs = _cross_cell_exact_shingle_pairs(commitments)
+    base = _feasibility_clusters(commitments, allow_incompatible_locks=True)
+    colocated = _feasibility_clusters(
+        commitments,
+        exact_shingle_colocation_pairs=pairs,
+        allow_incompatible_locks=True,
+    )
+    constraints = _exact_requirement_constraints(colocated, colocated)
+    classes, summary, signatures = _exchangeability_classes(base, colocated, constraints, pairs)
+
+    assert len(signatures) == len(colocated)
+    assert sorted(index for group in classes for index in group) == list(range(len(colocated)))
+    assert summary["exchangeability_class_count"] == len(classes)
+    assert summary["largest_exchangeability_class"] == max(map(len, classes))
+
+
+def test_res224_symmetry_breaker_rejects_nonexchangeable_components() -> None:
+    from scripts.res224_probes import _validate_symmetry_breaker
+
+    from dynamislm.benchmark.production import _ExactConstraint
+
+    with pytest.raises(ValueError, match="nonexchangeable"):
+        _validate_symmetry_breaker(((0, 1),), ("sha256:a", "sha256:b"), ())
+    with pytest.raises(ValueError, match="co-location equality"):
+        _validate_symmetry_breaker(
+            ((0, 1),),
+            ("sha256:a", "sha256:a"),
+            (_ExactConstraint("COLOCATION:a:b", equalities=((0, 1),)),),
+        )
+
+
+def test_res224_exact_three_cell_strengthening_is_exhaustively_equivalent() -> None:
+    from scripts.res224_probes import _exact_three_equivalence
+
+    equivalent, digest = _exact_three_equivalence()
+    assert equivalent
+    assert digest.startswith("sha256:")
+
+
+def test_res224_receipt_head_provenance_is_explicit() -> None:
+    receipt = Path("docs/qualification/RES-223-ACCEPTANCE-RECEIPT.md").read_text()
+    assert "IMPLEMENTATION_HEAD=79904ed1da9c0f5f351330b878b4570d035c8a48" in receipt
+    assert "RECEIPT_BINDING_HEAD=7cfbb7a73a91090c86d728d68c0614224f60cf9e" in receipt
+    assert "FINAL_HEAD=" not in receipt

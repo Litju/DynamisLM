@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import hashlib
 import heapq
+import itertools
 import re
+import tempfile
 from collections import Counter, defaultdict
+from collections.abc import Callable
 from dataclasses import dataclass, fields, replace
-from pathlib import PurePosixPath
-from typing import TypedDict
+from pathlib import Path, PurePosixPath
+from typing import Any, TypedDict
 
 from dynamislm.benchmark.authoring import (
     _AUTHORITY_CLASS_BY_KIND,
@@ -2054,6 +2058,17 @@ def _exact_completion_status(
     hint: tuple[int, ...] | None = None,
     solved_ranks: list[int] | None = None,
     max_time_in_seconds: float | None = None,
+    num_search_workers: int | None = None,
+    random_seed: int | None = None,
+    cp_model_presolve: bool | None = None,
+    randomize_search: bool | None = None,
+    log_search_progress: bool = False,
+    solve_label: str = "EXACT_COMPLETION",
+    telemetry: dict[str, object] | None = None,
+    solve_log: list[str] | None = None,
+    strengthen_cell_groups: frozenset[str] = frozenset(),
+    symmetry_classes: tuple[tuple[int, ...], ...] = (),
+    default_search: bool = False,
 ) -> str:
     try:
         from importlib.metadata import version
@@ -2063,10 +2078,67 @@ def _exact_completion_status(
         raise ProductionFeasibilityBlocked(
             "exact production feasibility requires the pinned OR-Tools benchmark dependency"
         ) from exc
+    if not hasattr(cp_model, "CpModel") or not hasattr(cp_model, "CpSolver"):
+        raise ProductionFeasibilityBlocked("OR-Tools CP-SAT API is unavailable")
     if version("ortools") != PRODUCTION_EXACT_SOLVER_VERSION:
         raise RuntimeError(
             f"exact production feasibility requires OR-Tools {PRODUCTION_EXACT_SOLVER_VERSION}"
         )
+
+    model, variables = _build_exact_cp_model(
+        component_count,
+        constraints,
+        active_group_ids=active_group_ids,
+        fixed=fixed,
+        hint=hint,
+        strengthen_cell_groups=strengthen_cell_groups,
+        symmetry_classes=symmetry_classes,
+    )
+    status_name, solver, details, log_text = _solve_exact_cp_model(
+        model,
+        max_time_in_seconds=max_time_in_seconds,
+        num_search_workers=num_search_workers,
+        random_seed=random_seed,
+        cp_model_presolve=cp_model_presolve,
+        randomize_search=randomize_search,
+        log_search_progress=log_search_progress,
+        solve_label=solve_label,
+        constraints=constraints,
+        active_group_ids=active_group_ids,
+        fixed=fixed,
+        strengthen_cell_groups=strengthen_cell_groups,
+        symmetry_classes=symmetry_classes,
+        default_search=default_search,
+    )
+    if telemetry is not None:
+        telemetry.update(details)
+    if solve_log is not None:
+        solve_log.append(log_text)
+    if status_name in {"FEASIBLE", "OPTIMAL"}:
+        if solved_ranks is not None:
+            solved_ranks.extend(
+                next(rank for rank in range(3) if solver.value(variables[index][rank]))
+                for index in range(component_count)
+            )
+        return "FEASIBLE"
+    if status_name == "INFEASIBLE":
+        return "INFEASIBLE"
+    if status_name == "UNKNOWN":
+        return "UNKNOWN"
+    raise RuntimeError(f"CP-SAT returned unexpected status {status_name}")
+
+
+def _build_exact_cp_model(
+    component_count: int,
+    constraints: tuple[_ExactConstraint, ...],
+    *,
+    active_group_ids: frozenset[str] | None = None,
+    fixed: dict[int, int] | None = None,
+    hint: tuple[int, ...] | None = None,
+    strengthen_cell_groups: frozenset[str] = frozenset(),
+    symmetry_classes: tuple[tuple[int, ...], ...] = (),
+) -> tuple[Any, tuple[tuple[Any, ...], ...]]:
+    from ortools.sat.python import cp_model
 
     model = cp_model.CpModel()
     variables = tuple(
@@ -2089,7 +2161,11 @@ def _exact_completion_status(
         expression = sum(
             coefficient * variables[index][rank] for index, rank, coefficient in constraint.terms
         )
-        if constraint.lower is not None and constraint.upper == constraint.lower:
+        if constraint.group_id in strengthen_cell_groups:
+            if not constraint.group_id.startswith("CELL:") or constraint.lower != 1:
+                raise ValueError("exact-three strengthening only supports cell coverage rows")
+            model.add(expression == 1)
+        elif constraint.lower is not None and constraint.upper == constraint.lower:
             model.add(expression == constraint.lower)
         else:
             if constraint.lower is not None:
@@ -2097,6 +2173,8 @@ def _exact_completion_status(
             if constraint.upper is not None:
                 model.add(expression <= constraint.upper)
     for index, rank in (fixed or {}).items():
+        if not 0 <= index < component_count or rank not in range(3):
+            raise ValueError("fixed exact split assignment is out of range")
         model.add(variables[index][rank] == 1)
     if hint is not None:
         if len(hint) != component_count or any(rank not in range(3) for rank in hint):
@@ -2107,30 +2185,174 @@ def _exact_completion_status(
         for index, rank in enumerate(hinted):
             for split_rank in range(3):
                 model.add_hint(variables[index][split_rank], int(split_rank == rank))
+    for component_class in symmetry_classes:
+        if len(component_class) < 2 or tuple(sorted(set(component_class))) != component_class:
+            raise ValueError("symmetry classes must be ordered unique component indices")
+        if component_class[-1] >= component_count:
+            raise ValueError("symmetry class component index is out of range")
+        for left, right in itertools.pairwise(component_class):
+            left_rank = sum(rank * variables[left][rank] for rank in range(3))
+            right_rank = sum(rank * variables[right][rank] for rank in range(3))
+            model.add(left_rank <= right_rank)
+    return model, variables
 
-    solver = cp_model.CpSolver()
-    solver.parameters.max_time_in_seconds = (
-        PRODUCTION_EXACT_SOLVER_CONFIG["max_time_in_seconds"]
-        if max_time_in_seconds is None
-        else max_time_in_seconds
+
+def _exact_cp_model_proto(model: Any) -> bytes:
+    with tempfile.TemporaryDirectory(prefix="dynamislm-cpsat-") as temp_dir:
+        path = Path(temp_dir) / "model.pb"
+        if not model.export_to_file(str(path)):
+            raise OSError("OR-Tools failed to export the canonical CP-SAT model proto")
+        return path.read_bytes()
+
+
+def _solve_exact_cp_model(
+    model: Any,
+    *,
+    max_time_in_seconds: float | None = None,
+    num_search_workers: int | None = None,
+    random_seed: int | None = None,
+    cp_model_presolve: bool | None = None,
+    randomize_search: bool | None = None,
+    log_search_progress: bool = False,
+    solve_label: str,
+    constraints: tuple[_ExactConstraint, ...],
+    active_group_ids: frozenset[str] | None = None,
+    fixed: dict[int, int] | None = None,
+    strengthen_cell_groups: frozenset[str] = frozenset(),
+    symmetry_classes: tuple[tuple[int, ...], ...] = (),
+    default_search: bool = False,
+) -> tuple[str, Any, dict[str, object], str]:
+    from importlib.metadata import version
+
+    from ortools.sat.python import cp_model
+
+    if version("ortools") != PRODUCTION_EXACT_SOLVER_VERSION:
+        raise RuntimeError(
+            f"exact production feasibility requires OR-Tools {PRODUCTION_EXACT_SOLVER_VERSION}"
+        )
+    configured: dict[str, object] = {}
+    if not default_search:
+        configured.update(PRODUCTION_EXACT_SOLVER_CONFIG)
+    parameter_values: tuple[tuple[str, object | None], ...] = (
+        ("max_time_in_seconds", max_time_in_seconds),
+        ("num_search_workers", num_search_workers),
+        ("random_seed", random_seed),
+        ("cp_model_presolve", cp_model_presolve),
+        ("randomize_search", randomize_search),
     )
-    solver.parameters.num_search_workers = PRODUCTION_EXACT_SOLVER_CONFIG["num_search_workers"]
-    solver.parameters.random_seed = PRODUCTION_EXACT_SOLVER_CONFIG["random_seed"]
-    solver.parameters.cp_model_presolve = PRODUCTION_EXACT_SOLVER_CONFIG["cp_model_presolve"]
-    solver.parameters.randomize_search = PRODUCTION_EXACT_SOLVER_CONFIG["randomize_search"]
-    status = solver.solve(model)
-    if status in (cp_model.FEASIBLE, cp_model.OPTIMAL):
-        if solved_ranks is not None:
-            solved_ranks.extend(
-                next(rank for rank in range(3) if solver.value(variables[index][rank]))
-                for index in range(component_count)
-            )
-        return "FEASIBLE"
-    if status == cp_model.INFEASIBLE:
-        return "INFEASIBLE"
-    if status == cp_model.UNKNOWN:
-        return "UNKNOWN"
-    raise RuntimeError(f"CP-SAT returned unexpected status {solver.status_name(status)}")
+    for name, value in parameter_values:
+        if value is not None:
+            configured[name] = value
+    configured["log_search_progress"] = log_search_progress
+    solver: Any = cp_model.CpSolver()
+    for name, value in configured.items():
+        setattr(solver.parameters, name, value)
+    log_chunks: list[str] = []
+    if log_search_progress:
+        solver.parameters.log_to_stdout = False
+        solver.log_callback = log_chunks.append
+    raw_status = solver.solve(model)
+    status_name = solver.status_name(raw_status)
+    log_text = "".join(log_chunks)
+    proto_bytes = _exact_cp_model_proto(model)
+    active_constraints = tuple(
+        item
+        for item in constraints
+        if active_group_ids is None or item.group_id in active_group_ids
+    )
+    constraint_set_digest = canonical_hash(
+        {
+            "component_count": len(model.proto.variables) // 3,
+            "constraints": tuple(
+                (item.group_id, item.terms, item.lower, item.upper, item.equalities)
+                for item in active_constraints
+            ),
+            "fixed": tuple(sorted((fixed or {}).items())),
+            "strengthen_cell_groups": tuple(sorted(strengthen_cell_groups)),
+            "symmetry_classes": symmetry_classes,
+        }
+    )
+    response = solver.response_proto
+    log_lines = log_text.splitlines()
+    search_start = next(
+        (index for index, line in enumerate(log_lines) if "Starting search at" in line),
+        len(log_lines),
+    )
+    presolve_log = "\n".join(log_lines[:search_start])
+    search_log = "\n".join(log_lines[search_start:])
+    symmetry_lines = tuple(
+        line
+        for line in log_lines
+        if "[Symmetry]" in line or "orbit" in line.lower() or "orbitope" in line.lower()
+    )
+    presolve_counts = next(
+        (
+            (int(match.group(1)), int(match.group(2)))
+            for line in log_lines
+            if (match := re.search(r"Presolved .*?:\s*(\d+) variables,\s*(\d+) constraints", line))
+        ),
+        (None, None),
+    )
+    presolved_start = next(
+        (
+            index + 1
+            for index, line in reversed(tuple(enumerate(log_lines[:search_start])))
+            if "Presolved satisfaction model" in line
+        ),
+        0,
+    )
+    presolved_section = log_lines[presolved_start:search_start]
+    presolved_variables = next(
+        (
+            int(match.group(1))
+            for line in presolved_section
+            if (match := re.match(r"#Variables:\s*(\d+)", line))
+        ),
+        presolve_counts[0],
+    )
+    presolved_constraints = sum(
+        int(match.group(1))
+        for line in presolved_section
+        if (match := re.match(r"#k[^:]+:\s*(\d+)", line))
+    )
+    if not presolved_constraints and presolve_counts[1] is not None:
+        presolved_constraints = presolve_counts[1]
+    details: dict[str, object] = {
+        "schema": "RES-224-PRIVATE-SOLVER-TELEMETRY@1.0.0",
+        "solve_label": solve_label,
+        "status": status_name,
+        "model_proto_digest": "sha256:" + hashlib.sha256(proto_bytes).hexdigest(),
+        "constraint_set_digest": constraint_set_digest,
+        "solver_config_digest": canonical_hash(
+            {
+                "ortools_version": PRODUCTION_EXACT_SOLVER_VERSION,
+                "default_search": default_search,
+                "explicit_parameters": configured,
+                "parameters_text": str(solver.parameters),
+            }
+        ),
+        "configured": {**configured, "default_search": default_search},
+        "presolved_variable_count": presolved_variables,
+        "presolved_constraint_count": presolved_constraints,
+        "num_booleans": getattr(response, "num_booleans", None),
+        "num_conflicts": getattr(response, "num_conflicts", None),
+        "num_branches": getattr(response, "num_branches", None),
+        "num_binary_propagations": getattr(response, "num_binary_propagations", None),
+        "num_integer_propagations": getattr(response, "num_integer_propagations", None),
+        "num_restarts": getattr(response, "num_restarts", None),
+        "num_lp_iterations": getattr(response, "num_lp_iterations", None),
+        "wall_time": getattr(response, "wall_time", None),
+        "user_time": getattr(response, "user_time", None),
+        "deterministic_time": getattr(response, "deterministic_time", None),
+        "solution_info": getattr(response, "solution_info", ""),
+        "presolve_log_digest": "sha256:" + hashlib.sha256(presolve_log.encode("utf-8")).hexdigest(),
+        "search_log_digest": "sha256:" + hashlib.sha256(search_log.encode("utf-8")).hexdigest(),
+        "solver_symmetry_log_digest": "sha256:"
+        + hashlib.sha256("\n".join(symmetry_lines).encode("utf-8")).hexdigest(),
+        "solver_symmetry_log_lines": symmetry_lines,
+        "solve_log_digest": "sha256:" + hashlib.sha256(log_text.encode("utf-8")).hexdigest(),
+    }
+    return status_name, solver, details, log_text
 
 
 def _reduce_exact_conflict(
@@ -2170,6 +2392,10 @@ def _canonical_split_ranks(
     component_count: int,
     constraints: tuple[_ExactConstraint, ...],
     initial_hint: tuple[int, ...],
+    *,
+    solve_trace: list[dict[str, object]] | None = None,
+    solve_log_sink: Callable[[str, str], None] | None = None,
+    log_search_progress: bool = False,
 ) -> tuple[str, tuple[int, ...] | None]:
     fixed: dict[int, int] = {}
     selected: list[int] = []
@@ -2178,13 +2404,24 @@ def _canonical_split_ranks(
         for rank in range(3):
             trial = {**fixed, index: rank}
             solved_ranks: list[int] = []
+            telemetry: dict[str, object] = {}
+            solve_log: list[str] = []
+            solve_label = f"CANONICAL_SELF_REDUCTION_{index:04d}_{rank}"
             status = _exact_completion_status(
                 component_count,
                 constraints,
                 fixed=trial,
                 hint=hint,
                 solved_ranks=solved_ranks,
+                telemetry=telemetry,
+                solve_log=solve_log,
+                solve_label=solve_label,
+                log_search_progress=log_search_progress,
             )
+            if solve_trace is not None:
+                solve_trace.append({**telemetry, "oracle_status": status})
+            if solve_log_sink is not None and solve_log:
+                solve_log_sink(solve_label, solve_log[0])
             if status == "UNKNOWN":
                 return "BLOCKED", None
             if status == "FEASIBLE":
