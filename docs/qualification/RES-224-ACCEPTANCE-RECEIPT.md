@@ -6,7 +6,7 @@ STATUS=PASS
 ENTRY_HEAD=7cfbb7a73a91090c86d728d68c0614224f60cf9e
 IMPLEMENTATION_HEAD=3c3c8807e3488c213c689649b3f51c44f9c4eee6
 FINAL_HEAD=3c3c8807e3488c213c689649b3f51c44f9c4eee6
-RECEIPT_BINDING_HEAD=3c3c8807e3488c213c689649b3f51c44f9c4eee6
+RECEIPT_BINDING_HEAD=97812c430a80b606600fb2bac4caac486f1bfb72
 
 RES223_IMPLEMENTATION_HEAD=79904ed1da9c0f5f351330b878b4570d035c8a48
 RES223_RECEIPT_BINDING_HEAD=7cfbb7a73a91090c86d728d68c0614224f60cf9e
@@ -48,9 +48,10 @@ PR_CREATED=NO
 MERGE_PERFORMED=NO
 ```
 
-`IMPLEMENTATION_HEAD` and `FINAL_HEAD` identify the code and probe commit. The
-receipt-binding pointer is updated in a follow-up atomic documentation commit;
-no implementation changes follow `IMPLEMENTATION_HEAD`.
+`IMPLEMENTATION_HEAD` and `FINAL_HEAD` identify the code and probe commit.
+`RECEIPT_BINDING_HEAD` identifies the commit that first recorded this receipt;
+this later documentation-only commit makes that provenance explicit. No
+implementation changes follow `IMPLEMENTATION_HEAD`.
 
 ## Reconstructed models
 
