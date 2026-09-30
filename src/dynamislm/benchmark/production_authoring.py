@@ -9,6 +9,7 @@ import secrets
 from collections import Counter, defaultdict
 from dataclasses import dataclass, fields, replace
 from pathlib import Path
+from typing import cast
 from xml.etree import ElementTree as ET
 
 from dynamislm.benchmark.authoring import (
@@ -79,7 +80,7 @@ from dynamislm.benchmark.res223_topology import (
 from dynamislm.benchmark.source_artifacts import SourceArtifactResolver
 from dynamislm.qualification import ReferenceCase
 from dynamislm.qualification.res115_authoring import SourceCellSelectionV1
-from dynamislm.serialization import canonical_hash, register_serializable_type
+from dynamislm.serialization import canonical_hash, canonical_json, register_serializable_type
 
 SYNTHETIC_GENERATOR_ID = "pse-v1-unregistered-operation-context"
 SYNTHETIC_GENERATOR_VERSION = "1.0.0"
@@ -91,6 +92,7 @@ _RES128_CANDIDATE_SET_DIGEST = (
 _RES128_COLOCATION_EDGE_DIGEST = (
     "sha256:922c19b9243f7a6cd56c22463db826607c1980edea9bb9b394feab0c5fcd02a4"
 )
+_RES225_MATERIALIZATION_PATH = "production/diagnostics/RES-225-materialization.private.json"
 _SYNTHETIC_QUESTION_FOCUS = {
     "F05": "is this unsupported rather than zero?",
     "F06": "which live method is missing?",
@@ -1086,6 +1088,181 @@ def _new_or_resume_private_inputs(
     return restored, None
 
 
+def _read_res225_materialization_plan(production_root: Path) -> dict[str, object] | None:
+    path = production_root / _RES225_MATERIALIZATION_PATH
+    if not path.exists():
+        return None
+    try:
+        decoded = path.read_text(encoding="utf-8")
+        envelope = json.loads(decoded)
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("RES-225 private materialization plan is unavailable or invalid") from exc
+    if (
+        not isinstance(envelope, dict)
+        or envelope.get("type") != "builtins.dict"
+        or envelope.get("serialization_version") != 3
+        or not isinstance(envelope.get("payload"), dict)
+        or canonical_json(envelope["payload"]) + "\n" != decoded
+    ):
+        raise ValueError("RES-225 materialization plan is not canonical Serialization V3")
+    plan = cast(dict[str, object], envelope["payload"])
+    if (
+        plan.get("schema") != "RES-225-MATERIALIZATION@1.0.0"
+        or plan.get("status") not in {"AUTHORIZED", "MATERIALIZED"}
+        or plan.get("abstract_base_status") != "FEASIBLE"
+        or plan.get("abstract_colocation_status") != "FEASIBLE"
+        or plan.get("plan_digest")
+        != canonical_hash({key: value for key, value in plan.items() if key != "plan_digest"})
+        or not isinstance(plan.get("actions"), list | tuple)
+    ):
+        raise ValueError("RES-225 materialization plan failed its authority binding")
+    return plan
+
+
+def _res225_required_text(action: dict[str, object], key: str) -> str:
+    value = action.get(key)
+    if not isinstance(value, str) or not value:
+        raise ValueError(f"RES-225 materialization field {key} is malformed")
+    return value
+
+
+def _apply_res225_materialization(
+    inputs: ProductionAuthoringInputsV1,
+    plan: dict[str, object] | None,
+) -> ProductionAuthoringInputsV1:
+    if plan is None:
+        return inputs
+    raw_actions = plan.get("actions")
+    if not isinstance(raw_actions, list | tuple):
+        raise ValueError("RES-225 materialization plan actions are malformed")
+    actions: tuple[object, ...] = tuple(raw_actions)
+    seeds = dict(inputs.scenario_seeds)
+    moved: dict[str, ProductionExpertBatchV1] = {}
+    selected_ids: set[str] = set()
+    reparented: list[dict[str, str]] = []
+    lineages = {item.lineage_id: item for item in inputs.mutation_lineages}
+    expert_ids = {
+        candidate_id for batch in inputs.expert_batches for candidate_id in batch.candidate_ids
+    }
+    for raw_action in actions:
+        if not isinstance(raw_action, dict):
+            raise ValueError("RES-225 materialization action is malformed")
+        action = cast(dict[str, object], raw_action)
+        candidate_id = action.get("anchor_candidate_id")
+        action_family = _res225_required_text(action, "action_family")
+        if action_family == "MUTATION_BRANCH_REPARENT":
+            candidate_id = _res225_required_text(action, "anchor_candidate_id")
+            old_lineage_id = _res225_required_text(action, "old_mutation_lineage_id")
+            new_parent_id = _res225_required_text(action, "target_parent_candidate_id")
+            new_lineage_id = _res225_required_text(action, "new_mutation_lineage_id")
+            operator_id = _res225_required_text(action, "mutation_operator_id")
+            affected_ids = action.get("affected_candidate_ids")
+            if not isinstance(affected_ids, list | tuple):
+                raise ValueError("RES-225 mutation reparent action is malformed")
+            affected_values = tuple(affected_ids)
+            if not affected_values or any(not isinstance(value, str) for value in affected_values):
+                raise ValueError("RES-225 mutation reparent child set is malformed")
+            affected: tuple[str, ...] = tuple(
+                value for value in affected_values if isinstance(value, str)
+            )
+            old_parent_id = _res225_required_text(action, "old_parent_candidate_id")
+            if candidate_id != affected[0]:
+                raise ValueError("RES-225 mutation branch anchor is not its first child")
+            if (
+                selected_ids.intersection(affected)
+                or set(affected).intersection(expert_ids)
+                or new_parent_id not in expert_ids
+            ):
+                raise ValueError("RES-225 mutation reparent action names an invalid candidate")
+            lineage = lineages.get(old_lineage_id)
+            if (
+                lineage is None
+                or lineage.operator_id != operator_id
+                or lineage.parent_candidate_id != old_parent_id
+                or lineage.parent_candidate_id == new_parent_id
+                or set(affected) != set(lineage.child_candidate_ids)
+            ):
+                raise ValueError("RES-225 mutation reparent is stale against its current lineage")
+            del lineages[old_lineage_id]
+            if new_lineage_id in lineages:
+                raise ValueError("RES-225 mutation reparent created a duplicate lineage ID")
+            lineages[new_lineage_id] = ProductionMutationLineageInputV1(
+                lineage_id=new_lineage_id,
+                parent_candidate_id=new_parent_id,
+                child_candidate_ids=affected,
+                operator_id=operator_id,
+                rationale=(
+                    "Mutation branch reparented to a role-compatible expert parent; parent "
+                    "authority, operator, and the stage-ordered child chain are preserved."
+                ),
+            )
+            selected_ids.update(affected)
+            reparented.extend(
+                {
+                    "candidate_id": child_id,
+                    "old_lineage_id": old_lineage_id,
+                    "new_lineage_id": new_lineage_id,
+                    "new_parent_candidate_id": new_parent_id,
+                }
+                for child_id in affected
+            )
+            continue
+        if action_family != "EXPERT_SEMANTIC_CONTENT_REPLACEMENT":
+            raise ValueError("RES-225 materialization action family is unauthorized")
+        candidate_id = _res225_required_text(action, "anchor_candidate_id")
+        replacement_seed = _res225_required_text(action, "replacement_seed")
+        if candidate_id in selected_ids or candidate_id not in seeds or not replacement_seed:
+            raise ValueError("RES-225 semantic replacement candidate or seed is invalid")
+        if candidate_id not in expert_ids:
+            raise ValueError("RES-225 semantic replacement does not name an expert slot")
+        selected_ids.add(candidate_id)
+        original_seed = seeds[candidate_id]
+        if (
+            action.get("original_seed_sha256")
+            != hashlib.sha256(original_seed.encode("ascii")).hexdigest()
+        ):
+            raise ValueError("RES-225 replacement seed is stale against the sealed authoring input")
+        seeds[candidate_id] = replacement_seed
+        batch_id = _res225_required_text(action, "new_author_batch_id")
+        template_id = _res225_required_text(action, "new_protocol_template_id")
+        cluster_id = _res225_required_text(action, "new_isolation_cluster_id")
+        moved[candidate_id] = ProductionExpertBatchV1(
+            author_batch_id=batch_id,
+            protocol_template_id=template_id,
+            isolation_cluster_id=cluster_id,
+            candidate_ids=(candidate_id,),
+            rationale=(
+                "Selected replacement authored under the existing frozen cell authority and "
+                "an independent deterministic scenario context."
+            ),
+        )
+
+    if not moved and not reparented:
+        raise ValueError("RES-225 materialization plan has no selected content replacements")
+    batches: list[ProductionExpertBatchV1] = []
+    retained_ids: set[str] = set()
+    for batch in inputs.expert_batches:
+        remaining = tuple(item for item in batch.candidate_ids if item not in moved)
+        if remaining:
+            batches.append(replace(batch, candidate_ids=remaining))
+            retained_ids.update(remaining)
+    if retained_ids & set(moved) or retained_ids | set(moved) != expert_ids:
+        raise ValueError("RES-225 semantic replacement changed expert slot membership")
+    batches.extend(moved.values())
+    updated = replace(
+        inputs,
+        scenario_seeds=tuple(sorted(seeds.items(), key=lambda item: item[0].encode("utf-8"))),
+        expert_batches=tuple(
+            sorted(batches, key=lambda item: item.author_batch_id.encode("utf-8"))
+        ),
+        mutation_lineages=tuple(
+            sorted(lineages.values(), key=lambda item: item.lineage_id.encode("utf-8"))
+        ),
+        input_digest="sha256:" + "0" * 64,
+    )
+    return replace(updated, input_digest=production_authoring_input_digest(updated))
+
+
 def _validate_res128_feasibility_baseline(
     duplication: ProductionDuplicationAuditV1,
     *,
@@ -1114,6 +1291,45 @@ def _validate_res128_feasibility_baseline(
     )
     if immutable_baseline_invalid:
         raise ValueError("sealed RES-128 baseline differs from its authoritative entry")
+    res225_plan = _read_res225_materialization_plan(production_root)
+    if res225_plan is not None:
+        if (
+            duplication.candidate_count != FINAL_TARGET_CASES
+            or duplication.candidate_set_digest == _RES128_CANDIDATE_SET_DIGEST
+            or duplication.exact_payload_duplicate_pairs != 0
+            or duplication.exact_question_duplicate_pairs != 0
+            or duplication.normalized_question_duplicate_pairs != 0
+            or duplication.blocking_fuzzy_overlap_pairs != 0
+            or duplication.unrelated_blocking_overlaps != 0
+        ):
+            raise ValueError("RES-128 duplication audit failed after RES-225 materialization")
+        report = {
+            "schema": "RES-128-RES225-RERUN@1",
+            "baseline_audit_sha256": _RES128_FINAL_AUDIT_SHA256,
+            "baseline_candidate_set_digest": _RES128_CANDIDATE_SET_DIGEST,
+            "current_candidate_set_digest": duplication.candidate_set_digest,
+            "selected_repair_digest": res225_plan.get("selected_repair_digest"),
+            "candidate_count": duplication.candidate_count,
+            "exact_payload_duplicate_pairs": duplication.exact_payload_duplicate_pairs,
+            "exact_question_duplicate_pairs": duplication.exact_question_duplicate_pairs,
+            "normalized_question_duplicate_pairs": duplication.normalized_question_duplicate_pairs,
+            "blocking_fuzzy_overlap_pairs": duplication.blocking_fuzzy_overlap_pairs,
+            "unrelated_blocking_overlaps": duplication.unrelated_blocking_overlaps,
+            "retained_exact_shingle_pairs": len(duplication.exact_shingle_colocation_pairs),
+            "retained_exact_shingle_pair_digest": canonical_hash(
+                duplication.exact_shingle_colocation_pairs
+            ),
+            "exact_overlap_dispositions_created": 0,
+            "production_store_promoted": "NO",
+            "final_split_allocation_performed": "NO",
+        }
+        write_external_production_json(
+            report,
+            f"production/diagnostics/RES-128-final-audit-res225-{res225_plan['iteration']:03d}.private.json",
+            repository_root=repository_root,
+            production_root=production_root,
+        )
+        return
     plan_path = production_root / RES223_PLAN_PATH
     if plan_path.exists():
         repair_plan = read_repair_plan(production_root)
@@ -2591,6 +2807,9 @@ def build_production_authoring_draft(
         production_root=production_root,
         allow_blocked_plan=_diagnostic_only,
     )
+    res225_plan = _read_res225_materialization_plan(production_root)
+    inputs = _apply_res225_materialization(inputs, res225_plan)
+    mutation_lineages = inputs.mutation_lineages
     semantic = _author_semantic_packets(semantic_slots, inputs)
     if prior_inputs is not None:
         validate_topology_only_packet_change(
@@ -2670,12 +2889,25 @@ def build_production_authoring_draft(
         use_legacy_hint=not bool(repair_plan and repair_plan["applied_action_ids"]),
         hint_search_seconds=300.0 if repair_plan and repair_plan["applied_action_ids"] else None,
         run_c03_f04_diagnostic=not bool(repair_plan and repair_plan["applied_action_ids"]),
+        canonical_self_reduction_backend="GLUCOSE" if res225_plan is not None else "CP-SAT",
+        oracle_time_limit_seconds=600.0 if res225_plan is not None else None,
+        canonical_progress_callback=(
+            lambda done, total, state: print(
+                f"RES225_PROGRESS canonical-final={done}/{total} status={state}",
+                flush=True,
+            )
+        )
+        if res225_plan is not None
+        else None,
     )
     feasibility = exact_result.receipt
     feasibility_key = hashlib.sha256(PRODUCTION_BATCH_ID.encode("utf-8")).hexdigest()[:24]
     receipt_path = f"production/receipts/{feasibility_key}-exact-feasibility-v2.json"
     diagnostic_path = "production/diagnostics/RES-222-exact-feasibility.private.json"
-    if repair_plan and repair_plan["applied_action_ids"]:
+    if res225_plan is not None:
+        receipt_path = "production/receipts/RES-225-exact-feasibility-v2.json"
+        diagnostic_path = "production/diagnostics/RES-225-exact-feasibility.private.json"
+    elif repair_plan and repair_plan["applied_action_ids"]:
         receipt_path = (
             f"production/receipts/RES-223-exact-feasibility-{repair_plan['iteration']:03d}-v2.json"
         )

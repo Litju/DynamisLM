@@ -24,6 +24,8 @@ classifiers = [
 dev = [
   "mypy>=1.17,<2",
   "ortools==9.15.6755",
+  "python-sat==1.9.dev15",
+  "pypblib==0.0.4",
   "pytest>=8.3,<9",
   "ruff>=0.12,<0.13",
 ]

@@ -7,6 +7,8 @@ import heapq
 import itertools
 import re
 import tempfile
+import threading
+import time
 from collections import Counter, defaultdict
 from collections.abc import Callable
 from dataclasses import dataclass, fields, replace
@@ -973,10 +975,8 @@ class ProductionExactFeasibilityReceiptV2:
             raise ValueError("exact feasibility receipt must bind the frozen 434-case targets")
         if self.base_component_count < 1 or self.co_location_component_count < 1:
             raise ValueError("exact feasibility receipt requires allocation components")
-        if self.exact_shingle_colocation_pair_count != _RETAINED_EXACT_SHINGLE_PAIR_COUNT:
-            raise ValueError(
-                "exact feasibility receipt must bind all 81 retained co-location pairs"
-            )
+        if self.exact_shingle_colocation_pair_count < 0:
+            raise ValueError("exact-shingle co-location pair count cannot be negative")
         if (
             sum(count for _size, count in self.co_location_component_size_distribution)
             != self.co_location_component_count
@@ -1818,9 +1818,6 @@ def validate_production_hard_feasibility(
     )
 
 
-_RETAINED_EXACT_SHINGLE_PAIR_COUNT = 81
-
-
 @dataclass(frozen=True, slots=True)
 class _ExactConstraint:
     group_id: str
@@ -2396,6 +2393,7 @@ def _canonical_split_ranks(
     solve_trace: list[dict[str, object]] | None = None,
     solve_log_sink: Callable[[str, str], None] | None = None,
     log_search_progress: bool = False,
+    deadline: float | None = None,
 ) -> tuple[str, tuple[int, ...] | None]:
     fixed: dict[int, int] = {}
     selected: list[int] = []
@@ -2407,6 +2405,15 @@ def _canonical_split_ranks(
             telemetry: dict[str, object] = {}
             solve_log: list[str] = []
             solve_label = f"CANONICAL_SELF_REDUCTION_{index:04d}_{rank}"
+            max_time = None
+            if deadline is not None:
+                max_time = max(
+                    0.001,
+                    min(
+                        PRODUCTION_EXACT_SOLVER_CONFIG["max_time_in_seconds"],
+                        deadline - time.monotonic(),
+                    ),
+                )
             status = _exact_completion_status(
                 component_count,
                 constraints,
@@ -2417,6 +2424,7 @@ def _canonical_split_ranks(
                 solve_log=solve_log,
                 solve_label=solve_label,
                 log_search_progress=log_search_progress,
+                max_time_in_seconds=max_time,
             )
             if solve_trace is not None:
                 solve_trace.append({**telemetry, "oracle_status": status})
@@ -2432,6 +2440,113 @@ def _canonical_split_ranks(
         else:
             raise RuntimeError("canonical self-reduction lost a proven feasible completion")
     return "PASS", tuple(selected)
+
+
+def _canonical_split_ranks_glucose(
+    component_count: int,
+    constraints: tuple[_ExactConstraint, ...],
+    progress_callback: Callable[[int, int, str], None] | None = None,
+    deadline: float | None = None,
+) -> tuple[str, tuple[int, ...] | None, tuple[tuple[int, int, str], ...]]:
+    from pysat.pb import EncType, PBEnc  # type: ignore[import-untyped]
+    from pysat.solvers import Solver  # type: ignore[import-untyped]
+
+    variables = tuple(
+        tuple(3 * index + rank + 1 for rank in range(3)) for index in range(component_count)
+    )
+    clauses: list[list[int]] = []
+    top_id = 3 * component_count
+    for row in variables:
+        clauses.append(list(row))
+        clauses.extend([-left, -right] for left, right in itertools.combinations(row, 2))
+
+    def add_bound(
+        *, lower: int | None, upper: int | None, literals: list[int], weights: list[int]
+    ) -> None:
+        nonlocal top_id
+        for encoder, bound in ((PBEnc.geq, lower), (PBEnc.leq, upper)):
+            if bound is None:
+                continue
+            encoded = encoder(
+                lits=literals,
+                weights=weights,
+                bound=bound,
+                top_id=top_id,
+                encoding=EncType.bdd,
+            )
+            clauses.extend(list(clause) for clause in encoded.clauses)
+            top_id = max(top_id, encoded.nv)
+
+    for constraint in constraints:
+        if constraint.equalities:
+            for left, right in constraint.equalities:
+                for rank in range(3):
+                    left_var, right_var = variables[left][rank], variables[right][rank]
+                    clauses.extend(([-left_var, right_var], [left_var, -right_var]))
+            continue
+        if not constraint.terms:
+            clauses.append([])
+            continue
+        literals = [variables[index][rank] for index, rank, _weight in constraint.terms]
+        weights = [weight for _index, _rank, weight in constraint.terms]
+        add_bound(
+            lower=constraint.lower,
+            upper=constraint.upper,
+            literals=literals,
+            weights=weights,
+        )
+
+    trace: list[tuple[int, int, str]] = []
+    selected_literals: list[int] = []
+
+    def solve_limited(solver: Any, assumptions: list[int]) -> bool | None:
+        timeout = None if deadline is None else deadline - time.monotonic()
+        if timeout is not None and timeout <= 0:
+            return None
+        timer = None if timeout is None else threading.Timer(timeout, solver.interrupt)
+        if timer is not None:
+            timer.daemon = True
+            timer.start()
+        try:
+            if timeout is None:
+                return bool(solver.solve(assumptions=assumptions))
+            result = solver.solve_limited(assumptions=assumptions, expect_interrupt=True)
+            return None if result is None else bool(result)
+        finally:
+            if timer is not None:
+                timer.cancel()
+                solver.clear_interrupt()
+
+    selected_ranks: list[int] = []
+    with Solver(name="g4", bootstrap_with=clauses) as solver:
+        initial = solve_limited(solver, [])
+        if initial is None:
+            return "BLOCKED", None, ()
+        if not initial:
+            return "BLOCKED", None, ()
+        for index, row in enumerate(variables):
+            for rank, literal in enumerate(row):
+                result = solve_limited(solver, [*selected_literals, literal])
+                if result is None:
+                    trace.append((index, rank, "UNKNOWN"))
+                    if progress_callback is not None:
+                        progress_callback(index, component_count, "UNKNOWN")
+                    return "BLOCKED", None, tuple(trace)
+                state = "FEASIBLE" if result else "INFEASIBLE"
+                trace.append((index, rank, state))
+                if result:
+                    selected_literals.append(literal)
+                    selected_ranks.append(rank)
+                    if progress_callback is not None and (
+                        (index + 1) % 25 == 0 or index + 1 == component_count
+                    ):
+                        progress_callback(index + 1, component_count, "FEASIBLE")
+                    break
+            else:
+                if progress_callback is not None:
+                    progress_callback(index + 1, component_count, "BLOCKED")
+                return "BLOCKED", None, tuple(trace)
+    return "PASS", tuple(selected_ranks), tuple(trace)
 
 
 def _exact_aggregate_evidence(
@@ -2538,11 +2653,31 @@ def validate_production_exact_feasibility(
     use_legacy_hint: bool = True,
     hint_search_seconds: float | None = None,
     run_c03_f04_diagnostic: bool = True,
+    candidate_rank_hint: dict[str, int] | None = None,
+    canonical_self_reduction_backend: str = "CP-SAT",
+    canonical_progress_callback: Callable[[int, int, str], None] | None = None,
+    oracle_time_limit_seconds: float | None = None,
 ) -> _ExactFeasibilityResult:
     """Run base/co-location CP-SAT models and canonicalize a prospective witness."""
 
     if len(commitments) != FINAL_TARGET_CASES:
         raise ProductionFeasibilityBlocked("exact feasibility requires exactly 434 commitments")
+    if canonical_self_reduction_backend not in {"CP-SAT", "GLUCOSE"}:
+        raise ValueError("canonical self-reduction backend is invalid")
+    if oracle_time_limit_seconds is not None and oracle_time_limit_seconds <= 0:
+        raise ValueError("exact feasibility oracle time limit must be positive")
+    oracle_started = time.monotonic()
+    oracle_deadline = (
+        None if oracle_time_limit_seconds is None else oracle_started + oracle_time_limit_seconds
+    )
+
+    def solver_time_budget(requested: float | None = None) -> float | None:
+        if oracle_deadline is None:
+            return requested
+        remaining = max(0.001, oracle_deadline - time.monotonic())
+        configured = PRODUCTION_EXACT_SOLVER_CONFIG["max_time_in_seconds"]
+        return min(remaining, configured if requested is None else requested)
+
     if any(not isinstance(item, ProductionCandidateCommitmentV1) for item in commitments):
         raise TypeError("exact feasibility input must contain production commitments")
     commitments = tuple(sorted(commitments, key=lambda item: item.candidate_id.encode("utf-8")))
@@ -2555,7 +2690,6 @@ def validate_production_exact_feasibility(
     candidate_id_set = set(candidate_ids)
     if (
         not isinstance(exact_shingle_colocation_pairs, tuple)
-        or len(exact_shingle_colocation_pairs) != _RETAINED_EXACT_SHINGLE_PAIR_COUNT
         or any(
             not isinstance(pair, tuple)
             or len(pair) != 2
@@ -2580,6 +2714,11 @@ def validate_production_exact_feasibility(
         raise ProductionFeasibilityBlocked(
             "exact feasibility requires the 81 canonical retained co-location pairs"
         )
+    if candidate_rank_hint is not None and (
+        set(candidate_rank_hint) != candidate_id_set
+        or any(rank not in range(3) for rank in candidate_rank_hint.values())
+    ):
+        raise ValueError("candidate-level exact-solver hint must cover all candidates and ranks")
     for commitment in commitments:
         _validate_feasibility_item(commitment.item)
     validate_production_isolation(
@@ -2684,6 +2823,26 @@ def validate_production_exact_feasibility(
         and len(colocation_legacy_ranks) == len(colocation_components)
         else tuple(component.preferred_rank for component in colocation_components)
     )
+    if candidate_rank_hint is not None:
+
+        def component_rank_hint(
+            components: tuple[_FeasibilityCluster, ...],
+        ) -> tuple[int, ...]:
+            ranks = tuple(
+                {candidate_rank_hint[item.candidate_id] for item in component.items}
+                for component in components
+            )
+            if any(len(component_ranks) != 1 for component_ranks in ranks):
+                raise ValueError("candidate-level rank hint splits an exact isolation component")
+            return tuple(next(iter(component_ranks)) for component_ranks in ranks)
+
+        legacy_hint = component_rank_hint(base_components)
+        colocation_hint = component_rank_hint(colocation_components)
+        legacy_status = "BLOCKED"
+        legacy_failure = (
+            "legacy search omitted; candidate-level SAT rank assignment is a CP-SAT hint"
+        )
+        colocation_legacy_status = "BLOCKED"
     hint_generation_status = "NOT_RUN"
     hint_generation_model = "NOT_RUN"
     base_hint_status = "NOT_RUN"
@@ -2701,7 +2860,7 @@ def validate_production_exact_feasibility(
             base_hint_constraints,
             hint=legacy_hint,
             solved_ranks=base_hint_ranks,
-            max_time_in_seconds=hint_search_seconds,
+            max_time_in_seconds=solver_time_budget(hint_search_seconds),
         )
         if base_hint_status == "FEASIBLE":
             legacy_hint = tuple(base_hint_ranks)
@@ -2726,7 +2885,7 @@ def validate_production_exact_feasibility(
             colocation_hint_constraints,
             hint=colocation_hint,
             solved_ranks=colocation_hint_ranks,
-            max_time_in_seconds=hint_search_seconds,
+            max_time_in_seconds=solver_time_budget(hint_search_seconds),
         )
         if colocation_hint_status == "FEASIBLE":
             colocation_hint = tuple(colocation_hint_ranks)
@@ -2753,7 +2912,7 @@ def validate_production_exact_feasibility(
             colocation_count_cell_constraints,
             hint=colocation_hint,
             solved_ranks=colocation_count_cell_ranks,
-            max_time_in_seconds=hint_search_seconds,
+            max_time_in_seconds=solver_time_budget(hint_search_seconds),
         )
         if colocation_count_cell_status == "FEASIBLE":
             colocation_hint = tuple(colocation_count_cell_ranks)
@@ -2780,7 +2939,7 @@ def validate_production_exact_feasibility(
             colocation_count_constraints,
             hint=colocation_hint,
             solved_ranks=colocation_count_ranks,
-            max_time_in_seconds=hint_search_seconds,
+            max_time_in_seconds=solver_time_budget(hint_search_seconds),
         )
         if colocation_count_status == "FEASIBLE":
             colocation_hint = tuple(colocation_count_ranks)
@@ -2807,7 +2966,7 @@ def validate_production_exact_feasibility(
             colocation_noncritical_constraints,
             hint=colocation_hint,
             solved_ranks=colocation_noncritical_ranks,
-            max_time_in_seconds=hint_search_seconds,
+            max_time_in_seconds=solver_time_budget(hint_search_seconds),
         )
         if colocation_noncritical_status == "FEASIBLE":
             colocation_hint = tuple(colocation_noncritical_ranks)
@@ -2836,6 +2995,7 @@ def validate_production_exact_feasibility(
         base_constraints,
         hint=legacy_hint,
         solved_ranks=base_solution,
+        max_time_in_seconds=solver_time_budget(),
     )
     if base_status == "FEASIBLE" and (
         (
@@ -2860,6 +3020,7 @@ def validate_production_exact_feasibility(
         colocation_constraints,
         hint=colocation_hint,
         solved_ranks=colocation_solution,
+        max_time_in_seconds=solver_time_budget(),
     )
     if base_status == "INFEASIBLE" and colocation_status == "FEASIBLE":
         raise RuntimeError("co-location exact model is feasible while its base model is infeasible")
@@ -2877,6 +3038,7 @@ def validate_production_exact_feasibility(
             base_constraints,
             fixed={index: 0},
             hint=tuple(base_solution) if base_status == "FEASIBLE" else legacy_hint,
+            max_time_in_seconds=solver_time_budget(),
         )
         c03_public_feasible += forced_status == "FEASIBLE"
         c03_unknown |= forced_status == "UNKNOWN"
@@ -2938,7 +3100,7 @@ def validate_production_exact_feasibility(
     c03_digest = canonical_hash(tuple(c03_f04_trace))
     base_conflicts = (
         _reduce_exact_conflict(len(base_components), base_constraints)
-        if base_status == "INFEASIBLE"
+        if base_status == "INFEASIBLE" and not defer_colocation_conflict_reduction
         else ()
     )
     colocation_reduction_deferred = (
@@ -2967,6 +3129,7 @@ def validate_production_exact_feasibility(
     )
     canonical_status = "NOT_RUN"
     witness_digest: str | None = None
+    canonical_trace: tuple[tuple[int, int, str], ...] = ()
     aggregates: dict[str, tuple[tuple[SplitName, int], ...]] = {
         "hard_cell_count_by_split": (),
         "adversarial_tag_count_by_split": (),
@@ -2976,11 +3139,22 @@ def validate_production_exact_feasibility(
         "c18_refusal_cell_count_by_split": (),
     }
     if overall_status == "FEASIBLE":
-        self_reduction_status, canonical_ranks = _canonical_split_ranks(
-            len(colocation_components),
-            colocation_constraints,
-            tuple(colocation_solution),
-        )
+        if canonical_self_reduction_backend == "GLUCOSE":
+            self_reduction_status, canonical_ranks, canonical_trace = (
+                _canonical_split_ranks_glucose(
+                    len(colocation_components),
+                    colocation_constraints,
+                    progress_callback=canonical_progress_callback,
+                    deadline=oracle_deadline,
+                )
+            )
+        else:
+            self_reduction_status, canonical_ranks = _canonical_split_ranks(
+                len(colocation_components),
+                colocation_constraints,
+                tuple(colocation_solution),
+                deadline=oracle_deadline,
+            )
         if self_reduction_status == "PASS" and canonical_ranks is not None:
             canonical_status = "PASS"
             witness_digest = canonical_hash(
@@ -3049,6 +3223,9 @@ def validate_production_exact_feasibility(
         "colocation_conflict_reduction_deferred": colocation_reduction_deferred,
         "hint_generation_status": hint_generation_status,
         "hint_generation_model": hint_generation_model,
+        "canonical_self_reduction_backend": canonical_self_reduction_backend,
+        "canonical_self_reduction_trace": canonical_trace,
+        "canonical_self_reduction_trace_digest": canonical_hash(canonical_trace),
         "colocation_edge_reason": "RETAINED_EXACT_SHINGLE",
         "colocation_structural_group_ids": _exact_colocation_group_ids(
             base_components,

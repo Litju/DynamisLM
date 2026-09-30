@@ -522,7 +522,7 @@ def _pb_model_bytes(
     component_count: int,
     constraints: tuple[_ExactConstraint, ...],
 ) -> tuple[bytes, tuple[tuple[int, ...], ...], tuple[tuple[int, ...], ...], int]:
-    from pysat.pb import EncType, PBEnc  # type: ignore[import-not-found]
+    from pysat.pb import EncType, PBEnc  # type: ignore[import-untyped]
 
     clauses: list[list[int]] = []
     variable_map = tuple(
@@ -611,7 +611,7 @@ def _run_independent_pb(
     try:
         from importlib.metadata import version
 
-        from pysat.solvers import Solver  # type: ignore[import-not-found]
+        from pysat.solvers import Solver  # type: ignore[import-untyped]
     except ImportError:
         return {"result": "NOT_RUN_BACKEND_UNAVAILABLE"}, None
     try:
