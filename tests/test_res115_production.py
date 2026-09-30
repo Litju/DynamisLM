@@ -593,6 +593,25 @@ def test_exact_oracle_survives_legacy_c03_f04_block_and_covers_frozen_contract(
     assert result.private_diagnostic["c03_f04_greedy_false_negative"] is True
 
 
+def test_exact_feasibility_can_skip_canonical_self_reduction() -> None:
+    commitments = _feasibility_fixture()
+    receipt = validate_production_exact_feasibility(
+        commitments,
+        exact_shingle_colocation_pairs=_cross_cell_exact_shingle_pairs(commitments),
+        defer_colocation_conflict_reduction=True,
+        use_legacy_hint=False,
+        run_c03_f04_diagnostic=False,
+        run_canonical_self_reduction=False,
+    ).receipt
+
+    assert receipt.status == "FEASIBLE"
+    assert receipt.base_status == receipt.colocation_status == "FEASIBLE"
+    assert receipt.canonical_self_reduction_status == "NOT_RUN"
+    assert receipt.canonical_witness_digest is None
+    assert not receipt.hard_cell_count_by_split
+    validate_production_exact_feasibility_receipt(receipt)
+
+
 def test_exact_canonical_self_reduction_ignores_arbitrary_solver_assignments(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

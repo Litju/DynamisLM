@@ -9,10 +9,11 @@ import sys
 import threading
 import time
 from collections import Counter
+from dataclasses import fields, is_dataclass, replace
 from pathlib import Path
 from typing import Any, cast
 
-from pysat.examples.hitman import Hitman  # type: ignore[import-untyped]
+from pysat.examples.hitman import Atom, Hitman  # type: ignore[import-untyped]
 from pysat.examples.rc2 import RC2  # type: ignore[import-untyped]
 from pysat.formula import WCNF  # type: ignore[import-untyped]
 from pysat.pb import EncType, PBEnc  # type: ignore[import-untyped]
@@ -30,6 +31,7 @@ from dynamislm.benchmark.production import (
     _feasibility_clusters,
     _validate_production_mutation_isolation_metadata,
     audit_production_duplicates,
+    bind_production_exact_feasibility_receipt,
     validate_production_candidate_packet,
     validate_production_candidate_set,
     validate_production_exact_feasibility_receipt,
@@ -47,6 +49,7 @@ from dynamislm.benchmark.production_exclusions import (
 from dynamislm.benchmark.production_store import (
     DEFAULT_PRODUCTION_ROOT,
     read_external_production_json,
+    replace_external_production_json,
     write_external_production_json,
 )
 from dynamislm.benchmark.res223_topology import allocation_resilience_summary
@@ -56,6 +59,7 @@ from dynamislm.benchmark.res225_repair import (
     PreservationAssumption,
     RepairAction,
     RES225RepairCheckpointV1,
+    _enum,
     assumptions_for_repair,
     build_core_model,
     build_preservation_registry,
@@ -74,10 +78,12 @@ _RES224_COLOCATION_PROOF_DIGEST = "838282d399dc5cfd6e03e71c93a5866a77c494d03e85d
 _MATERIALIZATION_PATH = "production/diagnostics/RES-225-materialization.private.json"
 _PRIVATE_DIR = "production/diagnostics/RES-225"
 _CHECKPOINT_PATH = f"{_PRIVATE_DIR}/repair-checkpoint.private.json"
+_CHECKPOINT_SCHEMA = "RES-225-REPAIR-CHECKPOINT@1.1.0"
 _EQUAL_REPAIR_LIMIT = 32
 _MAX_CORE_ITERATIONS = 500
 _MAX_EXACT_VARIANTS_PER_REPAIR = 16
 _DEFAULT_ORACLE_TIME_BUDGET_SECONDS = 300.0
+_WALL_CHECKPOINT_RESERVE_SECONDS = 2.0
 _CoreRecord = dict[str, Any]
 
 
@@ -89,8 +95,12 @@ class _RepairSearchBlockedError(RuntimeError):
     pass
 
 
+class _RepairSearchPausedError(RuntimeError):
+    pass
+
+
 def _progress(message: str) -> None:
-    print(f"RES225_PROGRESS {message}", file=sys.stderr, flush=True)
+    print(f"RES225_EVENT {message}", file=sys.stderr, flush=True)
 
 
 def _emit_iteration(
@@ -101,14 +111,20 @@ def _emit_iteration(
     last_core_size: int | None,
     last_minimized_core_size: int | None,
     hitting_set_size: int,
+    lower_bound: int,
+    upper_bound: int | None,
+    no_goods: int,
     best_repair_cardinality: int | None,
     oracle_calls: int,
     last_oracle_status: str,
     last_oracle_seconds: float,
     phase: str,
+    checkpoint_digest: str,
 ) -> None:
-    _progress(
-        " ".join(
+    gap = _optimality_gap(lower_bound, upper_bound)
+    print(
+        "RES225_PROGRESS "
+        + " ".join(
             (
                 f"ITERATION={iteration}",
                 f"ELAPSED={elapsed_seconds:.3f}",
@@ -117,14 +133,21 @@ def _emit_iteration(
                 "LAST_MINIMIZED_CORE_SIZE="
                 f"{last_minimized_core_size if last_minimized_core_size is not None else 'NONE'}",
                 f"CURRENT_HITTING_SET_SIZE={hitting_set_size}",
+                f"LOWER_BOUND={lower_bound}",
+                f"UPPER_BOUND={upper_bound if upper_bound is not None else 'NONE'}",
+                f"OPTIMALITY_GAP={gap if gap is not None else 'NONE'}",
                 "BEST_REPAIR_CARDINALITY="
                 f"{best_repair_cardinality if best_repair_cardinality is not None else 'NONE'}",
                 f"ORACLE_CALLS={oracle_calls}",
+                f"NO_GOODS={no_goods}",
                 f"LAST_ORACLE_STATUS={last_oracle_status}",
                 f"LAST_ORACLE_SECONDS={last_oracle_seconds:.3f}",
                 f"CURRENT_PHASE={phase}",
+                f"CHECKPOINT_DIGEST={checkpoint_digest}",
             )
-        )
+        ),
+        file=sys.stderr,
+        flush=True,
     )
 
 
@@ -147,6 +170,8 @@ def _private_write(
 
 
 def _checkpoint_plain(value: Any) -> Any:
+    if is_dataclass(value) and not isinstance(value, type):
+        return {item.name: _checkpoint_plain(getattr(value, item.name)) for item in fields(value)}
     if isinstance(value, dict):
         return {str(key): _checkpoint_plain(item) for key, item in value.items()}
     if isinstance(value, list | tuple):
@@ -156,9 +181,14 @@ def _checkpoint_plain(value: Any) -> Any:
 
 def _checkpoint_bind(payload: dict[str, Any]) -> dict[str, Any]:
     body = _checkpoint_plain(
-        {key: value for key, value in payload.items() if key != "checkpoint_digest"}
+        {
+            key: value
+            for key, value in payload.items()
+            if key not in {"checkpoint_digest", "CHECKPOINT_DIGEST"}
+        }
     )
-    return {**body, "checkpoint_digest": canonical_hash(body)}
+    digest = canonical_hash(body)
+    return {**body, "checkpoint_digest": digest, "CHECKPOINT_DIGEST": digest}
 
 
 def _validate_checkpoint(
@@ -169,10 +199,16 @@ def _validate_checkpoint(
     if not isinstance(checkpoint, dict):
         raise ValueError("RES-225 checkpoint must be a JSON object")
     checkpoint = cast(dict[str, Any], checkpoint)
-    if checkpoint.get("schema") != "RES-225-REPAIR-CHECKPOINT@1.0.0" or checkpoint.get(
-        "checkpoint_digest"
-    ) != canonical_hash(
-        {key: value for key, value in checkpoint.items() if key != "checkpoint_digest"}
+    body = {
+        key: value
+        for key, value in checkpoint.items()
+        if key not in {"checkpoint_digest", "CHECKPOINT_DIGEST"}
+    }
+    digest = canonical_hash(body)
+    if (
+        checkpoint.get("schema") != _CHECKPOINT_SCHEMA
+        or checkpoint.get("checkpoint_digest") != digest
+        or checkpoint.get("CHECKPOINT_DIGEST") != digest
     ):
         raise ValueError("RES-225 checkpoint schema/digest validation failed")
     if checkpoint.get("fingerprints") != expected_fingerprints:
@@ -182,6 +218,7 @@ def _validate_checkpoint(
         "iteration_records",
         "exact_core_evidence",
         "excluded_exact_designs",
+        "excluded_repair_families",
         "tested_repairs",
         "equality_records",
     ):
@@ -200,10 +237,51 @@ def _validate_checkpoint(
         raise ValueError("RES-225 checkpoint elapsed time is malformed")
     if not isinstance(checkpoint.get("phase"), str):
         raise ValueError("RES-225 checkpoint phase is malformed")
+    required_progress = (
+        "ITERATION",
+        "ELAPSED",
+        "CORES_DISCOVERED",
+        "LAST_CORE_SIZE",
+        "LAST_MINIMIZED_CORE_SIZE",
+        "CURRENT_HITTING_SET_SIZE",
+        "LOWER_BOUND",
+        "UPPER_BOUND",
+        "OPTIMALITY_GAP",
+        "BEST_REPAIR_CARDINALITY",
+        "ORACLE_CALLS",
+        "NO_GOODS",
+        "LAST_ORACLE_STATUS",
+        "LAST_ORACLE_SECONDS",
+        "CURRENT_PHASE",
+    )
+    if any(key not in checkpoint for key in required_progress):
+        raise ValueError("RES-225 checkpoint proof-progress fields are incomplete")
+    lower_bound = checkpoint["LOWER_BOUND"]
+    upper_bound = checkpoint["UPPER_BOUND"]
+    if type(lower_bound) is not int or (upper_bound is not None and type(upper_bound) is not int):
+        raise ValueError("RES-225 checkpoint proof bounds are malformed")
+    expected_gap = None if upper_bound is None else upper_bound - lower_bound
+    if (
+        (upper_bound is not None and upper_bound < lower_bound)
+        or checkpoint["OPTIMALITY_GAP"] != expected_gap
+        or checkpoint["BEST_REPAIR_CARDINALITY"] != upper_bound
+        or checkpoint["NO_GOODS"] != checkpoint.get("no_goods")
+        or checkpoint["CORES_DISCOVERED"] != len(checkpoint["cores"])
+        or checkpoint["ORACLE_CALLS"] != checkpoint.get("oracle_calls")
+        or checkpoint["ITERATION"] != checkpoint.get("iteration")
+        or checkpoint["CURRENT_PHASE"] != checkpoint.get("phase")
+        or checkpoint["CURRENT_HITTING_SET_SIZE"] != checkpoint.get("current_hitting_set_size")
+    ):
+        raise ValueError("RES-225 checkpoint proof-progress values are inconsistent")
     return checkpoint
 
 
-def _write_checkpoint(production_root: Path, state: dict[str, Any]) -> str:
+def _write_checkpoint(
+    production_root: Path,
+    state: dict[str, Any],
+    *,
+    expected_file_digest: str | None = None,
+) -> tuple[str, str]:
     encoded_state = dict(state)
     encoded_tests = []
     raw_tests = state.get("tested_repairs")
@@ -222,26 +300,38 @@ def _write_checkpoint(production_root: Path, state: dict[str, Any]) -> str:
         incumbent = dict(incumbent)
         incumbent["abstract_receipt_json"] = canonical_json(incumbent.pop("abstract_receipt"))
         encoded_state["incumbent"] = incumbent
-    payload = _checkpoint_bind({"schema": "RES-225-REPAIR-CHECKPOINT@1.0.0", **encoded_state})
-    return _private_write(
-        production_root,
-        _CHECKPOINT_PATH,
-        RES225RepairCheckpointV1("RES-225-REPAIR-CHECKPOINT@1.0.0", payload),
-    )
+    payload = _checkpoint_bind({"schema": _CHECKPOINT_SCHEMA, **encoded_state})
+    checkpoint = RES225RepairCheckpointV1(_CHECKPOINT_SCHEMA, payload)
+    if expected_file_digest is None:
+        _relative, file_digest, _size = write_external_production_json(
+            checkpoint,
+            _CHECKPOINT_PATH,
+            repository_root=_REPOSITORY_ROOT,
+            production_root=production_root,
+        )
+    else:
+        _relative, file_digest, _size = replace_external_production_json(
+            checkpoint,
+            _CHECKPOINT_PATH,
+            expected_digest=expected_file_digest,
+            repository_root=_REPOSITORY_ROOT,
+            production_root=production_root,
+        )
+    return str(payload["CHECKPOINT_DIGEST"]), file_digest
 
 
 def _read_checkpoint(
     production_root: Path,
     *,
     expected_fingerprints: dict[str, str],
-) -> tuple[dict[str, Any], str]:
-    wrapper, digest, _size = read_external_production_json(
+) -> tuple[dict[str, Any], str, str]:
+    wrapper, file_digest, _size = read_external_production_json(
         _CHECKPOINT_PATH,
         RES225RepairCheckpointV1,
         repository_root=_REPOSITORY_ROOT,
         production_root=production_root,
     )
-    if wrapper.schema != "RES-225-REPAIR-CHECKPOINT@1.0.0":
+    if wrapper.schema != _CHECKPOINT_SCHEMA:
         raise ValueError("RES-225 checkpoint wrapper schema is invalid")
     checkpoint = _validate_checkpoint(
         wrapper.payload,
@@ -270,7 +360,7 @@ def _read_checkpoint(
                 str(incumbent["abstract_receipt_json"]), ProductionExactFeasibilityReceiptV2
             ),
         }
-    return checkpoint, digest
+    return checkpoint, str(checkpoint["CHECKPOINT_DIGEST"]), file_digest
 
 
 def _bind_plan(plan: dict[str, object]) -> dict[str, object]:
@@ -389,12 +479,14 @@ def _initial_cores(
     oracle_timeout_seconds: float,
     completed_records: tuple[_CoreRecord, ...] = (),
     on_core: Any = None,
+    time_budget: Any = None,
 ) -> tuple[list[_CoreRecord], dict[str, Any]]:
     records: list[_CoreRecord] = [dict(item) for item in completed_records]
     completed_modes = {str(item["mode"]) for item in records}
     solvers: dict[str, Any] = {}
     for mode in ("BASE", "COLOCATION"):
-        deadline = time.monotonic() + oracle_timeout_seconds
+        budget = oracle_timeout_seconds if time_budget is None else time_budget()
+        deadline = time.monotonic() + min(oracle_timeout_seconds, budget)
         _progress(f"initial-core mode={mode} assumptions={len(models[mode].assumption_literals)}")
         model = models[mode]
         solver = Solver(name="g4", bootstrap_with=model.clauses)
@@ -444,6 +536,7 @@ def _new_hitman(
 def _hitman_from_cores(
     cores: list[_CoreRecord],
     weights: dict[str, int],
+    blocked_sets: tuple[tuple[str, ...], ...] = (),
 ) -> Any:
     hitman = Hitman(htype="rc2", solver="g3")
     for core in cores:
@@ -452,8 +545,23 @@ def _hitman_from_cores(
             hitman.delete()
             raise RuntimeError("RES-225 discovered an UNSAT core with no authorized repair action")
         hitman.hit(action_ids, weights=weights)
+    for blocked in blocked_sets:
+        _block_hitman_repair(hitman, tuple(weights), blocked, weights)
 
     return hitman
+
+
+def _block_hitman_repair(
+    hitman: Any,
+    action_ids: tuple[str, ...],
+    repair_ids: tuple[str, ...],
+    weights: dict[str, int],
+) -> None:
+    selected = set(repair_ids)
+    hitman.add_hard(
+        [Atom(action_id, sign=action_id not in selected) for action_id in action_ids],
+        weights=weights,
+    )
 
 
 def _run_rc2_limited(rc2: Any, operation: Any, time_budget_seconds: float) -> Any:
@@ -521,9 +629,10 @@ def _rc2_optimum(
     cores: list[_CoreRecord],
     weights: dict[str, int],
     time_budget_seconds: float = _DEFAULT_ORACLE_TIME_BUDGET_SECONDS,
+    blocked_sets: tuple[tuple[str, ...], ...] = (),
 ) -> tuple[tuple[str, ...], int]:
     core_sets = tuple(tuple(item["action_ids"]) for item in cores)
-    formula, variable_by_action = _new_wcnf(action_ids, core_sets, weights)
+    formula, variable_by_action = _new_wcnf(action_ids, core_sets, weights, blocked_sets)
     with RC2(formula, solver="g3") as rc2:
         model = _run_rc2_limited(rc2, rc2.compute, time_budget_seconds)
         if model is None:
@@ -550,6 +659,8 @@ def _enumerate_minimum_hit_sets(
     limit: int,
     include: tuple[str, ...],
     time_budget_seconds: float = _DEFAULT_ORACLE_TIME_BUDGET_SECONDS,
+    time_budget: Any = None,
+    blocked_sets: tuple[tuple[str, ...], ...] = (),
 ) -> tuple[tuple[tuple[str, ...], ...], bool]:
     core_sets = tuple(tuple(item["action_ids"]) for item in cores)
     selected_sets: list[tuple[str, ...]] = []
@@ -564,10 +675,11 @@ def _enumerate_minimum_hit_sets(
             action_ids,
             core_sets,
             weights,
-            tuple(blocked),
+            (*blocked_sets, *blocked),
         )
         with RC2(formula, solver="g3") as rc2:
-            model = _run_rc2_limited(rc2, rc2.compute, time_budget_seconds)
+            budget = time_budget_seconds if time_budget is None else time_budget()
+            model = _run_rc2_limited(rc2, rc2.compute, budget)
             if model is None or int(rc2.cost) != minimum_cost:
                 break
             selected = tuple(
@@ -592,13 +704,27 @@ def _enumerate_minimum_hit_sets(
 
 def _exact_state(receipt: Any) -> str:
     statuses = (receipt.base_status, receipt.colocation_status)
-    if "UNKNOWN" in statuses or receipt.status == "BLOCKED":
-        return "UNKNOWN"
-    if statuses == ("FEASIBLE", "FEASIBLE") and receipt.status == "FEASIBLE":
-        return "FEASIBLE"
     if "INFEASIBLE" in statuses:
         return "INFEASIBLE"
+    if statuses == ("FEASIBLE", "FEASIBLE") and receipt.status == "FEASIBLE":
+        return "FEASIBLE"
+    if "UNKNOWN" in statuses or receipt.status == "BLOCKED":
+        return "UNKNOWN"
     return "UNKNOWN"
+
+
+def _independent_witness_digests(records: dict[str, dict[str, object]]) -> dict[str, str]:
+    witnesses: dict[str, str] = {}
+    for mode in ("BASE", "COLOCATION"):
+        record = records.get(mode, {})
+        digest = record.get("witness_digest")
+        if (
+            record.get("result") == "SAT"
+            and record.get("witness_independently_validated") is True
+            and isinstance(digest, str)
+        ):
+            witnesses[mode] = digest
+    return witnesses
 
 
 def _exact_repair_variant(
@@ -608,14 +734,19 @@ def _exact_repair_variant(
     selected_action_ids: tuple[str, ...],
     *,
     target_parent_by_action: dict[str, str],
-    candidate_rank_hint: dict[str, int],
+    candidate_rank_hint: dict[str, int] | None,
     time_budget_seconds: float,
+    canonicalize: bool = False,
+    independent_validate: bool = False,
+    production_root: Path | None = None,
+    wall_deadline: float | None = None,
 ) -> tuple[
     str,
     Any,
     tuple[ProductionCandidateCommitmentV1, ...],
     tuple[tuple[str, str], ...],
     float,
+    dict[str, Any] | None,
 ]:
     abstract_commitments, abstract_pairs = make_abstract_design(
         commitments,
@@ -634,15 +765,155 @@ def _exact_repair_variant(
         abstract_pairs,
         candidate_rank_hint=candidate_rank_hint,
         time_budget_seconds=time_budget_seconds,
-        canonical_progress_callback=canonical_progress,
+        canonicalize=canonicalize,
+        canonical_progress_callback=canonical_progress if canonicalize else None,
     )
+    state = _exact_state(receipt)
+    fallback_evidence: dict[str, Any] | None = None
+    if (state == "UNKNOWN" or (state == "FEASIBLE" and independent_validate)) and not canonicalize:
+        initial_state = state
+        fallback_budget = time_budget_seconds
+        if wall_deadline is not None:
+            fallback_budget = min(
+                fallback_budget,
+                wall_deadline - time.monotonic() - _WALL_CHECKPOINT_RESERVE_SECONDS,
+            )
+        fallback_statuses, records = _independent_abstract_fallback(
+            abstract_commitments,
+            abstract_pairs,
+            receipt=receipt,
+            production_root=production_root,
+            time_budget_seconds=max(0.0, fallback_budget),
+            wall_deadline=wall_deadline,
+        )
+        if initial_state == "FEASIBLE":
+            # An independent disagreement cannot turn a solver-feasible variant into a no-good.
+            state = (
+                "FEASIBLE"
+                if (
+                    fallback_statuses.get("BASE")
+                    == fallback_statuses.get("COLOCATION")
+                    == "FEASIBLE"
+                    and len(_independent_witness_digests(records)) == 2
+                )
+                else "UNKNOWN"
+            )
+        else:
+            base_status = fallback_statuses.get("BASE", receipt.base_status)
+            colocation_status = fallback_statuses.get("COLOCATION", receipt.colocation_status)
+            if "INFEASIBLE" in {base_status, colocation_status}:
+                state = "INFEASIBLE"
+                overall_status = "INFEASIBLE"
+            elif (
+                base_status == colocation_status == "FEASIBLE"
+                and len(_independent_witness_digests(records)) == 2
+            ):
+                state = "FEASIBLE"
+                overall_status = "FEASIBLE"
+            else:
+                state = "UNKNOWN"
+                overall_status = "BLOCKED"
+            receipt = bind_production_exact_feasibility_receipt(
+                replace(
+                    receipt,
+                    status=overall_status,
+                    base_status=base_status,
+                    colocation_status=colocation_status,
+                    canonical_self_reduction_status="NOT_RUN",
+                    canonical_witness_digest=None,
+                    hard_cell_count_by_split=(),
+                    adversarial_tag_count_by_split=(),
+                    reachable_error_count_by_split=(),
+                    protected_critical_error_count_by_split=(),
+                    answerable_case_count_by_split=(),
+                    c18_refusal_cell_count_by_split=(),
+                )
+            )
+        fallback_evidence = {
+            "statuses": fallback_statuses,
+            "records": records,
+            "witness_digests": _independent_witness_digests(records),
+            "digest": canonical_hash((fallback_statuses, records)),
+        }
     return (
-        _exact_state(receipt),
+        state,
         receipt,
         abstract_commitments,
         abstract_pairs,
         time.monotonic() - started,
+        fallback_evidence,
     )
+
+
+def _independent_abstract_fallback(
+    commitments: tuple[ProductionCandidateCommitmentV1, ...],
+    pairs: tuple[tuple[str, str], ...],
+    *,
+    receipt: Any,
+    production_root: Path | None,
+    time_budget_seconds: float,
+    wall_deadline: float | None = None,
+) -> tuple[dict[str, str], dict[str, dict[str, object]]]:
+    from scripts.res224_probes import _run_independent_pb
+
+    if production_root is None:
+        return {}, {}
+    private_dir = production_root / _PRIVATE_DIR / "unknown-fallback"
+    private_dir.mkdir(parents=True, exist_ok=True)
+    base_components = _feasibility_clusters(commitments, allow_incompatible_locks=True)
+    colocation_components = _feasibility_clusters(
+        commitments,
+        exact_shingle_colocation_pairs=pairs,
+        allow_incompatible_locks=True,
+    )
+    base_constraints = _exact_requirement_constraints(base_components, base_components)
+    colocation_constraints = _exact_requirement_constraints(
+        colocation_components,
+        colocation_components,
+    )
+    statuses = {"BASE": "UNKNOWN", "COLOCATION": "UNKNOWN"}
+    records: dict[str, dict[str, object]] = {}
+    started = time.monotonic()
+    for mode, components, constraints in (
+        ("BASE", base_components, base_constraints),
+        ("COLOCATION", colocation_components, colocation_constraints),
+    ):
+        remaining = time_budget_seconds - (time.monotonic() - started)
+        if wall_deadline is not None:
+            remaining = min(
+                remaining,
+                wall_deadline - time.monotonic() - _WALL_CHECKPOINT_RESERVE_SECONDS,
+            )
+        if remaining <= 0:
+            statuses[mode] = "UNKNOWN"
+            records[mode] = {"result": "UNKNOWN", "reason": "TIME_BUDGET_EXHAUSTED"}
+            continue
+        record, _witness = _run_independent_pb(
+            label=f"RES225_INDEPENDENT_{mode}_{canonical_hash(commitments)[:16]}",
+            model_kind=mode,
+            semantic_model_digest=(
+                receipt.base_model_digest if mode == "BASE" else receipt.colocation_model_digest
+            ),
+            components=components,
+            constraints=constraints,
+            base_components=base_components,
+            colocation_components=colocation_components,
+            base_constraints=base_constraints,
+            colocation_constraints=colocation_constraints,
+            pairs=pairs,
+            private_dir=private_dir,
+            time_limit_seconds=remaining,
+            proof_checker=shutil.which("drat-trim"),
+        )
+        records[mode] = record
+        result = str(record.get("result", "UNKNOWN"))
+        if result == "SAT" and record.get("witness_independently_validated") is True:
+            statuses[mode] = "FEASIBLE"
+        elif result == "UNSAT" and record.get("proof_check_status") == "PASS":
+            statuses[mode] = "INFEASIBLE"
+        else:
+            statuses[mode] = "UNKNOWN"
+    return statuses, records
 
 
 def _exact_variant_nogood_clause(
@@ -730,6 +1001,29 @@ def _append_unique_exact_exclusion(
     exclusions.append(exclusion)
 
 
+def _append_unique_repair_family_exclusion(
+    exclusions: list[dict[str, Any]],
+    action_ids: tuple[str, ...],
+    tested_variant_digests: tuple[str, ...],
+) -> dict[str, Any]:
+    digest = canonical_hash(action_ids)
+    if any(item.get("repair_digest") == digest for item in exclusions):
+        raise RuntimeError("RES-225 repair family was already exhausted")
+    record = {
+        "action_ids": action_ids,
+        "repair_digest": digest,
+        "tested_variant_digests": tested_variant_digests,
+        "status": "ALL_EXACT_VARIANTS_PROVEN_INFEASIBLE",
+    }
+    exclusions.append(record)
+    return record
+
+
+def _enforce_variant_cap(attempts: int, limit: int, on_reached: Any) -> None:
+    if attempts >= limit:
+        on_reached()
+
+
 def _repair_profile(
     commitments: tuple[ProductionCandidateCommitmentV1, ...],
     pairs: tuple[tuple[str, str], ...],
@@ -762,25 +1056,134 @@ def _repair_profile(
     }
 
 
+def _repair_primary_cost(repair_ids: tuple[str, ...], actions: dict[str, RepairAction]) -> int:
+    return sum(actions[action_id].content_replacement_count for action_id in repair_ids)
+
+
+def _released_candidate_ids(
+    repair_ids: tuple[str, ...], actions: dict[str, RepairAction]
+) -> tuple[str, ...]:
+    return tuple(
+        sorted(
+            {
+                candidate_id
+                for action_id in repair_ids
+                for candidate_id in actions[action_id].affected_candidate_ids
+            },
+            key=lambda value: value.encode("utf-8"),
+        )
+    )
+
+
+def _origin_counts(
+    commitments: tuple[ProductionCandidateCommitmentV1, ...],
+) -> tuple[tuple[str, int], ...]:
+    return tuple(
+        sorted(
+            (origin.value, count)
+            for origin, count in Counter(item.item.origin_class for item in commitments).items()
+        )
+    )
+
+
+def _minimum_hit_solution(
+    cores: list[_CoreRecord],
+    weights: dict[str, int],
+    time_budget_seconds: float = _DEFAULT_ORACLE_TIME_BUDGET_SECONDS,
+    blocked_sets: tuple[tuple[str, ...], ...] = (),
+) -> tuple[str, ...]:
+    if not cores:
+        return ()
+    hitman = _hitman_from_cores(cores, weights, blocked_sets)
+    try:
+        return _hitman_solution(hitman, weights, time_budget_seconds)
+    finally:
+        hitman.delete()
+
+
+def _minimum_hit_cost(
+    cores: list[_CoreRecord],
+    weights: dict[str, int],
+    time_budget_seconds: float = _DEFAULT_ORACLE_TIME_BUDGET_SECONDS,
+) -> int:
+    selected = _minimum_hit_solution(cores, weights, time_budget_seconds)
+    return sum(weights[action_id] for action_id in selected)
+
+
+def _optimality_gap(lower_bound: int, upper_bound: int | None) -> int | None:
+    if lower_bound < 0 or (upper_bound is not None and upper_bound < lower_bound):
+        raise ValueError("RES-225 proof bounds are invalid or crossed")
+    return None if upper_bound is None else upper_bound - lower_bound
+
+
 def _repair_score(
     selected: tuple[str, ...],
     actions_by_id: dict[str, RepairAction],
     profile: dict[str, int],
     target_parent_by_action: dict[str, str],
+    before: tuple[ProductionCandidateCommitmentV1, ...],
+    after: tuple[ProductionCandidateCommitmentV1, ...],
 ) -> tuple[object, ...]:
-    mutation_children = sum(
-        sum(
-            placeholder.origin_class == CaseOrigin.ADVERSARIAL_MUTATION.value
-            for placeholder in actions_by_id[action_id].placeholders
-        )
-        for action_id in selected
+    old_items = {item.candidate_id: item.item for item in before}
+    new_items = {item.candidate_id: item.item for item in after}
+    origin_changes = sum(
+        _enum(old_items[candidate_id].origin_class) != _enum(new_items[candidate_id].origin_class)
+        for candidate_id in old_items
     )
+    mutation_removals = sum(
+        old_items[candidate_id].origin_class is CaseOrigin.ADVERSARIAL_MUTATION
+        and new_items[candidate_id].origin_class is not CaseOrigin.ADVERSARIAL_MUTATION
+        for candidate_id in old_items
+    )
+    semantic_reallocations = sum(
+        (old_items[candidate_id].capability_id, old_items[candidate_id].benchmark_family)
+        != (new_items[candidate_id].capability_id, new_items[candidate_id].benchmark_family)
+        for candidate_id in old_items
+    )
+    parent_changes = sum(
+        old_items[candidate_id].parent_candidate_id != new_items[candidate_id].parent_candidate_id
+        for candidate_id in old_items
+    )
+    source_engine_changes = sum(
+        (
+            old_items[candidate_id].source_document_ids,
+            old_items[candidate_id].source_artifact_ids,
+            old_items[candidate_id].construct_test_identity_ids,
+            old_items[candidate_id].provider_export_ids,
+        )
+        != (
+            new_items[candidate_id].source_document_ids,
+            new_items[candidate_id].source_artifact_ids,
+            new_items[candidate_id].construct_test_identity_ids,
+            new_items[candidate_id].provider_export_ids,
+        )
+        for candidate_id in old_items
+    )
+    distribution_deviation = 0
+    for field in (
+        "origin_class",
+        "capability_id",
+        "benchmark_family",
+        "practitioner_question_class",
+        "scoring_profile",
+        "difficulty",
+    ):
+        old_counts = Counter(_enum(getattr(item, field)) for item in old_items.values())
+        new_counts = Counter(_enum(getattr(item, field)) for item in new_items.values())
+        distribution_deviation += sum(
+            abs(old_counts[key] - new_counts[key]) for key in old_counts.keys() | new_counts.keys()
+        )
     return (
+        origin_changes,
+        mutation_removals,
+        semantic_reallocations,
+        parent_changes,
+        source_engine_changes,
+        distribution_deviation,
         -profile["minimum_cell_eligible_component_count"],
         -profile["total_cell_eligible_component_count"],
         -profile["colocation_component_count"],
         -profile["base_component_count"],
-        mutation_children,
         tuple(sorted(target_parent_by_action.items())),
         selected,
     )
@@ -802,27 +1205,19 @@ def _core_hit_set_is_sat(
         return "UNKNOWN", (), {}, {}, 0, 0, time.monotonic() - started
     if is_sat:
         selected = set(selected_action_ids)
-        forced = list(assumptions)
+        selected_literals = {literal for literal in solver.get_model() if literal > 0}
         target_map: dict[str, str] = {}
         for action_id, target_by_id in sorted(model.target_variables.items()):
             if action_id not in selected:
                 continue
-            for target_id, target_literal in sorted(target_by_id.items()):
-                try:
-                    target_sat = solve_assumptions_limited(
-                        solver,
-                        (*forced, target_literal),
-                        deadline=deadline,
-                    )
-                except CoreSolveTimeoutError:
-                    return "UNKNOWN", (), {}, {}, 0, 0, time.monotonic() - started
-                if target_sat:
-                    target_map[action_id] = target_id
-                    forced.append(target_literal)
-                    break
-            else:
-                raise RuntimeError("RES-225 could not canonicalize a satisfiable target assignment")
-        selected_literals = {literal for literal in solver.get_model() if literal > 0}
+            chosen = tuple(
+                target_id
+                for target_id, literal in target_by_id.items()
+                if literal in selected_literals
+            )
+            if len(chosen) != 1:
+                raise RuntimeError("RES-225 SAT witness has an invalid mutation-parent assignment")
+            target_map[action_id] = chosen[0]
         candidate_rank_hint = {
             candidate_id: next(
                 rank
@@ -848,6 +1243,26 @@ def _core_hit_set_is_sat(
     except CoreSolveTimeoutError:
         return "UNKNOWN", (), {}, {}, len(ids), 0, time.monotonic() - started
     return "UNSAT", shrunk, {}, {}, len(ids), len(shrunk), time.monotonic() - started
+
+
+def _candidate_model_fallback(
+    model: CoreModel,
+    selected_action_ids: tuple[str, ...],
+    *,
+    extra_clauses: tuple[tuple[int, ...], ...],
+    time_budget_seconds: float,
+) -> tuple[str, tuple[str, ...], dict[str, str], dict[str, int], int, int, float]:
+    try:
+        solver = Solver(name="m22", bootstrap_with=(*model.clauses, *extra_clauses))
+    except Exception:
+        return "UNKNOWN", (), {}, {}, 0, 0, 0.0
+    with solver:
+        return _core_hit_set_is_sat(
+            solver,
+            model,
+            selected_action_ids,
+            time_budget_seconds=time_budget_seconds,
+        )
 
 
 def _make_materialization_plan(
@@ -950,6 +1365,17 @@ def _require_abstract_feasible(receipt: Any) -> None:
         raise _RepairSearchBlockedError(
             "RES-225 materialization requires an exact canonical abstract witness"
         )
+
+
+def _require_abstract_search_feasible(receipt: Any) -> None:
+    if (
+        receipt.base_status != "FEASIBLE"
+        or receipt.colocation_status != "FEASIBLE"
+        or receipt.status != "FEASIBLE"
+        or receipt.canonical_self_reduction_status != "NOT_RUN"
+        or receipt.canonical_witness_digest is not None
+    ):
+        raise _RepairSearchBlockedError("RES-225 search requires feasibility-only exact evidence")
 
 
 def _write_authorized_materialization(
@@ -1159,10 +1585,17 @@ def run(
     oracle_timeout_seconds: float = _DEFAULT_ORACLE_TIME_BUDGET_SECONDS,
     max_iterations: int = _MAX_CORE_ITERATIONS,
     max_exact_variants_per_repair: int = _MAX_EXACT_VARIANTS_PER_REPAIR,
+    max_wall_seconds: float | None = None,
+    materialize: bool = False,
 ) -> tuple[dict[str, object], int]:
     if production_root.resolve().is_relative_to(_REPOSITORY_ROOT.resolve()):
         raise ValueError("RES-225 private artifacts must remain outside Git")
-    if oracle_timeout_seconds <= 0 or max_iterations <= 0 or max_exact_variants_per_repair <= 0:
+    if (
+        oracle_timeout_seconds <= 0
+        or max_iterations <= 0
+        or max_exact_variants_per_repair <= 0
+        or (max_wall_seconds is not None and max_wall_seconds <= 0)
+    ):
         raise ValueError("RES-225 search budgets must be positive")
     checkpoint_path = production_root / _CHECKPOINT_PATH
     if checkpoint_path.exists() and not resume:
@@ -1171,6 +1604,7 @@ def run(
         raise ValueError("RES-225 --resume requested but no private checkpoint exists")
 
     run_started = time.monotonic()
+    wall_deadline = None if max_wall_seconds is None else run_started + max_wall_seconds
     _progress("reconstructing-sealed-baseline")
     before_packets, commitments, pairs = _capture_current_design(production_root)
     _progress(f"baseline-ready candidates={len(commitments)} retained-edges={len(pairs)}")
@@ -1213,6 +1647,7 @@ def run(
     iteration_records: list[dict[str, Any]] = []
     exact_core_evidence: list[dict[str, Any]] = []
     excluded_exact_designs: list[dict[str, Any]] = []
+    excluded_repair_families: list[dict[str, Any]] = []
     tested_repairs: list[dict[str, Any]] = []
     equality_records: list[dict[str, Any]] = []
     variant_counts: dict[str, int] = {}
@@ -1227,9 +1662,16 @@ def run(
     last_oracle_seconds = 0.0
     current_phase = "INITIAL_CORE_EXTRACTION"
     incumbent: dict[str, Any] | None = None
+    primary_proof: dict[str, Any] | None = None
+    lower_bound = 0
+    upper_bound: int | None = None
+    current_hitting_set_size = 0
+    current_hitting_set_actions: tuple[str, ...] = ()
+    checkpoint_digest = "NONE"
+    checkpoint_file_digest: str | None = None
 
     if resume:
-        saved, _checkpoint_file_digest = _read_checkpoint(
+        saved, _checkpoint_body_digest, checkpoint_file_digest = _read_checkpoint(
             production_root,
             expected_fingerprints=fingerprints,
         )
@@ -1237,6 +1679,7 @@ def run(
         iteration_records = [dict(item) for item in saved["iteration_records"]]
         exact_core_evidence = [dict(item) for item in saved["exact_core_evidence"]]
         excluded_exact_designs = [dict(item) for item in saved["excluded_exact_designs"]]
+        excluded_repair_families = [dict(item) for item in saved["excluded_repair_families"]]
         tested_repairs = [dict(item) for item in saved["tested_repairs"]]
         equality_records = [dict(item) for item in saved["equality_records"]]
         variant_counts = dict(saved.get("variant_counts", {}))
@@ -1245,6 +1688,9 @@ def run(
         iteration = int(saved["iteration"])
         initial_core_count = int(saved.get("initial_core_count", 0))
         elapsed_before = float(saved["elapsed_seconds"])
+        lower_bound = int(saved["LOWER_BOUND"])
+        saved_upper = saved["UPPER_BOUND"]
+        upper_bound = None if saved_upper is None else int(saved_upper)
         last_core_size = saved.get("last_core_size")
         last_minimized_core_size = saved.get("last_minimized_core_size")
         last_oracle_status = str(saved.get("last_oracle_status", "UNKNOWN"))
@@ -1254,11 +1700,72 @@ def run(
             if not isinstance(incumbent_value, dict):
                 raise ValueError("RES-225 checkpoint incumbent is malformed")
             incumbent = dict(incumbent_value)
+        primary_value = saved.get("primary_proof")
+        if primary_value is not None:
+            if not isinstance(primary_value, dict):
+                raise ValueError("RES-225 checkpoint primary proof is malformed")
+            primary_proof = dict(primary_value)
+        checkpoint_digest = str(saved["CHECKPOINT_DIGEST"])
+        if (
+            saved.get("preservation_registry_digest") != assumptions_digest
+            or saved.get("action_registry_digest") != actions_digest
+            or saved.get("model_digests")
+            != {mode: model.model_digest for mode, model in models.items()}
+        ):
+            raise ValueError("RES-225 checkpoint registry/model state differs from its authority")
+        if (incumbent is None) != (upper_bound is None) or (
+            incumbent is not None and int(incumbent["cardinality"]) != upper_bound
+        ):
+            raise ValueError("RES-225 checkpoint upper bound differs from its incumbent")
+        _progress(
+            "RESUME_RESTORED "
+            f"CHECKPOINT_DIGEST={checkpoint_digest} "
+            f"CORES_DISCOVERED={len(cores)} LOWER_BOUND={lower_bound} "
+            f"UPPER_BOUND={upper_bound if upper_bound is not None else 'NONE'} "
+            f"NO_GOODS={len(excluded_exact_designs) + len(excluded_repair_families)} "
+            f"INCUMBENT={incumbent['repair_digest'] if incumbent is not None else 'NONE'} "
+            f"ITERATION={iteration} ORACLE_CALLS={oracle_calls} "
+            f"EXACT_VARIANTS={sum(variant_counts.values())}"
+        )
     else:
         initial_core_count = 0
+    run_iteration_start = iteration
 
     def elapsed() -> float:
         return elapsed_before + time.monotonic() - run_started
+
+    def pause_for_wall(
+        phase: str,
+        action_ids: tuple[str, ...] = (),
+        target_map: dict[str, str] | None = None,
+        cost: int | None = None,
+    ) -> None:
+        save_checkpoint(
+            phase,
+            current_action_ids=action_ids,
+            current_target_map=target_map,
+            current_cost=cost,
+        )
+        emit(action_ids, cost or 0)
+        raise _RepairSearchPausedError("RES-225 paused at the global wall-time budget")
+
+    def ensure_wall(
+        phase: str = "PAUSED_WALL_TIME",
+        action_ids: tuple[str, ...] = (),
+        target_map: dict[str, str] | None = None,
+        cost: int | None = None,
+    ) -> float:
+        if wall_deadline is None:
+            return oracle_timeout_seconds
+        remaining = wall_deadline - time.monotonic()
+        if remaining <= _WALL_CHECKPOINT_RESERVE_SECONDS:
+            pause_for_wall(phase, action_ids, target_map, cost)
+        return min(oracle_timeout_seconds, remaining - _WALL_CHECKPOINT_RESERVE_SECONDS)
+
+    def wall_checkpoint_due() -> bool:
+        return wall_deadline is not None and (
+            wall_deadline - time.monotonic() <= _WALL_CHECKPOINT_RESERVE_SECONDS
+        )
 
     def save_checkpoint(
         phase: str,
@@ -1267,19 +1774,27 @@ def run(
         current_target_map: dict[str, str] | None = None,
         current_cost: int | None = None,
     ) -> str:
-        nonlocal current_phase
+        nonlocal current_phase, checkpoint_digest, checkpoint_file_digest
+        gap = _optimality_gap(lower_bound, upper_bound)
+        elapsed_now = elapsed()
         state = {
             "fingerprints": fingerprints,
+            "preservation_registry_digest": assumptions_digest,
+            "action_registry_digest": actions_digest,
+            "model_digests": {mode: model.model_digest for mode, model in models.items()},
+            "preservation_registry": assumptions,
+            "action_registry": actions,
             "cores": tuple(cores),
             "initial_core_count": initial_core_count,
             "iteration_records": tuple(iteration_records),
             "exact_core_evidence": tuple(exact_core_evidence),
             "excluded_exact_designs": tuple(excluded_exact_designs),
+            "excluded_repair_families": tuple(excluded_repair_families),
             "tested_repairs": tuple(tested_repairs),
             "equality_records": tuple(equality_records),
             "variant_counts": variant_counts,
             "iteration": iteration,
-            "elapsed_seconds": elapsed(),
+            "elapsed_seconds": elapsed_now,
             "oracle_calls": oracle_calls,
             "oracle_status_counts": dict(oracle_status_counts),
             "last_core_size": last_core_size,
@@ -1287,24 +1802,64 @@ def run(
             "last_oracle_status": last_oracle_status,
             "last_oracle_seconds": last_oracle_seconds,
             "phase": phase,
-            "current_hitting_set_action_ids": current_action_ids,
-            "current_hitting_set_size": len(current_action_ids),
+            "lower_bound": lower_bound,
+            "upper_bound": upper_bound,
+            "optimality_gap": gap,
+            "no_goods": len(excluded_exact_designs) + len(excluded_repair_families),
+            "current_hitting_set_action_ids": current_hitting_set_actions,
+            "current_repair_action_ids": current_action_ids,
+            "current_hitting_set_size": current_hitting_set_size,
             "current_hitting_set_cost": current_cost,
             "current_target_parent_by_action": current_target_map or {},
-            "best_repair_cardinality": (
-                incumbent["cardinality"] if incumbent is not None else None
-            ),
+            "best_repair_cardinality": (upper_bound),
             "incumbent": incumbent,
+            "primary_proof": primary_proof,
             "hitman_core_registry_digest": canonical_hash(
                 tuple(tuple(item["action_ids"]) for item in cores)
             ),
             "production_store_promoted": "NO",
             "feasibility_membership_persisted": "NO",
+            "ITERATION": iteration,
+            "ELAPSED": elapsed_now,
+            "CORES_DISCOVERED": len(cores),
+            "LAST_CORE_SIZE": last_core_size,
+            "LAST_MINIMIZED_CORE_SIZE": last_minimized_core_size,
+            "CURRENT_HITTING_SET_SIZE": current_hitting_set_size,
+            "LOWER_BOUND": lower_bound,
+            "UPPER_BOUND": upper_bound,
+            "OPTIMALITY_GAP": gap,
+            "BEST_REPAIR_CARDINALITY": upper_bound,
+            "ORACLE_CALLS": oracle_calls,
+            "NO_GOODS": len(excluded_exact_designs) + len(excluded_repair_families),
+            "LAST_ORACLE_STATUS": last_oracle_status,
+            "LAST_ORACLE_SECONDS": last_oracle_seconds,
+            "CURRENT_PHASE": phase,
         }
-        digest = _write_checkpoint(production_root, state)
+        checkpoint_digest, checkpoint_file_digest = _write_checkpoint(
+            production_root,
+            state,
+            expected_file_digest=checkpoint_file_digest,
+        )
         current_phase = phase
-        _progress(f"CHECKPOINT phase={phase} digest={digest}")
-        return digest
+        _progress(f"CHECKPOINT phase={phase} digest={checkpoint_digest}")
+        _emit_iteration(
+            iteration=iteration,
+            elapsed_seconds=elapsed_now,
+            cores_discovered=len(cores),
+            last_core_size=last_core_size,
+            last_minimized_core_size=last_minimized_core_size,
+            hitting_set_size=current_hitting_set_size,
+            lower_bound=lower_bound,
+            upper_bound=upper_bound,
+            no_goods=len(excluded_exact_designs) + len(excluded_repair_families),
+            best_repair_cardinality=upper_bound,
+            oracle_calls=oracle_calls,
+            last_oracle_status=last_oracle_status,
+            last_oracle_seconds=last_oracle_seconds,
+            phase=phase,
+            checkpoint_digest=checkpoint_digest,
+        )
+        return checkpoint_digest
 
     def emit(iteration_action_ids: tuple[str, ...] = (), cost: int = 0) -> None:
         _emit_iteration(
@@ -1313,15 +1868,48 @@ def run(
             cores_discovered=len(cores),
             last_core_size=last_core_size,
             last_minimized_core_size=last_minimized_core_size,
-            hitting_set_size=len(iteration_action_ids),
-            best_repair_cardinality=(
-                int(incumbent["cardinality"]) if incumbent is not None else None
-            ),
+            hitting_set_size=current_hitting_set_size,
+            lower_bound=lower_bound,
+            upper_bound=upper_bound,
+            no_goods=len(excluded_exact_designs) + len(excluded_repair_families),
+            best_repair_cardinality=upper_bound,
             oracle_calls=oracle_calls,
             last_oracle_status=last_oracle_status,
             last_oracle_seconds=last_oracle_seconds,
             phase=current_phase,
+            checkpoint_digest=checkpoint_digest,
         )
+
+    def budgeted(
+        operation: Any,
+        *,
+        phase: str = "PAUSED_WALL_TIME",
+        action_ids: tuple[str, ...] = (),
+        target_map: dict[str, str] | None = None,
+        cost: int | None = None,
+    ) -> Any:
+        try:
+            return operation()
+        except (_RepairSearchBlockedError, CoreSolveTimeoutError):
+            if (
+                wall_deadline is not None
+                and wall_deadline - time.monotonic() <= _WALL_CHECKPOINT_RESERVE_SECONDS
+            ):
+                pause_for_wall(phase, action_ids, target_map, cost)
+            raise
+
+    if resume:
+        reconstructed_hitting_set = budgeted(
+            lambda: _minimum_hit_solution(cores, weights, ensure_wall()),
+            action_ids=tuple(saved.get("current_hitting_set_action_ids", ())),
+            target_map=dict(saved.get("current_target_parent_by_action", {})),
+            cost=saved.get("current_hitting_set_cost"),
+        )
+        reconstructed_lower_bound = sum(weights[item] for item in reconstructed_hitting_set)
+        if reconstructed_lower_bound != lower_bound:
+            raise ValueError("RES-225 checkpoint lower bound differs from its preserved cores")
+        current_hitting_set_size = len(reconstructed_hitting_set)
+        current_hitting_set_actions = tuple(reconstructed_hitting_set)
 
     if resume:
         completed_initial = tuple(cores[:initial_core_count])
@@ -1332,24 +1920,42 @@ def run(
 
     def initial_core_checkpoint(records: tuple[_CoreRecord, ...], _mode: str) -> None:
         nonlocal cores, initial_core_count, last_core_size, last_minimized_core_size
+        nonlocal lower_bound, current_hitting_set_size, current_hitting_set_actions
         initial_records = [dict(item) for item in records]
-        cores = initial_records + later_cores
-        initial_core_count = len(initial_records)
+        next_cores = initial_records + later_cores
         latest = initial_records[-1]
+        next_hitting_set = budgeted(
+            lambda: _minimum_hit_solution(
+                next_cores,
+                weights,
+                ensure_wall("PAUSED_WALL_TIME"),
+            )
+        )
+        cores = next_cores
+        initial_core_count = len(initial_records)
         last_core_size = int(latest["raw_assumption_core_size"])
         last_minimized_core_size = int(latest["minimized_assumption_core_size"])
+        current_hitting_set_size = len(next_hitting_set)
+        current_hitting_set_actions = tuple(next_hitting_set)
+        lower_bound = sum(weights[item] for item in next_hitting_set)
         save_checkpoint("INITIAL_CORE_MINIMIZED")
 
     if resume and not completed_initial and cores:
         raise ValueError("RES-225 checkpoint core ordering is invalid")
     if not resume:
         save_checkpoint("INITIAL_CORE_EXTRACTION")
-    initial_records, core_solvers = _initial_cores(
-        models,
-        oracle_timeout_seconds=oracle_timeout_seconds,
-        completed_records=completed_initial,
-        on_core=initial_core_checkpoint,
-    )
+    try:
+        initial_records, core_solvers = _initial_cores(
+            models,
+            oracle_timeout_seconds=oracle_timeout_seconds,
+            completed_records=completed_initial,
+            on_core=initial_core_checkpoint,
+            time_budget=ensure_wall,
+        )
+    except CoreSolveTimeoutError:
+        if wall_checkpoint_due():
+            pause_for_wall("PAUSED_WALL_TIME")
+        raise
     initial_core_count = len(initial_records)
     if not resume:
         cores = list(initial_records)
@@ -1357,17 +1963,23 @@ def run(
         cores = list(initial_records) + list(later_cores)
     _replay_exact_exclusions(excluded_exact_designs, models, core_solvers)
 
-    hitman = _hitman_from_cores(cores, weights)
+    excluded_repair_sets = tuple(tuple(item["action_ids"]) for item in excluded_repair_families)
+    hitman = _hitman_from_cores(cores, weights, excluded_repair_sets)
+    current_hitting_set_actions = budgeted(lambda: _hitman_solution(hitman, weights, ensure_wall()))
+    current_hitting_set_size = len(current_hitting_set_actions)
     tested_variants: dict[
         tuple[str, ...],
-        tuple[
-            dict[str, str],
-            Any,
-            tuple[ProductionCandidateCommitmentV1, ...],
-            tuple[tuple[str, str], ...],
+        list[
+            tuple[
+                dict[str, str],
+                Any,
+                tuple[ProductionCandidateCommitmentV1, ...],
+                tuple[tuple[str, str], ...],
+            ]
         ],
     ] = {}
     tested_status: dict[tuple[str, ...], str] = {}
+    feasible_variant_clauses: set[tuple[int, ...]] = set()
     for saved_test in tested_repairs:
         repair_ids = tuple(saved_test["action_ids"])
         status = str(saved_test["status"])
@@ -1382,12 +1994,13 @@ def run(
                 repair_ids,
                 target_parent_by_action=target_map,
             )
-            tested_variants[repair_ids] = (
-                target_map,
-                receipt,
-                abstract_commitments,
-                abstract_pairs,
+            tested_variants.setdefault(repair_ids, []).append(
+                (target_map, receipt, abstract_commitments, abstract_pairs)
             )
+            clause = _exact_variant_nogood_clause(models["COLOCATION"], repair_ids, target_map)
+            if clause not in feasible_variant_clauses:
+                feasible_variant_clauses.add(clause)
+                core_solvers["COLOCATION"].add_clause(list(clause))
 
     def block_unknown(
         phase: str,
@@ -1411,7 +2024,13 @@ def run(
         *,
         phase: str,
         current_cost: int,
-    ) -> tuple[str, Any, tuple[ProductionCandidateCommitmentV1, ...], tuple[tuple[str, str], ...]]:
+    ) -> tuple[
+        str,
+        Any,
+        tuple[ProductionCandidateCommitmentV1, ...],
+        tuple[tuple[str, str], ...],
+        dict[str, Any] | None,
+    ]:
         nonlocal oracle_calls, last_oracle_status, last_oracle_seconds
         save_checkpoint(
             "EXACT_ORACLE_PENDING",
@@ -1419,31 +2038,44 @@ def run(
             current_target_map=target_map,
             current_cost=current_cost,
         )
-        state, receipt, abstract_commitments, abstract_pairs, exact_seconds = _exact_repair_variant(
-            commitments,
-            pairs,
-            actions,
-            repair_ids,
-            target_parent_by_action=target_map,
-            candidate_rank_hint=rank_hint,
-            time_budget_seconds=oracle_timeout_seconds,
+        state, receipt, abstract_commitments, abstract_pairs, exact_seconds, fallback = (
+            _exact_repair_variant(
+                commitments,
+                pairs,
+                actions,
+                repair_ids,
+                target_parent_by_action=target_map,
+                candidate_rank_hint=rank_hint,
+                time_budget_seconds=ensure_wall(phase, repair_ids, target_map, current_cost),
+                independent_validate=phase == "CORE_GUIDED",
+                production_root=production_root,
+                wall_deadline=wall_deadline,
+            )
         )
-        oracle_calls += 1
+        oracle_calls += 1 + (len(fallback["records"]) if fallback is not None else 0)
         oracle_status_counts[state] += 1
+        if fallback is not None:
+            for record in fallback["records"].values():
+                oracle_status_counts[f"RES224_{record.get('result', 'UNKNOWN')}"] += 1
         last_oracle_status = {"FEASIBLE": "SAT", "INFEASIBLE": "UNSAT", "UNKNOWN": "UNKNOWN"}[state]
         last_oracle_seconds = exact_seconds
         _progress(
             f"EXACT_ORACLE status={state} seconds={exact_seconds:.3f} "
             f"repair={canonical_hash(repair_ids)} phase={phase}"
         )
-        return state, receipt, abstract_commitments, abstract_pairs
+        return state, receipt, abstract_commitments, abstract_pairs, fallback
 
     if incumbent is None:
         save_checkpoint("CORE_GUIDED_READY")
         while True:
-            if iteration >= max_iterations:
+            if iteration - run_iteration_start >= max_iterations:
                 block_unknown("BLOCKED_ITERATION_LIMIT")
-            proposed = _hitman_solution(hitman, weights, oracle_timeout_seconds)
+            try:
+                proposed = budgeted(lambda: _hitman_solution(hitman, weights, ensure_wall()))
+            except _RepairSearchBlockedError:
+                block_unknown("BLOCKED_HITMAN_ORACLE")
+            current_hitting_set_size = len(proposed)
+            current_hitting_set_actions = proposed
             proposed_cost = sum(weights[item] for item in proposed)
             iteration += 1
             candidate_started = time.monotonic()
@@ -1459,12 +2091,48 @@ def run(
                 core_solvers["COLOCATION"],
                 models["COLOCATION"],
                 proposed,
-                time_budget_seconds=oracle_timeout_seconds,
+                time_budget_seconds=ensure_wall("PAUSED_WALL_TIME", proposed),
             )
             oracle_calls += 1
             oracle_status_counts[candidate_status] += 1
             last_oracle_status = candidate_status
             last_oracle_seconds = time.monotonic() - candidate_started
+            primary_candidate_status = candidate_status
+            candidate_fallback_status: str | None = None
+            if candidate_status == "UNKNOWN":
+                fallback_started = time.monotonic()
+                extra_clauses = (
+                    *(tuple(item["blocking_clause"]) for item in excluded_exact_designs),
+                    *tuple(feasible_variant_clauses),
+                )
+                fallback_result = _candidate_model_fallback(
+                    models["COLOCATION"],
+                    proposed,
+                    extra_clauses=extra_clauses,
+                    time_budget_seconds=ensure_wall(
+                        "PAUSED_WALL_TIME", proposed, cost=proposed_cost
+                    ),
+                )
+                (
+                    candidate_status,
+                    relaxed_core,
+                    target_map,
+                    rank_hint,
+                    raw_core_size,
+                    minimized_core_size,
+                    _fallback_seconds,
+                ) = fallback_result
+                candidate_fallback_status = candidate_status
+                oracle_calls += 1
+                oracle_status_counts[f"MINISAT22_{candidate_status}"] += 1
+                last_oracle_status = candidate_status
+                last_oracle_seconds = time.monotonic() - candidate_started
+                _progress(
+                    f"candidate-model-fallback backend=MINISAT22 status={candidate_status} "
+                    f"seconds={time.monotonic() - fallback_started:.3f}"
+                )
+            if wall_checkpoint_due():
+                pause_for_wall("PAUSED_WALL_TIME", proposed, target_map, proposed_cost)
             record: dict[str, object] = {
                 "iteration": iteration,
                 "hitting_set_action_ids": proposed,
@@ -1472,15 +2140,54 @@ def run(
                 "minimum_content_replacement_cost": proposed_cost,
                 "core_count_before_solve": len(cores),
                 "candidate_level_exact_model_status": candidate_status,
+                "candidate_primary_status": primary_candidate_status,
+                "candidate_fallback_status": candidate_fallback_status,
                 "candidate_oracle_seconds": last_oracle_seconds,
             }
             if candidate_status == "UNKNOWN":
+                iteration_records.append(record)
                 block_unknown(
                     "BLOCKED_CANDIDATE_MODEL_TIMEOUT", proposed, target_map, proposed_cost
                 )
             if candidate_status == "UNSAT":
                 last_core_size = raw_core_size
                 last_minimized_core_size = minimized_core_size
+                tested_variants_for_repair = tuple(
+                    item
+                    for item in tested_repairs
+                    if tuple(item.get("action_ids", ())) == proposed
+                    and item.get("status") == "EXACT_INFEASIBLE_VARIANT"
+                )
+                if tested_variants_for_repair:
+                    try:
+                        family_record = _append_unique_repair_family_exclusion(
+                            excluded_repair_families,
+                            proposed,
+                            tuple(
+                                canonical_hash(item["target_parent_by_action"])
+                                for item in tested_variants_for_repair
+                            ),
+                        )
+                    except RuntimeError:
+                        block_unknown(
+                            "BLOCKED_DUPLICATE_REPAIR_FAMILY",
+                            proposed,
+                            {},
+                            proposed_cost,
+                        )
+                    _block_hitman_repair(hitman, action_ids, proposed, weights)
+                    excluded_repair_sets = (*excluded_repair_sets, proposed)
+                    current_hitting_set_actions = ()
+                    current_hitting_set_size = 0
+                    record["repair_family_no_good_digest"] = family_record["repair_digest"]
+                    iteration_records.append(record)
+                    save_checkpoint(
+                        "REPAIR_FAMILY_EXCLUDED",
+                        current_action_ids=proposed,
+                        current_cost=proposed_cost,
+                    )
+                    emit(proposed, proposed_cost)
+                    continue
                 try:
                     core_action_ids = semantic_core_action_ids(
                         relaxed_core,
@@ -1501,11 +2208,43 @@ def run(
                     "raw_assumption_core_size": raw_core_size,
                     "minimized_assumption_core_size": minimized_core_size,
                 }
+                next_core_hitting_set = budgeted(
+                    lambda core_values=(*cores, core_record),
+                    selected=proposed,
+                    cost=proposed_cost: _minimum_hit_solution(
+                        core_values,
+                        weights,
+                        ensure_wall("PAUSED_WALL_TIME", selected, cost=cost),
+                    ),
+                    action_ids=proposed,
+                    cost=proposed_cost,
+                )
+                next_current_hitting_set = budgeted(
+                    lambda core_values=(*cores, core_record),
+                    selected=proposed,
+                    cost=proposed_cost,
+                    blocked=excluded_repair_sets: _minimum_hit_solution(
+                        core_values,
+                        weights,
+                        ensure_wall("PAUSED_WALL_TIME", selected, cost=cost),
+                        blocked_sets=blocked,
+                    ),
+                    action_ids=proposed,
+                    cost=proposed_cost,
+                )
                 try:
                     _append_unique_core(cores, core_record)
                 except RuntimeError:
                     block_unknown("BLOCKED_DUPLICATE_CORE_NO_PROGRESS", proposed, {}, proposed_cost)
                 hitman.hit(core_action_ids, weights=weights)
+                new_lower_bound = sum(weights[item] for item in next_core_hitting_set)
+                if new_lower_bound < lower_bound:
+                    raise RuntimeError(
+                        "RES-225 hitting-set lower bound decreased after adding a core"
+                    )
+                lower_bound = new_lower_bound
+                current_hitting_set_actions = tuple(next_current_hitting_set)
+                current_hitting_set_size = len(current_hitting_set_actions)
                 record["new_core_digest"] = core_record["assumption_core_digest"]
                 iteration_records.append(record)
                 save_checkpoint(
@@ -1520,9 +2259,16 @@ def run(
             last_minimized_core_size = minimized_core_size or last_minimized_core_size
             proposal_digest = canonical_hash(proposed)
             attempt_count = variant_counts.get(proposal_digest, 0)
-            if attempt_count >= max_exact_variants_per_repair:
-                block_unknown("BLOCKED_EXACT_VARIANT_LIMIT", proposed, target_map, proposed_cost)
-            state, receipt, abstract_commitments, abstract_pairs = exact_attempt(
+            _enforce_variant_cap(
+                attempt_count,
+                max_exact_variants_per_repair,
+                lambda selected=proposed,
+                current_target_map=target_map,
+                cost=proposed_cost: block_unknown(
+                    "BLOCKED_EXACT_VARIANT_LIMIT", selected, current_target_map, cost
+                ),
+            )
+            state, receipt, abstract_commitments, abstract_pairs, fallback = exact_attempt(
                 proposed,
                 target_map,
                 rank_hint,
@@ -1536,8 +2282,11 @@ def run(
                         "target_parent_by_action": target_map,
                         "status": "UNKNOWN_VARIANT",
                         "receipt_digest": receipt.receipt_digest,
+                        "fallback_evidence": fallback,
                     }
                 )
+                if wall_checkpoint_due():
+                    pause_for_wall("PAUSED_WALL_TIME", proposed, target_map, proposed_cost)
                 block_unknown("BLOCKED_EXACT_ORACLE_UNKNOWN", proposed, target_map, proposed_cost)
             variant_counts[proposal_digest] = attempt_count + 1
             if state == "INFEASIBLE":
@@ -1567,6 +2316,7 @@ def run(
                         "target_parent_by_action": target_map,
                         "status": "EXACT_INFEASIBLE_VARIANT",
                         "receipt_digest": receipt.receipt_digest,
+                        "fallback_evidence": fallback,
                     }
                 )
                 record.update(
@@ -1586,15 +2336,33 @@ def run(
                 emit(proposed, proposed_cost)
                 continue
 
-            _require_abstract_feasible(receipt)
+            _require_abstract_search_feasible(receipt)
             selected_profile = _repair_profile(abstract_commitments, abstract_pairs)
+            upper_bound = proposed_cost
+            released_candidate_ids = _released_candidate_ids(proposed, action_by_id)
+            if len(released_candidate_ids) != proposed_cost:
+                raise RuntimeError(
+                    "RES-225 primary repair cost differs from released candidate slots"
+                )
             incumbent = {
                 "action_ids": proposed,
                 "target_parent_by_action": target_map,
                 "cardinality": proposed_cost,
                 "repair_digest": canonical_hash(proposed),
+                "released_candidate_ids": released_candidate_ids,
+                "origin_counts_before": _origin_counts(commitments),
+                "origin_counts_after": _origin_counts(abstract_commitments),
                 "abstract_receipt": receipt,
                 "abstract_witness_digest": receipt.canonical_witness_digest,
+                "independent_witness_digests": (
+                    fallback["witness_digests"] if fallback is not None else {}
+                ),
+                "independent_validation_records": (
+                    fallback["records"] if fallback is not None else {}
+                ),
+                "validation_evidence_digest": (
+                    fallback["digest"] if fallback is not None else receipt.receipt_digest
+                ),
                 "secondary_profile": selected_profile,
             }
             tested_repairs.append(
@@ -1603,22 +2371,34 @@ def run(
                     "target_parent_by_action": target_map,
                     "status": "FEASIBLE",
                     "receipt": receipt,
+                    "fallback_evidence": fallback,
+                    "released_candidate_ids": incumbent["released_candidate_ids"],
+                    "origin_counts_before": incumbent["origin_counts_before"],
+                    "origin_counts_after": incumbent["origin_counts_after"],
                     "secondary_profile": selected_profile,
                 }
             )
-            tested_variants[proposed] = (
-                target_map,
-                receipt,
-                abstract_commitments,
-                abstract_pairs,
+            tested_variants.setdefault(proposed, []).append(
+                (
+                    target_map,
+                    receipt,
+                    abstract_commitments,
+                    abstract_pairs,
+                )
             )
+            variant_clause = _exact_variant_nogood_clause(
+                models["COLOCATION"], proposed, target_map
+            )
+            if variant_clause not in feasible_variant_clauses:
+                feasible_variant_clauses.add(variant_clause)
+                core_solvers["COLOCATION"].add_clause(list(variant_clause))
             tested_status[proposed] = "FEASIBLE"
             record.update(
                 {
                     "exact_target_parent_by_action": target_map,
                     "abstract_base_status": receipt.base_status,
                     "abstract_colocation_status": receipt.colocation_status,
-                    "abstract_canonical_witness_digest": receipt.canonical_witness_digest,
+                    "abstract_canonical_self_reduction": receipt.canonical_self_reduction_status,
                 }
             )
             iteration_records.append(record)
@@ -1646,16 +2426,98 @@ def run(
         selected_repair,
         target_parent_by_action=selected_target_parent_by_action,
     )
-    _require_abstract_feasible(selected_receipt)
+    _require_abstract_search_feasible(selected_receipt)
+    if upper_bound != minimum_cost:
+        raise RuntimeError("RES-225 incumbent upper bound differs from its released-slot cost")
 
-    equal_sets, equal_sets_complete = _enumerate_minimum_hit_sets(
-        action_ids,
-        cores,
-        weights,
-        minimum_cost=minimum_cost,
-        limit=_EQUAL_REPAIR_LIMIT,
-        include=selected_repair,
-        time_budget_seconds=oracle_timeout_seconds,
+    if primary_proof is None:
+        hitman_selected = budgeted(
+            lambda: _hitman_solution(hitman, weights, ensure_wall()),
+            action_ids=selected_repair,
+            target_map=selected_target_parent_by_action,
+            cost=minimum_cost,
+        )
+        hitman_cost = sum(weights[item] for item in hitman_selected)
+        rc2_selected, rc2_cost = budgeted(
+            lambda: _rc2_optimum(
+                action_ids,
+                cores,
+                weights,
+                time_budget_seconds=ensure_wall(),
+                blocked_sets=excluded_repair_sets,
+            ),
+            action_ids=selected_repair,
+            target_map=selected_target_parent_by_action,
+            cost=minimum_cost,
+        )
+        if hitman_cost != minimum_cost or rc2_cost != minimum_cost:
+            block_unknown(
+                "BLOCKED_PRIMARY_OPTIMUM_MISMATCH",
+                selected_repair,
+                selected_target_parent_by_action,
+                minimum_cost,
+            )
+        additional_clauses = tuple(
+            tuple(item["blocking_clause"]) for item in excluded_exact_designs
+        )
+        lower_bound_result, lower_bound_digest = budgeted(
+            lambda: _independent_minimum_crosscheck(
+                models["COLOCATION"],
+                action_ids,
+                weights,
+                minimum_cost,
+                additional_clauses=additional_clauses,
+                time_budget_seconds=ensure_wall(),
+            ),
+            action_ids=selected_repair,
+            target_map=selected_target_parent_by_action,
+            cost=minimum_cost,
+        )
+        primary_proof = {
+            "minimum_cost": minimum_cost,
+            "hitman_selected": hitman_selected,
+            "hitman_cost": hitman_cost,
+            "rc2_selected": rc2_selected,
+            "rc2_cost": rc2_cost,
+            "lower_bound_result": lower_bound_result,
+            "lower_bound_digest": lower_bound_digest,
+            "objective": "MINIMIZE_RELEASED_CANDIDATE_SLOTS",
+        }
+        save_checkpoint(
+            "PRIMARY_OPTIMUM_PROVEN",
+            current_action_ids=selected_repair,
+            current_target_map=selected_target_parent_by_action,
+            current_cost=minimum_cost,
+        )
+    else:
+        hitman_selected = tuple(primary_proof["hitman_selected"])
+        hitman_cost = int(primary_proof["hitman_cost"])
+        rc2_selected = tuple(primary_proof["rc2_selected"])
+        rc2_cost = int(primary_proof["rc2_cost"])
+        lower_bound_result = dict(primary_proof["lower_bound_result"])
+        lower_bound_digest = str(primary_proof["lower_bound_digest"])
+        if (
+            int(primary_proof["minimum_cost"]) != minimum_cost
+            or hitman_cost != minimum_cost
+            or rc2_cost != minimum_cost
+        ):
+            raise ValueError("RES-225 checkpoint primary optimum no longer matches its bounds")
+
+    equal_sets, equal_sets_complete = budgeted(
+        lambda: _enumerate_minimum_hit_sets(
+            action_ids,
+            cores,
+            weights,
+            minimum_cost=minimum_cost,
+            limit=_EQUAL_REPAIR_LIMIT,
+            include=selected_repair,
+            time_budget_seconds=ensure_wall(),
+            time_budget=ensure_wall,
+            blocked_sets=excluded_repair_sets,
+        ),
+        action_ids=selected_repair,
+        target_map=selected_target_parent_by_action,
+        cost=minimum_cost,
     )
     if not equal_sets_complete:
         save_checkpoint(
@@ -1671,60 +2533,111 @@ def run(
         tuple[tuple[object, ...], tuple[str, ...], dict[str, str], Any, dict[str, int]]
     ] = []
     compared_digests = {str(item["repair_digest"]) for item in equality_records}
-    for repair_ids, cached in tested_variants.items():
-        if canonical_hash(repair_ids) not in compared_digests:
-            continue
-        target_map, receipt, abstract_commitments, abstract_pairs = cached
-        profile = _repair_profile(abstract_commitments, abstract_pairs)
-        score = _repair_score(repair_ids, action_by_id, profile, target_map)
-        feasible_ties.append((score, repair_ids, target_map, receipt, profile))
+    for repair_ids, variants in tested_variants.items():
+        for target_map, receipt, abstract_commitments, abstract_pairs in variants:
+            profile = _repair_profile(abstract_commitments, abstract_pairs)
+            score = _repair_score(
+                repair_ids,
+                action_by_id,
+                profile,
+                target_map,
+                commitments,
+                abstract_commitments,
+            )
+            feasible_ties.append((score, repair_ids, target_map, receipt, profile))
+
     for repair_ids in equal_sets:
         repair_digest = canonical_hash(repair_ids)
         if repair_digest in compared_digests:
             continue
-        tie_candidate_status = tested_status.get(repair_ids)
-        variants: list[
-            tuple[
-                dict[str, str],
-                Any,
-                tuple[ProductionCandidateCommitmentV1, ...],
-                tuple[tuple[str, str], ...],
-            ]
-        ] = []
-        tested_maps: list[dict[str, str]] = []
-        if tie_candidate_status == "FEASIBLE":
-            cached = tested_variants[repair_ids]
-            variants = [cached]
-            tested_maps = [cached[0]]
-        elif tie_candidate_status != "CANDIDATE_UNSAT":
-            tie_attempts = 0
-            while tie_attempts < max_exact_variants_per_repair:
-                if iteration >= max_iterations:
-                    block_unknown("BLOCKED_ITERATION_LIMIT", repair_ids, {}, minimum_cost)
-                iteration += 1
-                candidate_started = time.monotonic()
-                (
-                    tie_status,
-                    tie_core,
-                    tie_target_map,
-                    tie_rank_hint,
-                    raw_core_size,
-                    minimized_core_size,
-                    _candidate_seconds,
-                ) = _core_hit_set_is_sat(
-                    core_solvers["COLOCATION"],
+        current_hitting_set_size = len(repair_ids)
+        current_hitting_set_actions = repair_ids
+        variants = tested_variants.setdefault(repair_ids, [])
+        tested_maps = [
+            dict(item["target_parent_by_action"])
+            for item in tested_repairs
+            if tuple(item.get("action_ids", ())) == repair_ids
+            and item.get("status") in {"FEASIBLE", "EXACT_INFEASIBLE_VARIANT"}
+        ]
+        prior_status = tested_status.get(repair_ids)
+        family_exhausted = prior_status in {"CANDIDATE_UNSAT", "VARIANTS_EXHAUSTED"}
+        while not family_exhausted:
+            if iteration - run_iteration_start >= max_iterations:
+                block_unknown("BLOCKED_ITERATION_LIMIT", repair_ids, {}, minimum_cost)
+            iteration += 1
+            candidate_started = time.monotonic()
+            (
+                candidate_status,
+                _core,
+                target_map,
+                rank_hint,
+                raw_core_size,
+                minimized_core_size,
+                _candidate_seconds,
+            ) = _core_hit_set_is_sat(
+                core_solvers["COLOCATION"],
+                models["COLOCATION"],
+                repair_ids,
+                time_budget_seconds=ensure_wall("PAUSED_WALL_TIME", repair_ids),
+            )
+            oracle_calls += 1
+            oracle_status_counts[candidate_status] += 1
+            last_oracle_status = candidate_status
+            last_oracle_seconds = time.monotonic() - candidate_started
+            tie_primary_candidate_status = candidate_status
+            tie_candidate_fallback_status: str | None = None
+            if candidate_status == "UNKNOWN":
+                fallback_started = time.monotonic()
+                extra_clauses = (
+                    *(tuple(item["blocking_clause"]) for item in excluded_exact_designs),
+                    *tuple(feasible_variant_clauses),
+                )
+                fallback_result = _candidate_model_fallback(
                     models["COLOCATION"],
                     repair_ids,
-                    time_budget_seconds=oracle_timeout_seconds,
+                    extra_clauses=extra_clauses,
+                    time_budget_seconds=ensure_wall(
+                        "PAUSED_WALL_TIME", repair_ids, cost=minimum_cost
+                    ),
                 )
+                (
+                    candidate_status,
+                    _core,
+                    target_map,
+                    rank_hint,
+                    raw_core_size,
+                    minimized_core_size,
+                    _fallback_seconds,
+                ) = fallback_result
+                tie_candidate_fallback_status = candidate_status
                 oracle_calls += 1
-                oracle_status_counts[tie_status] += 1
-                last_oracle_status = tie_status
+                oracle_status_counts[f"MINISAT22_{candidate_status}"] += 1
+                last_oracle_status = candidate_status
                 last_oracle_seconds = time.monotonic() - candidate_started
-                if tie_status == "UNKNOWN":
-                    block_unknown("BLOCKED_TIE_CANDIDATE_TIMEOUT", repair_ids, {}, minimum_cost)
-                if tie_status == "UNSAT":
-                    tested_status[repair_ids] = "CANDIDATE_UNSAT"
+                _progress(
+                    f"candidate-model-fallback backend=MINISAT22 status={candidate_status} "
+                    f"seconds={time.monotonic() - fallback_started:.3f}"
+                )
+            if wall_checkpoint_due():
+                pause_for_wall("PAUSED_WALL_TIME", repair_ids, target_map, minimum_cost)
+            if candidate_status == "UNKNOWN":
+                iteration_records.append(
+                    {
+                        "iteration": iteration,
+                        "hitting_set_action_ids": repair_ids,
+                        "minimum_content_replacement_cost": minimum_cost,
+                        "candidate_primary_status": tie_primary_candidate_status,
+                        "candidate_fallback_status": tie_candidate_fallback_status,
+                        "candidate_level_exact_model_status": "UNKNOWN",
+                    }
+                )
+                block_unknown("BLOCKED_TIE_CANDIDATE_TIMEOUT", repair_ids, target_map, minimum_cost)
+            if candidate_status == "UNSAT":
+                family_exhausted = True
+                tested_status[repair_ids] = (
+                    "CANDIDATE_UNSAT" if not variants else "VARIANTS_EXHAUSTED"
+                )
+                if not variants:
                     tested_repairs.append(
                         {
                             "action_ids": repair_ids,
@@ -1733,129 +2646,155 @@ def run(
                             "minimized_core_size": minimized_core_size,
                         }
                     )
-                    save_checkpoint(
-                        "MINIMUM_REPAIR_CANDIDATE_UNSAT",
-                        current_action_ids=repair_ids,
-                        current_cost=minimum_cost,
-                    )
-                    break
-                candidate_digest = canonical_hash(repair_ids)
-                used = variant_counts.get(candidate_digest, 0)
-                if used >= max_exact_variants_per_repair:
-                    block_unknown(
-                        "BLOCKED_TIE_VARIANT_LIMIT", repair_ids, tie_target_map, minimum_cost
-                    )
-                save_checkpoint(
-                    "TIE_EXACT_ORACLE_PENDING",
-                    current_action_ids=repair_ids,
-                    current_target_map=tie_target_map,
-                    current_cost=minimum_cost,
-                )
-                state, receipt, abstract_commitments, abstract_pairs, exact_seconds = (
-                    _exact_repair_variant(
-                        commitments,
-                        pairs,
-                        actions,
-                        repair_ids,
-                        target_parent_by_action=tie_target_map,
-                        candidate_rank_hint=tie_rank_hint,
-                        time_budget_seconds=oracle_timeout_seconds,
-                    )
-                )
-                oracle_calls += 1
-                oracle_status_counts[state] += 1
-                last_oracle_status = {
-                    "FEASIBLE": "SAT",
-                    "INFEASIBLE": "UNSAT",
-                    "UNKNOWN": "UNKNOWN",
-                }[state]
-                last_oracle_seconds = exact_seconds
-                tested_maps.append(tie_target_map)
-                if state == "UNKNOWN":
+                else:
                     tested_repairs.append(
-                        {
-                            "action_ids": repair_ids,
-                            "target_parent_by_action": tie_target_map,
-                            "status": "UNKNOWN_VARIANT",
-                        }
+                        {"action_ids": repair_ids, "status": "VARIANTS_EXHAUSTED"}
                     )
-                    block_unknown(
-                        "BLOCKED_TIE_EXACT_UNKNOWN", repair_ids, tie_target_map, minimum_cost
-                    )
-                variant_counts[candidate_digest] = used + 1
-                if state == "INFEASIBLE":
-                    exact_exclusion = _exact_variant_exclusion_record(
-                        models,
-                        repair_ids,
-                        tie_target_map,
-                        receipt,
-                    )
-                    try:
-                        _append_unique_exact_exclusion(excluded_exact_designs, exact_exclusion)
-                    except RuntimeError:
-                        block_unknown(
-                            "BLOCKED_DUPLICATE_TIE_VARIANT",
-                            repair_ids,
-                            tie_target_map,
-                            minimum_cost,
-                        )
-                    for solver in core_solvers.values():
-                        solver.add_clause(list(exact_exclusion["blocking_clause"]))
-                    exact_core_evidence.append(
-                        {"schema": "RES-225-EXACT-DESIGN-NO-GOOD@1", **exact_exclusion}
-                    )
-                    tested_repairs.append(
-                        {
-                            "action_ids": repair_ids,
-                            "target_parent_by_action": tie_target_map,
-                            "status": "EXACT_INFEASIBLE_VARIANT",
-                            "receipt_digest": receipt.receipt_digest,
-                        }
-                    )
-                    save_checkpoint(
-                        "TIE_EXACT_VARIANT_EXCLUDED",
-                        current_action_ids=repair_ids,
-                        current_target_map=tie_target_map,
-                        current_cost=minimum_cost,
-                    )
-                    emit(repair_ids, minimum_cost)
-                    tie_attempts += 1
-                    continue
-                _require_abstract_feasible(receipt)
-                profile = _repair_profile(abstract_commitments, abstract_pairs)
-                variants = [(tie_target_map, receipt, abstract_commitments, abstract_pairs)]
-                tested_variants[repair_ids] = variants[0]
-                tested_status[repair_ids] = "FEASIBLE"
-                tested_repairs.append(
+                iteration_records.append(
                     {
-                        "action_ids": repair_ids,
-                        "target_parent_by_action": tie_target_map,
-                        "status": "FEASIBLE",
-                        "receipt": receipt,
-                        "secondary_profile": profile,
+                        "iteration": iteration,
+                        "hitting_set_action_ids": repair_ids,
+                        "minimum_content_replacement_cost": minimum_cost,
+                        "candidate_level_exact_model_status": "UNSAT",
+                        "variant_family_exhausted": True,
                     }
                 )
                 save_checkpoint(
-                    "TIE_REPAIR_FEASIBLE",
+                    "MINIMUM_REPAIR_VARIANTS_EXHAUSTED",
                     current_action_ids=repair_ids,
-                    current_target_map=tie_target_map,
                     current_cost=minimum_cost,
                 )
-                tie_attempts += 1
                 break
-            if not variants and tested_status.get(repair_ids) != "CANDIDATE_UNSAT":
-                block_unknown("BLOCKED_TIE_VARIANT_LIMIT", repair_ids, {}, minimum_cost)
+
+            repair_digest_for_count = canonical_hash(repair_ids)
+            used = variant_counts.get(repair_digest_for_count, 0)
+            _enforce_variant_cap(
+                used,
+                max_exact_variants_per_repair,
+                lambda selected=repair_ids, current_target_map=target_map: block_unknown(
+                    "BLOCKED_EXACT_VARIANT_LIMIT", selected, current_target_map, minimum_cost
+                ),
+            )
+            save_checkpoint(
+                "TIE_EXACT_ORACLE_PENDING",
+                current_action_ids=repair_ids,
+                current_target_map=target_map,
+                current_cost=minimum_cost,
+            )
+            state, receipt, abstract_commitments, abstract_pairs, fallback = exact_attempt(
+                repair_ids,
+                target_map,
+                rank_hint,
+                phase="MINIMUM_REPAIR_VARIANT",
+                current_cost=minimum_cost,
+            )
+            if state == "UNKNOWN":
+                tested_repairs.append(
+                    {
+                        "action_ids": repair_ids,
+                        "target_parent_by_action": target_map,
+                        "status": "UNKNOWN_VARIANT",
+                        "receipt_digest": receipt.receipt_digest,
+                        "fallback_evidence": fallback,
+                    }
+                )
+                if wall_checkpoint_due():
+                    pause_for_wall("PAUSED_WALL_TIME", repair_ids, target_map, minimum_cost)
+                block_unknown("BLOCKED_TIE_EXACT_UNKNOWN", repair_ids, target_map, minimum_cost)
+            variant_counts[repair_digest_for_count] = used + 1
+            tested_maps.append(target_map)
+            iteration_record: dict[str, Any] = {
+                "iteration": iteration,
+                "hitting_set_action_ids": repair_ids,
+                "minimum_content_replacement_cost": minimum_cost,
+                "candidate_level_exact_model_status": "SAT",
+                "candidate_primary_status": tie_primary_candidate_status,
+                "candidate_fallback_status": tie_candidate_fallback_status,
+                "target_parent_by_action": target_map,
+                "exact_target_status": state,
+            }
+            if state == "INFEASIBLE":
+                exact_exclusion = _exact_variant_exclusion_record(
+                    models,
+                    repair_ids,
+                    target_map,
+                    receipt,
+                )
+                try:
+                    _append_unique_exact_exclusion(excluded_exact_designs, exact_exclusion)
+                except RuntimeError:
+                    block_unknown(
+                        "BLOCKED_DUPLICATE_TIE_VARIANT", repair_ids, target_map, minimum_cost
+                    )
+                for solver in core_solvers.values():
+                    solver.add_clause(list(exact_exclusion["blocking_clause"]))
+                exact_core_evidence.append(
+                    {"schema": "RES-225-EXACT-DESIGN-NO-GOOD@1", **exact_exclusion}
+                )
+                tested_repairs.append(
+                    {
+                        "action_ids": repair_ids,
+                        "target_parent_by_action": target_map,
+                        "status": "EXACT_INFEASIBLE_VARIANT",
+                        "receipt_digest": receipt.receipt_digest,
+                        "fallback_evidence": fallback,
+                    }
+                )
+                iteration_records.append(iteration_record)
+                save_checkpoint(
+                    "TIE_EXACT_VARIANT_EXCLUDED",
+                    current_action_ids=repair_ids,
+                    current_target_map=target_map,
+                    current_cost=minimum_cost,
+                )
+                continue
+
+            _require_abstract_search_feasible(receipt)
+            profile = _repair_profile(abstract_commitments, abstract_pairs)
+            variants.append((target_map, receipt, abstract_commitments, abstract_pairs))
+            tested_status[repair_ids] = "FEASIBLE"
+            tested_repairs.append(
+                {
+                    "action_ids": repair_ids,
+                    "target_parent_by_action": target_map,
+                    "status": "FEASIBLE",
+                    "receipt": receipt,
+                    "fallback_evidence": fallback,
+                    "secondary_profile": profile,
+                }
+            )
+            variant_clause = _exact_variant_nogood_clause(
+                models["COLOCATION"], repair_ids, target_map
+            )
+            if variant_clause not in feasible_variant_clauses:
+                feasible_variant_clauses.add(variant_clause)
+                core_solvers["COLOCATION"].add_clause(list(variant_clause))
+            iteration_records.append(iteration_record)
+            save_checkpoint(
+                "TIE_REPAIR_VARIANT_FEASIBLE",
+                current_action_ids=repair_ids,
+                current_target_map=target_map,
+                current_cost=minimum_cost,
+            )
+
         variant_records: list[dict[str, object]] = []
         for target_map, receipt, abstract_commitments, abstract_pairs in variants:
             profile = _repair_profile(abstract_commitments, abstract_pairs)
-            score = _repair_score(repair_ids, action_by_id, profile, target_map)
+            score = _repair_score(
+                repair_ids,
+                action_by_id,
+                profile,
+                target_map,
+                commitments,
+                abstract_commitments,
+            )
             feasible_ties.append((score, repair_ids, target_map, receipt, profile))
             variant_records.append(
                 {
                     "target_parent_by_action": target_map,
                     "abstract_base_status": receipt.base_status,
                     "abstract_colocation_status": receipt.colocation_status,
-                    "abstract_canonical_witness_digest": receipt.canonical_witness_digest,
+                    "abstract_canonical_self_reduction": receipt.canonical_self_reduction_status,
                     "secondary_profile": profile,
                     "secondary_score_digest": canonical_hash(score),
                 }
@@ -1864,13 +2803,14 @@ def run(
             {
                 "repair_action_ids": repair_ids,
                 "repair_digest": repair_digest,
-                "content_replacement_count": sum(weights[item] for item in repair_ids),
-                "target_variants_tested": len(tested_maps),
-                "candidate_level_status": tested_status.get(repair_ids, "FEASIBLE"),
+                "content_replacement_count": _repair_primary_cost(repair_ids, action_by_id),
+                "target_variants_tested": variant_counts.get(canonical_hash(repair_ids), 0),
+                "candidate_level_status": tested_status.get(repair_ids, "VARIANTS_EXHAUSTED"),
                 "tested_target_parent_map_digests": tuple(
                     canonical_hash(item) for item in tested_maps
                 ),
                 "target_variant_results": tuple(variant_records),
+                "target_variant_family_exhausted": family_exhausted,
                 "result": "FEASIBLE" if variants else "INFEASIBLE",
             }
         )
@@ -1882,7 +2822,7 @@ def run(
         )
         _progress(
             f"minimum-repair-compared index={len(equality_records)}/{len(equal_sets)} "
-            f"actions={len(repair_ids)} feasible={len(variants)}"
+            f"actions={len(repair_ids)} feasible_variants={len(variants)}"
         )
 
     if not feasible_ties:
@@ -1902,33 +2842,155 @@ def run(
         selected_repair,
         target_parent_by_action=selected_target_parent_by_action,
     )
-    _require_abstract_feasible(selected_receipt)
-    minimum_cost = sum(weights[item] for item in selected_repair)
-    hitman_selected = _hitman_solution(hitman, weights, oracle_timeout_seconds)
-    hitman_cost = sum(weights[item] for item in hitman_selected)
-    rc2_selected, rc2_cost = _rc2_optimum(
-        action_ids,
-        cores,
-        weights,
-        time_budget_seconds=oracle_timeout_seconds,
+    _require_abstract_search_feasible(selected_receipt)
+    minimum_cost = _repair_primary_cost(selected_repair, action_by_id)
+    if minimum_cost != upper_bound:
+        raise RuntimeError("RES-225 selected repair does not match its proven primary bounds")
+
+    selected_score = feasible_ties[0][0]
+    selected_validation = next(
+        (
+            item.get("fallback_evidence")
+            for item in reversed(tested_repairs)
+            if tuple(item.get("action_ids", ())) == selected_repair
+            and dict(item.get("target_parent_by_action", {})) == selected_target_parent_by_action
+            and item.get("status") == "FEASIBLE"
+        ),
+        None,
     )
-    if hitman_cost != minimum_cost or rc2_cost != minimum_cost:
-        block_unknown(
-            "BLOCKED_MINIMUM_HITTING_SET_MISMATCH",
-            selected_repair,
-            selected_target_parent_by_action,
-            minimum_cost,
+    selected_witness_digests = (
+        _independent_witness_digests(selected_validation.get("records", {}))
+        if isinstance(selected_validation, dict)
+        else {}
+    )
+    selected_validation_records = (
+        dict(selected_validation.get("records", {}))
+        if isinstance(selected_validation, dict)
+        else {}
+    )
+    incumbent = {
+        **incumbent,
+        "action_ids": selected_repair,
+        "target_parent_by_action": selected_target_parent_by_action,
+        "cardinality": minimum_cost,
+        "repair_digest": selected_repair_digest,
+        "secondary_profile": selected_profile,
+        "secondary_score": selected_score,
+        "abstract_receipt": selected_receipt,
+        "released_candidate_ids": _released_candidate_ids(selected_repair, action_by_id),
+        "origin_counts_before": _origin_counts(commitments),
+        "origin_counts_after": _origin_counts(selected_abstract_commitments),
+        "independent_witness_digests": selected_witness_digests,
+        "independent_validation_records": selected_validation_records,
+        "validation_evidence_digest": (
+            selected_validation.get("digest")
+            if isinstance(selected_validation, dict) and len(selected_witness_digests) == 2
+            else None
+        ),
+    }
+    save_checkpoint(
+        "SECONDARY_OPTIMUM_SELECTED",
+        current_action_ids=selected_repair,
+        current_target_map=selected_target_parent_by_action,
+        current_cost=minimum_cost,
+    )
+
+    if len(selected_witness_digests) != 2:
+        save_checkpoint(
+            "INDEPENDENT_WITNESS_VALIDATION_PENDING",
+            current_action_ids=selected_repair,
+            current_target_map=selected_target_parent_by_action,
+            current_cost=minimum_cost,
+        )
+        witness_statuses, witness_records = _independent_abstract_fallback(
+            selected_abstract_commitments,
+            selected_abstract_pairs,
+            receipt=selected_receipt,
+            production_root=production_root,
+            time_budget_seconds=ensure_wall(
+                "PAUSED_WALL_TIME", selected_repair, selected_target_parent_by_action, minimum_cost
+            ),
+            wall_deadline=wall_deadline,
+        )
+        selected_witness_digests = _independent_witness_digests(witness_records)
+        incumbent["independent_witness_digests"] = selected_witness_digests
+        incumbent["independent_validation_records"] = witness_records
+        incumbent["validation_evidence_digest"] = canonical_hash(
+            (witness_statuses, witness_records)
+        )
+        if (
+            witness_statuses != {"BASE": "FEASIBLE", "COLOCATION": "FEASIBLE"}
+            or len(selected_witness_digests) != 2
+        ):
+            save_checkpoint(
+                "BLOCKED_ABSTRACT_WITNESS_CROSSCHECK",
+                current_action_ids=selected_repair,
+                current_target_map=selected_target_parent_by_action,
+                current_cost=minimum_cost,
+            )
+            raise _RepairSearchBlockedError(
+                "RES-225 independent BASE/COLOCATION allocation witness validation failed"
+            )
+        save_checkpoint(
+            "ABSTRACT_WITNESS_INDEPENDENTLY_VALIDATED",
+            current_action_ids=selected_repair,
+            current_target_map=selected_target_parent_by_action,
+            current_cost=minimum_cost,
         )
 
-    additional_clauses = tuple(tuple(item["blocking_clause"]) for item in excluded_exact_designs)
-    lower_bound_result, lower_bound_digest = _independent_minimum_crosscheck(
-        models["COLOCATION"],
-        action_ids,
-        weights,
-        minimum_cost,
-        additional_clauses=additional_clauses,
-        time_budget_seconds=oracle_timeout_seconds,
-    )
+    if selected_receipt.canonical_self_reduction_status != "PASS":
+        save_checkpoint(
+            "CANONICALIZATION_PENDING",
+            current_action_ids=selected_repair,
+            current_target_map=selected_target_parent_by_action,
+            current_cost=minimum_cost,
+        )
+        canonical_result = _exact_repair_variant(
+            commitments,
+            pairs,
+            actions,
+            selected_repair,
+            target_parent_by_action=selected_target_parent_by_action,
+            candidate_rank_hint=None,
+            time_budget_seconds=ensure_wall(
+                "PAUSED_WALL_TIME", selected_repair, selected_target_parent_by_action, minimum_cost
+            ),
+            canonicalize=True,
+            production_root=production_root,
+            wall_deadline=wall_deadline,
+        )
+        state, canonical_receipt, _canonical_commitments, _canonical_pairs, seconds, _fallback = (
+            canonical_result
+        )
+        oracle_calls += 1
+        oracle_status_counts[state] += 1
+        last_oracle_status = {"FEASIBLE": "SAT", "INFEASIBLE": "UNSAT", "UNKNOWN": "UNKNOWN"}[state]
+        last_oracle_seconds = seconds
+        if wall_checkpoint_due():
+            pause_for_wall(
+                "PAUSED_WALL_TIME", selected_repair, selected_target_parent_by_action, minimum_cost
+            )
+        if state != "FEASIBLE" or canonical_receipt.canonical_self_reduction_status != "PASS":
+            block_unknown(
+                "BLOCKED_CANONICALIZATION_UNKNOWN",
+                selected_repair,
+                selected_target_parent_by_action,
+                minimum_cost,
+            )
+        selected_receipt = canonical_receipt
+        incumbent["abstract_receipt"] = selected_receipt
+        incumbent["abstract_witness_digest"] = selected_receipt.canonical_witness_digest
+        for saved_test in reversed(tested_repairs):
+            if (
+                tuple(saved_test.get("action_ids", ())) == selected_repair
+                and dict(saved_test.get("target_parent_by_action", {}))
+                == selected_target_parent_by_action
+                and saved_test.get("status") == "FEASIBLE"
+            ):
+                saved_test["receipt"] = selected_receipt
+                break
+    _require_abstract_feasible(selected_receipt)
+
     minimum_evidence_digest = canonical_hash(
         {
             "preservation_registry_digest": assumptions_digest,
@@ -1939,6 +3001,10 @@ def run(
             "exact_design_exclusion_digests": tuple(
                 item["blocking_clause_digest"] for item in excluded_exact_designs
             ),
+            "repair_family_exclusion_digests": tuple(
+                item["repair_digest"] for item in excluded_repair_families
+            ),
+            "primary_proof": primary_proof,
             "hitman_selected": hitman_selected,
             "hitman_cost": hitman_cost,
             "rc2_selected": rc2_selected,
@@ -1948,6 +3014,7 @@ def run(
             "lower_bound_result": lower_bound_result,
             "selected_repair_digest": selected_repair_digest,
             "abstract_witness_digest": selected_receipt.canonical_witness_digest,
+            "secondary_score": selected_score,
         }
     )
     save_checkpoint(
@@ -1956,6 +3023,29 @@ def run(
         current_target_map=selected_target_parent_by_action,
         current_cost=minimum_cost,
     )
+
+    if not materialize:
+        save_checkpoint(
+            "ABSTRACT_MINIMUM_READY",
+            current_action_ids=selected_repair,
+            current_target_map=selected_target_parent_by_action,
+            current_cost=minimum_cost,
+        )
+        return {
+            "STATUS": "ABSTRACT_MINIMUM_READY",
+            "PRIMARY_OBJECTIVE": "MINIMIZE_RELEASED_CANDIDATE_SLOTS",
+            "MINIMUM_REPAIR_CARDINALITY": minimum_cost,
+            "MINIMUM_REPAIR_PROVEN": "YES",
+            "MINIMUM_REPAIR_EVIDENCE_DIGEST": minimum_evidence_digest,
+            "SELECTED_REPAIR_DIGEST": selected_repair_digest,
+            "NO_GOODS": len(excluded_exact_designs) + len(excluded_repair_families),
+            "ABSTRACT_BASE_EXACT_STATUS": selected_receipt.base_status,
+            "ABSTRACT_COLOCATION_EXACT_STATUS": selected_receipt.colocation_status,
+            "ABSTRACT_CANONICAL_WITNESS_DIGEST": selected_receipt.canonical_witness_digest,
+            "CANONICAL_SELF_REDUCTION": selected_receipt.canonical_self_reduction_status,
+            "CANDIDATES_MATERIALIZED": 0,
+            "CHECKPOINT_DIGEST": checkpoint_digest,
+        }, len(commitments)
 
     assumption_artifact_digest = _private_write(
         production_root,
@@ -2136,7 +3226,11 @@ def run(
         "MINIMIZED_ACTION_CORE_DIGESTS": tuple(item["action_core_digest"] for item in cores),
         "HITTING_SET_ITERATIONS": len(iteration_records),
         "MINIMUM_REPAIR_CARDINALITY": minimum_cost,
+        "PRIMARY_OBJECTIVE": "MINIMIZE_RELEASED_CANDIDATE_SLOTS",
         "MINIMUM_REPAIR_PROVEN": "YES",
+        "EXACT_VARIANT_NO_GOODS": len(excluded_exact_designs),
+        "REPAIR_FAMILY_NO_GOODS": len(excluded_repair_families),
+        "NO_GOODS": len(excluded_exact_designs) + len(excluded_repair_families),
         "MINIMUM_REPAIR_EVIDENCE_DIGEST": minimum_evidence_digest,
         "LOWER_CARDINALITY_CROSSCHECK": lower_bound,
         "LOWER_CARDINALITY_CROSSCHECK_DIGEST": lower_bound_digest,
@@ -2343,6 +3437,8 @@ def main(argv: list[str] | None = None) -> int:
         type=int,
         default=_MAX_EXACT_VARIANTS_PER_REPAIR,
     )
+    parser.add_argument("--max-wall-seconds", type=float)
+    parser.add_argument("--materialize", action="store_true")
     args = parser.parse_args(argv)
     try:
         receipt, _count = run(
@@ -2351,7 +3447,14 @@ def main(argv: list[str] | None = None) -> int:
             oracle_timeout_seconds=args.oracle_timeout_seconds,
             max_iterations=args.max_iterations,
             max_exact_variants_per_repair=args.max_exact_variants_per_repair,
+            max_wall_seconds=args.max_wall_seconds,
+            materialize=args.materialize,
         )
+    except _RepairSearchPausedError as exc:
+        print("STATUS=PAUSED")
+        print(f"REASON={exc}")
+        print(f"CHECKPOINT={args.production_root.resolve() / _CHECKPOINT_PATH}")
+        return 0
     except (_RepairSearchBlockedError, CoreSolveTimeoutError) as exc:
         print("STATUS=BLOCKED")
         print(f"REASON={exc}")
@@ -2359,7 +3462,7 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     for key, value in receipt.items():
         print(f"{key}={value}")
-    return 0 if receipt["STATUS"] == "PASS" else 2
+    return 0 if receipt["STATUS"] in {"PASS", "ABSTRACT_MINIMUM_READY"} else 2
 
 
 if __name__ == "__main__":

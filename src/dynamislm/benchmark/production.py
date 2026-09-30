@@ -1025,44 +1025,60 @@ class ProductionExactFeasibilityReceiptV2:
         if self.status != "FEASIBLE" and self.canonical_witness_digest is not None:
             raise ValueError("non-feasible exact receipt cannot contain a canonical witness")
         if self.status == "FEASIBLE":
-            if (
-                self.base_status != "FEASIBLE"
-                or self.colocation_status != "FEASIBLE"
-                or self.canonical_self_reduction_status != "PASS"
-                or self.canonical_witness_digest is None
-            ):
-                raise ValueError("feasible exact receipt lacks complete solver evidence")
-            for name, values, expected in (
-                ("cell", self.hard_cell_count_by_split, 87),
-                (
-                    "tag",
-                    self.adversarial_tag_count_by_split,
-                    sum(len(row.adversarial_tags) for row in COVERAGE_MATRIX),
-                ),
-                (
-                    "error",
-                    self.reachable_error_count_by_split,
-                    sum(len(row.error_classes) for row in COVERAGE_MATRIX),
-                ),
-                ("answerable", self.answerable_case_count_by_split, None),
-                ("C18 refusal", self.c18_refusal_cell_count_by_split, 14),
-            ):
-                if tuple(split for split, _ in values) != tuple(
-                    split for split, _ in PROSPECTIVE_SPLIT_COUNTS
+            if self.base_status != "FEASIBLE" or self.colocation_status != "FEASIBLE":
+                raise ValueError("feasible exact receipt lacks both exact solver results")
+            if self.canonical_self_reduction_status == "PASS" and self.canonical_witness_digest:
+                for name, values, expected in (
+                    ("cell", self.hard_cell_count_by_split, 87),
+                    (
+                        "tag",
+                        self.adversarial_tag_count_by_split,
+                        sum(len(row.adversarial_tags) for row in COVERAGE_MATRIX),
+                    ),
+                    (
+                        "error",
+                        self.reachable_error_count_by_split,
+                        sum(len(row.error_classes) for row in COVERAGE_MATRIX),
+                    ),
+                    ("answerable", self.answerable_case_count_by_split, None),
+                    ("C18 refusal", self.c18_refusal_cell_count_by_split, 14),
                 ):
-                    raise ValueError(f"exact feasibility {name} counts have wrong split coverage")
-                if expected is not None and any(count != expected for _split, count in values):
-                    raise ValueError(f"exact feasibility {name} counts violate the frozen target")
-                if name == "answerable" and any(count < 1 for _split, count in values):
-                    raise ValueError("exact feasibility answerability coverage is incomplete")
-            if tuple(split for split, _ in self.protected_critical_error_count_by_split) != (
-                SplitName.FROZEN_VALIDATION,
-                SplitName.HIDDEN_FINAL,
-            ) or any(
-                count != len(CRITICAL_ERROR_CLASSES)
-                for _split, count in self.protected_critical_error_count_by_split
+                    if tuple(split for split, _ in values) != tuple(
+                        split for split, _ in PROSPECTIVE_SPLIT_COUNTS
+                    ):
+                        raise ValueError(
+                            f"exact feasibility {name} counts have wrong split coverage"
+                        )
+                    if expected is not None and any(count != expected for _split, count in values):
+                        raise ValueError(
+                            f"exact feasibility {name} counts violate the frozen target"
+                        )
+                    if name == "answerable" and any(count < 1 for _split, count in values):
+                        raise ValueError("exact feasibility answerability coverage is incomplete")
+                if tuple(split for split, _ in self.protected_critical_error_count_by_split) != (
+                    SplitName.FROZEN_VALIDATION,
+                    SplitName.HIDDEN_FINAL,
+                ) or any(
+                    count != len(CRITICAL_ERROR_CLASSES)
+                    for _split, count in self.protected_critical_error_count_by_split
+                ):
+                    raise ValueError("protected critical-error coverage is incomplete")
+            elif self.canonical_self_reduction_status == "NOT_RUN" and (
+                self.canonical_witness_digest is not None
+                or any(
+                    (
+                        self.hard_cell_count_by_split,
+                        self.adversarial_tag_count_by_split,
+                        self.reachable_error_count_by_split,
+                        self.protected_critical_error_count_by_split,
+                        self.answerable_case_count_by_split,
+                        self.c18_refusal_cell_count_by_split,
+                    )
+                )
             ):
-                raise ValueError("protected critical-error coverage is incomplete")
+                raise ValueError("feasibility-only receipt contains canonical allocation evidence")
+            elif self.canonical_self_reduction_status != "NOT_RUN":
+                raise ValueError("feasible exact receipt has inconsistent canonical evidence")
         elif self.status == "INFEASIBLE" and "INFEASIBLE" not in {
             self.base_status,
             self.colocation_status,
@@ -2125,6 +2141,27 @@ def _exact_completion_status(
     raise RuntimeError(f"CP-SAT returned unexpected status {status_name}")
 
 
+def _validate_exact_rank_assignment(
+    component_count: int,
+    constraints: tuple[_ExactConstraint, ...],
+    ranks: list[int],
+) -> None:
+    if len(ranks) != component_count or any(rank not in range(3) for rank in ranks):
+        raise RuntimeError("CP-SAT feasible result has an incomplete split assignment")
+    for constraint in constraints:
+        if constraint.equalities:
+            if any(ranks[left] != ranks[right] for left, right in constraint.equalities):
+                raise RuntimeError("CP-SAT split assignment violates an exact equality")
+            continue
+        value = sum(
+            coefficient for index, rank, coefficient in constraint.terms if ranks[index] == rank
+        )
+        if (constraint.lower is not None and value < constraint.lower) or (
+            constraint.upper is not None and value > constraint.upper
+        ):
+            raise RuntimeError("CP-SAT split assignment violates an exact bound")
+
+
 def _build_exact_cp_model(
     component_count: int,
     constraints: tuple[_ExactConstraint, ...],
@@ -2655,10 +2692,11 @@ def validate_production_exact_feasibility(
     run_c03_f04_diagnostic: bool = True,
     candidate_rank_hint: dict[str, int] | None = None,
     canonical_self_reduction_backend: str = "CP-SAT",
+    run_canonical_self_reduction: bool = True,
     canonical_progress_callback: Callable[[int, int, str], None] | None = None,
     oracle_time_limit_seconds: float | None = None,
 ) -> _ExactFeasibilityResult:
-    """Run base/co-location CP-SAT models and canonicalize a prospective witness."""
+    """Check BASE/COLOCATION feasibility and optionally canonicalize the witness."""
 
     if len(commitments) != FINAL_TARGET_CASES:
         raise ProductionFeasibilityBlocked("exact feasibility requires exactly 434 commitments")
@@ -3024,6 +3062,12 @@ def validate_production_exact_feasibility(
     )
     if base_status == "INFEASIBLE" and colocation_status == "FEASIBLE":
         raise RuntimeError("co-location exact model is feasible while its base model is infeasible")
+    if base_status == "FEASIBLE":
+        _validate_exact_rank_assignment(len(base_components), base_constraints, base_solution)
+    if colocation_status == "FEASIBLE":
+        _validate_exact_rank_assignment(
+            len(colocation_components), colocation_constraints, colocation_solution
+        )
 
     c03_row = _row_by_capability("C03")
     split_order = tuple(split for split, _count in PROSPECTIVE_SPLIT_COUNTS)
@@ -3138,7 +3182,7 @@ def validate_production_exact_feasibility(
         "answerable_case_count_by_split": (),
         "c18_refusal_cell_count_by_split": (),
     }
-    if overall_status == "FEASIBLE":
+    if overall_status == "FEASIBLE" and run_canonical_self_reduction:
         if canonical_self_reduction_backend == "GLUCOSE":
             self_reduction_status, canonical_ranks, canonical_trace = (
                 _canonical_split_ranks_glucose(

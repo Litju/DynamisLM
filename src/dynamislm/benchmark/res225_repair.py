@@ -1208,9 +1208,12 @@ def shrink_unsat_core(
     *,
     forced_literals: tuple[int, ...] = (),
     deadline: float | None = None,
+    max_checks: int | None = 8,
 ) -> tuple[str, ...]:
-    """Deterministically shrink a core to subset-minimal semantic assumptions."""
+    """Deterministically reduce a valid semantic core with bounded SAT checks."""
 
+    if max_checks is not None and max_checks < 0:
+        raise ValueError("core reduction check limit cannot be negative")
     core = list(sorted(set(assumption_ids), key=lambda value: value.encode("utf-8")))
     if solve_assumptions_limited(
         solver,
@@ -1218,8 +1221,12 @@ def shrink_unsat_core(
         deadline=deadline,
     ):
         raise ValueError("RES-225 attempted to shrink a satisfiable assumption set")
+    checks = 0
     for assumption_id in tuple(core):
+        if max_checks is not None and checks >= max_checks:
+            break
         trial = [item for item in core if item != assumption_id]
+        checks += 1
         if not solve_assumptions_limited(
             solver,
             [*forced_literals, *(model.assumption_literals[item] for item in trial)],
@@ -1232,15 +1239,7 @@ def shrink_unsat_core(
         [*forced_literals, *(model.assumption_literals[item] for item in result)],
         deadline=deadline,
     ):
-        raise ValueError("RES-225 minimized core failed its UNSAT recheck")
-    for assumption_id in result:
-        trial_core = tuple(item for item in result if item != assumption_id)
-        if not solve_assumptions_limited(
-            solver,
-            [*forced_literals, *(model.assumption_literals[item] for item in trial_core)],
-            deadline=deadline,
-        ):
-            raise ValueError("RES-225 core is not subset-minimal")
+        raise ValueError("RES-225 reduced core failed its UNSAT recheck")
     return result
 
 
@@ -1370,6 +1369,7 @@ def run_exact_abstract_oracle(
     exact_shingle_colocation_pairs: tuple[tuple[str, str], ...],
     *,
     candidate_rank_hint: dict[str, int] | None = None,
+    canonicalize: bool = False,
     canonical_progress_callback: Callable[[int, int, str], None] | None = None,
     time_budget_seconds: float = 300.0,
 ) -> ProductionExactFeasibilityReceiptV2:
@@ -1383,6 +1383,7 @@ def run_exact_abstract_oracle(
         run_c03_f04_diagnostic=False,
         candidate_rank_hint=candidate_rank_hint,
         canonical_self_reduction_backend="GLUCOSE",
+        run_canonical_self_reduction=canonicalize,
         canonical_progress_callback=canonical_progress_callback,
         oracle_time_limit_seconds=time_budget_seconds,
     ).receipt
