@@ -12,6 +12,7 @@ from pysat.solvers import Solver  # type: ignore[import-untyped]
 from scripts.res225_repair import (
     _append_unique_core,
     _apply_cost2_closure_result,
+    _apply_primary_cost_closure_result,
     _block_hitman_repair,
     _candidate_model_fallback,
     _checkpoint_bind,
@@ -227,6 +228,55 @@ def test_cost2_unknown_preserves_global_primary_lower_bound() -> None:
     )
     assert updated["LOWER_BOUND"] == 2
     assert updated["GLOBAL_PRIMARY_LOWER_BOUND"] == 2
+
+
+def test_cost3_closure_receipt_and_bound_promotion() -> None:
+    checkpoint = {
+        "LOWER_BOUND": 2,
+        "GLOBAL_PRIMARY_LOWER_BOUND": 3,
+        "UPPER_BOUND": None,
+        "upper_bound": None,
+        "OPTIMALITY_GAP": None,
+    }
+    promoted = _apply_primary_cost_closure_result(
+        checkpoint,
+        {"status": "UNSAT", "proof_check_status": "PASS"},
+        primary_cost_cap=3,
+    )
+    assert promoted["LOWER_BOUND"] == 2
+    assert promoted["GLOBAL_PRIMARY_LOWER_BOUND"] == 4
+    assert promoted["UPPER_BOUND"] is None
+    with pytest.raises(ValueError, match="checked proof"):
+        _apply_primary_cost_closure_result(
+            checkpoint,
+            {"status": "UNSAT", "proof_check_status": "NOT_RUN"},
+            primary_cost_cap=3,
+        )
+
+    receipt = _cost2_closure_receipt(
+        {
+            "CHECKPOINT_DIGEST": "sha256:" + "e" * 64,
+            "LOWER_BOUND": 2,
+            "GLOBAL_PRIMARY_LOWER_BOUND": 3,
+            "UPPER_BOUND": 3,
+        },
+        {
+            "status": "SAT",
+            "proof_check_status": "PASS",
+            "abstract_base_status": "FEASIBLE",
+            "abstract_colocation_status": "FEASIBLE",
+            "independent_witness_validation": "PASS",
+            "repairs_tested_total": 1,
+            "exact_variant_nogoods": 0,
+        },
+        primary_cost_cap=3,
+    )
+    assert receipt["COST3_CLOSURE_STATUS"] == "SAT"
+    assert receipt["GLOBAL_PRIMARY_LOWER_BOUND_BEFORE"] == 3
+    assert receipt["GLOBAL_PRIMARY_LOWER_BOUND_AFTER"] == 3
+    assert receipt["MINIMUM_REPAIR_PROVEN"] == "YES"
+    assert receipt["MINIMUM_REPAIR_CARDINALITY"] == 3
+    assert receipt["NEXT"] == "SELECT_MINIMUM_REPAIR"
 
 
 def test_exact_unknown_is_not_feasible_or_infeasible() -> None:

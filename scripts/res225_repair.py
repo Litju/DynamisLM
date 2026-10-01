@@ -1368,8 +1368,8 @@ def _candidate_model_dimacs(clauses: tuple[tuple[int, ...], ...], maximum_variab
     return f"p cnf {max_var} {len(normalized)}\n{body}".encode("ascii")
 
 
-def _apply_cost2_closure_result(
-    checkpoint: dict[str, Any], closure: dict[str, Any]
+def _apply_primary_cost_closure_result(
+    checkpoint: dict[str, Any], closure: dict[str, Any], *, primary_cost_cap: int
 ) -> dict[str, Any]:
     status = closure.get("status")
     core_lower_bound = int(checkpoint["LOWER_BOUND"])
@@ -1383,23 +1383,23 @@ def _apply_cost2_closure_result(
             raise ValueError(
                 "RES-225 cannot promote the global lower bound without a checked proof"
             )
-        global_lower_bound = max(global_lower_bound, _COST2_PRIMARY_CAP + 1)
+        global_lower_bound = max(global_lower_bound, primary_cost_cap + 1)
         if upper_bound is not None and upper_bound < global_lower_bound:
-            raise ValueError("RES-225 cost-2 UNSAT proof conflicts with the incumbent")
+            raise ValueError("RES-225 bounded UNSAT proof conflicts with the incumbent")
     elif status == "SAT":
         if (
-            closure.get("repair_cost") != _COST2_PRIMARY_CAP
+            closure.get("repair_cost") != primary_cost_cap
             or closure.get("abstract_base_status") != "FEASIBLE"
             or closure.get("abstract_colocation_status") != "FEASIBLE"
             or closure.get("independent_witness_validation") != "PASS"
         ):
-            raise ValueError("RES-225 SAT closure lacks a validated cost-2 exact witness")
-        if global_lower_bound > _COST2_PRIMARY_CAP:
-            raise ValueError("RES-225 cost-2 witness conflicts with the global lower bound")
-        global_lower_bound = max(global_lower_bound, _COST2_PRIMARY_CAP)
-        upper_bound = _COST2_PRIMARY_CAP
+            raise ValueError("RES-225 SAT closure lacks a validated exact witness")
+        if global_lower_bound > primary_cost_cap:
+            raise ValueError("RES-225 bounded witness conflicts with the global lower bound")
+        global_lower_bound = max(global_lower_bound, primary_cost_cap)
+        upper_bound = primary_cost_cap
     elif status != "UNKNOWN":
-        raise ValueError("RES-225 cost-2 closure status is invalid")
+        raise ValueError("RES-225 bounded closure status is invalid")
 
     updated = dict(checkpoint)
     updated["GLOBAL_PRIMARY_LOWER_BOUND"] = global_lower_bound
@@ -1411,6 +1411,14 @@ def _apply_cost2_closure_result(
     updated["BEST_REPAIR_CARDINALITY"] = upper_bound
     updated["best_repair_cardinality"] = upper_bound
     return updated
+
+
+def _apply_cost2_closure_result(
+    checkpoint: dict[str, Any], closure: dict[str, Any]
+) -> dict[str, Any]:
+    return _apply_primary_cost_closure_result(
+        checkpoint, closure, primary_cost_cap=_COST2_PRIMARY_CAP
+    )
 
 
 def _make_materialization_plan(
@@ -1735,17 +1743,19 @@ def _cost2_closure_record(
     repairs_tested_total: int,
     exact_variant_nogoods: int,
     best_repair_digest: str,
+    primary_cost_cap: int = _COST2_PRIMARY_CAP,
+    lower_bound_before: int = _COST2_PRIMARY_CAP,
     **details: Any,
 ) -> dict[str, Any]:
     return {
-        "schema": "RES-225-COST2-CLOSURE@1.0.0",
+        "schema": f"RES-225-COST{primary_cost_cap}-CLOSURE@1.0.0",
         "status": status,
         "terminal": bool(details.pop("terminal", False)),
-        "primary_cost_cap": _COST2_PRIMARY_CAP,
+        "primary_cost_cap": primary_cost_cap,
         "candidate_sat_solver": "MiniSat 2.2 via PySAT",
         "pb_encoding": "BDD",
         "independent_proof_solver": "Glucose 4 via PySAT",
-        "lower_bound_before": 2,
+        "lower_bound_before": lower_bound_before,
         "proof_check_status": proof_check_status,
         "abstract_base_status": base_status,
         "abstract_colocation_status": colocation_status,
@@ -1761,61 +1771,74 @@ def _cost2_closure_receipt(
     closure: dict[str, Any],
     *,
     checkpoint_digest: str | None = None,
+    primary_cost_cap: int = _COST2_PRIMARY_CAP,
 ) -> dict[str, object]:
     status = str(closure["status"])
     proven = (
         status == "SAT"
-        and checkpoint.get("GLOBAL_PRIMARY_LOWER_BOUND") == _COST2_PRIMARY_CAP
-        and checkpoint.get("UPPER_BOUND") == _COST2_PRIMARY_CAP
+        and checkpoint.get("GLOBAL_PRIMARY_LOWER_BOUND") == primary_cost_cap
+        and checkpoint.get("UPPER_BOUND") == primary_cost_cap
         and closure.get("independent_witness_validation") == "PASS"
     )
-    return {
-        "COST2_CLOSURE_STATUS": status,
+    result: dict[str, object] = {
+        f"COST{primary_cost_cap}_CLOSURE_STATUS": status,
         "PROOF_CHECK": ("PASS" if closure.get("proof_check_status") == "PASS" else "NOT_RUN"),
-        "LOWER_BOUND_BEFORE": closure.get("lower_bound_before", 2),
-        "LOWER_BOUND_AFTER": checkpoint.get(
-            "GLOBAL_PRIMARY_LOWER_BOUND", checkpoint["LOWER_BOUND"]
-        ),
         "UPPER_BOUND_AFTER": (
             checkpoint["UPPER_BOUND"] if checkpoint.get("UPPER_BOUND") is not None else "NONE"
         ),
         "MINIMUM_REPAIR_PROVEN": "YES" if proven else "NO",
-        "MINIMUM_REPAIR_CARDINALITY": _COST2_PRIMARY_CAP if proven else "NONE",
-        "COST2_REPAIRS_TESTED": closure.get("repairs_tested_total", 0),
+        "MINIMUM_REPAIR_CARDINALITY": primary_cost_cap if proven else "NONE",
+        f"COST{primary_cost_cap}_REPAIRS_TESTED": closure.get("repairs_tested_total", 0),
         "EXACT_VARIANT_NOGOODS": closure.get("exact_variant_nogoods", 0),
         "BEST_REPAIR_DIGEST": closure.get("best_repair_digest", "NONE"),
         "ABSTRACT_BASE_STATUS": closure.get("abstract_base_status", "NOT_RUN"),
         "ABSTRACT_COLOCATION_STATUS": closure.get("abstract_colocation_status", "NOT_RUN"),
         "CHECKPOINT_DIGEST": checkpoint_digest or checkpoint.get("CHECKPOINT_DIGEST", "NONE"),
-        "QA": "NOT_RUN",
+        "QA": closure.get("qa_status", "NOT_RUN"),
         "NEXT": {
             "SAT": "SELECT_MINIMUM_REPAIR",
-            "UNSAT": "RESUME_COST3_SEARCH",
+            "UNSAT": f"RESUME_COST{primary_cost_cap + 1}_SEARCH",
             "UNKNOWN": "RESUME_IHS_SEARCH",
         }[status],
     }
+    lower_after = checkpoint.get("GLOBAL_PRIMARY_LOWER_BOUND", checkpoint["LOWER_BOUND"])
+    if primary_cost_cap == _COST2_PRIMARY_CAP:
+        result["LOWER_BOUND_BEFORE"] = closure.get("lower_bound_before", primary_cost_cap)
+        result["LOWER_BOUND_AFTER"] = lower_after
+        result["COST2_CLOSURE_STATUS"] = status
+    else:
+        result["GLOBAL_PRIMARY_LOWER_BOUND_BEFORE"] = closure.get(
+            "lower_bound_before", primary_cost_cap
+        )
+        result["GLOBAL_PRIMARY_LOWER_BOUND_AFTER"] = lower_after
+    return result
 
 
-def run_cost2_closure(
+def _run_primary_cost_closure(
     production_root: Path,
     *,
     expected_checkpoint_digest: str,
+    primary_cost_cap: int,
     max_wall_seconds: float,
     oracle_timeout_seconds: float = _DEFAULT_ORACLE_TIME_BUDGET_SECONDS,
     proof_checker: str | Path | None = None,
 ) -> dict[str, object]:
     if production_root.resolve().is_relative_to(_REPOSITORY_ROOT.resolve()):
         raise ValueError("RES-225 private artifacts must remain outside Git")
+    if primary_cost_cap < 2:
+        raise ValueError("RES-225 primary cost closure cap must be at least 2")
     if max_wall_seconds <= 0 or oracle_timeout_seconds <= 0:
-        raise ValueError("RES-225 cost-2 closure budgets must be positive")
+        raise ValueError("RES-225 bounded closure budgets must be positive")
     if not expected_checkpoint_digest.startswith("sha256:"):
-        raise ValueError("RES-225 cost-2 closure requires an expected checkpoint digest")
+        raise ValueError("RES-225 bounded closure requires an expected checkpoint digest")
 
     from scripts.res224_probes import _write_private
 
     started = time.monotonic()
     wall_deadline = started + max_wall_seconds
-    _progress("cost2-closure reconstructing-sealed-baseline")
+    cost_label = f"COST{primary_cost_cap}"
+    closure_key = f"cost{primary_cost_cap}_closure"
+    _progress(f"cost{primary_cost_cap}-closure reconstructing-sealed-baseline")
     _before_packets, commitments, pairs = _capture_current_design(production_root)
     inputs, input_digest, _input_size = read_external_production_json(
         "production/authoring_plan/private_inputs.json",
@@ -1847,27 +1870,50 @@ def run_cost2_closure(
         expected_fingerprints=fingerprints,
     )
     if saved["CHECKPOINT_DIGEST"] != expected_checkpoint_digest:
-        raise ValueError("RES-225 cost-2 checkpoint differs from the authorized starting digest")
-    prior_closure = saved.get("cost2_closure")
-    if prior_closure is None and (
-        saved["CORES_DISCOVERED"] != 1455
-        or saved["LOWER_BOUND"] != 2
-        or saved["UPPER_BOUND"] is not None
-        or saved["ORACLE_CALLS"] != 1454
+        raise ValueError("RES-225 checkpoint differs from the authorized starting digest")
+    prior_closure = saved.get(closure_key)
+    if (
+        primary_cost_cap == _COST2_PRIMARY_CAP
+        and prior_closure is None
+        and (
+            saved["CORES_DISCOVERED"] != 1455
+            or saved["LOWER_BOUND"] != 2
+            or saved["UPPER_BOUND"] is not None
+            or saved["ORACLE_CALLS"] != 1454
+        )
     ):
         raise ValueError("RES-225 cost-2 closure starting proof state differs from authority")
-    if isinstance(prior_closure, dict) and prior_closure.get("terminal") is True:
-        return _cost2_closure_receipt(saved, prior_closure)
-    if saved.get("GLOBAL_PRIMARY_LOWER_BOUND", saved["LOWER_BOUND"]) != 2:
-        raise ValueError("RES-225 cost-2 closure checkpoint has a different global lower bound")
+    if primary_cost_cap == _COST2_PRIMARY_CAP:
+        if isinstance(prior_closure, dict) and prior_closure.get("terminal") is True:
+            return _cost2_closure_receipt(saved, prior_closure)
+        starting_global_lower_bound = _COST2_PRIMARY_CAP
+    else:
+        certified_cost2 = saved.get("cost2_closure")
+        if not (
+            isinstance(certified_cost2, dict)
+            and certified_cost2.get("schema") == "RES-225-COST2-CLOSURE@1.0.0"
+            and certified_cost2.get("status") == "UNSAT"
+            and certified_cost2.get("terminal") is True
+            and certified_cost2.get("primary_cost_cap") == _COST2_PRIMARY_CAP
+            and certified_cost2.get("proof_check_status") == "PASS"
+        ):
+            raise ValueError("RES-225 cost-3 closure requires the certified cost-2 UNSAT closure")
+        if isinstance(prior_closure, dict) and prior_closure.get("terminal") is True:
+            if prior_closure.get("status") in {"SAT", "UNSAT"}:
+                return _cost2_closure_receipt(
+                    saved, prior_closure, primary_cost_cap=primary_cost_cap
+                )
+        starting_global_lower_bound = primary_cost_cap
+    if saved.get("GLOBAL_PRIMARY_LOWER_BOUND", saved["LOWER_BOUND"]) != starting_global_lower_bound:
+        raise ValueError("RES-225 bounded closure checkpoint has a different global lower bound")
     if saved["UPPER_BOUND"] is not None:
-        raise ValueError("RES-225 cost-2 closure checkpoint unexpectedly has an incumbent")
+        raise ValueError("RES-225 bounded closure checkpoint unexpectedly has an incumbent")
 
     action_by_id = {action.action_id: action for action in actions}
     costs = {action.action_id: action.content_replacement_count for action in actions}
     candidate_model = models["COLOCATION"]
     cap_clauses, maximum_variable = _release_cost_cap_clauses(
-        candidate_model, costs, _COST2_PRIMARY_CAP
+        candidate_model, costs, primary_cost_cap
     )
     exclusions: list[dict[str, Any]] = [dict(item) for item in saved["excluded_exact_designs"]]
     exact_variant_clauses: list[tuple[int, ...]] = []
@@ -1884,10 +1930,10 @@ def run_cost2_closure(
             raise ValueError("RES-225 checkpoint exact-variant no-good is stale")
         exact_variant_clauses.append(clause)
 
-    closure_dir = production_root / _PRIVATE_DIR / "cost2-closure"
+    closure_dir = production_root / _PRIVATE_DIR / f"cost{primary_cost_cap}-closure"
     closure_dir.mkdir(parents=True, exist_ok=True)
-    cnf_path = closure_dir / "candidate-cost2.cnf"
-    proof_path = closure_dir / "candidate-cost2.drup"
+    cnf_path = closure_dir / f"candidate-cost{primary_cost_cap}.cnf"
+    proof_path = closure_dir / f"candidate-cost{primary_cost_cap}.drup"
     checker = (
         str(Path(proof_checker).resolve())
         if proof_checker is not None
@@ -1910,7 +1956,14 @@ def run_cost2_closure(
     last_cnf_digest = "NONE"
     pending_repair_digest = "NONE"
 
-    def checkpoint_cost2(
+    def make_closure_record(**kwargs: Any) -> dict[str, Any]:
+        return _cost2_closure_record(
+            primary_cost_cap=primary_cost_cap,
+            lower_bound_before=primary_cost_cap,
+            **kwargs,
+        )
+
+    def checkpoint_closure(
         closure: dict[str, Any],
         *,
         phase: str,
@@ -1923,10 +1976,12 @@ def run_cost2_closure(
         nonlocal oracle_calls, last_oracle_status, last_oracle_seconds
         state = dict(saved)
         if final:
-            state = _apply_cost2_closure_result(state, closure)
+            state = _apply_primary_cost_closure_result(
+                state, closure, primary_cost_cap=primary_cost_cap
+            )
         state.update(
             {
-                "cost2_closure": closure,
+                closure_key: closure,
                 "oracle_calls": oracle_calls,
                 "ORACLE_CALLS": oracle_calls,
                 "oracle_status_counts": dict(status_counts),
@@ -1952,17 +2007,118 @@ def run_cost2_closure(
             state,
             expected_file_digest=checkpoint_file_digest,
         )
+        checked_state, checked_digest, _checked_file_digest = _read_checkpoint(
+            production_root,
+            expected_fingerprints=fingerprints,
+        )
+        if checked_digest != digest or checked_state.get(closure_key) != closure:
+            raise RuntimeError("RES-225 bounded closure checkpoint read-back failed")
         saved = dict(state)
         saved["CHECKPOINT_DIGEST"] = digest
         saved["checkpoint_digest"] = digest
-        _progress(f"cost2-closure checkpoint phase={phase} digest={digest}")
+        _progress(f"cost{primary_cost_cap}-closure checkpoint phase={phase} digest={digest}")
         return digest
+
+    if (
+        primary_cost_cap == 3
+        and isinstance(prior_closure, dict)
+        and prior_closure.get("status") == "UNKNOWN"
+        and prior_closure.get("reason") == "UNVERIFIED_UNSAT:CHECKER_UNAVAILABLE"
+        and checker is not None
+    ):
+        formula_clauses = (*candidate_model.clauses, *cap_clauses, *exact_variant_clauses)
+        cnf_bytes = _candidate_model_dimacs(formula_clauses, maximum_variable)
+        cost_model_digest = canonical_hash(
+            {
+                "candidate_model_digest": candidate_model.model_digest,
+                "primary_cost_cap": primary_cost_cap,
+                "content_replacement_costs": tuple(sorted(costs.items())),
+                "cost_cap_clauses_digest": canonical_hash(cap_clauses),
+                "exact_variant_no_good_digests": tuple(
+                    canonical_hash(clause) for clause in exact_variant_clauses
+                ),
+                "cnf_digest": _sha256(cnf_bytes),
+            }
+        )
+        if (
+            prior_closure.get("cnf_digest") != _sha256(cnf_bytes)
+            or prior_closure.get("cost_model_digest") != cost_model_digest
+            or prior_closure.get("proof_path") != str(proof_path)
+            or not cnf_path.is_file()
+            or cnf_path.read_bytes() != cnf_bytes
+            or not proof_path.is_file()
+            or prior_closure.get("proof_digest") != _sha256(proof_path.read_bytes())
+        ):
+            raise ValueError("RES-225 cost-3 proof artifacts differ from the checkpoint")
+        check_budget = min(
+            oracle_timeout_seconds,
+            wall_deadline - time.monotonic() - _WALL_CHECKPOINT_RESERVE_SECONDS,
+        )
+        checked_returncode: int | None = None
+        checker_log = ""
+        if check_budget > 0:
+            try:
+                recheck_result = subprocess.run(
+                    [checker, str(cnf_path), str(proof_path)],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    timeout=check_budget,
+                )
+                checked_returncode = recheck_result.returncode
+                checker_log = recheck_result.stdout + recheck_result.stderr
+            except subprocess.TimeoutExpired:
+                checker_log = "TIMEOUT"
+        oracle_calls += 1
+        status_counts[
+            f"{cost_label}_PROOF_CHECKER_PASS"
+            if checked_returncode == 0
+            else f"{cost_label}_PROOF_CHECKER_FAIL"
+            if checked_returncode is not None
+            else f"{cost_label}_PROOF_CHECKER_UNKNOWN"
+        ] += 1
+        closure = dict(prior_closure)
+        closure.update(
+            {
+                "status": "UNSAT" if checked_returncode == 0 else "UNKNOWN",
+                "terminal": checked_returncode == 0,
+                "proof_check_status": (
+                    "PASS"
+                    if checked_returncode == 0
+                    else "FAIL"
+                    if checked_returncode is not None
+                    else "NOT_RUN"
+                ),
+                "proof_checker_digest": _sha256(Path(checker).read_bytes()),
+                "proof_checker_returncode": checked_returncode,
+                "proof_checker_log_digest": _sha256(checker_log.encode("utf-8")),
+                "reason": (
+                    "DRAT_PROOF_CHECKED"
+                    if checked_returncode == 0
+                    else "PROOF_CHECKER_FAILED"
+                    if checked_returncode is not None
+                    else "PROOF_CHECKER_TIME_LIMIT"
+                ),
+                "qa_status": "PASS" if checked_returncode == 0 else "CHECKPOINT_PASS",
+            }
+        )
+        checkpoint_digest = checkpoint_closure(
+            closure,
+            phase=f"{cost_label}_CLOSURE_{closure['status']}",
+            final=True,
+        )
+        return _cost2_closure_receipt(
+            saved,
+            closure,
+            checkpoint_digest=checkpoint_digest,
+            primary_cost_cap=primary_cost_cap,
+        )
 
     while True:
         remaining = wall_deadline - time.monotonic()
         if remaining <= _WALL_CHECKPOINT_RESERVE_SECONDS:
             proof_check_status = "NOT_RUN"
-            closure = _cost2_closure_record(
+            closure = make_closure_record(
                 status="UNKNOWN",
                 proof_check_status=proof_check_status,
                 base_status=last_base_status,
@@ -1974,9 +2130,19 @@ def run_cost2_closure(
                 cost_model_digest=last_cost_model_digest,
                 cnf_digest=last_cnf_digest,
                 reason="GLOBAL_WALL_TIME_LIMIT",
+                qa_status="CHECKPOINT_PASS",
             )
-            checkpoint_digest = checkpoint_cost2(closure, phase="COST2_CLOSURE_UNKNOWN", final=True)
-            return _cost2_closure_receipt(saved, closure, checkpoint_digest=checkpoint_digest)
+            checkpoint_digest = checkpoint_closure(
+                closure,
+                phase=f"{cost_label}_CLOSURE_UNKNOWN",
+                final=True,
+            )
+            return _cost2_closure_receipt(
+                saved,
+                closure,
+                checkpoint_digest=checkpoint_digest,
+                primary_cost_cap=primary_cost_cap,
+            )
 
         formula_clauses = (
             *candidate_model.clauses,
@@ -1988,7 +2154,7 @@ def run_cost2_closure(
         last_cost_model_digest = canonical_hash(
             {
                 "candidate_model_digest": candidate_model.model_digest,
-                "primary_cost_cap": _COST2_PRIMARY_CAP,
+                "primary_cost_cap": primary_cost_cap,
                 "content_replacement_costs": tuple(sorted(costs.items())),
                 "cost_cap_clauses_digest": canonical_hash(cap_clauses),
                 "exact_variant_no_good_digests": tuple(
@@ -2018,14 +2184,14 @@ def run_cost2_closure(
         oracle_calls += 1
         last_oracle_seconds = solve_seconds
         if solve_result is True:
-            last_oracle_status = "COST2_SAT"
-            status_counts["COST2_SAT"] += 1
+            last_oracle_status = f"{cost_label}_SAT"
+            status_counts[f"{cost_label}_SAT"] += 1
         elif solve_result is False:
-            last_oracle_status = "COST2_UNSAT"
-            status_counts["COST2_UNSAT"] += 1
+            last_oracle_status = f"{cost_label}_UNSAT"
+            status_counts[f"{cost_label}_UNSAT"] += 1
         else:
-            last_oracle_status = "COST2_UNKNOWN"
-            status_counts["COST2_UNKNOWN"] += 1
+            last_oracle_status = f"{cost_label}_UNKNOWN"
+            status_counts[f"{cost_label}_UNKNOWN"] += 1
 
         if solve_result is False:
             proof_digest = "NONE"
@@ -2055,11 +2221,11 @@ def run_cost2_closure(
                         proof_solver.clear_interrupt()
                 oracle_calls += 1
                 status_counts[
-                    "COST2_PROOF_G4_UNSAT"
+                    f"{cost_label}_PROOF_G4_UNSAT"
                     if proof_result is False
-                    else "COST2_PROOF_G4_SAT"
+                    else f"{cost_label}_PROOF_G4_SAT"
                     if proof_result is True
-                    else "COST2_PROOF_G4_UNKNOWN"
+                    else f"{cost_label}_PROOF_G4_UNKNOWN"
                 ] += 1
                 if proof_result is True:
                     proof_detail = "INDEPENDENT_SOLVER_DISAGREEMENT"
@@ -2093,7 +2259,7 @@ def run_cost2_closure(
             else:
                 terminal_status = "UNKNOWN"
                 reason = f"UNVERIFIED_UNSAT:{proof_detail}"
-            closure = _cost2_closure_record(
+            closure = make_closure_record(
                 status=terminal_status,
                 proof_check_status=proof_check_status,
                 base_status=last_base_status,
@@ -2109,17 +2275,23 @@ def run_cost2_closure(
                     _sha256(Path(checker).read_bytes()) if checker is not None else "NONE"
                 ),
                 reason=reason,
-                terminal=True,
+                terminal=(terminal_status != "UNKNOWN" or primary_cost_cap == _COST2_PRIMARY_CAP),
+                qa_status="PASS" if terminal_status == "UNSAT" else "CHECKPOINT_PASS",
             )
-            checkpoint_digest = checkpoint_cost2(
+            checkpoint_digest = checkpoint_closure(
                 closure,
-                phase=f"COST2_CLOSURE_{terminal_status}",
+                phase=f"{cost_label}_CLOSURE_{terminal_status}",
                 final=True,
             )
-            return _cost2_closure_receipt(saved, closure, checkpoint_digest=checkpoint_digest)
+            return _cost2_closure_receipt(
+                saved,
+                closure,
+                checkpoint_digest=checkpoint_digest,
+                primary_cost_cap=primary_cost_cap,
+            )
 
         if solve_result is None:
-            closure = _cost2_closure_record(
+            closure = make_closure_record(
                 status="UNKNOWN",
                 proof_check_status="NOT_RUN",
                 base_status=last_base_status,
@@ -2130,26 +2302,32 @@ def run_cost2_closure(
                 cost_model_digest=last_cost_model_digest,
                 cnf_digest=last_cnf_digest,
                 reason="SAT_PB_TIME_LIMIT",
-                terminal=True,
+                terminal=(primary_cost_cap == _COST2_PRIMARY_CAP),
+                qa_status="CHECKPOINT_PASS",
             )
-            checkpoint_digest = checkpoint_cost2(
+            checkpoint_digest = checkpoint_closure(
                 closure,
-                phase="COST2_CLOSURE_UNKNOWN",
+                phase=f"{cost_label}_CLOSURE_UNKNOWN",
                 final=True,
             )
-            return _cost2_closure_receipt(saved, closure, checkpoint_digest=checkpoint_digest)
+            return _cost2_closure_receipt(
+                saved,
+                closure,
+                checkpoint_digest=checkpoint_digest,
+                primary_cost_cap=primary_cost_cap,
+            )
 
         repair_ids, target_map, rank_hint = _decode_candidate_sat_repair(
             candidate_model, witness_model
         )
         repair_cost = _repair_primary_cost(repair_ids, action_by_id)
-        if repair_cost > _COST2_PRIMARY_CAP:
+        if repair_cost > primary_cost_cap:
             raise RuntimeError("RES-225 bounded SAT witness exceeds the global primary cost cap")
         repair_variant_digest = canonical_hash(
             {"action_ids": repair_ids, "target_parent_by_action": target_map}
         )
         pending_repair_digest = repair_variant_digest
-        closure = _cost2_closure_record(
+        closure = make_closure_record(
             status="UNKNOWN",
             proof_check_status="NOT_RUN",
             base_status=last_base_status,
@@ -2162,9 +2340,9 @@ def run_cost2_closure(
             cnf_digest=last_cnf_digest,
             reason="EXACT_VALIDATION_PENDING",
         )
-        checkpoint_cost2(
+        checkpoint_closure(
             closure,
-            phase="COST2_EXACT_VALIDATION_PENDING",
+            phase=f"{cost_label}_EXACT_VALIDATION_PENDING",
             action_ids=repair_ids,
             target_map=target_map,
             repair_cost=repair_cost,
@@ -2191,11 +2369,11 @@ def run_cost2_closure(
         run_tested += 1
         total_tested += 1
         oracle_calls += 1 + (len(fallback["records"]) if fallback is not None else 0)
-        status_counts[f"COST2_EXACT_{exact_state}"] += 1
+        status_counts[f"{cost_label}_EXACT_{exact_state}"] += 1
         if fallback is not None:
             for validation in fallback["records"].values():
-                status_counts[f"COST2_RES224_{validation.get('result', 'UNKNOWN')}"] += 1
-        last_oracle_status = f"COST2_EXACT_{exact_state}"
+                status_counts[f"{cost_label}_RES224_{validation.get('result', 'UNKNOWN')}"] += 1
+        last_oracle_status = f"{cost_label}_EXACT_{exact_state}"
         last_oracle_seconds = exact_seconds
         last_base_status = str(receipt.base_status)
         last_colocation_status = str(receipt.colocation_status)
@@ -2224,7 +2402,7 @@ def run_cost2_closure(
                 *tuple(saved["exact_core_evidence"]),
                 {"schema": "RES-225-EXACT-DESIGN-NO-GOOD@1", **exclusion},
             )
-            closure = _cost2_closure_record(
+            closure = make_closure_record(
                 status="UNKNOWN",
                 proof_check_status="NOT_RUN",
                 base_status=last_base_status,
@@ -2236,9 +2414,9 @@ def run_cost2_closure(
                 cnf_digest=last_cnf_digest,
                 reason="EXACT_VARIANT_EXCLUDED",
             )
-            checkpoint_cost2(
+            checkpoint_closure(
                 closure,
-                phase="COST2_EXACT_VARIANT_EXCLUDED",
+                phase=f"{cost_label}_EXACT_VARIANT_EXCLUDED",
                 action_ids=repair_ids,
                 target_map=target_map,
                 repair_cost=repair_cost,
@@ -2252,9 +2430,9 @@ def run_cost2_closure(
             )
             if set(witness_digests) != {"BASE", "COLOCATION"}:
                 exact_state = "UNKNOWN"
-            elif repair_cost != _COST2_PRIMARY_CAP:
+            elif repair_cost != primary_cost_cap:
                 raise RuntimeError(
-                    "RES-225 cost-2 closure found a feasible repair below its proven bound"
+                    "RES-225 bounded closure found a feasible repair below its proven bound"
                 )
             else:
                 assert fallback is not None
@@ -2288,7 +2466,7 @@ def run_cost2_closure(
                 saved["incumbent"] = incumbent
                 saved["best_repair_cardinality"] = repair_cost
                 saved["BEST_REPAIR_CARDINALITY"] = repair_cost
-                closure = _cost2_closure_record(
+                closure = make_closure_record(
                     status="SAT",
                     proof_check_status="PASS",
                     base_status=last_base_status,
@@ -2303,21 +2481,27 @@ def run_cost2_closure(
                     cnf_digest=last_cnf_digest,
                     reason="EXACT_BASE_AND_COLOCATION_WITNESSES_VALIDATED",
                     terminal=True,
+                    qa_status="PASS",
                 )
-                checkpoint_digest = checkpoint_cost2(
+                checkpoint_digest = checkpoint_closure(
                     closure,
-                    phase="COST2_CLOSURE_SAT",
+                    phase=f"{cost_label}_CLOSURE_SAT",
                     action_ids=repair_ids,
                     target_map=target_map,
                     repair_cost=repair_cost,
                     final=True,
                 )
-                return _cost2_closure_receipt(saved, closure, checkpoint_digest=checkpoint_digest)
+                return _cost2_closure_receipt(
+                    saved,
+                    closure,
+                    checkpoint_digest=checkpoint_digest,
+                    primary_cost_cap=primary_cost_cap,
+                )
 
         variant_record["status"] = "UNKNOWN_VARIANT"
         variant_record["receipt"] = receipt
         saved["tested_repairs"] = (*tuple(saved["tested_repairs"]), variant_record)
-        closure = _cost2_closure_record(
+        closure = make_closure_record(
             status="UNKNOWN",
             proof_check_status="NOT_RUN",
             base_status=last_base_status,
@@ -2328,17 +2512,59 @@ def run_cost2_closure(
             cost_model_digest=last_cost_model_digest,
             cnf_digest=last_cnf_digest,
             reason="EXACT_VALIDATION_UNKNOWN",
-            terminal=True,
+            terminal=(primary_cost_cap == _COST2_PRIMARY_CAP),
+            qa_status="CHECKPOINT_PASS",
         )
-        checkpoint_digest = checkpoint_cost2(
+        checkpoint_digest = checkpoint_closure(
             closure,
-            phase="COST2_CLOSURE_UNKNOWN",
+            phase=f"{cost_label}_CLOSURE_UNKNOWN",
             action_ids=repair_ids,
             target_map=target_map,
             repair_cost=repair_cost,
             final=True,
         )
-        return _cost2_closure_receipt(saved, closure, checkpoint_digest=checkpoint_digest)
+        return _cost2_closure_receipt(
+            saved,
+            closure,
+            checkpoint_digest=checkpoint_digest,
+            primary_cost_cap=primary_cost_cap,
+        )
+
+
+def run_cost2_closure(
+    production_root: Path,
+    *,
+    expected_checkpoint_digest: str,
+    max_wall_seconds: float,
+    oracle_timeout_seconds: float = _DEFAULT_ORACLE_TIME_BUDGET_SECONDS,
+    proof_checker: str | Path | None = None,
+) -> dict[str, object]:
+    return _run_primary_cost_closure(
+        production_root,
+        expected_checkpoint_digest=expected_checkpoint_digest,
+        primary_cost_cap=_COST2_PRIMARY_CAP,
+        max_wall_seconds=max_wall_seconds,
+        oracle_timeout_seconds=oracle_timeout_seconds,
+        proof_checker=proof_checker,
+    )
+
+
+def run_cost3_closure(
+    production_root: Path,
+    *,
+    expected_checkpoint_digest: str,
+    max_wall_seconds: float,
+    oracle_timeout_seconds: float = _DEFAULT_ORACLE_TIME_BUDGET_SECONDS,
+    proof_checker: str | Path | None = None,
+) -> dict[str, object]:
+    return _run_primary_cost_closure(
+        production_root,
+        expected_checkpoint_digest=expected_checkpoint_digest,
+        primary_cost_cap=3,
+        max_wall_seconds=max_wall_seconds,
+        oracle_timeout_seconds=oracle_timeout_seconds,
+        proof_checker=proof_checker,
+    )
 
 
 def run(
@@ -4204,6 +4430,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--production-root", type=Path, default=DEFAULT_PRODUCTION_ROOT)
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--cost2-closure", action="store_true")
+    parser.add_argument("--cost3-closure", action="store_true")
     parser.add_argument("--expected-checkpoint-digest")
     parser.add_argument("--proof-checker", type=Path)
     parser.add_argument(
@@ -4221,18 +4448,21 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--materialize", action="store_true")
     args = parser.parse_args(argv)
     try:
-        if args.cost2_closure:
+        if args.cost2_closure or args.cost3_closure:
+            if args.cost2_closure and args.cost3_closure:
+                parser.error("select only one bounded closure cap")
+            cost_cap = 3 if args.cost3_closure else 2
             if args.materialize:
-                parser.error("--materialize is not available for the cost-2 closure probe")
+                parser.error("--materialize is not available for a bounded closure probe")
             if args.resume:
-                parser.error(
-                    "use --expected-checkpoint-digest instead of --resume for cost-2 closure"
-                )
+                parser.error("use --expected-checkpoint-digest instead of --resume for closure")
             if not args.expected_checkpoint_digest or args.max_wall_seconds is None:
                 parser.error(
-                    "--cost2-closure requires --expected-checkpoint-digest and --max-wall-seconds"
+                    f"--cost{cost_cap}-closure requires --expected-checkpoint-digest "
+                    "and --max-wall-seconds"
                 )
-            receipt = run_cost2_closure(
+            closure_runner = run_cost3_closure if cost_cap == 3 else run_cost2_closure
+            receipt = closure_runner(
                 args.production_root.resolve(),
                 expected_checkpoint_digest=args.expected_checkpoint_digest,
                 max_wall_seconds=args.max_wall_seconds,
