@@ -11,10 +11,13 @@ import scripts.res225_repair as res225_search
 from pysat.solvers import Solver  # type: ignore[import-untyped]
 from scripts.res225_repair import (
     _append_unique_core,
+    _apply_cost2_closure_result,
     _block_hitman_repair,
     _candidate_model_fallback,
     _checkpoint_bind,
     _core_hit_set_is_sat,
+    _cost2_closure_receipt,
+    _decode_candidate_sat_repair,
     _emit_iteration,
     _enforce_variant_cap,
     _exact_state,
@@ -27,6 +30,7 @@ from scripts.res225_repair import (
     _minimum_hit_cost,
     _optimality_gap,
     _read_checkpoint,
+    _release_cost_cap_clauses,
     _repair_primary_cost,
     _repair_score,
     _RepairSearchBlockedError,
@@ -128,6 +132,101 @@ def test_incremental_solver_reuses_model_for_exact_variant_no_good() -> None:
         assert not solver.solve(assumptions=[1, -2, 3])
         assert solver.solve(assumptions=[1, -2, 4])
         assert solver.solve(assumptions=[-1, 2, 3])
+
+
+def test_global_primary_cost_cap_is_encoded_as_a_weighted_pb_bound() -> None:
+    model = cast(
+        CoreModel,
+        SimpleNamespace(
+            clauses=(),
+            max_variable=2,
+            release_variables={"a": 1, "b": 2},
+        ),
+    )
+    clauses, maximum_variable = _release_cost_cap_clauses(model, {"a": 2, "b": 1}, 2)
+    assert clauses
+    assert maximum_variable >= 2
+    with Solver(name="g4", bootstrap_with=clauses) as solver:
+        assert not solver.solve(assumptions=[1, 2])
+        assert solver.solve(assumptions=[1, -2])
+        assert solver.solve(assumptions=[-1, 2])
+
+
+def test_global_sat_repair_decoding_returns_actions_targets_and_allocation() -> None:
+    model = cast(
+        CoreModel,
+        SimpleNamespace(
+            release_variables={"a": 1, "b": 2},
+            target_variables={"a": {"parent-a": 3, "parent-b": 4}},
+            candidate_ids=("candidate-a", "candidate-b"),
+            assignment_variables=((5, 6, 7), (8, 9, 10)),
+        ),
+    )
+    assert _decode_candidate_sat_repair(model, (1, -2, 3, -4, 5, -6, -7, -8, 9, -10)) == (
+        ("a",),
+        {"a": "parent-a"},
+        {"candidate-a": 0, "candidate-b": 1},
+    )
+
+
+def test_certified_cost2_unsat_promotes_only_global_primary_bound() -> None:
+    checkpoint = {
+        "LOWER_BOUND": 2,
+        "GLOBAL_PRIMARY_LOWER_BOUND": 2,
+        "UPPER_BOUND": None,
+        "upper_bound": None,
+        "OPTIMALITY_GAP": None,
+    }
+    promoted = _apply_cost2_closure_result(
+        checkpoint,
+        {"status": "UNSAT", "proof_check_status": "PASS"},
+    )
+    assert promoted["LOWER_BOUND"] == 2
+    assert promoted["GLOBAL_PRIMARY_LOWER_BOUND"] == 3
+    assert promoted["upper_bound"] is None
+    with pytest.raises(ValueError, match="checked proof"):
+        _apply_cost2_closure_result(
+            checkpoint,
+            {"status": "UNSAT", "proof_check_status": "NOT_RUN"},
+        )
+
+
+def test_terminal_cost2_unsat_receipt_preserves_promoted_bound() -> None:
+    receipt = _cost2_closure_receipt(
+        {
+            "CHECKPOINT_DIGEST": "sha256:" + "d" * 64,
+            "LOWER_BOUND": 2,
+            "GLOBAL_PRIMARY_LOWER_BOUND": 3,
+            "UPPER_BOUND": None,
+        },
+        {
+            "status": "UNSAT",
+            "proof_check_status": "PASS",
+            "repairs_tested_total": 0,
+            "exact_variant_nogoods": 0,
+            "abstract_base_status": "NOT_RUN",
+            "abstract_colocation_status": "NOT_RUN",
+        },
+    )
+    assert receipt["LOWER_BOUND_AFTER"] == 3
+    assert receipt["UPPER_BOUND_AFTER"] == "NONE"
+    assert receipt["NEXT"] == "RESUME_COST3_SEARCH"
+
+
+def test_cost2_unknown_preserves_global_primary_lower_bound() -> None:
+    checkpoint = {
+        "LOWER_BOUND": 2,
+        "GLOBAL_PRIMARY_LOWER_BOUND": 2,
+        "UPPER_BOUND": None,
+        "upper_bound": None,
+        "OPTIMALITY_GAP": None,
+    }
+    updated = _apply_cost2_closure_result(
+        checkpoint,
+        {"status": "UNKNOWN", "proof_check_status": "NOT_RUN"},
+    )
+    assert updated["LOWER_BOUND"] == 2
+    assert updated["GLOBAL_PRIMARY_LOWER_BOUND"] == 2
 
 
 def test_exact_unknown_is_not_feasible_or_infeasible() -> None:
@@ -646,6 +745,8 @@ def test_checkpoint_resume_replays_cores_and_exact_no_goods(tmp_path: Path) -> N
         "phase": "CORE_ADDED",
         "lower_bound": 1,
         "upper_bound": 2,
+        "GLOBAL_PRIMARY_LOWER_BOUND": 1,
+        "global_primary_lower_bound": 1,
         "optimality_gap": 1,
         "no_goods": 1,
         "current_hitting_set_size": 1,
@@ -664,6 +765,13 @@ def test_checkpoint_resume_replays_cores_and_exact_no_goods(tmp_path: Path) -> N
         "LAST_ORACLE_STATUS": "UNSAT",
         "LAST_ORACLE_SECONDS": 0.25,
         "CURRENT_PHASE": "CORE_ADDED",
+        "cost2_closure": {
+            "schema": "RES-225-COST2-CLOSURE@1.0.0",
+            "status": "UNKNOWN",
+            "terminal": True,
+            "primary_cost_cap": 2,
+            "proof_check_status": "NOT_RUN",
+        },
         "best_repair_cardinality": 2,
         "incumbent": {
             "action_ids": ("b",),
@@ -682,6 +790,7 @@ def test_checkpoint_resume_replays_cores_and_exact_no_goods(tmp_path: Path) -> N
     )
     restored_cores = cast(list[dict[str, Any]], restored["cores"])
     assert restored["LOWER_BOUND"] == 1
+    assert restored["GLOBAL_PRIMARY_LOWER_BOUND"] == 1
     assert restored["UPPER_BOUND"] == 2
     assert restored["OPTIMALITY_GAP"] == 1
     assert restored["NO_GOODS"] == len(restored["excluded_exact_designs"]) == 1
@@ -692,6 +801,7 @@ def test_checkpoint_resume_replays_cores_and_exact_no_goods(tmp_path: Path) -> N
     assert restored["preservation_registry"][0]["assumption_id"] == "KEEP:A"
     assert "split_membership" not in restored
     assert restored["CHECKPOINT_DIGEST"] == digest
+    assert restored["cost2_closure"]["status"] == "UNKNOWN"
     second_hitman = _hitman_from_cores(restored_cores, weights)
     assert _hitman_solution(second_hitman, weights) == selected_before_restart
 
