@@ -755,3 +755,14 @@ def test_plan_canonicalization_is_order_independent() -> None:
     plan = current_plan(_sealed())
     shuffled = RedesignPlan(roots=tuple(reversed(plan.roots)))
     assert shuffled.canonical() == plan
+
+
+def test_selected_plan_is_independent_of_the_solver_search_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Equally optimal plans must not be chosen by search order: a different
+    # search seed must reach the same canonical plan.
+    monkeypatch.setattr(redesign, "OPTIMIZER_RANDOM_SEED", 7)
+    reseeded = build_redesign("B", _sealed())
+    assert reseeded is not None
+    assert reseeded.design_digest == _design("B").design_digest

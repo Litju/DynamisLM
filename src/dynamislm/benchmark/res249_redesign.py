@@ -68,6 +68,7 @@ VH_ELIGIBLE_COMPONENTS_PER_CELL_MINIMUM = 2
 OPTIMIZER_DETERMINISTIC_TIME = 60.0
 # interleave_search makes multi-worker CP-SAT deterministic.
 OPTIMIZER_WORKERS = 8
+OPTIMIZER_RANDOM_SEED = 0
 EXACT_DETERMINISTIC_TIME = 120.0
 EXACT_WORKERS = 8
 MAX_ARRIVALS_PER_ROLE = 4
@@ -1508,7 +1509,7 @@ class _CapacityModel:
             solver = cp_model.CpSolver()
             solver.parameters.num_search_workers = OPTIMIZER_WORKERS
             solver.parameters.interleave_search = OPTIMIZER_WORKERS > 1
-            solver.parameters.random_seed = 0
+            solver.parameters.random_seed = OPTIMIZER_RANDOM_SEED
             solver.parameters.randomize_search = False
             solver.parameters.max_deterministic_time = OPTIMIZER_DETERMINISTIC_TIME
             status = solver.solve(self.model)
@@ -1536,22 +1537,78 @@ class _CapacityModel:
             self.model.clear_hints()  # type: ignore[no-untyped-call]
             for variable in self._decision_variables():
                 self.model.add_hint(variable, solver.value(variable))
+        values = self._canonicalize(
+            {id(var): solver.value(var) for var in self._decision_variables()}
+        )
+        if values is None:
+            return None, tuple(trace), "UNKNOWN"
+
+        def chosen(var: Any) -> int:
+            return values[id(var)]
+
         plan = RedesignPlan(
-            roots=tuple(key for key, var in self.root_vars.items() if solver.value(var)),
-            root_replacements=tuple(
-                cid for cid, var in self.root_replace.items() if solver.value(var)
-            ),
+            roots=tuple(key for key, var in self.root_vars.items() if chosen(var)),
+            root_replacements=tuple(cid for cid, var in self.root_replace.items() if chosen(var)),
             reassignments=self._pair_reassignments(
-                tuple(cid for cid, var in self.depart.items() if solver.value(var)),
+                tuple(cid for cid, var in self.depart.items() if chosen(var)),
                 tuple(
-                    source
-                    for source, var in self.arrive.items()
-                    for _copy in range(solver.value(var))
+                    source for source, var in self.arrive.items() for _copy in range(chosen(var))
                 ),
             ),
-            rebinds=tuple(cid for cid, var in self.rebind.items() if solver.value(var)),
+            rebinds=tuple(cid for cid, var in self.rebind.items() if chosen(var)),
         ).canonical()
         return plan, tuple(trace), status_label
+
+    def _canonical_order(self) -> list[Any]:
+        def ordered(mapping: Mapping[Any, Any]) -> list[Any]:
+            return [mapping[key] for key in sorted(mapping, key=canonical_hash)]
+
+        return [
+            *ordered(self.root_vars),
+            *ordered(self.root_replace),
+            *ordered(self.depart),
+            *ordered(self.rebind),
+            *ordered(self.arrive),
+        ]
+
+    def _canonicalize(self, incumbent: dict[int, int]) -> dict[int, int] | None:
+        """Lexicographically smallest decision vector within the pinned optimum.
+
+        With every objective level pinned, decision variables are visited in a
+        canonical order and each is fixed to the smallest value that keeps the
+        model feasible. Each step answers a feasibility question, so the result
+        is unique and independent of the solver's search path. Any UNKNOWN
+        answer fails closed.
+        """
+
+        cp_model = self.cp_model
+        decisions = self._decision_variables()
+        values = dict(incumbent)
+        for var in self._canonical_order():
+            chosen = values[id(var)]
+            for candidate in range(chosen):
+                trial = self.model.clone()
+                trial.add(trial.get_int_var_from_proto_index(var.index) == candidate)
+                # Each probe only answers a feasibility question, so the default
+                # portfolio is used (interleaved search aborts on cloned probes in
+                # OR-Tools 9.15); the canonical result does not depend on its path.
+                solver: Any = cp_model.CpSolver()
+                solver.parameters.num_search_workers = OPTIMIZER_WORKERS
+                solver.parameters.random_seed = OPTIMIZER_RANDOM_SEED
+                solver.parameters.max_deterministic_time = OPTIMIZER_DETERMINISTIC_TIME
+                name = solver.status_name(solver.solve(trial))
+                if name == "INFEASIBLE":
+                    continue
+                if name not in {"OPTIMAL", "FEASIBLE"}:
+                    return None
+                chosen = candidate
+                values = {id(other): int(solver.value(other)) for other in decisions}
+                break
+            self.model.add(var == chosen)
+            self.model.clear_hints()  # type: ignore[no-untyped-call]
+            for other in decisions:
+                self.model.add_hint(other, values[id(other)])
+        return values
 
 
 @dataclass(frozen=True, slots=True)
