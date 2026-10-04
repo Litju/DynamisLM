@@ -3,9 +3,67 @@
 This contract implements the RES-115 Phase-B boundary from
 [RES-21-DR-001](../decisions/RES21-DR-001-performance-science-eval-v1.md).
 It does not change that frozen case contract or the RES-60/62/69/70/71
-scientific authorities.
+scientific authorities. The pool and final-selection lifecycle is governed by
+[RES258-DR-001](../decisions/RES258-DR-001-pse-v1-pool-first-selection-authority.md)
+and its [supersession map](../decisions/RES258-SUPERSESSION-MAP.md).
 
-## Lifecycle
+## Pool-first benchmark lifecycle
+
+```text
+qualify a variable pre-review pool of at least 434 candidates
+-> validate scientific, source, provenance, contamination, and isolation identities
+-> qualify independent reserve inventory from eligible pool structure
+-> conduct human review
+-> remove rejected or unapproved candidates from final eligibility
+-> perform targeted governed backfill if the approved pool has a deficit
+-> jointly select exactly 434 approved eligible cases and allocate 260/87/87
+-> independently validate the final selection with the same constraint vocabulary
+-> freeze the validated final benchmark
+```
+
+The pre-review pool has no fixed cardinality beyond `N >= 434`. The final
+selection is exactly 434: `PUBLIC_DEVELOPMENT=260`,
+`FROZEN_VALIDATION=87`, and `HIDDEN_FINAL=87`. The final selection enforces
+RES-126 composition bounds: expert-authored semantic `<= 240`, source-backed
+evidence extraction `>= 40`, deterministic engine-derived `>= 30`,
+deterministic synthetic `>= 12`, adversarial mutation `>= 60`, and at least 20
+mutation lineages. These bounds do not cap or require exact counts in the
+pre-review pool.
+
+Reserve inventory is qualified before selection and is structurally derived
+from the actual eligible pool and hard constraints. An independent CRITICAL
+reserve is required at this pool-qualification stage as a reliability gate.
+This reserve does not increase the final CRITICAL minimum in DR-001. The final
+benchmark retains the DR-001 critical-error coverage minimum in each required
+protected split.
+
+Rejection removes that candidate from final eligibility. It does not turn the
+candidate into a Public case or move any other candidate into a predetermined
+split. Backfill is targeted and governed; every new candidate repeats pool
+qualification and human review. If the approved eligible pool cannot support
+an exact compliant final selection, selection and freeze remain blocked.
+
+Mutation parent provenance remains immutable and required, but parent
+co-selection is not required. A selected mutation may have an unselected
+parent. When related lineage members are selected, isolation keeps those
+selected members in the same split; same-cell inheritance remains the default.
+The final mutation and lineage counts follow the bounds above, not a fixed
+`37 x 3` topology.
+
+Pool qualification, approved-pool selection, final allocation, and independent
+validation must implement one semantic constraint vocabulary. A separate
+allocator with weaker or different constraints is not authorized. This
+documentation does not implement that solver or materialize candidates.
+RES-71 engine-reference identity must become an explicit isolation identity;
+that implementation is deferred to RES-3l.
+
+PSE V1's primary purpose is scientific capability coverage and its secondary
+purpose is adversarial scientific-behavior evaluation. Its coverage supports
+capability-by-family coverage claims; it does not authorize high-precision
+cell-level performance estimates or fine-grained model ranking without
+additional statistical qualification.
+
+## Per-candidate review and promotion lifecycle
 
 ```text
 CandidateReviewPacket (PENDING_HUMAN_REVIEW)
