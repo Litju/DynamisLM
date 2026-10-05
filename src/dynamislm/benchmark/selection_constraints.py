@@ -178,6 +178,13 @@ def selection_candidate_from_commitment(
         (IsolationIdentityKind.PROTOCOL_TEMPLATE, item.protocol_template_ids),
     ):
         identities.update(IsolationIdentity(kind, value) for value in values)
+    if item.engine_reference_case_id is not None:
+        identities.add(
+            IsolationIdentity(
+                IsolationIdentityKind.RES71_ENGINE_REFERENCE_CASE,
+                item.engine_reference_case_id,
+            )
+        )
     for kind, value in (
         (IsolationIdentityKind.EXPERT_AUTHOR_BATCH, item.expert_author_batch_id),
         (IsolationIdentityKind.GENERATOR_FAMILY, item.generator_family),
@@ -231,10 +238,7 @@ def selection_candidate_from_commitment(
 def contamination_isolation_identities(
     contamination: ContaminationBinding,
 ) -> tuple[IsolationIdentity, ...]:
-    """Retain DR-001 contamination identities not carried by the plan-item projection.
-
-    RES-71 engine-reference identity stays deferred to RES-3l.
-    """
+    """Retain DR-001 contamination identities not carried by the plan-item projection."""
 
     values = {
         IsolationIdentity(IsolationIdentityKind.SOURCE_FAMILY, contamination.source_family_id)

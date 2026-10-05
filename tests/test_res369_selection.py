@@ -31,6 +31,7 @@ from dynamislm.benchmark.selection_constraints import (
     FINAL_SPLIT_COUNTS,
     build_final_selection_problem,
     build_final_selection_problem_from_commitments,
+    selection_candidate_from_commitment,
 )
 from dynamislm.benchmark.selection_contracts import (
     PSE_V1_PRODUCTION_SELECTION_SOLVER_PROFILE_V1,
@@ -1293,6 +1294,25 @@ def test_commitment_adapter_uses_typed_review_and_coverage_features() -> None:
         IsolationIdentityKind.BENCHMARK_ARTIFACT,
         IsolationIdentityKind.TRAINING_EXCLUSION,
     }
+    engine_reference = "res71-reference:adapter"
+    engine_item = replace(
+        item,
+        candidate_id="PSE-V1-CANDIDATE:res369-engine-adapter",
+        origin_class=CaseOrigin.DETERMINISTIC_ENGINE_DERIVED,
+        authority_class="RES71_REFERENCE",
+        authority_kinds=("RES71_REFERENCE_CASE",),
+        expert_author_batch_id=None,
+        engine_reference_case_id=engine_reference,
+    )
+    adapted_engine = selection_candidate_from_commitment(
+        ProductionCandidateCommitmentV1(engine_item, canonical_hash("engine-adapter-payload")),
+        review_eligibility=ReviewEligibility.APPROVED,
+        contamination=contamination,
+    )
+    assert (
+        IsolationIdentity(IsolationIdentityKind.RES71_ENGINE_REFERENCE_CASE, engine_reference)
+        in adapted_engine.isolation_identities
+    )
     pending_problem = build_final_selection_problem_from_commitments(
         (commitment,),
         review_eligibility={item.candidate_id: CandidateReviewStatus.PENDING_HUMAN_REVIEW},
@@ -1303,3 +1323,75 @@ def test_commitment_adapter_uses_typed_review_and_coverage_features() -> None:
         constraint.kind is ConstraintKind.REVIEW_OUT_ONLY
         for constraint in pending_problem.constraint_set.constraints
     )
+
+
+def test_engine_reference_identity_survives_shingle_source_and_cluster_changes() -> None:
+    reference_case_id = "res71-reference:counterfactual"
+    engine_identity = IsolationIdentity(
+        IsolationIdentityKind.RES71_ENGINE_REFERENCE_CASE,
+        reference_case_id,
+    )
+    candidates = (
+        _candidate(
+            "engine-a",
+            cluster="cluster:a",
+            identities=(
+                engine_identity,
+                IsolationIdentity(IsolationIdentityKind.SOURCE_FAMILY, "family:a"),
+            ),
+            exact_shingles=(canonical_hash("shingle:a"),),
+        ),
+        _candidate(
+            "engine-b",
+            cluster="cluster:b",
+            identities=(
+                engine_identity,
+                IsolationIdentity(IsolationIdentityKind.SOURCE_FAMILY, "family:b"),
+            ),
+            exact_shingles=(canonical_hash("shingle:b"),),
+        ),
+    )
+    problem = build_final_selection_problem(candidates)
+    candidate_ids = tuple(candidate.candidate_id for candidate in candidates)
+    relation = next(
+        constraint
+        for constraint in problem.constraint_set.constraints
+        if constraint.kind is ConstraintKind.CONDITIONAL_COLOCATION
+        and constraint.relation_kind is RelationKind.ISOLATION_IDENTITY
+        and constraint.candidate_ids == candidate_ids
+    )
+    assert {candidate.isolation_cluster_id for candidate in candidates} == {
+        "cluster:a",
+        "cluster:b",
+    }
+    assert {
+        identity.identity
+        for candidate in candidates
+        for identity in candidate.isolation_identities
+        if identity.kind is IsolationIdentityKind.SOURCE_FAMILY
+    } == {"family:a", "family:b"}
+    assert len({candidate.exact_shingle_digests for candidate in candidates}) == 2
+
+    one_selected = _toy_problem(
+        candidates,
+        ((SplitName.PUBLIC_DEVELOPMENT, 1),),
+        extra=(relation,),
+    )
+    one_result = solve_final_selection(one_selected)
+    assert one_result.plan is not None
+    assert sum(item.state is AssignmentState.OUT for item in one_result.plan.assignments) == 1
+
+    crossing = _toy_problem(
+        candidates,
+        ((SplitName.PUBLIC_DEVELOPMENT, 1), (SplitName.FROZEN_VALIDATION, 1)),
+        extra=(relation,),
+    )
+    crossing_plan = _plan(
+        crossing,
+        {
+            candidate_ids[0]: AssignmentState.PUBLIC_DEVELOPMENT,
+            candidate_ids[1]: AssignmentState.FROZEN_VALIDATION,
+        },
+    )
+    assert validate_final_selection(crossing, crossing_plan).status is ValidationStatus.INVALID
+    assert solve_final_selection(crossing).solve_receipt.status is SolveStatus.INFEASIBLE

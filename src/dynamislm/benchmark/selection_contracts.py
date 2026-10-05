@@ -72,6 +72,7 @@ class IsolationIdentityKind(enum.StrEnum):
     GENERATOR_SEED_BLOCK = "seed-block"
     MUTATION_LINEAGE = "mutation-lineage"
     MUTATION_PARENT = "mutation-parent-candidate"
+    RES71_ENGINE_REFERENCE_CASE = "res71-engine-reference-case"
 
 
 class RelationKind(enum.StrEnum):

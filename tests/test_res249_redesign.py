@@ -148,6 +148,11 @@ def _item(
         expected_answer_kind=ExpectedAnswerKind.REFUSAL if refusal else ExpectedAnswerKind.ANSWER,
         safe_partial_support=refusal,
         difficulty=DifficultyLevel.EASY,
+        engine_reference_case_id=(
+            f"res71-reference:{candidate_id}"
+            if origin is CaseOrigin.DETERMINISTIC_ENGINE_DERIVED
+            else None
+        ),
     )
 
 

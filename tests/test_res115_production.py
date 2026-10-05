@@ -207,6 +207,11 @@ def _item(
         expected_answer_kind=answer_kind,
         safe_partial_support=safe_partial_support,
         difficulty=DifficultyLevel.EASY,
+        engine_reference_case_id=(
+            f"res71-reference:{candidate_id}"
+            if origin is CaseOrigin.DETERMINISTIC_ENGINE_DERIVED
+            else None
+        ),
     )
 
 

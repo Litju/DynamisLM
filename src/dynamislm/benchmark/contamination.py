@@ -26,6 +26,7 @@ from dynamislm.benchmark.contracts import (
     OverlapDispositionV1,
 )
 from dynamislm.benchmark.hashing import case_payload_hash
+from dynamislm.benchmark.selection_contracts import IsolationIdentityKind
 from dynamislm.serialization import canonical_hash
 
 _TOKEN_RE = re.compile(r"\w+|[^\w\s]", flags=re.UNICODE)
@@ -1056,6 +1057,10 @@ def case_isolation_values(case: BenchmarkCaseV1) -> tuple[tuple[str, str], ...]:
         ("expert-author-batch", contamination.expert_author_batch_id),
         ("generator-family", provenance.generator_family),
         ("mutation-lineage", provenance.mutation_lineage_id),
+        (
+            IsolationIdentityKind.RES71_ENGINE_REFERENCE_CASE.value,
+            provenance.engine_reference_case_id,
+        ),
     ):
         if value:
             values.add((kind, value))

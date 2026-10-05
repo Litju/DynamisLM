@@ -54,8 +54,9 @@ Pool qualification, approved-pool selection, final allocation, and independent
 validation must implement one semantic constraint vocabulary. A separate
 allocator with weaker or different constraints is not authorized. This
 documentation does not implement that solver or materialize candidates.
-RES-71 engine-reference identity must become an explicit isolation identity;
-that implementation is deferred to RES-3l.
+RES-71 engine-reference case IDs are typed isolation identities in joint
+selection and final case validation. Related selected cases share a split;
+any member may remain `OUT`.
 
 PSE V1's primary purpose is scientific capability coverage and its secondary
 purpose is adversarial scientific-behavior evaluation. Its coverage supports

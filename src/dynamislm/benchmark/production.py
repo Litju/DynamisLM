@@ -223,6 +223,7 @@ class ProductionAuthoringPlanItemV1:
     safe_partial_support: bool
     difficulty: DifficultyLevel
     question_surface_variant_id: str | None = None
+    engine_reference_case_id: str | None = None
 
     def __post_init__(self) -> None:
         _candidate_id(self.candidate_id)
@@ -289,6 +290,7 @@ class ProductionAuthoringPlanItemV1:
             "mutation_lineage_id",
             "parent_candidate_id",
             "question_surface_variant_id",
+            "engine_reference_case_id",
         ):
             _optional_text(getattr(self, name), name)
         if self.expert_author_batch_id in {
@@ -346,6 +348,15 @@ class ProductionAuthoringPlanItemV1:
         elif any(value is not None for value in synthetic_fields):
             raise ValueError(
                 "non-synthetic production candidate cannot carry generator seed metadata"
+            )
+        if self.origin_class is CaseOrigin.DETERMINISTIC_ENGINE_DERIVED:
+            if self.engine_reference_case_id is None:
+                raise ValueError(
+                    "engine-derived production candidate requires a RES-71 reference ID"
+                )
+        elif self.engine_reference_case_id is not None:
+            raise ValueError(
+                "only engine-derived production candidates may carry a RES-71 reference ID"
             )
         if self.origin_class is CaseOrigin.ADVERSARIAL_MUTATION:
             if self.mutation_lineage_id is None or self.parent_candidate_id is None:
@@ -583,6 +594,7 @@ def production_plan_item_from_packet(
             packet.capability_id,
             packet.benchmark_family,
         ),
+        engine_reference_case_id=provenance.engine_reference_case_id,
     )
 
 

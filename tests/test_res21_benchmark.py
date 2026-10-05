@@ -512,9 +512,22 @@ def test_synthetic_final_split_must_match_its_locked_seed_namespace() -> None:
 
 
 def _build_full_coverage_qualification_cases() -> tuple[BenchmarkCaseV1, ...]:
+    from dynamislm.benchmark.contamination import (
+        exact_shingle_digest,
+        fuzzy_fingerprint,
+        normalized_text_sha256,
+    )
+    from dynamislm.benchmark.contracts import (
+        DeterministicResultView,
+        ExpectedStructuredAnswer,
+        ProvenanceEdge,
+        ToleranceContract,
+    )
     from dynamislm.benchmark.coverage import COVERAGE_MATRIX
     from dynamislm.benchmark.hashing import bind_case_payload
     from dynamislm.benchmark.scoring_paths import reachable_error_classes
+    from dynamislm.qualification.contracts import ReferenceCaseStatus
+    from dynamislm.qualification.references import get_reference_case
     from dynamislm.serialization import canonical_hash
 
     fixtures = build_synthetic_reference_fixture_cases()
@@ -622,37 +635,153 @@ def _build_full_coverage_qualification_cases() -> tuple[BenchmarkCaseV1, ...]:
         assert len(errors) <= len(keys)
         return tuple((key, errors[index % len(errors)]) for index, key in enumerate(keys))
 
+    def engine_reference_case(
+        *,
+        case_id: str,
+        reference_case_id: str,
+        template: BenchmarkCaseV1,
+        capability_id: str,
+        family: str,
+        errors: tuple[ErrorClass, ...],
+        index: int,
+    ) -> BenchmarkCaseV1:
+        reference = get_reference_case(reference_case_id)
+        if (
+            reference.status is not ReferenceCaseStatus.VALUE
+            or reference.operation_id is None
+            or len(reference.expected_values) != 1
+            or reference.expected_values[0].unit is None
+            or reference.tolerance_absolute is None
+            or reference.tolerance_relative is None
+        ):
+            raise AssertionError("scale fixture requires a scalar RES-71 value reference")
+        operation = bind_res71_operation(
+            reference.operation_id,
+            reference_case_id=reference.case_id,
+        )
+        reference_digest = operation.reference_case_digest
+        assert reference_digest is not None
+        result_id = f"scale-result-{index:03d}"
+        question = f"In-memory scale qualification case {case_id}."
+        field_ids = tuple(value.name for value in reference.expected_values)
+        expected_values = {value.name: value.value for value in reference.expected_values}
+        result = DeterministicResultView(
+            result_reference_id=result_id,
+            operation_id=operation.operation_id,
+            method_version=operation.method_version,
+            output_unit=reference.expected_values[0].unit,
+            result_or_refusal_digest=reference_digest,
+            authority_reference=reference.case_id,
+            values=expected_values,
+        )
+        authorities = tuple(
+            replace(
+                binding,
+                source_reference_id=operation.operation_id,
+                version=operation.method_version,
+                digest=operation.operation_inventory_digest,
+            )
+            if binding.authority_kind == "RES71_OPERATION"
+            else replace(
+                binding,
+                source_reference_id=reference.case_id,
+                version=reference.case_version,
+                digest=reference_digest,
+            )
+            if binding.authority_kind == "RES71_REFERENCE_CASE"
+            else binding
+            for binding in template.authority
+        )
+        provenance = replace(
+            template.provenance,
+            authority_lineage=("res71-reference-interface", reference.case_id),
+            derivation_edges=(ProvenanceEdge(reference.case_id, result_id, "REFERENCE_OUTPUT"),),
+            engine_operation_id=operation.operation_id,
+            engine_method_version=operation.method_version,
+            engine_reference_case_id=reference.case_id,
+            engine_reference_digest=reference_digest,
+            engine_registry_digest=operation.operation_inventory_digest,
+        )
+        attribution = tuple(
+            (field_id, errors[position % len(errors)])
+            for position, field_id in enumerate((*field_ids, "__over_refusal__"))
+        )
+        return bind_case_payload(
+            replace(
+                template,
+                case_id=case_id,
+                capability_id=capability_id,
+                benchmark_family=family,
+                question=question,
+                input=replace(
+                    template.input,
+                    question_text=question,
+                    structured_context={
+                        value.name: value.value for value in reference.synthetic_input
+                    },
+                    deterministic_results=(result,),
+                ),
+                expected_answer=ExpectedStructuredAnswer(
+                    kind=template.expected_answer.kind,
+                    required_field_ids=field_ids,
+                    expected_fields=expected_values,
+                    reference_case_id=reference.case_id,
+                    expected_operation_id=operation.operation_id,
+                ),
+                authority=authorities,
+                scoring_contract=replace(
+                    template.scoring_contract,
+                    profile_id=ScoringProfile.NUMERIC_TOLERANCE_V1,
+                    required_output_fields=field_ids,
+                    critical_fields=field_ids,
+                    error_class_rules=errors,
+                    error_attribution=attribution,
+                ),
+                tolerance_contract=ToleranceContract(
+                    field_ids,
+                    reference.expected_values[0].unit,
+                    reference.tolerance_absolute,
+                    reference.tolerance_relative,
+                ),
+                provenance=provenance,
+                split=replace(
+                    template.split,
+                    isolation_cluster_id=f"scale-cluster-{index:03d}",
+                ),
+                contamination=replace(
+                    template.contamination,
+                    source_family_id=f"scale-source-{index:03d}",
+                    normalized_text_sha256=normalized_text_sha256(question),
+                    exact_shingle_digest=exact_shingle_digest(question),
+                    fuzzy_fingerprint=fuzzy_fingerprint(question),
+                    construct_test_identity_ids=(f"scale-construct-test-{index:03d}",),
+                    provider_export_id=f"scale-provider-{index:03d}",
+                    protocol_template_id=f"scale-template-{index:03d}",
+                    expert_author_batch_id=f"scale-batch-{index:03d}",
+                    artifact_ids=(f"scale-artifact-{index:03d}",),
+                    benchmark_artifact_ids=(f"scale-artifact-{index:03d}",),
+                    training_exclusion_ids=(f"scale-exclusion-{index:03d}",),
+                ),
+                adversarial_tags=tuple(
+                    next(
+                        row for row in COVERAGE_MATRIX if row.capability_id == capability_id
+                    ).adversarial_tags
+                ),
+                case_payload_hash="sha256:" + "0" * 64,
+            )
+        )
+
+    engine_references_by_split = (
+        "res71-external-unit-km-to-m",
+        "res71-cmj-flight-time-v2-gold",
+        "res71-rsa-mechanical-percent-decrement",
+    )
+
     for row in COVERAGE_MATRIX:
         template = engine_template if row.capability_id in {"C08", "C16"} else expert_template
-        if row.capability_id == "C16":
-            c16_fields = ("value", "result_provenance", "claim_scope")
-            c16_answer = replace(
-                template.expected_answer,
-                required_field_ids=c16_fields,
-                expected_fields={
-                    **template.expected_answer.expected_fields,
-                    "result_provenance": "registered-result",
-                    "claim_scope": "descriptive",
-                },
-            )
-            template = bind_case_payload(
-                replace(
-                    template,
-                    expected_answer=c16_answer,
-                    scoring_contract=replace(
-                        template.scoring_contract,
-                        profile_id=ScoringProfile.STRUCTURED_FIELDS_V1,
-                        required_output_fields=c16_fields,
-                        critical_fields=c16_fields,
-                    ),
-                    case_payload_hash="sha256:" + "0" * 64,
-                )
-            )
         profile = (
             ScoringProfile.NUMERIC_TOLERANCE_V1
-            if row.capability_id == "C08"
-            else ScoringProfile.STRUCTURED_FIELDS_V1
-            if row.capability_id == "C16"
+            if row.capability_id in {"C08", "C16"}
             else next(
                 item
                 for item in (
@@ -672,11 +801,31 @@ def _build_full_coverage_qualification_cases() -> tuple[BenchmarkCaseV1, ...]:
                     if family_index % 2 == 0
                     else tuple(row.error_classes[4:])
                 )
+            elif row.capability_id == "C16":
+                row_errors = tuple(row.error_classes)
+                family_index = row.benchmark_families.index(family)
+                errors = (
+                    row_errors[family_index % len(row_errors)],
+                    row_errors[(family_index + 1) % len(row_errors)],
+                )
             else:
                 errors = tuple(row.error_classes)
             for replica in range(3):
                 index = len(scale_cases)
                 case_id = f"scale-qualification-{row.capability_id}-{family}-{replica}"
+                if row.capability_id in {"C08", "C16"}:
+                    scale_cases.append(
+                        engine_reference_case(
+                            case_id=case_id,
+                            reference_case_id=engine_references_by_split[replica],
+                            template=template,
+                            capability_id=row.capability_id,
+                            family=family,
+                            errors=errors,
+                            index=index,
+                        )
+                    )
+                    continue
                 attribution = reachable_attribution(template, errors)
                 question = f"In-memory scale qualification case {case_id}."
                 scale_cases.append(
@@ -848,6 +997,68 @@ def test_split_isolation_clusters_and_rejects_shared_identity_attacks(
         ),
     )
     with pytest.raises(ValueError, match=expected_kind):
+        validate_source_family_isolation(cross_split)
+
+
+def test_final_case_isolation_keeps_shared_res71_reference_same_split() -> None:
+    from dynamislm.benchmark.contamination import (
+        case_isolation_values,
+        validate_source_family_isolation,
+    )
+
+    template = next(
+        case
+        for case in build_synthetic_reference_fixture_cases()
+        if case.provenance.origin_class is CaseOrigin.DETERMINISTIC_ENGINE_DERIVED
+    )
+
+    def case(case_id: str, suffix: str) -> BenchmarkCaseV1:
+        return bind_case_payload(
+            replace(
+                template,
+                case_id=case_id,
+                split=replace(template.split, isolation_cluster_id=f"engine-cluster-{suffix}"),
+                contamination=replace(
+                    template.contamination,
+                    source_artifact_ids=(),
+                    document_ids=(),
+                    source_family_id=f"engine-source-family-{suffix}",
+                    provider_export_id=None,
+                    protocol_template_id=None,
+                    expert_author_batch_id=None,
+                    artifact_ids=(),
+                    exact_shingle_digest=f"sha256:{suffix * 64}",
+                    fuzzy_fingerprint=f"sha256:{suffix * 64}",
+                    semantic_cluster_id=None,
+                    generator_namespace=None,
+                    generator_seed_block=None,
+                    benchmark_artifact_ids=(),
+                    training_exclusion_ids=(),
+                    construct_test_identity_ids=(),
+                ),
+            )
+        )
+
+    first, second = case("engine-isolation-a", "a"), case("engine-isolation-b", "b")
+    assert first.provenance.engine_reference_case_id == second.provenance.engine_reference_case_id
+    assert first.contamination.source_family_id != second.contamination.source_family_id
+    assert first.contamination.exact_shingle_digest != second.contamination.exact_shingle_digest
+    assert first.split.isolation_cluster_id != second.split.isolation_cluster_id
+    identity = (
+        "res71-engine-reference-case",
+        first.provenance.engine_reference_case_id,
+    )
+    assert identity in case_isolation_values(first)
+
+    cross_split = (
+        bind_case_payload(
+            replace(first, split=replace(first.split, split_name=SplitName.PUBLIC_DEVELOPMENT))
+        ),
+        bind_case_payload(
+            replace(second, split=replace(second.split, split_name=SplitName.FROZEN_VALIDATION))
+        ),
+    )
+    with pytest.raises(ValueError, match="res71-engine-reference-case crosses split boundary"):
         validate_source_family_isolation(cross_split)
 
 
