@@ -33,6 +33,7 @@ from dynamislm.benchmark.selection_constraints import (
     build_final_selection_problem_from_commitments,
 )
 from dynamislm.benchmark.selection_contracts import (
+    PSE_V1_PRODUCTION_SELECTION_SOLVER_PROFILE_V1,
     AssignmentState,
     BalanceDimension,
     CandidateAssignment,
@@ -1063,6 +1064,44 @@ def test_unknown_is_unresolved_and_fails_closed(monkeypatch: pytest.MonkeyPatch)
     assert result.validation_receipt is None
 
 
+def test_semantic_validation_failed_decoded_witness_is_not_reported_optimal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    problem = _toy_problem((_candidate("a"),), ((SplitName.PUBLIC_DEVELOPMENT, 1),))
+    validate = validate_final_selection
+
+    def invalidate_witness(problem: FinalSelectionProblem, plan: FinalSelectionPlan) -> Any:
+        receipt = validate(problem, plan)
+        violations = ("test:independent-invalidation",)
+        return replace(
+            receipt,
+            status=ValidationStatus.INVALID,
+            violated_constraint_ids=violations,
+            validation_digest=canonical_hash(
+                {
+                    "version": receipt.validator_version,
+                    "status": ValidationStatus.INVALID,
+                    "violations": violations,
+                    "plan_digest": receipt.plan_digest,
+                    "authority_digest": receipt.authority_digest,
+                    "summary": receipt.summary,
+                }
+            ),
+        )
+
+    monkeypatch.setattr(
+        "dynamislm.benchmark.selection_solver.validate_final_selection", invalidate_witness
+    )
+    result = solve_final_selection(problem)
+
+    assert result.solve_receipt.status is SolveStatus.UNKNOWN
+    assert result.plan is None
+    assert result.validation_receipt is not None
+    assert result.validation_receipt.status is ValidationStatus.INVALID
+    assert tuple(item.code for item in result.diagnostics) == ("SEMANTIC_VALIDATION_FAILED",)
+    assert result.diagnostics[0].constraint_ids == ("test:independent-invalidation",)
+
+
 def test_canonical_plan_is_stable_five_of_five() -> None:
     problem = _toy_problem(
         (_candidate("a"), _candidate("b"), _candidate("c")),
@@ -1092,7 +1131,7 @@ def test_fixed_434_abstract_qualification_and_resource_receipt() -> None:
     result = solve_final_selection(
         problem,
         initial_plan_hint=_production_shape_hint(problem),
-        solver_config=SelectionSolverConfig(timeout_s=60, cp_model_presolve=False),
+        solver_config=PSE_V1_PRODUCTION_SELECTION_SOLVER_PROFILE_V1,
     )
     assert result.solve_receipt.status is SolveStatus.OPTIMAL
     assert result.plan is not None and result.validation_receipt is not None
@@ -1108,6 +1147,7 @@ def test_fixed_434_abstract_qualification_and_resource_receipt() -> None:
     assert result.solve_receipt.deterministic_time_s > 0
     assert result.solve_receipt.peak_rss_mb > 0
     assert result.solve_receipt.warm_start_used
+    assert result.solve_receipt.solver_config == PSE_V1_PRODUCTION_SELECTION_SOLVER_PROFILE_V1
     assert result.validation_receipt.validation_wall_s > 0
 
 
@@ -1124,11 +1164,10 @@ def test_oversupply_sequential_counterexample_and_rejection_removal() -> None:
         == FINAL_CASE_COUNT + 1
     )
 
-    config = SelectionSolverConfig(timeout_s=60, cp_model_presolve=False)
     result = solve_final_selection(
         problem,
         initial_plan_hint=_production_shape_hint(problem),
-        solver_config=config,
+        solver_config=PSE_V1_PRODUCTION_SELECTION_SOLVER_PROFILE_V1,
     )
     assert result.solve_receipt.status is SolveStatus.OPTIMAL
     assert result.plan is not None and result.validation_receipt is not None
@@ -1138,6 +1177,8 @@ def test_oversupply_sequential_counterexample_and_rejection_removal() -> None:
     assert assignments[reserve_id] is not AssignmentState.OUT
     assert result.validation_receipt.status is ValidationStatus.VALID
     assert result.validation_receipt.summary.split_counts == FINAL_SPLIT_COUNTS
+    assert result.solve_receipt.solver_config == PSE_V1_PRODUCTION_SELECTION_SOLVER_PROFILE_V1
+    assert result.solve_receipt.warm_start_used
 
     eligible = tuple(
         sorted(

@@ -13,6 +13,7 @@ SELECTION_CONSTRAINT_SCHEMA = "PSE-V1-JOINT-SELECTION-CONSTRAINTS@1.0.0"
 SELECTION_PLAN_VERSION = "PSE-V1-JOINT-SELECTION-PLAN@1.0.0"
 SELECTION_RECEIPT_VERSION = "PSE-V1-JOINT-SELECTION-RECEIPT@1.0.0"
 SELECTION_VALIDATOR_VERSION = "PSE-V1-JOINT-SELECTION-VALIDATOR@1.0.0"
+SELECTION_PRODUCTION_SOLVER_PROFILE_VERSION = "PSE-V1-PRODUCTION-SELECTION-SOLVER@1.0.0"
 _SHA256 = re.compile(r"^sha256:[0-9a-f]{64}$")
 
 
@@ -736,6 +737,17 @@ class SelectionSolverConfig:
             raise ValueError("cp_model_presolve must be boolean")
         if not isinstance(self.randomize_search, bool):
             raise ValueError("randomize_search must be boolean")
+
+
+# Qualified on production-shape pools with a validated production-shape warm start.
+PSE_V1_PRODUCTION_SELECTION_SOLVER_PROFILE_V1 = SelectionSolverConfig(
+    workers=8,
+    random_seed=369,
+    timeout_s=60.0,
+    canonical_chunk_size=30,
+    cp_model_presolve=False,
+    randomize_search=False,
+)
 
 
 @register_serializable_type

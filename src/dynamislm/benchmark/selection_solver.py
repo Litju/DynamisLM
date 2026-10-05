@@ -463,8 +463,8 @@ def solve_final_selection(
                 approved_pool_digest=problem.approved_pool_digest,
             )
             validation = validate_final_selection(problem, plan)
-            solve_status = SolveStatus.OPTIMAL
             if validation.status is ValidationStatus.INVALID:
+                solve_status = SolveStatus.UNKNOWN
                 diagnostics = (
                     SelectionDiagnostic(
                         "SEMANTIC_VALIDATION_FAILED",
@@ -473,6 +473,8 @@ def solve_final_selection(
                     ),
                 )
                 plan = None
+            else:
+                solve_status = SolveStatus.OPTIMAL
     if solver_wall_s == 0.0:
         solver_wall_s = time.perf_counter() - started
     receipt = SelectionSolveReceipt(
