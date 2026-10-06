@@ -131,13 +131,15 @@ def test_feasibility_only_returns_independently_validated_witness() -> None:
     problem = _problem((_candidate("a"), _candidate("b")), final_count=1)
     receipt = solve_selection_feasibility(problem)
     assert receipt.status is FeasibilityStatus.FEASIBLE
-    assert receipt.validation_status.value == "VALID"
+    assert receipt.validation_status is ValidationStatus.VALID
     assert receipt.plan_digest is not None
     assert receipt.optimization_performed is False
     assert receipt.canonicalization_performed is False
 
 
-def test_feasibility_only_rejects_a_witness_denied_by_the_semantic_validator(monkeypatch) -> None:
+def test_feasibility_only_rejects_a_witness_denied_by_the_semantic_validator(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     from dynamislm.benchmark import selection_solver
 
     problem = _problem((_candidate("a"), _candidate("b")), final_count=1)
