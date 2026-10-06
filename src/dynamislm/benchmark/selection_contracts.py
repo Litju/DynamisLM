@@ -750,6 +750,17 @@ PSE_V1_PRODUCTION_SELECTION_SOLVER_PROFILE_V1 = SelectionSolverConfig(
     randomize_search=False,
 )
 
+# PSE-V1-PRODUCTION-SELECTION-SOLVER@2.0.0 keeps base-4 chunk objectives
+# below 2**53, where CP-SAT's double-valued objective and bound are exact.
+PSE_V1_PRODUCTION_SELECTION_SOLVER_PROFILE_V2 = SelectionSolverConfig(
+    workers=8,
+    random_seed=369,
+    timeout_s=120.0,
+    canonical_chunk_size=15,
+    cp_model_presolve=False,
+    randomize_search=False,
+)
+
 
 @register_serializable_type
 @dataclass(frozen=True, slots=True)

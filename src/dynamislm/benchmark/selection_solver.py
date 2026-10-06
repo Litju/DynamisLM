@@ -64,6 +64,10 @@ def _status_name(solver: Any, status: Any) -> str:
     return str(solver.status_name(status))
 
 
+def _has_exact_objective_bound(solver: Any, value: int) -> bool:
+    return int(solver.response_proto.inner_objective_lower_bound) == value
+
+
 def _selection_literals(
     assignment_vars: dict[tuple[str, AssignmentState], Any], candidate_id: str
 ) -> list[Any]:
@@ -428,6 +432,9 @@ def solve_final_selection(
                     canonical_status = f"CANONICAL_CHUNK:{start}:{objective_status}"
                     break
                 value = solver.value(expression)
+                if not _has_exact_objective_bound(solver, value):
+                    canonical_status = f"CANONICAL_CHUNK:{start}:UNPROVEN_INTEGER_BOUND"
+                    break
                 model.add(expression == value)
                 model.clear_objective()
                 _refresh_hints(model, solver)
