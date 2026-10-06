@@ -115,6 +115,12 @@ class ValidationStatus(enum.StrEnum):
     INVALID = "INVALID"
 
 
+class FeasibilityStatus(enum.StrEnum):
+    FEASIBLE = "FEASIBLE"
+    INFEASIBLE = "INFEASIBLE"
+    UNKNOWN = "UNKNOWN"
+
+
 @register_serializable_type
 @dataclass(frozen=True, slots=True)
 class SelectionFeature:
@@ -716,6 +722,65 @@ class SelectionValidationReceipt:
     validation_digest: str
     validation_wall_s: float
     summary: SelectionSummary
+
+
+@register_serializable_type
+@dataclass(frozen=True, slots=True)
+class SelectionFeasibilityReceiptV1:
+    receipt_version: str
+    status: FeasibilityStatus
+    solver_family: str
+    solver_version: str
+    solver_config: SelectionSolverConfig
+    problem_digest: str
+    candidate_pool_digest: str
+    constraint_inventory_digest: str
+    variable_count: int
+    constraint_count: int
+    wall_s: float
+    deterministic_time_s: float
+    plan_digest: str | None
+    validation_status: ValidationStatus | None
+    validation_digest: str | None
+    summary: SelectionSummary | None
+    diagnostics: tuple[SelectionDiagnostic, ...] = ()
+    optimization_performed: bool = False
+    canonicalization_performed: bool = False
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "status", FeasibilityStatus(self.status))
+        if self.validation_status is not None:
+            object.__setattr__(self, "validation_status", ValidationStatus(self.validation_status))
+        for name in (
+            "problem_digest",
+            "candidate_pool_digest",
+            "constraint_inventory_digest",
+        ):
+            if _SHA256.fullmatch(getattr(self, name)) is None:
+                raise ValueError(f"{name} must be a canonical SHA-256 digest")
+        for value in (self.plan_digest, self.validation_digest):
+            if value is not None and _SHA256.fullmatch(value) is None:
+                raise ValueError("feasibility receipt contains a malformed digest")
+        if self.optimization_performed or self.canonicalization_performed:
+            raise ValueError(
+                "feasibility-only receipts cannot report optimization or canonicalization"
+            )
+        if (
+            self.variable_count < 0
+            or self.constraint_count < 0
+            or self.wall_s < 0
+            or self.deterministic_time_s < 0
+        ):
+            raise ValueError("feasibility receipt counts and timings must be non-negative")
+        if self.status is FeasibilityStatus.FEASIBLE and (
+            self.plan_digest is None
+            or self.validation_status is not ValidationStatus.VALID
+            or self.validation_digest is None
+            or self.summary is None
+        ):
+            raise ValueError("feasible receipt requires an independently validated witness")
+        if self.status is not FeasibilityStatus.FEASIBLE and self.plan_digest is not None:
+            raise ValueError("non-feasible receipt cannot accept a plan")
 
 
 @register_serializable_type

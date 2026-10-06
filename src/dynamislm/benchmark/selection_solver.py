@@ -12,15 +12,18 @@ from ortools.sat.python import cp_model
 
 from dynamislm.benchmark.constants import SPLIT_ORDER, CaseOrigin, SplitName
 from dynamislm.benchmark.selection_contracts import (
+    PSE_V1_PRODUCTION_SELECTION_SOLVER_PROFILE_V2,
     SELECTION_RECEIPT_VERSION,
     AssignmentState,
     CandidateAssignment,
     ConstraintKind,
+    FeasibilityStatus,
     FinalSelectionPlan,
     FinalSelectionProblem,
     FinalSelectionResult,
     ObjectiveKind,
     SelectionDiagnostic,
+    SelectionFeasibilityReceiptV1,
     SelectionSolverConfig,
     SelectionSolveReceipt,
     SolveStatus,
@@ -80,6 +83,8 @@ def _selection_literals(
 
 def _model_for(
     problem: FinalSelectionProblem,
+    *,
+    include_objectives: bool = True,
 ) -> tuple[
     Any,
     dict[tuple[str, AssignmentState], Any],
@@ -215,6 +220,9 @@ def _model_for(
         model.add(sum(terms) >= constraint.minimum)
         if constraint.maximum is not None:
             model.add(sum(terms) <= constraint.maximum)
+
+    if not include_objectives:
+        return model, assignment_vars, None, None
 
     targets: dict[SplitName, int] = {}
     for constraint in problem.constraint_set.constraints:
@@ -520,4 +528,90 @@ def solve_final_selection(
     )
 
 
-__all__ = ["solve_final_selection"]
+def solve_selection_feasibility(
+    problem: FinalSelectionProblem,
+    *,
+    solver_config: SelectionSolverConfig | None = None,
+) -> SelectionFeasibilityReceiptV1:
+    """Find one hard-constraint witness and independently validate it."""
+
+    started = time.perf_counter()
+    config = solver_config or SelectionSolverConfig()
+    if config == PSE_V1_PRODUCTION_SELECTION_SOLVER_PROFILE_V2:
+        raise ValueError(
+            "production solver profile v2 is reserved for final canonical confirmation"
+        )
+    model, assignment_vars, _, _ = _model_for(problem, include_objectives=False)
+    solver, status, deterministic_time = _solve_once(model, config)
+    plan_digest = None
+    validation_status = None
+    validation_digest = None
+    summary = None
+    diagnostics: tuple[SelectionDiagnostic, ...] = ()
+    if status == "INFEASIBLE":
+        result_status = FeasibilityStatus.INFEASIBLE
+        diagnostics = (
+            SelectionDiagnostic(
+                "SELECTION_INFEASIBLE",
+                "CP-SAT proved the hard-constraint assignment problem infeasible.",
+            ),
+        )
+    elif status not in {"OPTIMAL", "FEASIBLE"}:
+        result_status = FeasibilityStatus.UNKNOWN
+        diagnostics = (
+            SelectionDiagnostic(
+                "SELECTION_UNKNOWN",
+                f"CP-SAT returned {status}; no witness was accepted.",
+            ),
+        )
+    else:
+        plan = FinalSelectionPlan(
+            assignments=tuple(
+                CandidateAssignment(candidate.candidate_id, state)
+                for candidate in problem.candidates
+                for state in _STATE_ORDER
+                if solver.boolean_value(assignment_vars[(candidate.candidate_id, state)])
+            ),
+            authority_digest=problem.authority_digest,
+            problem_digest=problem.problem_digest,
+            approved_pool_digest=problem.approved_pool_digest,
+        )
+        validation = validate_final_selection(problem, plan)
+        validation_status = validation.status
+        validation_digest = validation.validation_digest
+        summary = validation.summary
+        if validation.status is ValidationStatus.VALID:
+            result_status = FeasibilityStatus.FEASIBLE
+            plan_digest = plan.plan_digest
+        else:
+            result_status = FeasibilityStatus.UNKNOWN
+            diagnostics = (
+                SelectionDiagnostic(
+                    "SEMANTIC_VALIDATION_FAILED",
+                    "The independent validator rejected the feasibility witness.",
+                    validation.violated_constraint_ids,
+                ),
+            )
+
+    return SelectionFeasibilityReceiptV1(
+        receipt_version="PSE-V1-JOINT-SELECTION-FEASIBILITY-RECEIPT@1.0.0",
+        status=result_status,
+        solver_family=_SOLVER_FAMILY,
+        solver_version=version("ortools"),
+        solver_config=config,
+        problem_digest=problem.problem_digest,
+        candidate_pool_digest=problem.approved_pool_digest,
+        constraint_inventory_digest=problem.constraint_inventory_digest,
+        variable_count=len(model.proto.variables),
+        constraint_count=len(model.proto.constraints),
+        wall_s=time.perf_counter() - started,
+        deterministic_time_s=deterministic_time,
+        plan_digest=plan_digest,
+        validation_status=validation_status,
+        validation_digest=validation_digest,
+        summary=summary,
+        diagnostics=diagnostics,
+    )
+
+
+__all__ = ["solve_final_selection", "solve_selection_feasibility"]
