@@ -35,6 +35,7 @@ from dynamislm.benchmark.selection_constraints import (
 )
 from dynamislm.benchmark.selection_contracts import (
     PSE_V1_PRODUCTION_SELECTION_SOLVER_PROFILE_V1,
+    PSE_V1_PRODUCTION_SELECTION_SOLVER_PROFILE_V2,
     AssignmentState,
     BalanceDimension,
     CandidateAssignment,
@@ -1108,8 +1109,37 @@ def test_canonical_plan_is_stable_five_of_five() -> None:
         (_candidate("a"), _candidate("b"), _candidate("c")),
         ((SplitName.PUBLIC_DEVELOPMENT, 1), (SplitName.FROZEN_VALIDATION, 1)),
     )
-    digests = tuple(solve_final_selection(problem).plan.plan_digest for _ in range(5))  # type: ignore[union-attr]
+    digests = tuple(
+        solve_final_selection(
+            problem,
+            solver_config=PSE_V1_PRODUCTION_SELECTION_SOLVER_PROFILE_V2,
+        ).plan.plan_digest  # type: ignore[union-attr]
+        for _ in range(5)
+    )
     assert len(set(digests)) == 1
+
+
+def test_production_canonicalization_profile_versions_exact_objective_width() -> None:
+    assert PSE_V1_PRODUCTION_SELECTION_SOLVER_PROFILE_V1.canonical_chunk_size == 30
+    assert PSE_V1_PRODUCTION_SELECTION_SOLVER_PROFILE_V2 == replace(
+        PSE_V1_PRODUCTION_SELECTION_SOLVER_PROFILE_V1,
+        canonical_chunk_size=15,
+        timeout_s=120.0,
+    )
+    assert 4**PSE_V1_PRODUCTION_SELECTION_SOLVER_PROFILE_V2.canonical_chunk_size - 1 < 2**53
+
+
+def test_unproven_canonical_integer_bound_fails_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from dynamislm.benchmark import selection_solver
+
+    problem = _toy_problem((_candidate("a"),), ((SplitName.PUBLIC_DEVELOPMENT, 1),))
+    monkeypatch.setattr(selection_solver, "_has_exact_objective_bound", lambda *_: False)
+    result = solve_final_selection(problem)
+    assert result.solve_receipt.status is SolveStatus.UNKNOWN
+    assert result.plan is None
+    assert result.validation_receipt is None
 
 
 def test_joint_solver_does_not_call_legacy_phase_e_allocator(
@@ -1132,7 +1162,7 @@ def test_fixed_434_abstract_qualification_and_resource_receipt() -> None:
     result = solve_final_selection(
         problem,
         initial_plan_hint=_production_shape_hint(problem),
-        solver_config=PSE_V1_PRODUCTION_SELECTION_SOLVER_PROFILE_V1,
+        solver_config=PSE_V1_PRODUCTION_SELECTION_SOLVER_PROFILE_V2,
     )
     assert result.solve_receipt.status is SolveStatus.OPTIMAL
     assert result.plan is not None and result.validation_receipt is not None
@@ -1148,7 +1178,10 @@ def test_fixed_434_abstract_qualification_and_resource_receipt() -> None:
     assert result.solve_receipt.deterministic_time_s > 0
     assert result.solve_receipt.peak_rss_mb > 0
     assert result.solve_receipt.warm_start_used
-    assert result.solve_receipt.solver_config == PSE_V1_PRODUCTION_SELECTION_SOLVER_PROFILE_V1
+    assert result.solve_receipt.solver_config == PSE_V1_PRODUCTION_SELECTION_SOLVER_PROFILE_V2
+    assert result.plan.plan_digest == (
+        "sha256:7dd3f236964f2f31561668553010078e1c443b3a8c41e572f226e10a9fc5aa1d"
+    )
     assert result.validation_receipt.validation_wall_s > 0
 
 
@@ -1168,7 +1201,7 @@ def test_oversupply_sequential_counterexample_and_rejection_removal() -> None:
     result = solve_final_selection(
         problem,
         initial_plan_hint=_production_shape_hint(problem),
-        solver_config=PSE_V1_PRODUCTION_SELECTION_SOLVER_PROFILE_V1,
+        solver_config=PSE_V1_PRODUCTION_SELECTION_SOLVER_PROFILE_V2,
     )
     assert result.solve_receipt.status is SolveStatus.OPTIMAL
     assert result.plan is not None and result.validation_receipt is not None
@@ -1177,8 +1210,11 @@ def test_oversupply_sequential_counterexample_and_rejection_removal() -> None:
     assert assignments[rejected_id] is AssignmentState.OUT
     assert assignments[reserve_id] is not AssignmentState.OUT
     assert result.validation_receipt.status is ValidationStatus.VALID
+    assert result.plan.plan_digest == (
+        "sha256:7fad1ac2e83005996879b1f8d5ffb03c2536e93f87ebe2aae5468a8d815bc75d"
+    )
     assert result.validation_receipt.summary.split_counts == FINAL_SPLIT_COUNTS
-    assert result.solve_receipt.solver_config == PSE_V1_PRODUCTION_SELECTION_SOLVER_PROFILE_V1
+    assert result.solve_receipt.solver_config == PSE_V1_PRODUCTION_SELECTION_SOLVER_PROFILE_V2
     assert result.solve_receipt.warm_start_used
 
     eligible = tuple(
