@@ -520,9 +520,15 @@ def build_final_selection_problem(
                         f"{_relation_id(kind, identity_key)}"
                     ),
                     authority_ref=(
-                        "RES-258 mutation relation semantics"
-                        if kind in {RelationKind.MUTATION_LINEAGE, RelationKind.MUTATION_PARENT}
-                        else "DR-001 §7.2 isolation and exact-shingle semantics"
+                        "RES-71 reference identity; RES-258/RES-369 isolation authority"
+                        if kind is RelationKind.ISOLATION_IDENTITY
+                        and identity_key.partition("\0")[0]
+                        == IsolationIdentityKind.RES71_ENGINE_REFERENCE_CASE.value
+                        else (
+                            "RES-258 mutation relation semantics"
+                            if kind in {RelationKind.MUTATION_LINEAGE, RelationKind.MUTATION_PARENT}
+                            else "DR-001 §7.2 isolation and exact-shingle semantics"
+                        )
                     ),
                     kind=ConstraintKind.CONDITIONAL_COLOCATION,
                     candidate_ids=member_ids,

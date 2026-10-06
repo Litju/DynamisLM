@@ -1360,6 +1360,9 @@ def test_engine_reference_identity_survives_shingle_source_and_cluster_changes()
         and constraint.relation_kind is RelationKind.ISOLATION_IDENTITY
         and constraint.candidate_ids == candidate_ids
     )
+    assert relation.authority_ref == (
+        "RES-71 reference identity; RES-258/RES-369 isolation authority"
+    )
     assert {candidate.isolation_cluster_id for candidate in candidates} == {
         "cluster:a",
         "cluster:b",
