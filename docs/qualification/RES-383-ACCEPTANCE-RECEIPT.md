@@ -37,11 +37,11 @@ remain in the external qualification store; the repository records only this
 count summary and the inventory/file digests.
 
 ```text
-SUPPLY_SCHEMA=PSE-V1-AUTHORITY-SUPPLY-INVENTORY@1.1.0
-SUPPLY_INVENTORY_DIGEST=sha256:e6f0c601171822278898450e622fa953427733065c1c7e51c5ada807f67d80c1
-SUPPLY_EXTERNAL_FILE=qualification/RES-383/authority-supply-inventory.v1.1.json (external)
-SUPPLY_EXTERNAL_FILE_DIGEST=sha256:ac0df6382262a31f916b926da96a0634d27a8fe7adee8338db5fce78d4a7d719
-SUPPLY_ASSESSMENT_DIGEST=sha256:cadedbd36a0c01cb8242f8cb0573857ab2377d3b0987221ea1f0a8708d5d7106
+SUPPLY_SCHEMA=PSE-V1-AUTHORITY-SUPPLY-INVENTORY@1.2.0
+SUPPLY_INVENTORY_DIGEST=sha256:c54db929976f5d6fed61298e2d5fd5a55a9bba0766d1e1f8f5fb5a62fe98c23f
+SUPPLY_EXTERNAL_FILE=qualification/RES-383/authority-supply-inventory.v1.2.json (external)
+SUPPLY_EXTERNAL_FILE_DIGEST=sha256:b0968856366483cd970242a68b692ecb7c99354bf261f3049785e18ff3183bb2
+SUPPLY_ASSESSMENT_DIGEST=sha256:29039a48f559a12efda21ab5bda347de0f47e8f8a51365703452367fa6b07b27
 SUPPLY_ATOMS=890
 GOVERNED_RESERVE_LANES=273
 ```
@@ -49,7 +49,7 @@ GOVERNED_RESERVE_LANES=273
 | Authority | Actual inventory |
 | --- | --- |
 | RES-71 | 12 sealed references: 5 `VALUE`, 4 `REFUSAL`, 1 `COMPARABILITY`, 2 `CLAIM_AUTHORITY`; 6 operation identities are referenced by those cases. The live operation inventory has 100 entries. Sealed reference digest: `sha256:d29d84699b7cf70c2d409d370c5ffd6c7ad7cd704375b14b541527a95fa385e5`. |
-| Phase-A source authority | 104 accepted documents across 94 source families; 104 source-tag support rows. Forty documents are selected. Sixty-four remain unselected raw source authority; 62 have retained applicability lanes, not qualified candidate slots. |
+| Phase-A source authority | 104 accepted documents across 94 source families; 104 source-tag support rows. Forty documents are selected. Sixty-four remain unselected raw source authority; 15 have exact production-eligible reserve lanes across 26 capability-family cells after recipe and qualification-span exclusions. The other 49 have no eligible production source selection. |
 | Engine lanes | 23 exact capability/family/reference lanes cover 31 planned engine slots. No extra engine reference or slot is inferred. |
 | Synthetic authority | 3 registered split-family lanes under one generator identity. The 12 current seed blocks are planned. Additional unique blocks remain governed by the registered generator and split-lock rules; capacity is not given a fabricated numeric ceiling. |
 | Expert-semantic authority | 146 bounded batch/template/isolation lanes cover 240 planned slots. No extra slot is recorded. |
@@ -74,6 +74,9 @@ synthetic_generator_registry=sha256:1e75e89e95b3705f9adc0d58cf06d92fd1a335b5da68
 qualification_exclusion_digest=sha256:5bcc5da6fe959a66b819eb4a6c45326f82b06c4660a114de5f20aa3adf3b6343
 ```
 
+The v1.2 inventory binds that qualification exclusion commitment. The prior
+immutable v1.1 external inventory remains unchanged.
+
 ## Structural reserve result
 
 The final target remains 434 with splits `260 / 87 / 87`. Each single removal
@@ -92,10 +95,11 @@ constraints. Necessary count lower bounds from the current planned slots are:
 
 The source and synthetic deficits require distinct origins, so the evidence
 supports `KNOWN_STRUCTURAL_POOL_FLOOR >= 436`. It does not derive a complete
-pool size. The typed inventory returns one source request with 62 retained
-applicability lanes and one synthetic request under the three registered
-split-family lanes. The requests are authoring/sourcing capacity only; no
-candidate prose or metadata was created.
+pool size. The typed inventory returns one source request with 15 exact eligible
+document lanes and one synthetic request under the three registered split-family
+lanes. Source lane cells come from the production source authoring enumerator;
+qualification-excluded spans provide no reserve capacity. The requests are
+authoring/sourcing capacity only; no candidate prose or metadata was created.
 
 There are 5 critical error classes across 2 protected splits. Removal tolerance
 requires 20 candidate-feature incidences. The candidate store is empty, so
@@ -108,11 +112,13 @@ not `AUTHORITY_EXPANSION_REQUIRED`.
 
 - Added immutable, versioned `AuthoritySupplyInventoryV1`, per-atom and
   per-lane digests, payload-free `ReserveCandidateLaneV1` and typed
-  `BackfillRequestV1`/`ReserveDeficitV1`. Schema 1.1.0 records exact authorized
-  capability-family cells. Materialized candidates bind those cells and their
+  `BackfillRequestV1`/`ReserveDeficitV1`. Schema 1.2.0 derives source reserve
+  cells from the exact production source-selection enumerator after applying
+  qualification-span exclusions; proposal tag-list products do not create
+  reserve capacity. Materialized candidates bind those cells and their
   source document/family, RES-71 reference, generator/split, expert batch/template,
-  or mutation parent/lineage identities. The external inventory round-tripped
-  with the recorded digest; the prior schema 1.0.0 file remains unchanged.
+  or mutation parent/lineage identities. The external v1.2 inventory was
+  written to its new immutable path; prior v1.0 and v1.1 files remain unchanged.
 - Kept actual `FinalSelectionCandidate` metadata in a separate
   materialized-backfill type. Simple count needs create lane-bound requests;
   exact baseline/removal failures create scenario-bound deficits and retry from
@@ -137,8 +143,10 @@ not `AUTHORITY_EXPANSION_REQUIRED`.
   not run for scenario enumeration. Exact-interaction repair tests every
   available materialized candidate against the failed scenario and only retries
   candidates with a FEASIBLE witness, ordered by review cost then lane/candidate ID.
+  This deterministic retry policy is not claimed globally cardinality-minimal;
+  `DERIVED_POOL_N` remains unclaimed.
 - No candidate prose, human review, protected membership, DR-001 change, or
   RES-71 reference change occurred. P4A.3n was not started. The PR remains draft.
-- Focused RES-383 tests: 20 passed.
+- Focused RES-383 tests: 23 passed.
 - Full `./scripts/ci.sh`: Ruff, formatting, strict mypy, repository policy, and
-  tracked-mutation checks passed; pytest passed all 1,187 tests in 859.52 s.
+  tracked-mutation checks passed; pytest passed all 1,190 tests in 979.62 s.

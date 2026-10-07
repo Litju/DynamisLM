@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import hashlib
 from dataclasses import replace
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
@@ -15,8 +17,10 @@ from dynamislm.benchmark.authority_supply import (
     ReserveCandidateLaneV1,
     ReserveDeficitKind,
     SupplyAssessmentStatus,
+    _source_cells_by_document,
 )
 from dynamislm.benchmark.constants import CRITICAL_ERROR_CLASSES, CaseOrigin, SplitName
+from dynamislm.benchmark.production_exclusions import QualificationExclusionCommitmentV1
 from dynamislm.benchmark.selection_contracts import (
     PSE_V1_POOL_FEASIBILITY_SOLVER_PROFILE_V1,
     PSE_V1_PRODUCTION_SELECTION_SOLVER_PROFILE_V2,
@@ -995,3 +999,183 @@ def test_inventory_digest_is_canonical_and_rejects_tampering() -> None:
     assert inventory.inventory_digest.startswith("sha256:")
     with pytest.raises(ValueError, match="does not match its contents"):
         replace(inventory, inventory_digest=canonical_hash("tampered"))
+
+
+def _source_test_sha(value: str) -> str:
+    return "sha256:" + hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def _source_row(pmcid: str, family_id: str) -> dict[str, object]:
+    return {
+        "pmcid": pmcid,
+        "applicability_scope": "INDIRECT_MEASUREMENT_EVIDENCE",
+        "source_family_identity": {
+            "source_family_id": family_id,
+            "family_digest": _source_test_sha(family_id),
+        },
+    }
+
+
+def _source_support(capabilities: tuple[str, ...], families: tuple[str, ...]) -> dict[str, object]:
+    return {
+        "candidate_capabilities_retained": list(capabilities),
+        "candidate_benchmark_families_retained": list(families),
+    }
+
+
+def _source_authority_fixture(monkeypatch: pytest.MonkeyPatch) -> dict[str, dict[str, object]]:
+    from dynamislm.qualification import res115_authoring
+    from dynamislm.qualification.res115_authoring import SourceSpanProposalV1
+
+    accepted = (
+        _source_row("PMC9000001", "family-cross"),
+        _source_row("PMC9000002", "family-excluded"),
+    )
+    support = {
+        "PMC9000001": _source_support(("C13", "C14"), ("F01", "F03")),
+        "PMC9000002": _source_support(("C13",), ("F02",)),
+    }
+
+    def proposal(
+        row: dict[str, object], support_row: dict[str, object], **kwargs: object
+    ) -> tuple[SourceSpanProposalV1, ...]:
+        capability = str(kwargs["capability_id"])
+        family = str(kwargs["benchmark_family"])
+        capabilities = support_row["candidate_capabilities_retained"]
+        families = support_row["candidate_benchmark_families_retained"]
+        if not isinstance(capabilities, list) or not isinstance(families, list):
+            raise ValueError("test source tags are malformed")
+        if capability not in capabilities or family not in families:
+            return ()
+        return (
+            SourceSpanProposalV1(
+                span_digest=_source_test_sha(f"{row['pmcid']}:{capability}:{family}"),
+                locator="test-locator",
+                text="test span",
+                scope="test scope",
+                support_rules=("test rule",),
+                support_tags=(capability, family),
+            ),
+        )
+
+    monkeypatch.setattr(
+        res115_authoring,
+        "_phase_a_source_inputs",
+        lambda **_kwargs: (
+            accepted,
+            support,
+            (),
+            {"PMC9000001": (), "PMC9000002": ()},
+        ),
+    )
+    monkeypatch.setattr(res115_authoring, "_source_tag_span_proposals", proposal)
+    return {
+        "document-cross": {
+            **accepted[0],
+            "retained_source_artifact": {"document_identity_id": "document-cross"},
+        },
+        "document-excluded": {
+            **accepted[1],
+            "retained_source_artifact": {"document_identity_id": "document-excluded"},
+        },
+    }
+
+
+def _source_exclusion(span_digest: str) -> QualificationExclusionCommitmentV1:
+    from dynamislm.benchmark.authoring import QUALIFICATION_CANDIDATE_ID_PREFIX
+    from dynamislm.benchmark.contamination import exact_13_token_shingles, normalized_text_sha256
+    from dynamislm.benchmark.production_exclusions import (
+        QUALIFICATION_001B_BATCH_ID,
+        QUALIFICATION_EXCLUSION_VERSION,
+        QualificationExclusionCandidateV1,
+        QualificationExclusionCommitmentV1,
+        bind_qualification_exclusion_commitment,
+    )
+
+    question = "qualification span exclusion"
+    entry = QualificationExclusionCandidateV1(
+        candidate_id=QUALIFICATION_CANDIDATE_ID_PREFIX + "SOURCE-TEST",
+        candidate_payload_hash=_source_test_sha("payload"),
+        question_text=question,
+        exact_question_sha256=_source_test_sha(question),
+        normalized_question_sha256=normalized_text_sha256(question),
+        question_13_token_shingle_hashes=tuple(sorted(exact_13_token_shingles(question))),
+        seed_blocks=(),
+        seed_namespaces=(),
+        generator_seed_identities=(),
+        mutation_lineage_ids=(),
+        mutation_seed_values=(),
+        evidence_span_identities=(("PSE-EVIDENCE:QUALIFICATION:source-test", span_digest),),
+    )
+    return bind_qualification_exclusion_commitment(
+        QualificationExclusionCommitmentV1(
+            batch_id=QUALIFICATION_001B_BATCH_ID,
+            version=QUALIFICATION_EXCLUSION_VERSION,
+            qualification_manifest_digest=_source_test_sha("manifest"),
+            qualification_store_receipt_digest=_source_test_sha("store receipt"),
+            authoring_plan_digest=_source_test_sha("authoring plan"),
+            seed_input_digest=_source_test_sha("seed inputs"),
+            candidate_count=1,
+            entries=(entry,),
+            commitment_digest=_source_test_sha("unbound"),
+        )
+    )
+
+
+def test_source_reserve_ignores_proposal_tag_cross_products(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from dynamislm.benchmark.production_authoring import eligible_production_source_selections
+
+    accepted = _source_authority_fixture(monkeypatch)
+    selections = eligible_production_source_selections(
+        _source_exclusion(_source_test_sha("unrelated span")),
+        external_root=Path("/test-external"),
+    )
+    cells = _source_cells_by_document(accepted, selections)
+
+    assert cells == {
+        "document-cross": (("C13", "F01"),),
+        "document-excluded": (("C13", "F02"),),
+    }
+
+
+def test_qualification_excluded_source_span_cannot_create_a_reserve_lane(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from dynamislm.benchmark.production_authoring import eligible_production_source_selections
+
+    accepted = _source_authority_fixture(monkeypatch)
+    exclusion = _source_exclusion(_source_test_sha("PMC9000002:C13:F02"))
+    selections = eligible_production_source_selections(
+        exclusion,
+        external_root=Path("/test-external"),
+    )
+    cells = _source_cells_by_document(accepted, selections)
+
+    assert "document-excluded" not in cells
+    assert all(item.pmcid != "PMC9000002" for item in selections)
+
+
+def test_source_inventory_cells_equal_production_eligible_selections(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from dynamislm.benchmark.production_authoring import eligible_production_source_selections
+
+    accepted = _source_authority_fixture(monkeypatch)
+    selections = eligible_production_source_selections(
+        _source_exclusion(_source_test_sha("unrelated span")),
+        external_root=Path("/test-external"),
+    )
+    inventory_cells = _source_cells_by_document(accepted, selections)
+    authoring_cells: dict[str, set[tuple[str, str]]] = {}
+    document_by_pmcid = {str(row["pmcid"]): document_id for document_id, row in accepted.items()}
+    for selection in selections:
+        document_id = document_by_pmcid[selection.pmcid]
+        authoring_cells.setdefault(document_id, set()).add(
+            (selection.capability_id, selection.benchmark_family)
+        )
+
+    assert inventory_cells == {
+        document_id: tuple(sorted(cells)) for document_id, cells in authoring_cells.items()
+    }

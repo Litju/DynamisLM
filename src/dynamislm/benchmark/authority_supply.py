@@ -6,16 +6,18 @@ import enum
 import hashlib
 import json
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
 from dynamislm.benchmark.constants import CAPABILITY_IDS, FAMILY_IDS, CaseOrigin, SplitName
 from dynamislm.benchmark.selection_contracts import FeatureKind
+from dynamislm.qualification.res115_authoring import SourceCellSelectionV1
 from dynamislm.serialization import canonical_hash, register_serializable_type
 
 _SHA256 = re.compile(r"^sha256:[0-9a-f]{64}$")
-AUTHORITY_SUPPLY_SCHEMA = "PSE-V1-AUTHORITY-SUPPLY-INVENTORY@1.1.0"
-AUTHORITY_SUPPLY_INVENTORY_PATH = "qualification/RES-383/authority-supply-inventory.v1.1.json"
+AUTHORITY_SUPPLY_SCHEMA = "PSE-V1-AUTHORITY-SUPPLY-INVENTORY@1.2.0"
+AUTHORITY_SUPPLY_INVENTORY_PATH = "qualification/RES-383/authority-supply-inventory.v1.2.json"
 
 
 class AuthoritySupplyKind(enum.StrEnum):
@@ -395,6 +397,34 @@ def _jsonl_rows(payload: bytes, name: str) -> tuple[dict[str, object], ...]:
     return rows
 
 
+def _source_cells_by_document(
+    accepted_by_document: Mapping[str, Mapping[str, object]],
+    selections: tuple[SourceCellSelectionV1, ...],
+) -> dict[str, tuple[tuple[str, str], ...]]:
+    document_by_pmcid: dict[str, tuple[str, str]] = {}
+    for document_id, row in accepted_by_document.items():
+        pmcid = row.get("pmcid")
+        family = row.get("source_family_identity")
+        if (
+            not isinstance(pmcid, str)
+            or not isinstance(family, dict)
+            or not isinstance(family.get("source_family_id"), str)
+            or pmcid in document_by_pmcid
+        ):
+            raise ValueError("accepted source identity is missing or duplicated")
+        document_by_pmcid[pmcid] = (document_id, family["source_family_id"])
+
+    cells_by_document: dict[str, set[tuple[str, str]]] = {}
+    for selection in selections:
+        identity = document_by_pmcid.get(selection.pmcid)
+        if identity is None or identity[1] != selection.source_family_id:
+            raise ValueError("eligible source selection does not resolve to accepted authority")
+        cells_by_document.setdefault(identity[0], set()).add(
+            (selection.capability_id, selection.benchmark_family)
+        )
+    return {document_id: tuple(sorted(cells)) for document_id, cells in cells_by_document.items()}
+
+
 def build_live_authority_supply_inventory(
     *,
     repository_root: str | Path,
@@ -413,7 +443,13 @@ def build_live_authority_supply_inventory(
         _engine_slot_specs,
         _semantic_slot_specs,
         _synthetic_slot_specs,
+        eligible_production_source_selections,
         production_authoring_input_digest,
+    )
+    from dynamislm.benchmark.production_exclusions import (
+        QUALIFICATION_PRIVATE_EXCLUSION_PATH,
+        QualificationExclusionCommitmentV1,
+        validate_qualification_exclusion_commitment,
     )
     from dynamislm.benchmark.production_store import (
         DEFAULT_PRODUCTION_ROOT,
@@ -440,6 +476,15 @@ def build_live_authority_supply_inventory(
         repository_root=repository,
         production_root=root,
     )
+    qualification_exclusion, _exclusion_file_digest, _exclusion_size = (
+        read_external_production_json(
+            QUALIFICATION_PRIVATE_EXCLUSION_PATH,
+            QualificationExclusionCommitmentV1,
+            repository_root=repository,
+            production_root=root,
+        )
+    )
+    validate_qualification_exclusion_commitment(qualification_exclusion)
     if (
         inputs.input_digest != production_authoring_input_digest(inputs)
         or inputs.synthetic_generator_registry_digest != PRODUCTION_SYNTHETIC_GENERATOR_DIGEST
@@ -508,6 +553,14 @@ def build_live_authority_supply_inventory(
         assert isinstance(retained, dict)
         if retained.get("source_family_id") != selection.source_family_id:
             raise ValueError("production source selection has a stale source-family binding")
+
+    eligible_source_selections = eligible_production_source_selections(
+        qualification_exclusion,
+        external_root=root,
+    )
+    source_cells_by_document = _source_cells_by_document(
+        accepted_by_document, eligible_source_selections
+    )
 
     semantic_ids = {item[0] for item in _semantic_slot_specs()}
     engine_slots = _engine_slot_specs()
@@ -588,11 +641,7 @@ def build_live_authority_supply_inventory(
         )
         if document_id in selected_documents:
             continue
-        support = support_by_pmcid[str(row["pmcid"])]
-        capabilities = support.get("candidate_capabilities_retained")
-        families_retained = support.get("candidate_benchmark_families_retained")
-        if not isinstance(capabilities, list) or not isinstance(families_retained, list):
-            raise ValueError("source support row has malformed retained applicability")
+        supported_cells = source_cells_by_document.get(document_id, ())
         family = row["source_family_identity"]
         assert isinstance(family, dict)
         family_id = family.get("source_family_id")
@@ -605,21 +654,11 @@ def build_live_authority_supply_inventory(
             authority_digest=source_digest,
             capacity_unit="source-document-backed-candidate-slot",
             existing_planned_capacity=0,
-            available_capacity=1 if capabilities and families_retained else 0,
+            available_capacity=1 if supported_cells else 0,
             capacity_status=(
-                LaneCapacityStatus.AVAILABLE
-                if capabilities and families_retained
-                else LaneCapacityStatus.EXHAUSTED
+                LaneCapacityStatus.AVAILABLE if supported_cells else LaneCapacityStatus.EXHAUSTED
             ),
-            supported_cells=tuple(
-                sorted(
-                    {
-                        (capability, family)
-                        for capability in capabilities
-                        for family in families_retained
-                    }
-                )
-            ),
+            supported_cells=supported_cells,
             isolation_identity_digests=tuple(
                 sorted(
                     {
@@ -856,6 +895,7 @@ def build_live_authority_supply_inventory(
         "PHASE_A_ACCEPTED_SOURCE_MANIFEST": accepted_manifest_digest,
         "PHASE_A_SOURCE_FAMILY_MANIFEST": family_manifest_digest,
         "PHASE_A_SOURCE_SUPPORT_MANIFEST": support_manifest_digest,
+        "QUALIFICATION_EXCLUSION_COMMITMENT": qualification_exclusion.commitment_digest,
         "PRODUCTION_AUTHORING_INPUT_FILE": input_file_digest,
         "PRODUCTION_AUTHORING_INPUT_CONTENT": inputs.input_digest,
         "SYNTHETIC_GENERATOR_REGISTRY": PRODUCTION_SYNTHETIC_GENERATOR_DIGEST,
