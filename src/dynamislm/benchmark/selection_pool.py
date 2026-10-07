@@ -12,6 +12,7 @@ from dynamislm.benchmark.authority_supply import (
     AuthoritySupplyInventoryV1,
     BackfillRequestKind,
     BackfillRequestV1,
+    LaneCapacityStatus,
     ReserveCandidateLaneV1,
     ReserveDeficitKind,
     ReserveDeficitV1,
@@ -334,12 +335,47 @@ def _authorable_lanes(
     )
 
 
+def _lane_supply(
+    inventory: AuthoritySupplyInventoryV1,
+    origin: CaseOrigin | None = None,
+) -> int | None:
+    """Quantified authorable supply, or None when a governing rule leaves it unbounded."""
+
+    lanes = [
+        lane
+        for lane in inventory.reserve_candidate_lanes
+        if origin is None or lane.origin_class is origin
+    ]
+    if any(lane.capacity_status is LaneCapacityStatus.RULE_GOVERNED for lane in lanes):
+        return None
+    return sum(
+        lane.available_capacity or 0
+        for lane in lanes
+        if lane.capacity_status is LaneCapacityStatus.AVAILABLE
+    )
+
+
 def assess_authority_supply_inventory(
     inventory: AuthoritySupplyInventoryV1,
 ) -> AuthoritySupplyAssessmentV1:
-    """Report count-derived requests before any candidate metadata is materialized."""
+    """Report count-derived requests before any candidate metadata is materialized.
 
-    planned = dict(inventory.planned_origin_counts)
+    Historical v1.2 inventories are assessed against their recorded planned slots. Current
+    v1.3 inventories carry no planned geometry and are assessed against authorable lane
+    supply, so the pool's composition is chosen by an explicit authoring plan instead.
+    """
+
+    if inventory.encodes_planned_geometry:
+        planned: dict[CaseOrigin, int | None] = dict(inventory.planned_origin_counts)
+        lineage_present: int = inventory.planned_mutation_lineage_count
+        total_present: int | None = inventory.planned_candidate_count
+    else:
+        planned = {origin: _lane_supply(inventory, origin) for origin in CaseOrigin}
+        lineage_present = sum(
+            lane.capacity_status is LaneCapacityStatus.AVAILABLE
+            for lane in _authorable_lanes(inventory, CaseOrigin.ADVERSARIAL_MUTATION)
+        )
+        total_present = _lane_supply(inventory)
     deficits: list[ReserveDeficitV1] = []
     requests: list[BackfillRequestV1] = []
     origin_missing: dict[CaseOrigin, int] = {}
@@ -348,6 +384,8 @@ def assess_authority_supply_inventory(
             continue
         present = planned.get(origin, 0)
         required = minimum + 1
+        if present is None:
+            continue
         missing = max(0, required - present)
         if not missing:
             continue
@@ -373,13 +411,13 @@ def assess_authority_supply_inventory(
         origin_missing[origin] = missing
 
     lineage_required = MUTATION_LINEAGE_MINIMUM + 1
-    lineage_missing = max(0, lineage_required - inventory.planned_mutation_lineage_count)
+    lineage_missing = max(0, lineage_required - lineage_present)
     if lineage_missing:
         deficit = ReserveDeficitV1(
             deficit_kind=ReserveDeficitKind.STRUCTURAL_COUNT,
             constraint_id="RES258:MUTATION_LINEAGES_MINIMUM",
             required_count=lineage_required,
-            observed_count=inventory.planned_mutation_lineage_count,
+            observed_count=lineage_present,
         )
         lanes = _authorable_lanes(inventory, CaseOrigin.ADVERSARIAL_MUTATION)
         deficits.append(deficit)
@@ -395,7 +433,7 @@ def assess_authority_supply_inventory(
             )
         )
 
-    final_missing = max(0, FINAL_CASE_COUNT + 1 - inventory.planned_candidate_count)
+    final_missing = 0 if total_present is None else max(0, FINAL_CASE_COUNT + 1 - total_present)
     non_mutation_missing = sum(
         count
         for origin, count in origin_missing.items()
@@ -410,7 +448,7 @@ def assess_authority_supply_inventory(
             deficit_kind=ReserveDeficitKind.STRUCTURAL_COUNT,
             constraint_id="RES258:FINAL_SELECTED_N",
             required_count=FINAL_CASE_COUNT + 1,
-            observed_count=inventory.planned_candidate_count,
+            observed_count=total_present or 0,
         )
         lanes = _authorable_lanes(inventory)
         deficits.append(deficit)
@@ -467,7 +505,14 @@ def assess_authority_supply_inventory(
         materialized_candidate_count=inventory.materialized_candidate_count,
         usable_reserve_capacity_count=0,
         final_target_count=FINAL_CASE_COUNT,
-        known_structural_pool_floor=inventory.planned_candidate_count + additional,
+        known_structural_pool_floor=(
+            inventory.planned_candidate_count + additional
+            if inventory.encodes_planned_geometry
+            else max(
+                FINAL_CASE_COUNT + 1,
+                sum(minimum + 1 for _origin, minimum, _maximum in _ORIGIN_BOUNDS if minimum),
+            )
+        ),
         derived_pool_n=None,
         backfill_requests=tuple(requests),
         unresolved_deficits=tuple(deficits),

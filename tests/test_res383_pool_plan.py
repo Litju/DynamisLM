@@ -11,6 +11,7 @@ import pytest
 from dynamislm.benchmark.authoring import production_seed_namespace
 from dynamislm.benchmark.authority_supply import (
     AUTHORITY_SUPPLY_SCHEMA,
+    AUTHORITY_SUPPLY_SCHEMA_V1_2,
     AuthoritySupplyInventoryV1,
     BackfillRequestKind,
     LaneCapacityStatus,
@@ -287,7 +288,12 @@ def _inventory(
     capacity_scope_complete: bool = False,
 ) -> AuthoritySupplyInventoryV1:
     return AuthoritySupplyInventoryV1(
-        schema_version=AUTHORITY_SUPPLY_SCHEMA,
+        # Planned slot geometry is only representable in historical v1.2 inventories.
+        schema_version=(
+            AUTHORITY_SUPPLY_SCHEMA_V1_2
+            if planned_counts or mutation_lineages
+            else AUTHORITY_SUPPLY_SCHEMA
+        ),
         atoms=(),
         reserve_candidate_lanes=tuple(sorted(lanes, key=lambda item: item.lane_id.encode())),
         planned_origin_counts=tuple(
@@ -1126,6 +1132,112 @@ def test_complete_empty_lane_inventory_can_prove_expansion() -> None:
     )
     assessment = assess_authority_supply_inventory(inventory)
     assert assessment.status is SupplyAssessmentStatus.AUTHORITY_EXPANSION_REQUIRED
+
+
+def test_v13_supply_rejects_planned_slot_and_lineage_geometry() -> None:
+    inventory = _inventory((_lane("source"),))
+    assert inventory.schema_version == AUTHORITY_SUPPLY_SCHEMA
+    assert not inventory.encodes_planned_geometry
+    with pytest.raises(ValueError, match="planned slot or lineage geometry"):
+        replace(
+            inventory,
+            planned_origin_counts=((CaseOrigin.SOURCE_BACKED_EVIDENCE_EXTRACTION, 40),),
+            inventory_digest="",
+        )
+    with pytest.raises(ValueError, match="planned slot or lineage geometry"):
+        replace(inventory, planned_mutation_lineage_count=37, inventory_digest="")
+    with pytest.raises(ValueError, match="planned slot or lineage geometry"):
+        replace(
+            inventory,
+            reserve_candidate_lanes=(
+                replace(_lane("source"), existing_planned_capacity=1, lane_digest=""),
+            ),
+            inventory_digest="",
+        )
+
+
+def test_v13_assessment_uses_authorable_supply_not_historical_slots() -> None:
+    lanes = (
+        *(_lane(f"source-{index:02d}") for index in range(41)),
+        _lane(
+            "engine-c16",
+            origin=CaseOrigin.DETERMINISTIC_ENGINE_DERIVED,
+            capacity=31,
+            supported_cells=(("C16", "F05"),),
+        ),
+        _lane(
+            "synthetic-rule",
+            origin=CaseOrigin.DETERMINISTIC_SYNTHETIC,
+            capacity=None,
+            status=LaneCapacityStatus.RULE_GOVERNED,
+            supported_cells=(("C08", "F05"),),
+        ),
+        *(
+            _lane(
+                f"mutation-{index:02d}",
+                origin=CaseOrigin.ADVERSARIAL_MUTATION,
+                capacity=3,
+            )
+            for index in range(21)
+        ),
+    )
+    assessment = assess_authority_supply_inventory(_inventory(lanes))
+
+    assert assessment.planned_candidate_count == 0
+    assert assessment.known_structural_pool_floor == 435
+    assert assessment.derived_pool_n is None
+    assert not any(
+        item.request_kind is BackfillRequestKind.CONSTRAINT_MINIMUM
+        for item in assessment.backfill_requests
+    )
+    assert assessment.status is SupplyAssessmentStatus.METADATA_REQUIRED
+    assert assessment.exact_qualification_status is SupplyAssessmentStatus.METADATA_REQUIRED
+
+    short = assess_authority_supply_inventory(_inventory(lanes[1:]))
+    source = next(
+        item
+        for item in short.unresolved_deficits
+        if item.constraint_id == "RES126:ORIGIN:SOURCE_BACKED_EVIDENCE_EXTRACTION"
+    )
+    assert (source.required_count, source.observed_count) == (41, 40)
+    lineages = assess_authority_supply_inventory(
+        _inventory(tuple(item for item in lanes if item.lane_id != "mutation-00"))
+    )
+    assert any(
+        item.constraint_id == "RES258:MUTATION_LINEAGES_MINIMUM"
+        and (item.required_count, item.observed_count) == (21, 20)
+        for item in lineages.unresolved_deficits
+    )
+
+
+def test_historical_v12_inventory_digest_is_unchanged_by_v13() -> None:
+    lane = ReserveCandidateLaneV1(
+        lane_id="source:x",
+        origin_class=CaseOrigin.SOURCE_BACKED_EVIDENCE_EXTRACTION,
+        authority_ref="ref",
+        authority_digest=canonical_hash("a"),
+        capacity_unit="u",
+        existing_planned_capacity=0,
+        available_capacity=1,
+        capacity_status=LaneCapacityStatus.AVAILABLE,
+        supported_cells=(("C01", "F01"),),
+    )
+    inventory = AuthoritySupplyInventoryV1(
+        schema_version=AUTHORITY_SUPPLY_SCHEMA_V1_2,
+        atoms=(),
+        reserve_candidate_lanes=(lane,),
+        planned_origin_counts=((CaseOrigin.SOURCE_BACKED_EVIDENCE_EXTRACTION, 40),),
+        planned_mutation_lineage_count=37,
+        materialized_candidate_count=0,
+        evidence_bindings=(("X", canonical_hash("b")),),
+        authority_inventory_complete=True,
+        capacity_scope_complete=False,
+    )
+    # Pinned against the RES-383 anchor implementation (c689d5d) for the same inventory.
+    assert inventory.encodes_planned_geometry
+    assert inventory.inventory_digest == (
+        "sha256:6c811ff6cf4806d00c3ac8c80a788b8cc6fc86a37480087e964a6a94eec9b2a3"
+    )
 
 
 def test_inventory_digest_is_canonical_and_rejects_tampering() -> None:
