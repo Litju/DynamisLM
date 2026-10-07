@@ -14,6 +14,11 @@ from dynamislm.benchmark.constants import (
     ExpectedAnswerKind,
     SplitName,
 )
+from dynamislm.benchmark.contamination import (
+    exact_13_token_shingles,
+    exact_shingle_digest,
+    normalized_text_sha256,
+)
 from dynamislm.benchmark.contracts import ContaminationBinding
 from dynamislm.benchmark.coverage import COVERAGE_MATRIX, coverage_manifest_digest
 from dynamislm.benchmark.production import (
@@ -123,6 +128,7 @@ def selection_candidate_from_commitment(
     *,
     review_eligibility: ReviewEligibility | str,
     contamination: ContaminationBinding,
+    question_text: str | None = None,
     mutation_parent_payload_hash: str | None = None,
     qualification_excluded: bool = False,
 ) -> FinalSelectionCandidate:
@@ -210,6 +216,18 @@ def selection_candidate_from_commitment(
         else None
     )
     balance = _balance_cells(item, features)
+    shingle_digests: tuple[str, ...] = (contamination.exact_shingle_digest,)
+    if question_text is not None:
+        # Project every exact 13-token shingle only from the question bound by contamination.
+        if (
+            normalized_text_sha256(question_text) != contamination.normalized_text_sha256
+            or exact_shingle_digest(question_text) != contamination.exact_shingle_digest
+        ):
+            raise ValueError("selection adapter question differs from contamination commitments")
+        shingle_digests = (
+            tuple("sha256:" + value for value in sorted(exact_13_token_shingles(question_text)))
+            or shingle_digests
+        )
     return FinalSelectionCandidate(
         candidate_id=item.candidate_id,
         payload_hash=commitment.candidate_payload_hash,
@@ -225,7 +243,7 @@ def selection_candidate_from_commitment(
                 key=lambda identity: (identity.kind.value, identity.identity.encode()),
             )
         ),
-        exact_shingle_digests=(contamination.exact_shingle_digest,),
+        exact_shingle_digests=shingle_digests,
         generator_seed_blocks=tuple(sorted(seed_blocks, key=str.encode)),
         mutation_lineage_id=item.mutation_lineage_id,
         mutation_parent_candidate_id=item.parent_candidate_id,
@@ -571,6 +589,7 @@ def build_final_selection_problem_from_commitments(
     *,
     review_eligibility: Mapping[str, ReviewEligibility | str],
     contamination_bindings: Mapping[str, ContaminationBinding],
+    question_texts: Mapping[str, str] | None = None,
     parent_provenance_registry: tuple[MutationParentProvenance, ...] = (),
     qualification_excluded_candidate_ids: frozenset[str] = frozenset(),
 ) -> FinalSelectionProblem:
@@ -582,6 +601,8 @@ def build_final_selection_problem_from_commitments(
     candidate_ids = set(by_id)
     if set(contamination_bindings) != candidate_ids:
         raise ValueError("every candidate requires its complete contamination binding")
+    if question_texts is not None and set(question_texts) != candidate_ids:
+        raise ValueError("question text bindings must exactly cover the production candidate pool")
     if not qualification_excluded_candidate_ids.issubset(candidate_ids):
         raise ValueError("qualification exclusion references a candidate outside the pool")
     external = {item.candidate_id: item.payload_hash for item in parent_provenance_registry}
@@ -603,6 +624,7 @@ def build_final_selection_problem_from_commitments(
                     item.candidate_id, ReviewEligibility.UNAPPROVED
                 ),
                 contamination=contamination_bindings[item.candidate_id],
+                question_text=(question_texts[item.candidate_id] if question_texts else None),
                 mutation_parent_payload_hash=parent_hash,
                 qualification_excluded=item.candidate_id in qualification_excluded_candidate_ids,
             )
