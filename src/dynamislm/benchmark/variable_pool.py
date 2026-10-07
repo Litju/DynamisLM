@@ -17,24 +17,54 @@ receipts -- is never authority here and is never read by this path.
 from __future__ import annotations
 
 import enum
+import hashlib
 import re
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from pathlib import Path
+from typing import TYPE_CHECKING
 
 from dynamislm.benchmark.constants import CaseOrigin, SplitName
 from dynamislm.benchmark.coverage import COVERAGE_MATRIX
 from dynamislm.benchmark.pre_review import CandidateReviewPacket, CandidateReviewStatus
 from dynamislm.benchmark.production import (
+    PRODUCTION_BATCH_ID,
     PRODUCTION_CANDIDATE_ID_PREFIX,
     PRODUCTION_SYNTHETIC_QUESTION_SURFACE_VARIANTS,
+    validate_production_candidate_pool,
 )
 from dynamislm.benchmark.production_authoring import (
+    PRODUCTION_SYNTHETIC_GENERATOR_DIGEST,
     PRODUCTION_SYNTHETIC_GENERATORS,
+    ProductionAuthoringInputsV1,
     ProductionExpertBatchV1,
     ProductionSourceSelectionV1,
+    _author_engine_packets,
+    _author_semantic_packets,
+    _author_source_packets,
+    _author_synthetic_packets,
+    _direct_target_source_selections,
+    _mutation_child,
+    _scope_production_author_batch,
+    _source_authoring_records,
+    eligible_production_source_selections,
+    production_authoring_input_digest,
 )
-from dynamislm.benchmark.selection_constraints import FINAL_CASE_COUNT
+from dynamislm.benchmark.production_exclusions import (
+    QualificationExclusionCommitmentV1,
+    validate_production_candidate_set_against_qualification_exclusion,
+)
+from dynamislm.benchmark.selection_constraints import (
+    FINAL_CASE_COUNT,
+    selection_candidate_from_commitment,
+)
+from dynamislm.benchmark.selection_contracts import FinalSelectionCandidate
+from dynamislm.benchmark.source_artifacts import SourceArtifactResolver
+from dynamislm.qualification.res115_authoring import SourceCellSelectionV1
 from dynamislm.serialization import canonical_hash, register_serializable_type
+
+if TYPE_CHECKING:
+    from dynamislm.benchmark.authority_supply import AuthoritySupplyInventoryV1
 
 _SHA256 = re.compile(r"^sha256:[0-9a-f]{64}$")
 CANDIDATE_RECIPE_SCHEMA = "PSE-V1-CANDIDATE-RECIPE@1.0.0"
@@ -323,6 +353,390 @@ def require_pre_review_pool_minimum(pool: ProductionAuthoringCandidatePoolV1) ->
         )
 
 
+_SEMANTIC_ID = re.compile(r"^PSE-V1-CANDIDATE:SEM:(C\d{2}):(F\d{2}):(\d+)$")
+_ENGINE_ID = re.compile(r"^PSE-V1-CANDIDATE:ENGINE:(C\d{2}):(F\d{2}):(\d+)$")
+_SYNTHETIC_ID = re.compile(
+    r"^PSE-V1-CANDIDATE:SYNTH:C08:(F\d{2}):(PUBLIC_DEVELOPMENT|FROZEN_VALIDATION|HIDDEN_FINAL)$"
+)
+
+
+def production_engine_reference_case_id(capability_id: str, family: str, slot_index: int) -> str:
+    """Return the sealed RES-71 reference the production engine builder binds to one recipe."""
+
+    from dynamislm.qualification import ReferenceCaseStatus, get_reference_cases
+    from dynamislm.qualification.res115_authoring import _production_authoring_engine_references
+
+    if capability_id == "C18":
+        return "res71-nonfinite-unit-refusal" if family == "F06" else "res71-bpt-mpv-refusal"
+    if capability_id == "C08":
+        return _production_authoring_engine_references()[0].case_id
+    if capability_id not in ENGINE_RECIPE_CAPABILITIES:
+        raise ValueError("engine recipe capability has no registered RES-71 adapter")
+    values = tuple(
+        item for item in get_reference_cases() if item.status is ReferenceCaseStatus.VALUE
+    )
+    return values[(slot_index + (0 if family == "F05" else 1)) % len(values)].case_id
+
+
+def _historical_authority(inputs: ProductionAuthoringInputsV1, candidate_id: str) -> str:
+    return canonical_hash(
+        (RecipeAuthorityBasis.HISTORICAL_INDIVIDUAL_RECIPE, inputs.input_digest, candidate_id)
+    )
+
+
+def historical_recipes_from_authoring_inputs(
+    inputs: ProductionAuthoringInputsV1,
+) -> tuple[ProductionCandidateRecipeV1, ...]:
+    """Decompose historical production inputs into individual recipes, discarding topology.
+
+    Every recipe is reconstructed from its own seed, cell, and authority identity. Expert
+    batch membership, slot totals, origin counts, and lineage sizes are not carried
+    forward; each recipe must still pass every current materialization gate.
+    """
+
+    if inputs.input_digest != production_authoring_input_digest(inputs):
+        raise ValueError("historical authoring input digest does not match its contents")
+    if inputs.synthetic_generator_registry_digest != PRODUCTION_SYNTHETIC_GENERATOR_DIGEST:
+        raise ValueError("historical synthetic seeds do not bind the live generator registry")
+    batch_by_id = {
+        candidate_id: batch
+        for batch in inputs.expert_batches
+        for candidate_id in batch.candidate_ids
+    }
+    recipes: dict[str, ProductionCandidateRecipeV1] = {}
+
+    def add(recipe: ProductionCandidateRecipeV1) -> None:
+        if recipe.candidate_id in recipes:
+            raise ValueError("historical authoring input repeats a candidate recipe")
+        recipes[recipe.candidate_id] = recipe
+
+    for candidate_id, seed in inputs.scenario_seeds:
+        semantic = _SEMANTIC_ID.fullmatch(candidate_id)
+        engine = _ENGINE_ID.fullmatch(candidate_id)
+        match = semantic or engine
+        if match is None:
+            raise ValueError("historical scenario seed does not name a recipe identity")
+        batch = batch_by_id.get(candidate_id)
+        if (batch is not None) != (semantic is not None):
+            raise ValueError("historical expert batch identity differs from recipe origin")
+        add(
+            ProductionCandidateRecipeV1(
+                candidate_id=candidate_id,
+                origin_class=(
+                    CaseOrigin.EXPERT_AUTHORED_SEMANTIC
+                    if semantic
+                    else CaseOrigin.DETERMINISTIC_ENGINE_DERIVED
+                ),
+                capability_id=match.group(1),
+                benchmark_family=match.group(2),
+                authority_basis=RecipeAuthorityBasis.HISTORICAL_INDIVIDUAL_RECIPE,
+                authority_ref=HISTORICAL_RECIPE_AUTHORITY_REF,
+                authority_digest=_historical_authority(inputs, candidate_id),
+                slot_index=int(match.group(3)),
+                scenario_seed=seed,
+                expert_batch=(
+                    None
+                    if batch is None
+                    else ProductionExpertBatchV1(
+                        author_batch_id=batch.author_batch_id,
+                        protocol_template_id=batch.protocol_template_id,
+                        isolation_cluster_id=batch.isolation_cluster_id,
+                        candidate_ids=(candidate_id,),
+                        rationale=batch.rationale,
+                    )
+                ),
+            )
+        )
+    if set(batch_by_id) - set(recipes):
+        raise ValueError("historical expert batch names a candidate without a scenario seed")
+    for candidate_id, seed_block in inputs.synthetic_seed_blocks:
+        synthetic = _SYNTHETIC_ID.fullmatch(candidate_id)
+        if synthetic is None:
+            raise ValueError("historical synthetic seed does not name a recipe identity")
+        split = SplitName(synthetic.group(2))
+        add(
+            ProductionCandidateRecipeV1(
+                candidate_id=candidate_id,
+                origin_class=CaseOrigin.DETERMINISTIC_SYNTHETIC,
+                capability_id="C08",
+                benchmark_family=synthetic.group(1),
+                authority_basis=RecipeAuthorityBasis.HISTORICAL_INDIVIDUAL_RECIPE,
+                authority_ref=HISTORICAL_RECIPE_AUTHORITY_REF,
+                authority_digest=_historical_authority(inputs, candidate_id),
+                generator_family=f"pse-v1-synthetic-refusal-{split.value.lower()}",
+                split_lock=split,
+                seed_block=seed_block,
+            )
+        )
+    for record in inputs.source_selections:
+        add(
+            ProductionCandidateRecipeV1(
+                candidate_id=record.candidate_id,
+                origin_class=CaseOrigin.SOURCE_BACKED_EVIDENCE_EXTRACTION,
+                capability_id=record.capability_id,
+                benchmark_family=record.benchmark_family,
+                authority_basis=RecipeAuthorityBasis.HISTORICAL_INDIVIDUAL_RECIPE,
+                authority_ref=HISTORICAL_RECIPE_AUTHORITY_REF,
+                authority_digest=_historical_authority(inputs, record.candidate_id),
+                source_record=record,
+            )
+        )
+    mutation_seeds = dict(inputs.mutation_seed_blocks)
+    lineage_children = [
+        child for lineage in inputs.mutation_lineages for child in lineage.child_candidate_ids
+    ]
+    if sorted(lineage_children) != sorted(mutation_seeds):
+        raise ValueError("historical mutation seeds differ from their parent/operator chains")
+    for lineage in inputs.mutation_lineages:
+        root = recipes.get(lineage.parent_candidate_id)
+        if root is None:
+            raise ValueError("historical mutation parent is not an individual recipe")
+        parent_id = lineage.parent_candidate_id
+        for stage, child_id in enumerate(lineage.child_candidate_ids, start=1):
+            add(
+                ProductionCandidateRecipeV1(
+                    candidate_id=child_id,
+                    origin_class=CaseOrigin.ADVERSARIAL_MUTATION,
+                    capability_id=root.capability_id,
+                    benchmark_family=root.benchmark_family,
+                    authority_basis=RecipeAuthorityBasis.HISTORICAL_INDIVIDUAL_RECIPE,
+                    authority_ref=HISTORICAL_RECIPE_AUTHORITY_REF,
+                    authority_digest=_historical_authority(inputs, child_id),
+                    seed_block=mutation_seeds[child_id],
+                    mutation_parent_candidate_id=parent_id,
+                    mutation_lineage_id=lineage.lineage_id,
+                    mutation_operator_id=lineage.operator_id,
+                    mutation_stage=stage,
+                )
+            )
+            parent_id = child_id
+    return tuple(recipes[candidate_id] for candidate_id in sorted(recipes, key=str.encode))
+
+
+def production_source_selection_universe(
+    exclusion: QualificationExclusionCommitmentV1,
+    *,
+    external_root: Path,
+) -> tuple[SourceCellSelectionV1, ...]:
+    """Every exact source cell current authority may author: eligible plus direct-target."""
+
+    selections: dict[str, SourceCellSelectionV1] = {}
+    for selection in (
+        *eligible_production_source_selections(exclusion, external_root=external_root),
+        *_direct_target_source_selections(exclusion, external_root=external_root),
+    ):
+        candidate_id = _source_authoring_records((selection,))[0].candidate_id
+        if selections.setdefault(candidate_id, selection) != selection:
+            raise ValueError("source authority yields conflicting selections for one recipe")
+    return tuple(selections[item] for item in sorted(selections, key=str.encode))
+
+
+def _governed_recipe_check(
+    recipes: tuple[ProductionCandidateRecipeV1, ...],
+    supply_inventory: AuthoritySupplyInventoryV1,
+) -> None:
+    lanes = {lane.lane_id: lane for lane in supply_inventory.reserve_candidate_lanes}
+    uses: Counter[str] = Counter()
+    for recipe in recipes:
+        if recipe.authority_basis is not RecipeAuthorityBasis.GOVERNED_SUPPLY_LANE:
+            continue
+        lane = lanes.get(recipe.lane_id or "")
+        if (
+            lane is None
+            or not lane.may_author_backfill
+            or lane.origin_class is not recipe.origin_class
+            or lane.authority_digest != recipe.authority_digest
+            or (recipe.capability_id, recipe.benchmark_family) not in lane.supported_cells
+        ):
+            raise ValueError("governed recipe does not match an authorable supply lane")
+        uses[lane.lane_id] += 1
+        if lane.available_capacity is not None and uses[lane.lane_id] > lane.available_capacity:
+            raise ValueError("governed recipes exceed their supply lane capacity")
+
+
+def _recipe_inputs(recipes: tuple[ProductionCandidateRecipeV1, ...]) -> ProductionAuthoringInputsV1:
+    """Adapter carrying only these recipes' seeds into the existing per-recipe builders."""
+
+    scenario = tuple(
+        (item.candidate_id, item.scenario_seed or "")
+        for item in recipes
+        if item.scenario_seed is not None
+    )
+    synthetic = tuple(
+        (item.candidate_id, item.seed_block or "")
+        for item in recipes
+        if item.origin_class is CaseOrigin.DETERMINISTIC_SYNTHETIC
+    )
+    provisional = ProductionAuthoringInputsV1(
+        batch_id=PRODUCTION_BATCH_ID,
+        synthetic_generator_registry_digest=PRODUCTION_SYNTHETIC_GENERATOR_DIGEST,
+        scenario_seeds=scenario,
+        synthetic_seed_blocks=synthetic,
+        mutation_seed_blocks=(),
+        source_selections=(),
+        expert_batches=tuple(
+            item.expert_batch for item in recipes if item.expert_batch is not None
+        ),
+        mutation_lineages=(),
+        input_digest="sha256:" + "0" * 64,
+    )
+    return replace(provisional, input_digest=production_authoring_input_digest(provisional))
+
+
+def materialize_variable_pool(
+    plan: VariablePoolAuthoringPlanV1,
+    *,
+    supply_inventory: AuthoritySupplyInventoryV1,
+    exclusion: QualificationExclusionCommitmentV1,
+    source_resolver: SourceArtifactResolver | None,
+    source_selections: tuple[SourceCellSelectionV1, ...] = (),
+) -> ProductionAuthoringCandidatePoolV1:
+    """Author every planned recipe with the production builders and current validators.
+
+    No fixed count, origin vector, lineage geometry, historical repair plan, historical
+    candidate-set digest, or legacy exact-feasibility receipt participates. The returned
+    pool is unqualified: reserve qualification and human review remain separate gates.
+    """
+
+    if (
+        plan.supply_inventory_digest != supply_inventory.inventory_digest
+        or plan.qualification_exclusion_digest != exclusion.commitment_digest
+    ):
+        raise ValueError("variable pool plan binds a different supply or exclusion authority")
+    _governed_recipe_check(plan.recipes, supply_inventory)
+    by_origin: dict[CaseOrigin, tuple[ProductionCandidateRecipeV1, ...]] = {
+        origin: tuple(item for item in plan.recipes if item.origin_class is origin)
+        for origin in CaseOrigin
+    }
+    inputs = _recipe_inputs(plan.recipes)
+    authored: list[CandidateReviewPacket] = [
+        *_author_semantic_packets(
+            tuple(
+                (item.candidate_id, item.capability_id, item.benchmark_family, item.slot_index or 0)
+                for item in by_origin[CaseOrigin.EXPERT_AUTHORED_SEMANTIC]
+            ),
+            inputs,
+        ),
+        *_author_engine_packets(
+            tuple(
+                (item.candidate_id, item.capability_id, item.benchmark_family, item.slot_index or 0)
+                for item in by_origin[CaseOrigin.DETERMINISTIC_ENGINE_DERIVED]
+            ),
+            inputs,
+        ),
+        *_author_synthetic_packets(
+            tuple(
+                (
+                    item.candidate_id,
+                    item.benchmark_family,
+                    item.split_lock or SplitName.HIDDEN_FINAL,
+                )
+                for item in by_origin[CaseOrigin.DETERMINISTIC_SYNTHETIC]
+            ),
+            inputs,
+        ),
+    ]
+    source_recipes = by_origin[CaseOrigin.SOURCE_BACKED_EVIDENCE_EXTRACTION]
+    if source_recipes:
+        if source_resolver is None:
+            raise ValueError("source recipes require the canonical source artifact resolver")
+        selection_by_record = {
+            _source_authoring_records((selection,))[0]: selection for selection in source_selections
+        }
+        chosen = []
+        for recipe in source_recipes:
+            assert recipe.source_record is not None
+            selection = selection_by_record.get(recipe.source_record)
+            if selection is None:
+                raise ValueError("source recipe is not an exact current source authority cell")
+            chosen.append(selection)
+        authored.extend(_author_source_packets(tuple(chosen), source_resolver=source_resolver))
+
+    built = {packet.candidate_id: _scope_production_author_batch(packet) for packet in authored}
+    pending = list(by_origin[CaseOrigin.ADVERSARIAL_MUTATION])
+    while pending:
+        ready = [item for item in pending if item.mutation_parent_candidate_id in built]
+        if not ready:
+            raise ValueError("mutation recipe parent could not be materialized")
+        for recipe in ready:
+            child = _mutation_child(
+                built[recipe.mutation_parent_candidate_id or ""],
+                candidate_id=recipe.candidate_id,
+                lineage_id=recipe.mutation_lineage_id or "",
+                operator_id=recipe.mutation_operator_id or "",
+                stage=recipe.mutation_stage or 0,
+                mutation_seed=int(
+                    hashlib.sha256((recipe.seed_block or "").encode("ascii")).hexdigest()[:15], 16
+                ),
+            )
+            built[recipe.candidate_id] = _scope_production_author_batch(child)
+            pending.remove(recipe)
+
+    recipe_by_id = {item.candidate_id: item for item in plan.recipes}
+    if set(built) != set(recipe_by_id):
+        raise ValueError("materialization did not author exactly the planned recipes")
+    for candidate_id, packet in built.items():
+        recipe = recipe_by_id[candidate_id]
+        if packet.proposed_provenance.origin_class is not recipe.origin_class or (
+            packet.capability_id,
+            packet.benchmark_family,
+        ) != (recipe.capability_id, recipe.benchmark_family):
+            raise ValueError("materialized packet differs from its recipe origin or cell")
+    packets = tuple(built[candidate_id] for candidate_id in sorted(built, key=str.encode))
+    validate_production_candidate_pool(packets, source_resolver=source_resolver)
+    validate_production_candidate_set_against_qualification_exclusion(
+        packets, exclusion, source_resolver=source_resolver
+    )
+    return ProductionAuthoringCandidatePoolV1(
+        authoring_plan_digest=plan.plan_digest,
+        packets=packets,
+    )
+
+
+def project_variable_pool_selection_candidates(
+    pool: ProductionAuthoringCandidatePoolV1,
+    *,
+    source_resolver: SourceArtifactResolver | None,
+) -> tuple[FinalSelectionCandidate, ...]:
+    """Project materialized packets into the unchanged RES-369 selection vocabulary."""
+
+    commitments, _audit = validate_production_candidate_pool(
+        pool.packets, source_resolver=source_resolver
+    )
+    packet_by_id = {packet.candidate_id: packet for packet in pool.packets}
+    candidates = []
+    for commitment in commitments:
+        packet = packet_by_id[commitment.candidate_id]
+        parent = packet.parent_candidate_binding
+        candidates.append(
+            selection_candidate_from_commitment(
+                commitment,
+                review_eligibility=packet.review_status,
+                contamination=packet.contamination,
+                question_text=packet.question,
+                mutation_parent_payload_hash=(
+                    None if parent is None else parent.parent_candidate_payload_hash
+                ),
+            )
+        )
+    return tuple(candidates)
+
+
+def validate_variable_pre_review_pool(
+    pool: ProductionAuthoringCandidatePoolV1,
+    *,
+    exclusion: QualificationExclusionCommitmentV1,
+    source_resolver: SourceArtifactResolver | None,
+) -> None:
+    """Gate a materialized pool for reserve qualification: N>=434 plus every packet gate."""
+
+    require_pre_review_pool_minimum(pool)
+    validate_production_candidate_pool(pool.packets, source_resolver=source_resolver)
+    validate_production_candidate_set_against_qualification_exclusion(
+        pool.packets, exclusion, source_resolver=source_resolver
+    )
+
+
 __all__ = [
     "CANDIDATE_RECIPE_SCHEMA",
     "ENGINE_RECIPE_CAPABILITIES",
@@ -335,7 +749,13 @@ __all__ = [
     "RecipeAuthorityBasis",
     "VariablePoolAuthoringPlanV1",
     "candidate_recipe_digest",
+    "historical_recipes_from_authoring_inputs",
+    "materialize_variable_pool",
     "production_authoring_candidate_pool_digest",
+    "production_engine_reference_case_id",
+    "production_source_selection_universe",
+    "project_variable_pool_selection_candidates",
     "require_pre_review_pool_minimum",
+    "validate_variable_pre_review_pool",
     "variable_pool_authoring_plan_digest",
 ]
