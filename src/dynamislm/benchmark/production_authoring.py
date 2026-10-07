@@ -61,6 +61,7 @@ from dynamislm.benchmark.production_exclusions import (
     QUALIFICATION_PRIVATE_EXCLUSION_PATH,
     QualificationExclusionCommitmentV1,
     validate_production_candidate_set_against_qualification_exclusion,
+    validate_qualification_exclusion_commitment,
 )
 from dynamislm.benchmark.production_store import (
     DEFAULT_PRODUCTION_ROOT,
@@ -460,11 +461,14 @@ def _source_candidate_id(selection: SourceCellSelectionV1) -> str:
     )
 
 
-def _choose_supported_sources(
+def eligible_production_source_selections(
     exclusion: QualificationExclusionCommitmentV1,
     *,
     external_root: Path,
 ) -> tuple[SourceCellSelectionV1, ...]:
+    """Enumerate exact source cells that production authoring may still use."""
+
+    validate_qualification_exclusion_commitment(exclusion)
     from dynamislm.qualification.res115_authoring import (
         PHASE_A_SEARCH_STRATA,
         _mapping,
@@ -512,12 +516,9 @@ def _choose_supported_sources(
             for proposal in item.spans
         )
     )
-    by_family: dict[str, list[SourceCellSelectionV1]] = defaultdict(list)
-    for item in eligible:
-        by_family[item.source_family_id].append(item)
-    candidates = tuple(
+    return tuple(
         sorted(
-            (item for family_items in by_family.values() for item in family_items),
+            eligible,
             key=lambda item: (
                 item.source_family_id.encode("utf-8"),
                 item.pmcid.encode("utf-8"),
@@ -526,6 +527,16 @@ def _choose_supported_sources(
             ),
         )
     )
+
+
+def _choose_supported_sources(
+    exclusion: QualificationExclusionCommitmentV1,
+    *,
+    external_root: Path,
+) -> tuple[SourceCellSelectionV1, ...]:
+    from dynamislm.qualification.res115_authoring import PHASE_A_SEARCH_STRATA
+
+    candidates = eligible_production_source_selections(exclusion, external_root=external_root)
     noncanonical = next(
         (item for item in candidates if item.applicability_scope == "NONCANONICAL_CONTEXT_ONLY"),
         None,

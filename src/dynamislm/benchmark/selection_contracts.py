@@ -14,6 +14,7 @@ SELECTION_PLAN_VERSION = "PSE-V1-JOINT-SELECTION-PLAN@1.0.0"
 SELECTION_RECEIPT_VERSION = "PSE-V1-JOINT-SELECTION-RECEIPT@1.0.0"
 SELECTION_VALIDATOR_VERSION = "PSE-V1-JOINT-SELECTION-VALIDATOR@1.0.0"
 SELECTION_PRODUCTION_SOLVER_PROFILE_VERSION = "PSE-V1-PRODUCTION-SELECTION-SOLVER@1.0.0"
+POOL_FEASIBILITY_SOLVER_PROFILE_VERSION = "PSE-V1-POOL-FEASIBILITY-SOLVER@1.0.0"
 _SHA256 = re.compile(r"^sha256:[0-9a-f]{64}$")
 
 
@@ -113,6 +114,12 @@ class SolveStatus(enum.StrEnum):
 class ValidationStatus(enum.StrEnum):
     VALID = "VALID"
     INVALID = "INVALID"
+
+
+class FeasibilityStatus(enum.StrEnum):
+    FEASIBLE = "FEASIBLE"
+    INFEASIBLE = "INFEASIBLE"
+    UNKNOWN = "UNKNOWN"
 
 
 @register_serializable_type
@@ -720,6 +727,65 @@ class SelectionValidationReceipt:
 
 @register_serializable_type
 @dataclass(frozen=True, slots=True)
+class SelectionFeasibilityReceiptV1:
+    receipt_version: str
+    status: FeasibilityStatus
+    solver_family: str
+    solver_version: str
+    solver_config: SelectionSolverConfig
+    problem_digest: str
+    candidate_pool_digest: str
+    constraint_inventory_digest: str
+    variable_count: int
+    constraint_count: int
+    wall_s: float
+    deterministic_time_s: float
+    plan_digest: str | None
+    validation_status: ValidationStatus | None
+    validation_digest: str | None
+    summary: SelectionSummary | None
+    diagnostics: tuple[SelectionDiagnostic, ...] = ()
+    optimization_performed: bool = False
+    canonicalization_performed: bool = False
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "status", FeasibilityStatus(self.status))
+        if self.validation_status is not None:
+            object.__setattr__(self, "validation_status", ValidationStatus(self.validation_status))
+        for name in (
+            "problem_digest",
+            "candidate_pool_digest",
+            "constraint_inventory_digest",
+        ):
+            if _SHA256.fullmatch(getattr(self, name)) is None:
+                raise ValueError(f"{name} must be a canonical SHA-256 digest")
+        for value in (self.plan_digest, self.validation_digest):
+            if value is not None and _SHA256.fullmatch(value) is None:
+                raise ValueError("feasibility receipt contains a malformed digest")
+        if self.optimization_performed or self.canonicalization_performed:
+            raise ValueError(
+                "feasibility-only receipts cannot report optimization or canonicalization"
+            )
+        if (
+            self.variable_count < 0
+            or self.constraint_count < 0
+            or self.wall_s < 0
+            or self.deterministic_time_s < 0
+        ):
+            raise ValueError("feasibility receipt counts and timings must be non-negative")
+        if self.status is FeasibilityStatus.FEASIBLE and (
+            self.plan_digest is None
+            or self.validation_status is not ValidationStatus.VALID
+            or self.validation_digest is None
+            or self.summary is None
+        ):
+            raise ValueError("feasible receipt requires an independently validated witness")
+        if self.status is not FeasibilityStatus.FEASIBLE and self.plan_digest is not None:
+            raise ValueError("non-feasible receipt cannot accept a plan")
+
+
+@register_serializable_type
+@dataclass(frozen=True, slots=True)
 class SelectionSolverConfig:
     workers: int = 8
     random_seed: int = 369
@@ -757,6 +823,17 @@ PSE_V1_PRODUCTION_SELECTION_SOLVER_PROFILE_V2 = SelectionSolverConfig(
     random_seed=369,
     timeout_s=120.0,
     canonical_chunk_size=15,
+    cp_model_presolve=False,
+    randomize_search=False,
+)
+
+# Scenario enumeration is feasibility-only, so its chunk size does not affect
+# the model. Keep a named, longer-running profile separate from canonical v2.
+PSE_V1_POOL_FEASIBILITY_SOLVER_PROFILE_V1 = SelectionSolverConfig(
+    workers=8,
+    random_seed=369,
+    timeout_s=120.0,
+    canonical_chunk_size=30,
     cp_model_presolve=False,
     randomize_search=False,
 )
