@@ -14,6 +14,7 @@ SELECTION_PLAN_VERSION = "PSE-V1-JOINT-SELECTION-PLAN@1.0.0"
 SELECTION_RECEIPT_VERSION = "PSE-V1-JOINT-SELECTION-RECEIPT@1.0.0"
 SELECTION_VALIDATOR_VERSION = "PSE-V1-JOINT-SELECTION-VALIDATOR@1.0.0"
 SELECTION_PRODUCTION_SOLVER_PROFILE_VERSION = "PSE-V1-PRODUCTION-SELECTION-SOLVER@1.0.0"
+POOL_FEASIBILITY_SOLVER_PROFILE_VERSION = "PSE-V1-POOL-FEASIBILITY-SOLVER@1.0.0"
 _SHA256 = re.compile(r"^sha256:[0-9a-f]{64}$")
 
 
@@ -822,6 +823,17 @@ PSE_V1_PRODUCTION_SELECTION_SOLVER_PROFILE_V2 = SelectionSolverConfig(
     random_seed=369,
     timeout_s=120.0,
     canonical_chunk_size=15,
+    cp_model_presolve=False,
+    randomize_search=False,
+)
+
+# Scenario enumeration is feasibility-only, so its chunk size does not affect
+# the model. Keep a named, longer-running profile separate from canonical v2.
+PSE_V1_POOL_FEASIBILITY_SOLVER_PROFILE_V1 = SelectionSolverConfig(
+    workers=8,
+    random_seed=369,
+    timeout_s=120.0,
+    canonical_chunk_size=30,
     cp_model_presolve=False,
     randomize_search=False,
 )

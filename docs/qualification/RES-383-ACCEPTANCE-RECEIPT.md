@@ -2,17 +2,21 @@
 
 ```text
 MISSION=RES-383
-STATUS=AUTHORITY_EXPANSION_REQUIRED
+STATUS=BACKFILL_REQUIRED
+EXACT_POOL_QUALIFICATION=METADATA_REQUIRED
 ENTRY_HEAD=86b16f9a395416b7319c20499fef626d747283db
 ENTRY_TREE=CLEAN
 ENTRY_REMOTE_REF=origin/work/res-21-performance-science-eval-v1
 ENTRY_REMOTE_HEAD=86b16f9a395416b7319c20499fef626d747283db
 WORK_BRANCH=work/res-383-variable-pool-feasibility
 POOL_N_POLICY=STRUCTURALLY_DERIVED_NO_FIXED_TARGET
-KNOWN_BACKFILL_FLOOR=1_SOURCE_PLUS_1_SYNTHETIC
+KNOWN_STRUCTURAL_POOL_FLOOR=436
+DERIVED_POOL_N=NOT_CLAIMED
+BACKFILL_REQUESTS=1_SOURCE_PLUS_1_SYNTHETIC
 INDEPENDENT_CRITICAL_RESERVE=NOT_QUALIFIED
 CURRENT_AUTHORING_INPUT_SLOTS=434
-CANDIDATE_LEVEL_SELECTION_METADATA=0
+MATERIALIZED_FINAL_SELECTION_CANDIDATES=0
+USABLE_RESERVE_CAPACITY=0
 FINAL_CANONICAL_CONFIRMATION=NOT_RUN
 PRODUCTION_SOLVER_PROFILE_V2_SOLVE=NOT_RUN
 PROFILE_V2_RESERVED_FOR_FINAL_CANONICAL=YES
@@ -23,34 +27,42 @@ DR001_CHANGED=NO
 RES71_REFERENCES_CHANGED=NO
 ```
 
-## Authority inventory
+## Authority supply inventory
 
-The read-only inventory used the sealed RES-71 reference module, the current
-typed production authoring inputs, Phase-A accepted-source manifests, and the
-external production directory. No candidate packets or candidate prose were
-read or produced.
+The inventory was derived read-only from sealed RES-71 references and registered
+operations, the Phase-A accepted-source/family/support manifests, the registered
+production generator, and current private production authoring inputs. It does
+not read or create production candidate packets. Sensitive identities and rows
+remain in the external qualification store; the repository records only this
+count summary and the inventory/file digests.
 
-| Authority | Current supply |
+```text
+SUPPLY_SCHEMA=PSE-V1-AUTHORITY-SUPPLY-INVENTORY@1.0.0
+SUPPLY_INVENTORY_DIGEST=sha256:d53b685cc717cef195788fb3f6bbea16ddee8756522a9c887282e2bb08946de1
+SUPPLY_EXTERNAL_FILE=qualification/RES-383/authority-supply-inventory.v1.json (external)
+SUPPLY_EXTERNAL_FILE_DIGEST=sha256:16e33f8044db08c5f0bee798113de8bde60a814f068cf5698e6c4e13bd950052
+SUPPLY_ASSESSMENT_DIGEST=sha256:56432d0ca1b479c55446dc3fc7130f33f983a18745fd885b21949a577e1ef293
+SUPPLY_ATOMS=890
+GOVERNED_RESERVE_LANES=273
+```
+
+| Authority | Actual inventory |
 | --- | --- |
-| Sealed RES-71 references | 12 validated references: 5 `VALUE`, 4 `REFUSAL`, 1 `COMPARABILITY`, 2 `CLAIM_AUTHORITY`; 6 registered operation identities; digest `sha256:d29d84699b7cf70c2d409d370c5ffd6c7ad7cd704375b14b541527a95fa385e5` |
-| Phase-A accepted source metadata | 104 accepted documents across 94 source families: 5 direct-target, 95 indirect-measurement, 4 noncanonical-context documents; 104 source-tag support rows |
-| Current source selections | 40 selections across 40 documents and 38 source families, covering 5 direct-target documents and all 10 Phase-A search strata |
-| Unselected source metadata | 64 accepted documents remain unselected; each has a source-tag support row. This is raw source authority, not 64 qualified candidate slots. |
-| Registered synthetic generator | 3 registered split-family entries, 1 generator identity, digest `sha256:1e75e89e95b3705f9adc0d58cf06d92fd1a335b5da68863be4a5a2be98069a64` |
-| Current synthetic seed blocks | 12 unique blocks bound in the current private inputs |
-| Expert-semantic lane | 146 author-batch, template, and isolation-cluster identities covering 240 planned semantic slots; no additional slot is recorded |
-| Mutation lane | 37 parent roots and lineages; 111 child seed blocks; operator counts: identity trap 7, comparability overreach 7, claim-boundary overreach 7, safe-partial refusal trap 8, error-correction trap 8 |
-| Current production candidate and review stores | No production candidate or review directory and 0 production candidate files; the existing production-lock report records 0 candidates created and 0 human approvals |
-| Qualification exclusion | 101 qualification candidates are excluded from production reuse by the current exclusion boundary |
+| RES-71 | 12 sealed references: 5 `VALUE`, 4 `REFUSAL`, 1 `COMPARABILITY`, 2 `CLAIM_AUTHORITY`; 6 operation identities are referenced by those cases. The live operation inventory has 100 entries. Sealed reference digest: `sha256:d29d84699b7cf70c2d409d370c5ffd6c7ad7cd704375b14b541527a95fa385e5`. |
+| Phase-A source authority | 104 accepted documents across 94 source families; 104 source-tag support rows. Forty documents are selected. Sixty-four remain unselected raw source authority; 62 have retained applicability lanes, not qualified candidate slots. |
+| Engine lanes | 23 exact capability/family/reference lanes cover 31 planned engine slots. No extra engine reference or slot is inferred. |
+| Synthetic authority | 3 registered split-family lanes under one generator identity. The 12 current seed blocks are planned. Additional unique blocks remain governed by the registered generator and split-lock rules; capacity is not given a fabricated numeric ceiling. |
+| Expert-semantic authority | 146 bounded batch/template/isolation lanes cover 240 planned slots. No extra slot is recorded. |
+| Mutation authority | 37 existing parent/operator lineages and 111 child seed blocks. Additional child capacity remains unresolved until parent/cell candidate metadata exists. |
+| Candidate/review stores | 0 materialized production candidates. Qualification exclusion boundary: 101 candidates excluded from production reuse. No human approval exists for this mission. |
 
-The current typed `ProductionAuthoringInputsV1` file validates against its
-input digest `sha256:b1549e62d61de905939a1a8139ff55c4f2ce9ac0fd0d25412026eb5f34fccea9`
-and the registered generator digest. Its external file digest is
+The current private authoring input content digest is
+`sha256:b1549e62d61de905939a1a8139ff55c4f2ce9ac0fd0d25412026eb5f34fccea9`;
+its external file digest is
 `sha256:b64146e9eb6f4b917a4f199f589a72cba2d4312e2be3a3719cba54bb8016b044`.
 It contains 271 scenario seeds (240 semantic and 31 engine), 12 synthetic seed
-blocks, 40 source selections, and 111 mutation seed blocks: exactly 434
-prospective authoring slots. It does not contain production
-`FinalSelectionCandidate` metadata.
+blocks, 40 source selections, and 111 mutation seed blocks: 434 prospective
+authoring slots, not materialized `FinalSelectionCandidate` metadata.
 
 Phase-A manifest digests:
 
@@ -58,90 +70,67 @@ Phase-A manifest digests:
 accepted.jsonl=sha256:5f32fd5fda9e9072c90afd49f8e3080ed9fd8a9c160e962eccdfc7a97b3f8335
 source_families_001.jsonl=sha256:4d3420fcd5a1e0b3bad24db73e8a6ed68308cdc5a1f19dab9f2fcf3e289156b7
 source_tag_support_evidence_001.jsonl=sha256:7dd8bcf756ffa5de4cf26db3f5fcd3227c153d7295b3e46dacd0bf9ef20e9bac
-phase_a_source_authority_head=6b2d3bee397d3b7efe1faee908a6ec86ce7540bd
+synthetic_generator_registry=sha256:1e75e89e95b3705f9adc0d58cf06d92fd1a335b5da68863be4a5a2be98069a64
 qualification_exclusion_digest=sha256:5bcc5da6fe959a66b819eb4a6c45326f82b06c4660a114de5f20aa3adf3b6343
-production_lock_report=sha256:4f741e3ca4dc8ec66532919f0fd9622b78d3ecd5b2f77b299c41e0a7bc0a7c21
 ```
 
-## Reserve derivation
+## Structural reserve result
 
-The reserve rule is structural: every one-candidate removal must retain an
-exact feasible `434 / 260 / 87 / 87` assignment under the RES-369 constraints.
-The current planned origin counts imply these necessary lower bounds before
-critical-feature and isolation checks:
+The final target remains 434 with splits `260 / 87 / 87`. Each single removal
+must leave a jointly feasible 434-candidate assignment under the RES-369 hard
+constraints. Necessary count lower bounds from the current planned slots are:
 
-| Constraint | Current slots | Required to tolerate any one removal | Detected deficit |
+| Constraint | Planned slots | Needed for one-removal tolerance | Deficit |
 | --- | ---: | ---: | ---: |
-| Final selected count | 434 total | Pool size at least 435 | At least 1 slot |
-| Source-backed minimum | 40 | At least 41 source candidates | 1 source candidate |
-| Engine-derived minimum | 30 | At least 31 engine candidates | 0; 31 planned |
-| Deterministic-synthetic minimum | 12 | At least 13 synthetic candidates | 1 synthetic candidate |
-| Mutation minimum | 60 | At least 61 mutation candidates | 0; 111 planned |
-| Mutation lineages | 20 | At least 21 distinct lineages | 0; 37 planned |
-| Expert-semantic maximum | At most 240 selected | No pool reserve implied by the maximum | 0 |
+| Final selected count | 434 | pool at least 435 | 1 overall |
+| Source-backed minimum | 40 | at least 41 | 1 source |
+| Engine-derived minimum | 31 | at least 31 | 0 |
+| Synthetic minimum | 12 | at least 13 | 1 synthetic |
+| Mutation minimum | 111 | at least 61 | 0 |
+| Distinct mutation lineages | 37 | at least 21 | 0 |
+| Expert-semantic maximum | 240 | at most 240 selected | no reserve implied |
 
-The two origin deficits require at least one additional source-backed slot and
-one additional synthetic slot. Added to the current 434 slots, the resulting
-known lower bound is 436. This is not a selected pool size: coverage,
-isolation, candidate metadata, and critical reserve may require more.
+The source and synthetic deficits require distinct origins, so the evidence
+supports `KNOWN_STRUCTURAL_POOL_FLOOR >= 436`. It does not derive a complete
+pool size. The typed inventory returns one source request with 62 retained
+applicability lanes and one synthetic request under the three registered
+split-family lanes. The requests are authoring/sourcing capacity only; no
+candidate prose or metadata was created.
 
-There are 5 critical error classes and 2 protected splits. Each existing
-critical feature minimum is 1; tolerating removal of any one candidate
-therefore requires at least 2 independently assignable candidate identities
-for each class/split requirement: 10 requirements and 20 required
-candidate-feature incidences. RES-115's aggregate `N434_FEASIBILITY_FIXTURE`
-receipt records baseline protected-critical feasibility only. It does not
-establish these independent reserve incidences for an actual candidate pool.
+There are 5 critical error classes across 2 protected splits. Removal tolerance
+requires 20 candidate-feature incidences. The candidate store is empty, so
+neither these incidences nor the exact isolation/colocation/split-lock/mutation
+interactions can yet be checked. The typed result is therefore
+`BACKFILL_REQUIRED` with exact qualification `METADATA_REQUIRED/UNRESOLVED`,
+not `AUTHORITY_EXPANSION_REQUIRED`.
 
-## Missing authority
+## Implementation and verification
 
-The exact deficits cannot be closed from the current production candidate
-metadata because no production candidate packet or per-candidate selection
-metadata exists. The current private inputs are seed, source-selection,
-expert-batch, and mutation-lineage inputs; they do not bind the features,
-isolation relations, source/RES-71 identities, exact-shingle digests, or
-mutation-parent payload hashes needed by the exact oracle.
-
-The targeted expansion required before qualification is:
-
-1. One additional governed source selection, binding a distinct eligible
-   Phase-A document/family, capability/family, applicability, and exact support
-   span. The accepted registry has unused documents, but the current active
-   production input has exactly 40 selections.
-2. One additional unique synthetic seed block and candidate slot under the
-   existing registered generator identity. The current input has 12 of 12
-   planned seed blocks bound.
-3. Candidate-level metadata for the full proposed pool that proves the 20
-   critical feature incidences and exact source, engine-reference, generator,
-   expert-batch, mutation-parent, and contamination/isolation identities.
-   Backfill beyond the two known deficits must be derived from those metadata
-   and the exact removal oracle.
-
-No additional engine reference, mutation root, or mutation operator is
-required by the known count bounds. If exact feasibility identifies a specific
-critical or isolation deficit, any further supply must name its governed
-source, expert, generator, or mutation-root/operator authority.
-
-## Implementation and evidence
-
-- Added a feasibility-only CP-SAT solve path. It encodes the existing
-  RES-369 hard-constraint vocabulary, returns only a plan digest, and passes
-  any witness to the independent semantic validator. It does not optimize or
-  canonicalize. The feasibility path rejects production solver profile v2,
-  reserving it for final canonical confirmation.
-- Added variable-size pool metadata planning, structural `minimum + 1`
-  backfill needs, authority-bound backfill inputs, exact checks after every
-  planned candidate removal, and an explicit independent critical-reserve
-  status. It adds only supplied backfill candidates that address a detected
-  bound. Pending/unapproved candidates are treated as potential capacity only
-  inside the ephemeral oracle view; plan metadata retains their original
-  review status.
-- Focused RES-383 and RES-369 selection tests: 33 passed. Ruff, formatting,
-  and mypy passed on the changed Python files.
-- The exact live reserve oracle and production-profile-v2 canonical
-  confirmation were not run because no candidate-level production metadata
-  pool exists and the detected source/synthetic deficits remain unfilled.
-
-The receipt intentionally stops at `AUTHORITY_EXPANSION_REQUIRED`. No
-candidate supply, critical reserve, or final pool membership is inferred from
-the metadata inventory alone.
+- Added immutable, versioned `AuthoritySupplyInventoryV1`, per-atom and
+  per-lane digests, payload-free `ReserveCandidateLaneV1` and typed
+  `BackfillRequestV1`/`ReserveDeficitV1`. A lane has no candidate payload hash or
+  exact-shingle digest. The external inventory round-tripped with the recorded
+  digest.
+- Kept actual `FinalSelectionCandidate` metadata in a separate
+  materialized-backfill type. Simple count needs create lane-bound requests;
+  exact baseline/removal failures create scenario-bound deficits and retry from
+  materialized candidates on governed lanes. If lane candidates or exact-cause
+  metadata are missing, status remains `METADATA_REQUIRED`; expansion requires
+  a complete inventory proving no lane can satisfy the deficit.
+- Pool feasibility uses the named
+  `PSE-V1-POOL-FEASIBILITY-SOLVER@1.0.0` profile: 8 workers, seed 369,
+  120-second timeout, chunk size 30, presolve disabled, and randomized search
+  disabled. The feasibility model does not use the canonical chunk size. The
+  profile was exercised on a critical/split/co-location scenario. Production
+  canonical profile v2 remains reserved for final confirmation.
+- Receipts distinguish total planned candidates, eligible candidates, and
+  usable reserve count. Rejected and qualification-excluded candidates are
+  excluded from reserve counts.
+- The exact feasibility-only path continues to use RES-369 hard constraints
+  and independent witness validation. Optimization and canonicalization are
+  not run for scenario enumeration.
+- No candidate prose, human review, protected membership, DR-001 change, or
+  RES-71 reference change occurred. P4A.3n was not started. The PR remains draft.
+- Focused RES-383 tests: 18 passed.
+- Full `./scripts/ci.sh`: Ruff, formatting, strict mypy, repository policy, and
+  tracked-mutation checks passed; pytest passed all 1,184 tests.

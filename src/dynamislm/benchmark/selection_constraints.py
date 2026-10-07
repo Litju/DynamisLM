@@ -49,6 +49,7 @@ RES258_AUTHORITY_DOCUMENT_SHA256 = (
 )
 DR001_DOCUMENT_SHA256 = "sha256:857ed5f1833f3404d3dd6df1a0340c6daac916ebe4f283dccd2409710ddf148e"
 FINAL_CASE_COUNT = 434
+MUTATION_LINEAGE_MINIMUM = 20
 FINAL_SPLIT_COUNTS: tuple[tuple[SplitName, int], ...] = (
     (SplitName.PUBLIC_DEVELOPMENT, 260),
     (SplitName.FROZEN_VALIDATION, 87),
@@ -425,7 +426,7 @@ def build_final_selection_problem(
                 constraint_id="RES258:MUTATION_LINEAGES_MINIMUM",
                 authority_ref="RES-258 final composition",
                 kind=ConstraintKind.MUTATION_LINEAGE_MINIMUM,
-                minimum=20,
+                minimum=MUTATION_LINEAGE_MINIMUM,
             ),
         )
     )

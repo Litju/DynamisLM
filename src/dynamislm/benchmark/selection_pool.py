@@ -6,12 +6,27 @@ import enum
 import re
 from dataclasses import dataclass, replace
 
+from dynamislm.benchmark.authority_supply import (
+    AuthoritySupplyAssessmentV1,
+    AuthoritySupplyInventoryV1,
+    BackfillRequestKind,
+    BackfillRequestV1,
+    ReserveCandidateLaneV1,
+    ReserveDeficitKind,
+    ReserveDeficitV1,
+    SupplyAssessmentStatus,
+)
 from dynamislm.benchmark.constants import CaseOrigin, SplitName
 from dynamislm.benchmark.selection_constraints import (
+    _ORIGIN_BOUNDS,
+    FINAL_CASE_COUNT,
+    MUTATION_LINEAGE_MINIMUM,
     _allocation_clusters,
     build_final_selection_problem,
 )
 from dynamislm.benchmark.selection_contracts import (
+    POOL_FEASIBILITY_SOLVER_PROFILE_VERSION,
+    PSE_V1_POOL_FEASIBILITY_SOLVER_PROFILE_V1,
     ConstraintKind,
     FeasibilityStatus,
     FeatureKind,
@@ -30,30 +45,42 @@ from dynamislm.serialization import canonical_hash, register_serializable_type
 _SHA256 = re.compile(r"^sha256:[0-9a-f]{64}$")
 POOL_METADATA_PLAN_VERSION = "PSE-V1-VARIABLE-POOL-METADATA-PLAN@1.0.0"
 POOL_RESERVE_RECEIPT_VERSION = "PSE-V1-SINGLE-REMOVAL-RESERVE-RECEIPT@1.0.0"
+POOL_SUPPLY_ASSESSMENT_VERSION = "PSE-V1-POOL-SUPPLY-ASSESSMENT@1.0.0"
 
 
 class PoolPlanStatus(enum.StrEnum):
     QUALIFIED = "QUALIFIED"
+    BACKFILL_REQUIRED = "BACKFILL_REQUIRED"
+    METADATA_REQUIRED = "METADATA_REQUIRED"
     AUTHORITY_EXPANSION_REQUIRED = "AUTHORITY_EXPANSION_REQUIRED"
     UNKNOWN = "UNKNOWN"
 
 
 class CriticalReserveStatus(enum.StrEnum):
     QUALIFIED = "QUALIFIED"
+    BACKFILL_REQUIRED = "BACKFILL_REQUIRED"
+    METADATA_REQUIRED = "METADATA_REQUIRED"
     AUTHORITY_EXPANSION_REQUIRED = "AUTHORITY_EXPANSION_REQUIRED"
     UNKNOWN = "UNKNOWN"
 
 
 @register_serializable_type
 @dataclass(frozen=True, slots=True)
-class GovernedBackfillCandidateV1:
+class MaterializedBackfillCandidateV1:
     candidate: FinalSelectionCandidate
+    lane_id: str
     authority_ref: str
     authority_digest: str
 
     def __post_init__(self) -> None:
-        if not self.authority_ref.strip() or _SHA256.fullmatch(self.authority_digest) is None:
-            raise ValueError("backfill candidate requires a named, digested authority")
+        if (
+            not self.lane_id.strip()
+            or not self.authority_ref.strip()
+            or _SHA256.fullmatch(self.authority_digest) is None
+        ):
+            raise ValueError(
+                "materialized backfill candidate requires a lane and digested authority"
+            )
 
 
 @register_serializable_type
@@ -93,7 +120,7 @@ class PoolBackfillNeedV1:
 class PoolMetadataPlanV1:
     candidates: tuple[FinalSelectionCandidate, ...]
     parent_provenance_registry: tuple[MutationParentProvenance, ...]
-    backfill_authorities: tuple[tuple[str, str, str], ...]
+    backfill_authorities: tuple[tuple[str, str, str, str], ...]
     plan_digest: str = ""
 
     def __post_init__(self) -> None:
@@ -115,12 +142,12 @@ class PoolMetadataPlanV1:
         known_ids = set(ids)
         if any(
             candidate_id not in known_ids
-            for candidate_id, _ref, _digest in self.backfill_authorities
+            for candidate_id, _lane, _ref, _digest in self.backfill_authorities
         ):
             raise ValueError("backfill authority binding references a candidate outside the pool")
         if any(
-            not authority_ref.strip() or _SHA256.fullmatch(digest) is None
-            for _candidate, authority_ref, digest in self.backfill_authorities
+            not lane_id.strip() or not authority_ref.strip() or _SHA256.fullmatch(digest) is None
+            for _candidate, lane_id, authority_ref, digest in self.backfill_authorities
         ):
             raise ValueError("backfill authority binding is malformed")
         computed = canonical_hash(
@@ -182,7 +209,12 @@ class PoolReserveReceiptV1:
     candidate_count: int
     backfill_candidate_count: int
     final_target_count: int
-    reserve_candidate_count: int
+    eligible_candidate_count: int
+    usable_reserve_candidate_count: int
+    supply_inventory_digest: str | None
+    authority_inventory_complete: bool
+    capacity_scope_complete: bool
+    solver_profile_version: str
     baseline_feasibility_status: FeasibilityStatus | None
     checked_removal_count: int
     feasible_removal_count: int
@@ -193,7 +225,10 @@ class PoolReserveReceiptV1:
     critical_obligations_with_structural_reserve: int
     independent_critical_reserve_status: CriticalReserveStatus
     unresolved_backfill_needs: tuple[PoolBackfillNeedV1, ...]
-    authority_expansion_reasons: tuple[str, ...]
+    reserve_deficits: tuple[ReserveDeficitV1, ...]
+    backfill_requests: tuple[BackfillRequestV1, ...]
+    status_reasons: tuple[str, ...]
+    authority_exhaustion_proven: bool = False
     review_eligibility_assumption: str = "PENDING_OR_UNAPPROVED_AS_POOL_CAPACITY_ONLY"
     human_review_performed: bool = False
     protected_membership_persisted: bool = False
@@ -217,7 +252,8 @@ class PoolReserveReceiptV1:
             self.candidate_count,
             self.backfill_candidate_count,
             self.final_target_count,
-            self.reserve_candidate_count,
+            self.eligible_candidate_count,
+            self.usable_reserve_candidate_count,
             self.checked_removal_count,
             self.feasible_removal_count,
             self.infeasible_removal_count,
@@ -231,10 +267,25 @@ class PoolReserveReceiptV1:
             _SHA256.fullmatch(self.pool_plan_digest) is None
             or _SHA256.fullmatch(self.removal_case_digest) is None
             or self.candidate_count != self.initial_candidate_count + self.backfill_candidate_count
-            or self.reserve_candidate_count
-            != max(0, self.candidate_count - self.final_target_count)
+            or self.eligible_candidate_count > self.candidate_count
+            or self.usable_reserve_candidate_count
+            != max(0, self.eligible_candidate_count - self.final_target_count)
+            or (
+                self.supply_inventory_digest is not None
+                and _SHA256.fullmatch(self.supply_inventory_digest) is None
+            )
+            or not self.solver_profile_version.strip()
         ):
             raise ValueError("pool receipt digest or candidate counts are inconsistent")
+        if self.status is PoolPlanStatus.AUTHORITY_EXPANSION_REQUIRED and (
+            not self.authority_exhaustion_proven
+            or self.supply_inventory_digest is None
+            or not self.authority_inventory_complete
+            or not self.capacity_scope_complete
+        ):
+            raise ValueError(
+                "authority expansion requires complete proof of exhausted governed lanes"
+            )
         if self.human_review_performed or self.protected_membership_persisted:
             raise ValueError("pool planning cannot perform review or persist final membership")
         if self.canonicalization_performed:
@@ -249,6 +300,7 @@ class PoolReserveReceiptV1:
             or self.checked_removal_count != self.candidate_count
             or self.feasible_removal_count != self.candidate_count
             or self.unresolved_backfill_needs
+            or self.backfill_requests
             or self.independent_critical_reserve_status is not CriticalReserveStatus.QUALIFIED
             or self.critical_obligations_with_structural_reserve != self.critical_obligation_count
         ):
@@ -267,6 +319,160 @@ class PoolPlanningResultV1:
             or len(self.plan.candidates) != self.receipt.candidate_count
         ):
             raise ValueError("pool planning result and receipt do not match")
+
+
+def _authorable_lanes(
+    inventory: AuthoritySupplyInventoryV1,
+    origin: CaseOrigin | None = None,
+) -> tuple[ReserveCandidateLaneV1, ...]:
+    return tuple(
+        lane
+        for lane in inventory.reserve_candidate_lanes
+        if lane.may_author_backfill and (origin is None or lane.origin_class is origin)
+    )
+
+
+def assess_authority_supply_inventory(
+    inventory: AuthoritySupplyInventoryV1,
+) -> AuthoritySupplyAssessmentV1:
+    """Report count-derived requests before any candidate metadata is materialized."""
+
+    planned = dict(inventory.planned_origin_counts)
+    deficits: list[ReserveDeficitV1] = []
+    requests: list[BackfillRequestV1] = []
+    origin_missing: dict[CaseOrigin, int] = {}
+    for origin, minimum, _maximum in _ORIGIN_BOUNDS:
+        if minimum == 0:
+            continue
+        present = planned.get(origin, 0)
+        required = minimum + 1
+        missing = max(0, required - present)
+        if not missing:
+            continue
+        deficit = ReserveDeficitV1(
+            deficit_kind=ReserveDeficitKind.STRUCTURAL_COUNT,
+            constraint_id=f"RES126:ORIGIN:{origin.value}",
+            required_count=required,
+            observed_count=present,
+        )
+        lanes = _authorable_lanes(inventory, origin)
+        deficits.append(deficit)
+        requests.append(
+            BackfillRequestV1(
+                request_kind=BackfillRequestKind.CONSTRAINT_MINIMUM,
+                deficit_digest=deficit.deficit_digest,
+                lane_ids=tuple(lane.lane_id for lane in lanes),
+                requested_capacity=missing,
+                required_origin=origin,
+                constraint_id=deficit.constraint_id,
+                requires_candidate_metadata=True,
+            )
+        )
+        origin_missing[origin] = missing
+
+    lineage_required = MUTATION_LINEAGE_MINIMUM + 1
+    lineage_missing = max(0, lineage_required - inventory.planned_mutation_lineage_count)
+    if lineage_missing:
+        deficit = ReserveDeficitV1(
+            deficit_kind=ReserveDeficitKind.STRUCTURAL_COUNT,
+            constraint_id="RES258:MUTATION_LINEAGES_MINIMUM",
+            required_count=lineage_required,
+            observed_count=inventory.planned_mutation_lineage_count,
+        )
+        lanes = _authorable_lanes(inventory, CaseOrigin.ADVERSARIAL_MUTATION)
+        deficits.append(deficit)
+        requests.append(
+            BackfillRequestV1(
+                request_kind=BackfillRequestKind.CONSTRAINT_MINIMUM,
+                deficit_digest=deficit.deficit_digest,
+                lane_ids=tuple(lane.lane_id for lane in lanes),
+                requested_capacity=lineage_missing,
+                required_origin=CaseOrigin.ADVERSARIAL_MUTATION,
+                constraint_id=deficit.constraint_id,
+                requires_candidate_metadata=True,
+            )
+        )
+
+    final_missing = max(0, FINAL_CASE_COUNT + 1 - inventory.planned_candidate_count)
+    non_mutation_missing = sum(
+        count
+        for origin, count in origin_missing.items()
+        if origin is not CaseOrigin.ADVERSARIAL_MUTATION
+    )
+    mutation_missing = max(origin_missing.get(CaseOrigin.ADVERSARIAL_MUTATION, 0), lineage_missing)
+    origin_additional = non_mutation_missing + mutation_missing
+    additional = max(final_missing, origin_additional)
+    total_only_missing = max(0, final_missing - origin_additional)
+    if total_only_missing:
+        deficit = ReserveDeficitV1(
+            deficit_kind=ReserveDeficitKind.STRUCTURAL_COUNT,
+            constraint_id="RES258:FINAL_SELECTED_N",
+            required_count=FINAL_CASE_COUNT + 1,
+            observed_count=inventory.planned_candidate_count,
+        )
+        lanes = _authorable_lanes(inventory)
+        deficits.append(deficit)
+        requests.append(
+            BackfillRequestV1(
+                request_kind=BackfillRequestKind.CONSTRAINT_MINIMUM,
+                deficit_digest=deficit.deficit_digest,
+                lane_ids=tuple(lane.lane_id for lane in lanes),
+                requested_capacity=total_only_missing,
+                constraint_id=deficit.constraint_id,
+                requires_candidate_metadata=True,
+            )
+        )
+
+    metadata_deficit = ReserveDeficitV1(
+        deficit_kind=ReserveDeficitKind.METADATA_UNRESOLVED,
+        scenario_digest=inventory.inventory_digest,
+    )
+    metadata_lanes = _authorable_lanes(inventory)
+    deficits.append(metadata_deficit)
+    requests.append(
+        BackfillRequestV1(
+            request_kind=BackfillRequestKind.CANDIDATE_METADATA,
+            deficit_digest=metadata_deficit.deficit_digest,
+            lane_ids=tuple(lane.lane_id for lane in metadata_lanes),
+            requested_capacity=None,
+            scenario_digest=inventory.inventory_digest,
+            requires_candidate_metadata=True,
+        )
+    )
+
+    no_lane_request = any(
+        request.request_kind is not BackfillRequestKind.CANDIDATE_METADATA and not request.lane_ids
+        for request in requests
+    )
+    if (
+        no_lane_request
+        and inventory.authority_inventory_complete
+        and inventory.capacity_scope_complete
+    ):
+        status = SupplyAssessmentStatus.AUTHORITY_EXPANSION_REQUIRED
+    elif any(
+        request.request_kind is BackfillRequestKind.CONSTRAINT_MINIMUM and request.lane_ids
+        for request in requests
+    ):
+        status = SupplyAssessmentStatus.BACKFILL_REQUIRED
+    else:
+        status = SupplyAssessmentStatus.METADATA_REQUIRED
+    return AuthoritySupplyAssessmentV1(
+        assessment_version=POOL_SUPPLY_ASSESSMENT_VERSION,
+        status=status,
+        inventory_digest=inventory.inventory_digest,
+        planned_candidate_count=inventory.planned_candidate_count,
+        materialized_candidate_count=inventory.materialized_candidate_count,
+        usable_reserve_capacity_count=0,
+        final_target_count=FINAL_CASE_COUNT,
+        known_structural_pool_floor=inventory.planned_candidate_count + additional,
+        derived_pool_n=None,
+        backfill_requests=tuple(requests),
+        unresolved_deficits=tuple(deficits),
+        exact_qualification_status=SupplyAssessmentStatus.METADATA_REQUIRED,
+        authority_inventory_complete=inventory.authority_inventory_complete,
+        capacity_scope_complete=inventory.capacity_scope_complete,
+    )
 
 
 def _planning_candidates(
@@ -442,6 +648,14 @@ def _problem_without_candidate(
     )
 
 
+def _pool_solver_config(config: SelectionSolverConfig | None) -> SelectionSolverConfig:
+    if config is None:
+        return PSE_V1_POOL_FEASIBILITY_SOLVER_PROFILE_V1
+    if config != PSE_V1_POOL_FEASIBILITY_SOLVER_PROFILE_V1:
+        raise ValueError("pool qualification requires the named pool-feasibility solver profile")
+    return config
+
+
 def qualify_candidate_removal_reserve(
     problem: FinalSelectionProblem,
     *,
@@ -452,6 +666,7 @@ def qualify_candidate_removal_reserve(
 ]:
     """Require an exact, independently validated solution after every one-item removal."""
 
+    solver_config = _pool_solver_config(solver_config)
     baseline = solve_selection_feasibility(problem, solver_config=solver_config)
     if baseline.status is not FeasibilityStatus.FEASIBLE:
         return baseline, ()
@@ -489,60 +704,275 @@ def qualify_candidate_removal_reserve(
     return baseline, tuple(removals)
 
 
+def _deficit_requests_for_need(
+    need: PoolBackfillNeedV1,
+    inventory: AuthoritySupplyInventoryV1 | None,
+    *,
+    scenario_digest: str | None = None,
+    removed_candidate_digest: str | None = None,
+) -> tuple[ReserveDeficitV1, BackfillRequestV1]:
+    deficit = ReserveDeficitV1(
+        deficit_kind=ReserveDeficitKind.STRUCTURAL_COUNT,
+        constraint_id=need.constraint_id,
+        scenario_digest=scenario_digest,
+        removed_candidate_digest=removed_candidate_digest,
+        required_count=need.required_candidate_count,
+        observed_count=need.present_candidate_count,
+        affected_constraint_ids=(need.constraint_id,),
+    )
+    lanes = _authorable_lanes(inventory, need.origin_class) if inventory else ()
+    request = BackfillRequestV1(
+        request_kind=BackfillRequestKind.CONSTRAINT_MINIMUM,
+        deficit_digest=deficit.deficit_digest,
+        lane_ids=tuple(lane.lane_id for lane in lanes),
+        requested_capacity=need.missing_candidate_count,
+        required_origin=need.origin_class,
+        constraint_id=need.constraint_id,
+        split=need.split,
+        feature_kind=need.feature_kind,
+        feature_key=need.feature_key,
+        scenario_digest=scenario_digest,
+        requires_candidate_metadata=True,
+    )
+    return deficit, request
+
+
+def _exact_deficits_and_requests(
+    problem: FinalSelectionProblem,
+    baseline: SelectionFeasibilityReceiptV1,
+    removals: tuple[SingleCandidateRemovalCheckV1, ...],
+    inventory: AuthoritySupplyInventoryV1 | None,
+) -> tuple[tuple[ReserveDeficitV1, ...], tuple[BackfillRequestV1, ...]]:
+    deficits: list[ReserveDeficitV1] = []
+    requests: list[BackfillRequestV1] = []
+    all_lanes = _authorable_lanes(inventory) if inventory else ()
+    if baseline.status is FeasibilityStatus.INFEASIBLE:
+        scenario_digest = problem.problem_digest
+        deficit = ReserveDeficitV1(
+            deficit_kind=ReserveDeficitKind.EXACT_BASELINE_INFEASIBLE,
+            scenario_digest=scenario_digest,
+        )
+        deficits.append(deficit)
+        requests.append(
+            BackfillRequestV1(
+                request_kind=BackfillRequestKind.EXACT_SELECTION_INTERACTION,
+                deficit_digest=deficit.deficit_digest,
+                lane_ids=tuple(lane.lane_id for lane in all_lanes),
+                requested_capacity=None,
+                scenario_digest=scenario_digest,
+                requires_candidate_metadata=True,
+            )
+        )
+        return tuple(deficits), tuple(requests)
+    if baseline.status is FeasibilityStatus.UNKNOWN:
+        return (
+            (
+                ReserveDeficitV1(
+                    deficit_kind=ReserveDeficitKind.EXACT_ORACLE_UNKNOWN,
+                    scenario_digest=problem.problem_digest,
+                ),
+            ),
+            (),
+        )
+    candidates_by_digest = {canonical_hash(item.candidate_id): item for item in problem.candidates}
+    for removal in removals:
+        if removal.status is FeasibilityStatus.FEASIBLE:
+            continue
+        scenario_digest = canonical_hash((problem.problem_digest, removal.candidate_digest))
+        if removal.status is FeasibilityStatus.UNKNOWN:
+            deficits.append(
+                ReserveDeficitV1(
+                    deficit_kind=ReserveDeficitKind.EXACT_ORACLE_UNKNOWN,
+                    scenario_digest=scenario_digest,
+                    removed_candidate_digest=removal.candidate_digest,
+                )
+            )
+            continue
+        without = _problem_without_candidate(
+            problem,
+            candidates_by_digest[removal.candidate_digest].candidate_id,
+        )
+        needs = derive_pool_backfill_needs(without)
+        if needs:
+            for need in needs:
+                deficit, request = _deficit_requests_for_need(
+                    need,
+                    inventory,
+                    scenario_digest=scenario_digest,
+                    removed_candidate_digest=removal.candidate_digest,
+                )
+                deficits.append(deficit)
+                requests.append(request)
+            continue
+        interaction_digest = canonical_hash((scenario_digest, without.problem_digest))
+        deficit = ReserveDeficitV1(
+            deficit_kind=ReserveDeficitKind.EXACT_REMOVAL_INFEASIBLE,
+            scenario_digest=interaction_digest,
+            removed_candidate_digest=removal.candidate_digest,
+        )
+        deficits.append(deficit)
+        requests.append(
+            BackfillRequestV1(
+                request_kind=BackfillRequestKind.EXACT_SELECTION_INTERACTION,
+                deficit_digest=deficit.deficit_digest,
+                lane_ids=tuple(lane.lane_id for lane in all_lanes),
+                requested_capacity=None,
+                scenario_digest=interaction_digest,
+                requires_candidate_metadata=True,
+            )
+        )
+    return tuple(deficits), tuple(requests)
+
+
 def plan_variable_pool(
     initial_candidates: tuple[FinalSelectionCandidate, ...],
     *,
-    governed_backfill_candidates: tuple[GovernedBackfillCandidateV1, ...] = (),
+    supply_inventory: AuthoritySupplyInventoryV1 | None = None,
+    materialized_backfill_candidates: tuple[MaterializedBackfillCandidateV1, ...] = (),
     parent_provenance_registry: tuple[MutationParentProvenance, ...] = (),
     solver_config: SelectionSolverConfig | None = None,
 ) -> PoolPlanningResultV1:
-    """Add only backfill that addresses a measured bound, then prove every removal."""
+    """Retry exact reserve failures from governed lanes, stopping at missing metadata."""
 
     if not initial_candidates:
         raise ValueError("pool planning requires existing candidate metadata")
+    solver_config = _pool_solver_config(solver_config)
     initial = tuple(sorted(initial_candidates, key=lambda item: item.candidate_id.encode()))
     if len({item.candidate_id for item in initial}) != len(initial):
         raise ValueError("initial pool candidate IDs must be unique")
-    available = tuple(
-        sorted(governed_backfill_candidates, key=lambda item: item.candidate.candidate_id.encode())
-    )
-    available_ids = tuple(item.candidate.candidate_id for item in available)
-    if len(set(available_ids)) != len(available_ids):
-        raise ValueError("governed backfill candidate IDs must be unique")
     initial_ids = {item.candidate_id for item in initial}
     initial_hashes = {item.payload_hash for item in initial}
+    available = tuple(
+        sorted(
+            materialized_backfill_candidates,
+            key=lambda item: (item.lane_id.encode(), item.candidate.candidate_id.encode()),
+        )
+    )
+    available_ids = tuple(item.candidate.candidate_id for item in available)
     backfill_hashes = tuple(item.candidate.payload_hash for item in available)
-    if any(item.candidate.candidate_id in initial_ids for item in available) or set(
+    if len(set(available_ids)) != len(available_ids) or len(set(backfill_hashes)) != len(
         backfill_hashes
-    ).intersection(initial_hashes):
+    ):
+        raise ValueError("materialized backfill candidate identities must be unique")
+    if set(available_ids).intersection(initial_ids) or set(backfill_hashes).intersection(
+        initial_hashes
+    ):
         raise ValueError("backfill candidate duplicates an initial pool identity")
-    if len(set(backfill_hashes)) != len(backfill_hashes):
-        raise ValueError("governed backfill candidate payload identities must be unique")
+    if available and supply_inventory is None:
+        raise ValueError("materialized backfill candidates require a bound authority inventory")
+    lanes = (
+        {lane.lane_id: lane for lane in supply_inventory.reserve_candidate_lanes}
+        if supply_inventory
+        else {}
+    )
+    use_counts: dict[str, int] = {}
+    for binding in available:
+        lane = lanes.get(binding.lane_id)
+        if (
+            lane is None
+            or not lane.may_author_backfill
+            or lane.origin_class is not binding.candidate.origin_class
+            or lane.authority_ref != binding.authority_ref
+            or lane.authority_digest != binding.authority_digest
+        ):
+            raise ValueError(
+                "materialized backfill candidate does not match an available authority lane"
+            )
+        use_counts[binding.lane_id] = use_counts.get(binding.lane_id, 0) + 1
+        if (
+            lane.available_capacity is not None
+            and use_counts[binding.lane_id] > lane.available_capacity
+        ):
+            raise ValueError("materialized backfill candidates exceed their governed lane capacity")
+
     pool = list(initial)
-    used_authorities: dict[str, tuple[str, str]] = {}
     remaining = {item.candidate.candidate_id: item for item in available}
+    used_authorities: dict[str, tuple[str, str, str]] = {}
+    final_problem: FinalSelectionProblem | None = None
+    unresolved: tuple[PoolBackfillNeedV1, ...] = ()
+    deficits: tuple[ReserveDeficitV1, ...] = ()
+    requests: tuple[BackfillRequestV1, ...] = ()
+    baseline: SelectionFeasibilityReceiptV1 | None = None
+    removals: tuple[SingleCandidateRemovalCheckV1, ...] = ()
 
     while True:
-        problem = _build_problem(tuple(pool), parent_provenance_registry)
-        needs = derive_pool_backfill_needs(problem)
-        if not needs:
-            break
-        scored = []
-        for candidate_id, binding in remaining.items():
-            candidate = _planning_candidates((binding.candidate,))[0]
+        baseline = None
+        removals = ()
+        deficits = ()
+        requests = ()
+        final_problem = _build_problem(tuple(pool), parent_provenance_registry)
+        unresolved = derive_pool_backfill_needs(final_problem)
+        if unresolved:
+            scored = []
             effective_pool = _planning_candidates(tuple(pool))
-            score = sum(_contributes(candidate, need, effective_pool) for need in needs)
-            if score:
-                scored.append((score, candidate_id.encode(), candidate_id, binding))
-        if not scored:
+            for candidate_id, binding in remaining.items():
+                lane = lanes[binding.lane_id]
+                if not lane.may_author_backfill:
+                    continue
+                candidate = _planning_candidates((binding.candidate,))[0]
+                score = sum(_contributes(candidate, need, effective_pool) for need in unresolved)
+                if score:
+                    scored.append((score, candidate_id.encode(), candidate_id, binding))
+            if scored:
+                _score, _key, candidate_id, binding = min(
+                    scored, key=lambda item: (-item[0], item[1])
+                )
+                pool.append(binding.candidate)
+                used_authorities[candidate_id] = (
+                    binding.lane_id,
+                    binding.authority_ref,
+                    binding.authority_digest,
+                )
+                del remaining[candidate_id]
+                continue
+            generated = tuple(
+                _deficit_requests_for_need(need, supply_inventory) for need in unresolved
+            )
+            deficits = tuple(item[0] for item in generated)
+            requests = tuple(item[1] for item in generated)
             break
-        _score, _key, candidate_id, binding = min(scored, key=lambda item: (-item[0], item[1]))
-        pool.append(binding.candidate)
-        used_authorities[candidate_id] = (binding.authority_ref, binding.authority_digest)
-        del remaining[candidate_id]
 
-    final_problem = _build_problem(tuple(pool), parent_provenance_registry)
-    unresolved = derive_pool_backfill_needs(final_problem)
+        baseline, removals = qualify_candidate_removal_reserve(
+            final_problem,
+            solver_config=solver_config,
+        )
+        if baseline.status is FeasibilityStatus.UNKNOWN or any(
+            item.status is FeasibilityStatus.UNKNOWN for item in removals
+        ):
+            deficits, requests = _exact_deficits_and_requests(
+                final_problem, baseline, removals, supply_inventory
+            )
+            break
+        if baseline.status is FeasibilityStatus.FEASIBLE and all(
+            item.status is FeasibilityStatus.FEASIBLE for item in removals
+        ):
+            break
+        deficits, requests = _exact_deficits_and_requests(
+            final_problem, baseline, removals, supply_inventory
+        )
+        request_lanes = {lane_id for request in requests for lane_id in request.lane_ids}
+        next_candidate = next(
+            (
+                binding
+                for candidate_id, binding in sorted(
+                    remaining.items(), key=lambda item: (item[1].lane_id.encode(), item[0].encode())
+                )
+                if binding.lane_id in request_lanes
+                and _eligible(_planning_candidates((binding.candidate,))[0])
+            ),
+            None,
+        )
+        if next_candidate is None:
+            break
+        pool.append(next_candidate.candidate)
+        used_authorities[next_candidate.candidate.candidate_id] = (
+            next_candidate.lane_id,
+            next_candidate.authority_ref,
+            next_candidate.authority_digest,
+        )
+        del remaining[next_candidate.candidate.candidate_id]
+
+    assert final_problem is not None
     final_target = next(
         item.minimum
         for item in final_problem.constraint_set.constraints
@@ -555,8 +985,12 @@ def plan_variable_pool(
         backfill_authorities=tuple(
             sorted(
                 [
-                    (candidate_id, authority_ref, authority_digest)
-                    for candidate_id, (authority_ref, authority_digest) in used_authorities.items()
+                    (candidate_id, lane_id, authority_ref, authority_digest)
+                    for candidate_id, (
+                        lane_id,
+                        authority_ref,
+                        authority_digest,
+                    ) in used_authorities.items()
                 ],
                 key=lambda item: item[0].encode(),
             )
@@ -569,44 +1003,63 @@ def plan_variable_pool(
         and item.feature is not None
         and item.feature.kind is FeatureKind.CRITICAL_ERROR
     )
-    needs_by_id = {item.constraint_id: item for item in unresolved}
+    needs_by_id = {item.constraint_id for item in unresolved}
     critical_ready = sum(item.constraint_id not in needs_by_id for item in critical_constraints)
-    reasons = tuple(
-        f"{need.constraint_id}: missing {need.missing_candidate_count} "
-        "eligible metadata candidate(s)"
-        for need in unresolved
+    unknown = baseline is not None and (
+        baseline.status is FeasibilityStatus.UNKNOWN
+        or any(item.status is FeasibilityStatus.UNKNOWN for item in removals)
     )
-    if unresolved:
-        status = PoolPlanStatus.AUTHORITY_EXPANSION_REQUIRED
-        baseline = None
-        removals: tuple[SingleCandidateRemovalCheckV1, ...] = ()
-        critical_status = CriticalReserveStatus.AUTHORITY_EXPANSION_REQUIRED
+    exact_qualified = (
+        baseline is not None
+        and baseline.status is FeasibilityStatus.FEASIBLE
+        and all(item.status is FeasibilityStatus.FEASIBLE for item in removals)
+    )
+    if exact_qualified and not unresolved:
+        status = PoolPlanStatus.QUALIFIED
+    elif unknown:
+        status = PoolPlanStatus.UNKNOWN
     else:
-        baseline, removals = qualify_candidate_removal_reserve(
-            final_problem,
-            solver_config=solver_config,
+        empty_lane_request = any(not item.lane_ids for item in requests)
+        exhausted = bool(
+            supply_inventory
+            and supply_inventory.authority_inventory_complete
+            and supply_inventory.capacity_scope_complete
+            and empty_lane_request
         )
-        if baseline.status is FeasibilityStatus.UNKNOWN or any(
-            item.status is FeasibilityStatus.UNKNOWN for item in removals
-        ):
-            status = PoolPlanStatus.UNKNOWN
-            critical_status = CriticalReserveStatus.UNKNOWN
-        elif baseline.status is FeasibilityStatus.INFEASIBLE:
+        if exhausted:
             status = PoolPlanStatus.AUTHORITY_EXPANSION_REQUIRED
-            critical_status = CriticalReserveStatus.AUTHORITY_EXPANSION_REQUIRED
-            reasons = ("exact baseline joint feasibility is INFEASIBLE",)
-        elif baseline.status is FeasibilityStatus.FEASIBLE and all(
-            item.status is FeasibilityStatus.FEASIBLE for item in removals
-        ):
-            status = PoolPlanStatus.QUALIFIED
-            critical_status = CriticalReserveStatus.QUALIFIED
+        elif unresolved and any(item.lane_ids for item in requests):
+            status = PoolPlanStatus.BACKFILL_REQUIRED
         else:
-            status = PoolPlanStatus.AUTHORITY_EXPANSION_REQUIRED
-            critical_status = CriticalReserveStatus.AUTHORITY_EXPANSION_REQUIRED
-            failed = sum(item.status is FeasibilityStatus.INFEASIBLE for item in removals)
-            reasons = (f"exact joint feasibility failed for {failed} single-candidate removal(s)",)
+            status = PoolPlanStatus.METADATA_REQUIRED
+    if status is PoolPlanStatus.QUALIFIED:
+        critical_status = CriticalReserveStatus.QUALIFIED
+    elif status is PoolPlanStatus.UNKNOWN:
+        critical_status = CriticalReserveStatus.UNKNOWN
+    elif status is PoolPlanStatus.AUTHORITY_EXPANSION_REQUIRED:
+        critical_status = CriticalReserveStatus.AUTHORITY_EXPANSION_REQUIRED
+    elif any(item.feature_kind is FeatureKind.CRITICAL_ERROR for item in unresolved) or any(
+        item.request_kind is BackfillRequestKind.EXACT_SELECTION_INTERACTION for item in requests
+    ):
+        critical_status = CriticalReserveStatus.METADATA_REQUIRED
+    elif unresolved:
+        critical_status = CriticalReserveStatus.BACKFILL_REQUIRED
+    else:
+        critical_status = CriticalReserveStatus.METADATA_REQUIRED
 
+    status_reasons = tuple(
+        [
+            f"{need.constraint_id}: missing {need.missing_candidate_count} "
+            "eligible metadata candidate(s)"
+            for need in unresolved
+        ]
+        + [
+            f"{deficit.deficit_kind.value}: exact deficit {deficit.deficit_digest}"
+            for deficit in deficits
+        ]
+    )
     removal_digest = canonical_hash(removals)
+    eligible_count = sum(_eligible(candidate) for candidate in _planning_candidates(tuple(pool)))
     receipt = PoolReserveReceiptV1(
         receipt_version=POOL_RESERVE_RECEIPT_VERSION,
         status=status,
@@ -615,7 +1068,16 @@ def plan_variable_pool(
         candidate_count=len(pool),
         backfill_candidate_count=len(used_authorities),
         final_target_count=final_target,
-        reserve_candidate_count=max(0, len(pool) - final_target),
+        eligible_candidate_count=eligible_count,
+        usable_reserve_candidate_count=max(0, eligible_count - final_target),
+        supply_inventory_digest=supply_inventory.inventory_digest if supply_inventory else None,
+        authority_inventory_complete=(
+            supply_inventory.authority_inventory_complete if supply_inventory else False
+        ),
+        capacity_scope_complete=supply_inventory.capacity_scope_complete
+        if supply_inventory
+        else False,
+        solver_profile_version=POOL_FEASIBILITY_SOLVER_PROFILE_VERSION,
         baseline_feasibility_status=baseline.status if baseline else None,
         checked_removal_count=len(removals),
         feasible_removal_count=sum(item.status is FeasibilityStatus.FEASIBLE for item in removals),
@@ -628,20 +1090,24 @@ def plan_variable_pool(
         critical_obligations_with_structural_reserve=critical_ready,
         independent_critical_reserve_status=critical_status,
         unresolved_backfill_needs=unresolved,
-        authority_expansion_reasons=reasons,
+        reserve_deficits=deficits,
+        backfill_requests=requests,
+        status_reasons=status_reasons,
+        authority_exhaustion_proven=status is PoolPlanStatus.AUTHORITY_EXPANSION_REQUIRED,
     )
     return PoolPlanningResultV1(plan=plan, receipt=receipt)
 
 
 __all__ = [
     "CriticalReserveStatus",
-    "GovernedBackfillCandidateV1",
+    "MaterializedBackfillCandidateV1",
     "PoolBackfillNeedV1",
     "PoolMetadataPlanV1",
     "PoolPlanStatus",
     "PoolPlanningResultV1",
     "PoolReserveReceiptV1",
     "SingleCandidateRemovalCheckV1",
+    "assess_authority_supply_inventory",
     "derive_pool_backfill_needs",
     "plan_variable_pool",
     "qualify_candidate_removal_reserve",
