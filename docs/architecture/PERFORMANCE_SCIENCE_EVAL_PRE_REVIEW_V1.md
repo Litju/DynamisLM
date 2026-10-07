@@ -64,6 +64,30 @@ capability-by-family coverage claims; it does not authorize high-precision
 cell-level performance estimates or fine-grained model ranking without
 additional statistical qualification.
 
+## Variable pool authoring boundary
+
+`dynamislm.benchmark.variable_pool` is the only pool-construction path under
+this lifecycle:
+
+```text
+ProductionCandidateRecipeV1     one individually authorized candidate recipe
+    -> VariablePoolAuthoringPlanV1  explicit variable recipe set; no N, origin, or lineage target
+    -> materialize_variable_pool    per-recipe production builders and current packet gates
+    -> ProductionAuthoringCandidatePoolV1 (pending review; bound to the plan digest)
+```
+
+A recipe is authorized either as an individual historical recipe or by a
+governed supply lane. Historical production inputs are decomposed into
+individual recipes. Their slot totals, origin vector, expert batch membership,
+mutation lineage geometry, RES-223 repair plans, RES-128 candidate-set digests,
+and legacy exact-feasibility receipts are not read on this path. A static
+call-path test enforces that boundary. Pool qualification applies the RES258
+lower bound `N >= 434` and then the RES-383 single-removal and CRITICAL reserve
+gates. No fixed pool size is targeted.
+
+The live authority-supply inventory (`@1.3.0`) records authority and authorable
+capacity only. It carries no planned slot or lineage geometry.
+
 ## Per-candidate review and promotion lifecycle
 
 ```text
