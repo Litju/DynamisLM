@@ -3684,8 +3684,8 @@ class ProductionDuplicationAuditV1:
     def __post_init__(self) -> None:
         if self.algorithm_id != "PSE-V1-INTRA-DUPLICATION-AUDIT@1.1.0":
             raise ValueError("unsupported production duplication audit algorithm")
-        if self.candidate_count != FINAL_TARGET_CASES:
-            raise ValueError("duplication audit must bind exactly 434 candidates")
+        if self.candidate_count < 1:
+            raise ValueError("duplication audit must bind a non-empty candidate pool")
         if any(
             value != 0
             for value in (
@@ -3742,10 +3742,8 @@ def audit_production_duplicates(
 ) -> ProductionDuplicationAuditV1:
     """Reject exact duplicates and fuzzy-only overlaps; retain exact-shingle constraints."""
 
-    if len(packets) != FINAL_TARGET_CASES:
-        raise ValueError("production duplication audit requires exactly 434 packets")
-    if len({item.candidate_id for item in packets}) != FINAL_TARGET_CASES:
-        raise ValueError("production duplication audit requires unique candidate IDs")
+    if not packets or len({item.candidate_id for item in packets}) != len(packets):
+        raise ValueError("production duplication audit requires unique packets")
     by_id = {item.candidate_id: item for item in packets}
     parent_by_child: dict[str, str] = {}
     lineage_clusters: dict[str, str] = {}
@@ -3937,7 +3935,7 @@ def audit_production_duplicates(
     )
     provisional = ProductionDuplicationAuditV1(
         algorithm_id="PSE-V1-INTRA-DUPLICATION-AUDIT@1.1.0",
-        candidate_count=FINAL_TARGET_CASES,
+        candidate_count=len(ordered),
         candidate_set_digest=candidate_set_digest,
         exact_payload_duplicate_pairs=exact_payload,
         exact_question_duplicate_pairs=exact_question,
@@ -3955,11 +3953,18 @@ def _validate_production_candidate_set_and_commitments(
     packets: tuple[CandidateReviewPacket, ...],
     *,
     source_resolver: SourceArtifactResolver | None = None,
+    expected_count: int | None = FINAL_TARGET_CASES,
 ) -> tuple[ProductionCandidateCommitmentV1, ...]:
-    """Validate packets/topology and derive commitments before the isolation gate."""
+    """Validate packets/topology and derive commitments before the isolation gate.
 
-    if len(packets) != FINAL_TARGET_CASES:
-        raise ValueError("production candidate set must contain exactly 434 packets")
+    ``expected_count=None`` validates a variable pre-review pool (RES258-DR-001); the
+    historical exact-434 production batch keeps its default count.
+    """
+
+    if not packets:
+        raise ValueError("production candidate pool must be non-empty")
+    if expected_count is not None and len(packets) != expected_count:
+        raise ValueError(f"production candidate set must contain exactly {expected_count} packets")
     if any(
         not packet.candidate_id.startswith(PRODUCTION_CANDIDATE_ID_PREFIX) for packet in packets
     ):
@@ -4001,6 +4006,30 @@ def validate_production_candidate_set(
         enforce_public_capacity=enforce_public_capacity,
     )
     return commitments
+
+
+def validate_production_candidate_pool(
+    packets: tuple[CandidateReviewPacket, ...],
+    *,
+    source_resolver: SourceArtifactResolver | None = None,
+) -> tuple[tuple[ProductionCandidateCommitmentV1, ...], ProductionDuplicationAuditV1]:
+    """Apply packet, set, isolation, and duplication gates to a variable pre-review pool.
+
+    Split-lock conflicts and Public capacity are allocation questions for joint final
+    selection, so they are deferred exactly as in pre-review production qualification.
+    """
+
+    commitments = _validate_production_candidate_set_and_commitments(
+        packets,
+        source_resolver=source_resolver,
+        expected_count=None,
+    )
+    validate_production_isolation(
+        commitments,
+        defer_split_lock_conflicts=True,
+        enforce_public_capacity=False,
+    )
+    return commitments, audit_production_duplicates(packets)
 
 
 __all__ = [
@@ -4049,6 +4078,7 @@ __all__ = [
     "validate_production_batch_manifest",
     "validate_production_batch_manifest_bindings",
     "validate_production_candidate_packet",
+    "validate_production_candidate_pool",
     "validate_production_candidate_set",
     "validate_production_candidate_store_receipt",
     "validate_production_exact_feasibility",
