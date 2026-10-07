@@ -31,6 +31,7 @@ from dynamislm.benchmark.selection_contracts import (
     FinalSelectionProblem,
     IsolationIdentity,
     IsolationIdentityKind,
+    MutationParentProvenance,
     RelationKind,
     ReviewEligibility,
     SelectionConstraint,
@@ -65,6 +66,7 @@ def _candidate(
     generator_seed_blocks: tuple[str, ...] = (),
     mutation_lineage_id: str | None = None,
     mutation_parent_candidate_id: str | None = None,
+    mutation_parent_payload_hash: str | None = None,
 ) -> FinalSelectionCandidate:
     features = (
         (SelectionFeature(FeatureKind.CRITICAL_ERROR, (CRITICAL_ERROR_CLASSES[0].value,)),)
@@ -80,6 +82,7 @@ def _candidate(
         locked_split=locked_split,
         mutation_lineage_id=mutation_lineage_id,
         mutation_parent_candidate_id=mutation_parent_candidate_id,
+        mutation_parent_payload_hash=mutation_parent_payload_hash,
         generator_seed_blocks=generator_seed_blocks,
         features=features,
         balance_cells=(),
@@ -157,6 +160,27 @@ def _problem(
                     kind=ConstraintKind.SYNTHETIC_SPLIT_LOCK,
                     candidate_ids=(item.candidate_id,),
                     locked_split=item.locked_split,
+                )
+            )
+        if item.mutation_lineage_id is not None:
+            constraints.extend(
+                (
+                    SelectionConstraint(
+                        constraint_id=f"RES258:MUTATION_PARENT:{item.candidate_id}",
+                        authority_ref="test mutation parent provenance",
+                        kind=ConstraintKind.MUTATION_PARENT_PROVENANCE,
+                        candidate_ids=(item.candidate_id,),
+                        related_id=item.mutation_parent_candidate_id,
+                        related_payload_hash=item.mutation_parent_payload_hash,
+                    ),
+                    SelectionConstraint(
+                        constraint_id=f"RES258:MUTATION_CELL:{item.candidate_id}",
+                        authority_ref="test mutation parent cell",
+                        kind=ConstraintKind.MUTATION_PARENT_CELL_INHERITANCE,
+                        candidate_ids=(item.candidate_id,),
+                        related_id=item.mutation_parent_candidate_id,
+                        reason=item.mutation_cell_exception_authority_ref,
+                    ),
                 )
             )
     constraints.extend(
@@ -924,6 +948,116 @@ def test_exact_interaction_backfill_requires_feasibility_witness_then_uses_revie
     assert result.receipt.backfill_candidate_count == 1
     assert result.plan.backfill_authorities[0][0] == "repair-b"
     assert result.plan.backfill_authorities[0][1] == "b-approved"
+
+
+def test_mutation_repair_trial_keeps_removed_parent_provenance(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from dynamislm.benchmark import selection_pool
+    from dynamislm.benchmark.selection_pool import SingleCandidateRemovalCheckV1
+
+    parent = _candidate("parent-candidate")
+    lineage = "mutation-lineage:parent-a"
+    parent_hash = parent.payload_hash
+    mutation = _candidate(
+        "repair-mutation",
+        origin=CaseOrigin.ADVERSARIAL_MUTATION,
+        identities=(
+            IsolationIdentity(IsolationIdentityKind.SOURCE_FAMILY, "family:mutation"),
+            IsolationIdentity(IsolationIdentityKind.MUTATION_PARENT, parent.candidate_id),
+            IsolationIdentity(IsolationIdentityKind.MUTATION_LINEAGE, lineage),
+        ),
+        mutation_lineage_id=lineage,
+        mutation_parent_candidate_id=parent.candidate_id,
+        mutation_parent_payload_hash=parent_hash,
+    )
+    lane = _lane(
+        "mutation-parent-a",
+        origin=CaseOrigin.ADVERSARIAL_MUTATION,
+        capacity=None,
+        status=LaneCapacityStatus.METADATA_REQUIRED,
+        identity_digests=tuple(
+            sorted(
+                (
+                    _identity_digest("MUTATION_PARENT", parent.candidate_id),
+                    _identity_digest("MUTATION_LINEAGE", lineage),
+                )
+            )
+        ),
+    )
+
+    def build_small_problem(
+        candidates: tuple[FinalSelectionCandidate, ...],
+        parents: tuple[MutationParentProvenance, ...],
+    ) -> FinalSelectionProblem:
+        return replace(
+            _problem(selection_pool._planning_candidates(candidates), final_count=1),
+            parent_provenance_registry=parents,
+        )
+
+    monkeypatch.setattr(selection_pool, "_build_problem", build_small_problem)
+    trial_parent_registry: list[tuple[str, ...]] = []
+
+    def trial_solver(problem: FinalSelectionProblem, **_kwargs: Any) -> Any:
+        candidate_ids = {item.candidate_id for item in problem.candidates}
+        if "repair-mutation" in candidate_ids:
+            trial_parent_registry.append(
+                tuple(item.candidate_id for item in problem.parent_provenance_registry)
+            )
+        return SimpleNamespace(
+            status=(
+                FeasibilityStatus.FEASIBLE
+                if "repair-mutation" in candidate_ids
+                and any(
+                    item.candidate_id == parent.candidate_id
+                    for item in problem.parent_provenance_registry
+                )
+                else FeasibilityStatus.INFEASIBLE
+            )
+        )
+
+    def qualify(problem: FinalSelectionProblem, **_kwargs: Any) -> tuple[Any, Any]:
+        repairing = any(item.candidate_id == "repair-mutation" for item in problem.candidates)
+        baseline = SimpleNamespace(status=FeasibilityStatus.FEASIBLE)
+        removals = tuple(
+            SingleCandidateRemovalCheckV1(
+                canonical_hash(candidate.candidate_id),
+                (
+                    FeasibilityStatus.FEASIBLE
+                    if repairing or candidate.candidate_id != parent.candidate_id
+                    else FeasibilityStatus.INFEASIBLE
+                ),
+                "EXACT_FEASIBILITY_ORACLE",
+                canonical_hash(("plan", candidate.candidate_id))
+                if repairing or candidate.candidate_id != parent.candidate_id
+                else None,
+                canonical_hash(("validation", candidate.candidate_id))
+                if repairing or candidate.candidate_id != parent.candidate_id
+                else None,
+            )
+            for candidate in problem.candidates
+        )
+        return baseline, removals
+
+    monkeypatch.setattr(selection_pool, "solve_selection_feasibility", trial_solver)
+    monkeypatch.setattr(selection_pool, "qualify_candidate_removal_reserve", qualify)
+    result = plan_variable_pool(
+        (parent, _candidate("a"), _candidate("b")),
+        supply_inventory=_inventory((lane,)),
+        materialized_backfill_candidates=(
+            MaterializedBackfillCandidateV1(
+                mutation,
+                lane.lane_id,
+                lane.authority_ref,
+                lane.authority_digest,
+            ),
+        ),
+    )
+
+    assert result.receipt.status is PoolPlanStatus.QUALIFIED
+    assert result.plan.backfill_authorities[0][0] == "repair-mutation"
+    assert trial_parent_registry
+    assert all(parent.candidate_id in registry for registry in trial_parent_registry)
 
 
 def test_exact_removal_failure_without_materialized_metadata_is_unresolved(

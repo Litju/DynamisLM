@@ -1078,7 +1078,7 @@ def plan_variable_pool(
                 trial = solve_selection_feasibility(
                     _build_problem(
                         (*scenario.candidates, binding.candidate),
-                        parent_provenance_registry,
+                        scenario.parent_provenance_registry,
                     ),
                     solver_config=solver_config,
                 )
