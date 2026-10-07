@@ -6,6 +6,7 @@ from typing import Any
 
 import pytest
 
+from dynamislm.benchmark.authoring import production_seed_namespace
 from dynamislm.benchmark.authority_supply import (
     AUTHORITY_SUPPLY_SCHEMA,
     AuthoritySupplyInventoryV1,
@@ -41,6 +42,7 @@ from dynamislm.benchmark.selection_pool import (
     derive_pool_backfill_needs,
     plan_variable_pool,
     qualify_candidate_removal_reserve,
+    validate_materialized_backfill_lane_binding,
 )
 from dynamislm.benchmark.selection_solver import solve_selection_feasibility
 from dynamislm.serialization import canonical_hash
@@ -54,6 +56,11 @@ def _candidate(
     review: ReviewEligibility = ReviewEligibility.APPROVED,
     excluded: bool = False,
     locked_split: SplitName | None = None,
+    cell: tuple[str, str] = ("C01", "F01"),
+    identities: tuple[IsolationIdentity, ...] | None = None,
+    generator_seed_blocks: tuple[str, ...] = (),
+    mutation_lineage_id: str | None = None,
+    mutation_parent_candidate_id: str | None = None,
 ) -> FinalSelectionCandidate:
     features = (
         (SelectionFeature(FeatureKind.CRITICAL_ERROR, (CRITICAL_ERROR_CLASSES[0].value,)),)
@@ -67,13 +74,36 @@ def _candidate(
         review_eligibility=review,
         qualification_excluded=excluded,
         locked_split=locked_split,
+        mutation_lineage_id=mutation_lineage_id,
+        mutation_parent_candidate_id=mutation_parent_candidate_id,
+        generator_seed_blocks=generator_seed_blocks,
         features=features,
         balance_cells=(),
         isolation_cluster_id=f"cluster:{candidate_id}",
         allocation_stratum="res383-abstract",
-        cell=("C01", "F01"),
-        isolation_identities=(
-            IsolationIdentity(IsolationIdentityKind.SOURCE_FAMILY, f"family:{candidate_id}"),
+        cell=cell,
+        isolation_identities=tuple(
+            sorted(
+                identities
+                or (
+                    (
+                        IsolationIdentity(
+                            IsolationIdentityKind.SOURCE_FAMILY, "family:source-lane"
+                        ),
+                        IsolationIdentity(
+                            IsolationIdentityKind.SOURCE_DOCUMENT, "document:source-lane"
+                        ),
+                    )
+                    if origin is CaseOrigin.SOURCE_BACKED_EVIDENCE_EXTRACTION
+                    else (
+                        IsolationIdentity(
+                            IsolationIdentityKind.SOURCE_FAMILY,
+                            f"family:{candidate_id}",
+                        ),
+                    )
+                ),
+                key=lambda item: (item.kind.value, item.identity.encode()),
+            )
         ),
         exact_shingle_digests=(canonical_hash(("RES383-ABSTRACT-SHINGLE", candidate_id)),),
     )
@@ -195,6 +225,8 @@ def _lane(
     origin: CaseOrigin = CaseOrigin.SOURCE_BACKED_EVIDENCE_EXTRACTION,
     capacity: int | None = 1,
     status: LaneCapacityStatus = LaneCapacityStatus.AVAILABLE,
+    supported_cells: tuple[tuple[str, str], ...] = (("C01", "F01"),),
+    identity_digests: tuple[str, ...] | None = None,
 ) -> ReserveCandidateLaneV1:
     return ReserveCandidateLaneV1(
         lane_id=lane_id,
@@ -206,6 +238,16 @@ def _lane(
         available_capacity=capacity,
         capacity_status=status,
         capacity_rule=("test governed capacity rule" if capacity is None else None),
+        supported_cells=supported_cells,
+        isolation_identity_digests=identity_digests
+        or (
+            (
+                canonical_hash(("SOURCE_FAMILY", "family:source-lane")),
+                canonical_hash(("SOURCE_DOCUMENT", "document:source-lane")),
+            )
+            if origin is CaseOrigin.SOURCE_BACKED_EVIDENCE_EXTRACTION
+            else ()
+        ),
     )
 
 
@@ -229,6 +271,230 @@ def _inventory(
         authority_inventory_complete=True,
         capacity_scope_complete=capacity_scope_complete,
     )
+
+
+def _with_identity(
+    candidate: FinalSelectionCandidate,
+    kind: IsolationIdentityKind,
+    identity: str,
+) -> FinalSelectionCandidate:
+    identities = tuple(
+        sorted(
+            {
+                *(item for item in candidate.isolation_identities if item.kind is not kind),
+                IsolationIdentity(kind, identity),
+            },
+            key=lambda item: (item.kind.value, item.identity.encode()),
+        )
+    )
+    return replace(candidate, isolation_identities=identities)
+
+
+def _identity_digest(*parts: object) -> str:
+    return canonical_hash(parts)
+
+
+def test_materialized_backfill_binding_requires_exact_cell_and_origin_identities() -> None:
+    source = _candidate("source", origin=CaseOrigin.SOURCE_BACKED_EVIDENCE_EXTRACTION)
+    source_lane = _lane(
+        "source",
+        identity_digests=tuple(
+            sorted(
+                (
+                    _identity_digest("SOURCE_FAMILY", "family:source-lane"),
+                    _identity_digest("SOURCE_DOCUMENT", "document:source-lane"),
+                )
+            )
+        ),
+    )
+    cross_product_lane = _lane(
+        "source-exact-pairs",
+        supported_cells=(("C01", "F01"), ("C02", "F02")),
+    )
+
+    engine_ref = "res71-reference-a"
+    engine = _candidate(
+        "engine",
+        origin=CaseOrigin.DETERMINISTIC_ENGINE_DERIVED,
+        cell=("C08", "F05"),
+        identities=(
+            IsolationIdentity(IsolationIdentityKind.SOURCE_FAMILY, "family:engine"),
+            IsolationIdentity(IsolationIdentityKind.RES71_ENGINE_REFERENCE_CASE, engine_ref),
+        ),
+    )
+    engine_lane = _lane(
+        "engine",
+        origin=engine.origin_class,
+        supported_cells=(engine.cell,),
+        identity_digests=(_identity_digest("RES71_ENGINE_REFERENCE_CASE", engine_ref),),
+    )
+
+    generator_family = "res115-synthetic-refusal-hidden_final"
+    split = SplitName.HIDDEN_FINAL
+    namespace = production_seed_namespace(split, "res115.synthetic-refusal", "1.0.0", "block-001")
+    synthetic = _candidate(
+        "synthetic",
+        origin=CaseOrigin.DETERMINISTIC_SYNTHETIC,
+        cell=("C08", "F05"),
+        locked_split=split,
+        generator_seed_blocks=("block-001",),
+        identities=(
+            IsolationIdentity(IsolationIdentityKind.SOURCE_FAMILY, "family:synthetic"),
+            IsolationIdentity(IsolationIdentityKind.GENERATOR_FAMILY, generator_family),
+            IsolationIdentity(IsolationIdentityKind.GENERATOR_SEED_NAMESPACE, namespace),
+        ),
+    )
+    synthetic_lane = _lane(
+        "synthetic",
+        origin=synthetic.origin_class,
+        supported_cells=(synthetic.cell,),
+        identity_digests=tuple(
+            sorted(
+                (
+                    _identity_digest("SYNTHETIC_GENERATOR", "res115.synthetic-refusal", "1.0.0"),
+                    _identity_digest("GENERATOR_FAMILY", generator_family),
+                    _identity_digest("SYNTHETIC_SPLIT_LOCK", split.value),
+                )
+            )
+        ),
+    )
+
+    expert_batch = "expert-batch-a"
+    template = "protocol-template-a"
+    expert_cluster = "expert-cluster-a"
+    expert = _candidate(
+        "expert",
+        identities=(
+            IsolationIdentity(IsolationIdentityKind.SOURCE_FAMILY, "family:expert"),
+            IsolationIdentity(IsolationIdentityKind.EXPERT_AUTHOR_BATCH, expert_batch),
+            IsolationIdentity(IsolationIdentityKind.PROTOCOL_TEMPLATE, template),
+        ),
+    )
+    expert = replace(expert, isolation_cluster_id=expert_cluster)
+    expert_lane = _lane(
+        "expert",
+        origin=expert.origin_class,
+        identity_digests=tuple(
+            sorted(
+                (
+                    _identity_digest("EXPERT_BATCH", expert_batch),
+                    _identity_digest("PROTOCOL_TEMPLATE", template),
+                    _identity_digest("EXPERT_ISOLATION_CLUSTER", expert_cluster),
+                )
+            )
+        ),
+    )
+
+    parent = "parent-candidate-a"
+    lineage = "mutation-lineage-a"
+    mutation = _candidate(
+        "mutation",
+        origin=CaseOrigin.ADVERSARIAL_MUTATION,
+        identities=(
+            IsolationIdentity(IsolationIdentityKind.SOURCE_FAMILY, "family:mutation"),
+            IsolationIdentity(IsolationIdentityKind.MUTATION_PARENT, parent),
+            IsolationIdentity(IsolationIdentityKind.MUTATION_LINEAGE, lineage),
+        ),
+        mutation_parent_candidate_id=parent,
+        mutation_lineage_id=lineage,
+    )
+    mutation_lane = _lane(
+        "mutation",
+        origin=mutation.origin_class,
+        identity_digests=tuple(
+            sorted(
+                (
+                    _identity_digest("MUTATION_PARENT", parent),
+                    _identity_digest("MUTATION_LINEAGE", lineage),
+                )
+            )
+        ),
+    )
+
+    for candidate, lane in (
+        (source, source_lane),
+        (engine, engine_lane),
+        (synthetic, synthetic_lane),
+        (expert, expert_lane),
+        (mutation, mutation_lane),
+    ):
+        binding = MaterializedBackfillCandidateV1(
+            candidate, lane.lane_id, lane.authority_ref, lane.authority_digest
+        )
+        validate_materialized_backfill_lane_binding(binding, lane)
+
+    source_binding = MaterializedBackfillCandidateV1(
+        source, source_lane.lane_id, source_lane.authority_ref, source_lane.authority_digest
+    )
+    wrong_candidates = (
+        replace(source, cell=("C02", "F01")),
+        _candidate(
+            "cross-cell",
+            origin=CaseOrigin.SOURCE_BACKED_EVIDENCE_EXTRACTION,
+            cell=("C01", "F02"),
+        ),
+        _with_identity(source, IsolationIdentityKind.SOURCE_DOCUMENT, "document:other"),
+        _with_identity(source, IsolationIdentityKind.SOURCE_FAMILY, "family:other"),
+        _with_identity(
+            engine, IsolationIdentityKind.RES71_ENGINE_REFERENCE_CASE, "res71-reference-b"
+        ),
+        _with_identity(
+            synthetic,
+            IsolationIdentityKind.GENERATOR_FAMILY,
+            "another-synthetic-generator-family",
+        ),
+        _with_identity(
+            synthetic,
+            IsolationIdentityKind.GENERATOR_SEED_NAMESPACE,
+            production_seed_namespace(
+                split,
+                "another-synthetic-generator",
+                "1.0.0",
+                "block-001",
+            ),
+        ),
+        replace(
+            _with_identity(
+                synthetic,
+                IsolationIdentityKind.GENERATOR_SEED_NAMESPACE,
+                production_seed_namespace(
+                    SplitName.PUBLIC_DEVELOPMENT,
+                    "res115.synthetic-refusal",
+                    "1.0.0",
+                    "block-002",
+                ),
+            ),
+            locked_split=SplitName.PUBLIC_DEVELOPMENT,
+            generator_seed_blocks=("block-002",),
+        ),
+        _with_identity(expert, IsolationIdentityKind.EXPERT_AUTHOR_BATCH, "expert-batch-b"),
+        replace(
+            _with_identity(mutation, IsolationIdentityKind.MUTATION_LINEAGE, "mutation-lineage-b"),
+            mutation_lineage_id="mutation-lineage-b",
+        ),
+    )
+    lanes = (
+        source_lane,
+        cross_product_lane,
+        source_lane,
+        source_lane,
+        engine_lane,
+        synthetic_lane,
+        synthetic_lane,
+        synthetic_lane,
+        expert_lane,
+        mutation_lane,
+    )
+    for candidate, lane in zip(wrong_candidates, lanes, strict=True):
+        binding = replace(
+            source_binding,
+            candidate=candidate,
+            lane_id=lane.lane_id,
+            authority_ref=lane.authority_ref,
+            authority_digest=lane.authority_digest,
+        )
+        with pytest.raises(ValueError, match="backfill candidate"):
+            validate_materialized_backfill_lane_binding(binding, lane)
 
 
 def test_feasibility_only_returns_independently_validated_witness() -> None:
@@ -569,6 +835,93 @@ def test_exact_removal_failure_returns_request_for_governed_lane_and_retries(
     monkeypatch.setattr(selection_pool, "qualify_candidate_removal_reserve", original_qualify)
 
 
+def test_exact_interaction_backfill_requires_feasibility_witness_then_uses_review_cost(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from dynamislm.benchmark import selection_pool
+    from dynamislm.benchmark.selection_pool import SingleCandidateRemovalCheckV1
+
+    monkeypatch.setattr(
+        selection_pool,
+        "_build_problem",
+        lambda values, _parents: _problem(
+            selection_pool._planning_candidates(values), final_count=1
+        ),
+    )
+    trial_ids: set[str] = set()
+
+    def feasibility(problem: FinalSelectionProblem, **_kwargs: Any) -> Any:
+        ids = {item.candidate_id for item in problem.candidates}
+        trial_ids.update(ids.intersection({"unrelated", "repair-pending", "repair-z", "repair-b"}))
+        return SimpleNamespace(
+            status=(
+                FeasibilityStatus.FEASIBLE
+                if ids.intersection({"repair-pending", "repair-z", "repair-b"})
+                else FeasibilityStatus.INFEASIBLE
+            )
+        )
+
+    def qualify(problem: FinalSelectionProblem, **_kwargs: Any) -> tuple[Any, Any]:
+        baseline = SimpleNamespace(status=FeasibilityStatus.FEASIBLE)
+        repairing = any(item.candidate_id.startswith("repair-") for item in problem.candidates)
+        removals = tuple(
+            SingleCandidateRemovalCheckV1(
+                canonical_hash(item.candidate_id),
+                (
+                    FeasibilityStatus.FEASIBLE
+                    if repairing or item.candidate_id != "a"
+                    else FeasibilityStatus.INFEASIBLE
+                ),
+                "EXACT_FEASIBILITY_ORACLE",
+                canonical_hash(("plan", item.candidate_id))
+                if repairing or item.candidate_id != "a"
+                else None,
+                canonical_hash(("validation", item.candidate_id))
+                if repairing or item.candidate_id != "a"
+                else None,
+            )
+            for item in problem.candidates
+        )
+        return baseline, removals
+
+    monkeypatch.setattr(selection_pool, "solve_selection_feasibility", feasibility)
+    monkeypatch.setattr(selection_pool, "qualify_candidate_removal_reserve", qualify)
+    lanes = (
+        _lane("a-arbitrary"),
+        _lane("b-pending"),
+        _lane("b-approved"),
+        _lane("z-approved"),
+    )
+    bindings = tuple(
+        MaterializedBackfillCandidateV1(
+            _candidate(
+                candidate_id,
+                origin=CaseOrigin.SOURCE_BACKED_EVIDENCE_EXTRACTION,
+                review=review,
+            ),
+            lane.lane_id,
+            lane.authority_ref,
+            lane.authority_digest,
+        )
+        for candidate_id, review, lane in (
+            ("unrelated", ReviewEligibility.PENDING, lanes[0]),
+            ("repair-pending", ReviewEligibility.PENDING, lanes[1]),
+            ("repair-b", ReviewEligibility.APPROVED, lanes[2]),
+            ("repair-z", ReviewEligibility.APPROVED, lanes[3]),
+        )
+    )
+    result = plan_variable_pool(
+        (_candidate("a"), _candidate("b"), _candidate("c")),
+        supply_inventory=_inventory(lanes),
+        materialized_backfill_candidates=bindings,
+    )
+    assert trial_ids == {"unrelated", "repair-pending", "repair-b", "repair-z"}
+    assert result.receipt.status is PoolPlanStatus.QUALIFIED
+    assert result.receipt.backfill_candidate_count == 1
+    assert result.plan.backfill_authorities[0][0] == "repair-b"
+    assert result.plan.backfill_authorities[0][1] == "b-approved"
+
+
 def test_exact_removal_failure_without_materialized_metadata_is_unresolved(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -616,6 +969,8 @@ def test_exact_removal_failure_without_materialized_metadata_is_unresolved(
         supply_inventory=_inventory((lane,)),
     )
     assert result.receipt.status is PoolPlanStatus.METADATA_REQUIRED
+    assert result.receipt.candidate_count == result.receipt.initial_candidate_count == 3
+    assert result.receipt.backfill_candidate_count == 0
     assert (
         result.receipt.reserve_deficits[0].deficit_kind
         is ReserveDeficitKind.EXACT_REMOVAL_INFEASIBLE

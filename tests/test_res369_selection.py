@@ -1185,6 +1185,103 @@ def test_fixed_434_abstract_qualification_and_resource_receipt() -> None:
     assert result.validation_receipt.validation_wall_s > 0
 
 
+def test_res383_pool_feasibility_profile_on_production_shape() -> None:
+    import json
+
+    from dynamislm.benchmark.selection_contracts import (
+        PSE_V1_POOL_FEASIBILITY_SOLVER_PROFILE_V1,
+        FeasibilityStatus,
+    )
+    from dynamislm.benchmark.selection_pool import _problem_without_candidate
+    from dynamislm.benchmark.selection_solver import solve_selection_feasibility
+
+    base, parent_registry = _production_shape_candidates()
+    source = next(
+        item for item in base if item.origin_class is CaseOrigin.SOURCE_BACKED_EVIDENCE_EXTRACTION
+    )
+    reserve = replace(
+        source,
+        candidate_id="PSE-V1-CANDIDATE:RES383-POOL-QUALIFICATION-RESERVE",
+        payload_hash=canonical_hash("RES383-POOL-QUALIFICATION-RESERVE"),
+        isolation_cluster_id="cluster:RES383-POOL-QUALIFICATION-RESERVE",
+        isolation_identities=(
+            IsolationIdentity(
+                IsolationIdentityKind.SOURCE_FAMILY,
+                "family:RES383-POOL-QUALIFICATION-RESERVE",
+            ),
+        ),
+        exact_shingle_digests=(canonical_hash("RES383-POOL-QUALIFICATION-SHINGLE"),),
+    )
+    problem = build_final_selection_problem(
+        (*base, reserve), parent_provenance_registry=parent_registry
+    )
+    baseline = solve_selection_feasibility(
+        problem,
+        solver_config=PSE_V1_POOL_FEASIBILITY_SOLVER_PROFILE_V1,
+    )
+    assert baseline.status is FeasibilityStatus.FEASIBLE
+
+    representative = tuple(
+        (
+            next(
+                item
+                for item in base
+                if item.origin_class is CaseOrigin.EXPERT_AUTHORED_SEMANTIC
+                and item.cell == source.cell
+            ),
+            source,
+            next(
+                item
+                for item in base
+                if item.origin_class is CaseOrigin.DETERMINISTIC_ENGINE_DERIVED
+            ),
+            next(item for item in base if item.origin_class is CaseOrigin.DETERMINISTIC_SYNTHETIC),
+            next(item for item in base if item.origin_class is CaseOrigin.ADVERSARIAL_MUTATION),
+        )
+    )
+    removal_receipts = tuple(
+        solve_selection_feasibility(
+            _problem_without_candidate(problem, candidate.candidate_id),
+            solver_config=PSE_V1_POOL_FEASIBILITY_SOLVER_PROFILE_V1,
+        )
+        for candidate in representative
+    )
+    assert all(item.status is FeasibilityStatus.FEASIBLE for item in removal_receipts), [
+        (candidate.origin_class.value, receipt.status.value, round(receipt.wall_s, 6))
+        for candidate, receipt in zip(representative, removal_receipts, strict=True)
+    ]
+    unknown_count = sum(
+        item.status is FeasibilityStatus.UNKNOWN for item in (baseline, *removal_receipts)
+    )
+    print(
+        "RES383_POOL_FEASIBILITY_QUALIFICATION="
+        + json.dumps(
+            {
+                "profile": "PSE-V1-POOL-FEASIBILITY-SOLVER@1.0.0",
+                "model": "RES-369 abstract production-shape hard constraints; 435 candidates",
+                "base_status": baseline.status.value,
+                "base_wall_s": round(baseline.wall_s, 6),
+                "representative_removals": {
+                    origin.value: round(receipt.wall_s, 6)
+                    for origin, receipt in zip(
+                        (
+                            CaseOrigin.EXPERT_AUTHORED_SEMANTIC,
+                            CaseOrigin.SOURCE_BACKED_EVIDENCE_EXTRACTION,
+                            CaseOrigin.DETERMINISTIC_ENGINE_DERIVED,
+                            CaseOrigin.DETERMINISTIC_SYNTHETIC,
+                            CaseOrigin.ADVERSARIAL_MUTATION,
+                        ),
+                        removal_receipts,
+                        strict=True,
+                    )
+                },
+                "unknown_count": unknown_count,
+            },
+            sort_keys=True,
+        )
+    )
+
+
 def test_oversupply_sequential_counterexample_and_rejection_removal() -> None:
     pool, parent_registry, rejected_id, reserve_id = _production_oversupply_with_rejection()
     problem = build_final_selection_problem(pool, parent_provenance_registry=parent_registry)

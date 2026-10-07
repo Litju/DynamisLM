@@ -9,13 +9,13 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-from dynamislm.benchmark.constants import CaseOrigin, SplitName
+from dynamislm.benchmark.constants import CAPABILITY_IDS, FAMILY_IDS, CaseOrigin, SplitName
 from dynamislm.benchmark.selection_contracts import FeatureKind
 from dynamislm.serialization import canonical_hash, register_serializable_type
 
 _SHA256 = re.compile(r"^sha256:[0-9a-f]{64}$")
-AUTHORITY_SUPPLY_SCHEMA = "PSE-V1-AUTHORITY-SUPPLY-INVENTORY@1.0.0"
-AUTHORITY_SUPPLY_INVENTORY_PATH = "qualification/RES-383/authority-supply-inventory.v1.json"
+AUTHORITY_SUPPLY_SCHEMA = "PSE-V1-AUTHORITY-SUPPLY-INVENTORY@1.1.0"
+AUTHORITY_SUPPLY_INVENTORY_PATH = "qualification/RES-383/authority-supply-inventory.v1.1.json"
 
 
 class AuthoritySupplyKind(enum.StrEnum):
@@ -258,8 +258,7 @@ class ReserveCandidateLaneV1:
     available_capacity: int | None
     capacity_status: LaneCapacityStatus
     capacity_rule: str | None = None
-    supported_capabilities: tuple[str, ...] = ()
-    supported_families: tuple[str, ...] = ()
+    supported_cells: tuple[tuple[str, str], ...] = ()
     isolation_identity_digests: tuple[str, ...] = ()
     lane_digest: str = ""
 
@@ -280,11 +279,18 @@ class ReserveCandidateLaneV1:
                 raise ValueError("exhausted lane must have zero available capacity")
         elif self.available_capacity is not None or not (self.capacity_rule or "").strip():
             raise ValueError("unquantified lane requires a governing rule and no numeric capacity")
-        for name in ("supported_capabilities", "supported_families"):
-            values = getattr(self, name)
-            ordered = tuple(sorted(set(values), key=str.encode))
-            if values != ordered:
-                raise ValueError(f"{name} must use unique canonical ordering")
+        if (
+            not self.supported_cells and self.capacity_status is not LaneCapacityStatus.EXHAUSTED
+        ) or any(
+            not isinstance(cell, tuple)
+            or len(cell) != 2
+            or cell[0] not in CAPABILITY_IDS
+            or cell[1] not in FAMILY_IDS
+            for cell in self.supported_cells
+        ):
+            raise ValueError("available reserve lanes require exact frozen capability-family cells")
+        if self.supported_cells != tuple(sorted(set(self.supported_cells))):
+            raise ValueError("supported_cells must use unique canonical ordering")
         if self.isolation_identity_digests != tuple(sorted(set(self.isolation_identity_digests))):
             raise ValueError("lane isolation identities must be unique and canonical")
         if any(_SHA256.fullmatch(value) is None for value in self.isolation_identity_digests):
@@ -300,8 +306,7 @@ class ReserveCandidateLaneV1:
                 "available_capacity": self.available_capacity,
                 "capacity_status": self.capacity_status,
                 "capacity_rule": self.capacity_rule,
-                "supported_capabilities": self.supported_capabilities,
-                "supported_families": self.supported_families,
+                "supported_cells": self.supported_cells,
                 "isolation_identity_digests": self.isolation_identity_digests,
             }
         )
@@ -606,9 +611,23 @@ def build_live_authority_supply_inventory(
                 if capabilities and families_retained
                 else LaneCapacityStatus.EXHAUSTED
             ),
-            supported_capabilities=tuple(sorted(set(capabilities), key=str.encode)),
-            supported_families=tuple(sorted(set(families_retained), key=str.encode)),
-            isolation_identity_digests=(canonical_hash(("SOURCE_FAMILY", family_id)),),
+            supported_cells=tuple(
+                sorted(
+                    {
+                        (capability, family)
+                        for capability in capabilities
+                        for family in families_retained
+                    }
+                )
+            ),
+            isolation_identity_digests=tuple(
+                sorted(
+                    {
+                        canonical_hash(("SOURCE_DOCUMENT", document_id)),
+                        canonical_hash(("SOURCE_FAMILY", family_id)),
+                    }
+                )
+            ),
         )
         source_lanes.append(lane)
 
@@ -643,9 +662,14 @@ def build_live_authority_supply_inventory(
                 available_capacity=None,
                 capacity_status=LaneCapacityStatus.RULE_GOVERNED,
                 capacity_rule="registered generator and split-family seed-block namespace",
-                supported_capabilities=("C08",),
-                supported_families=tuple(
-                    sorted({family for _candidate_id, family, _split in synthetic_slots})
+                supported_cells=tuple(
+                    sorted(
+                        {
+                            ("C08", family)
+                            for _candidate_id, family, slot_split in synthetic_slots
+                            if slot_split is split
+                        }
+                    )
                 ),
                 isolation_identity_digests=tuple(
                     sorted(
@@ -653,6 +677,7 @@ def build_live_authority_supply_inventory(
                             canonical_hash(
                                 ("SYNTHETIC_GENERATOR", generator.generator_id, generator.version)
                             ),
+                            canonical_hash(("GENERATOR_FAMILY", generator.generator_family)),
                             canonical_hash(("SYNTHETIC_SPLIT_LOCK", split)),
                         }
                     )
@@ -704,8 +729,7 @@ def build_live_authority_supply_inventory(
                 existing_planned_capacity=len(slot_ids),
                 available_capacity=0,
                 capacity_status=LaneCapacityStatus.EXHAUSTED,
-                supported_capabilities=(capability,),
-                supported_families=(family,),
+                supported_cells=((capability, family),),
                 isolation_identity_digests=(
                     canonical_hash(("RES71_ENGINE_REFERENCE_CASE", reference_id)),
                 ),
@@ -713,6 +737,10 @@ def build_live_authority_supply_inventory(
         )
 
     expert_lanes: list[ReserveCandidateLaneV1] = []
+    semantic_cell_by_id = {
+        candidate_id: (capability, family)
+        for candidate_id, capability, family, _slot in _semantic_slot_specs()
+    }
     for batch in inputs.expert_batches:
         batch_digest = canonical_hash(batch)
         atom(
@@ -731,16 +759,9 @@ def build_live_authority_supply_inventory(
                 existing_planned_capacity=len(batch.candidate_ids),
                 available_capacity=0,
                 capacity_status=LaneCapacityStatus.EXHAUSTED,
-                supported_capabilities=tuple(
+                supported_cells=tuple(
                     sorted(
-                        {candidate_id.split(":")[2] for candidate_id in batch.candidate_ids},
-                        key=str.encode,
-                    )
-                ),
-                supported_families=tuple(
-                    sorted(
-                        {candidate_id.split(":")[3] for candidate_id in batch.candidate_ids},
-                        key=str.encode,
+                        {semantic_cell_by_id[candidate_id] for candidate_id in batch.candidate_ids}
                     )
                 ),
                 isolation_identity_digests=tuple(
@@ -758,6 +779,7 @@ def build_live_authority_supply_inventory(
         )
 
     mutation_lanes: list[ReserveCandidateLaneV1] = []
+    parent_cell_by_id = semantic_cell_by_id
     mutation_seed_ids = {candidate_id for candidate_id, _seed in inputs.mutation_seed_blocks}
     for lineage in inputs.mutation_lineages:
         lineage_digest = canonical_hash(lineage)
@@ -768,8 +790,8 @@ def build_live_authority_supply_inventory(
             lineage_digest,
         )
         child_seed_count = len(mutation_seed_ids.intersection(lineage.child_candidate_ids))
-        parent_parts = lineage.parent_candidate_id.split(":")
-        if len(parent_parts) < 4:
+        parent_cell = parent_cell_by_id.get(lineage.parent_candidate_id)
+        if parent_cell is None:
             raise ValueError("mutation parent does not resolve to a frozen PSE cell")
         mutation_lanes.append(
             ReserveCandidateLaneV1(
@@ -789,12 +811,10 @@ def build_live_authority_supply_inventory(
                         {
                             canonical_hash(("MUTATION_PARENT", lineage.parent_candidate_id)),
                             canonical_hash(("MUTATION_LINEAGE", lineage.lineage_id)),
-                            canonical_hash(("MUTATION_OPERATOR", lineage.operator_id)),
                         }
                     )
                 ),
-                supported_capabilities=(parent_parts[2],),
-                supported_families=(parent_parts[3],),
+                supported_cells=(parent_cell,),
             )
         )
 

@@ -6,6 +6,7 @@ import enum
 import re
 from dataclasses import dataclass, replace
 
+from dynamislm.benchmark.authoring import parse_production_seed_namespace
 from dynamislm.benchmark.authority_supply import (
     AuthoritySupplyAssessmentV1,
     AuthoritySupplyInventoryV1,
@@ -32,6 +33,7 @@ from dynamislm.benchmark.selection_contracts import (
     FeatureKind,
     FinalSelectionCandidate,
     FinalSelectionProblem,
+    IsolationIdentityKind,
     MutationParentProvenance,
     ReviewEligibility,
     SelectionConstraint,
@@ -505,6 +507,115 @@ def _eligible(candidate: FinalSelectionCandidate) -> bool:
     )
 
 
+def validate_materialized_backfill_lane_binding(
+    binding: MaterializedBackfillCandidateV1,
+    lane: ReserveCandidateLaneV1,
+) -> None:
+    """Fail closed unless the candidate matches the lane's exact cell and authority identities."""
+
+    candidate = binding.candidate
+    if (
+        binding.lane_id != lane.lane_id
+        or not lane.may_author_backfill
+        or lane.origin_class is not candidate.origin_class
+        or lane.authority_ref != binding.authority_ref
+        or lane.authority_digest != binding.authority_digest
+        or candidate.cell not in lane.supported_cells
+    ):
+        raise ValueError(
+            "materialized backfill candidate does not match an available authority lane"
+        )
+
+    identity_tags = {
+        IsolationIdentityKind.SOURCE_FAMILY: "SOURCE_FAMILY",
+        IsolationIdentityKind.SOURCE_DOCUMENT: "SOURCE_DOCUMENT",
+        IsolationIdentityKind.RES71_ENGINE_REFERENCE_CASE: "RES71_ENGINE_REFERENCE_CASE",
+        IsolationIdentityKind.EXPERT_AUTHOR_BATCH: "EXPERT_BATCH",
+        IsolationIdentityKind.PROTOCOL_TEMPLATE: "PROTOCOL_TEMPLATE",
+        IsolationIdentityKind.GENERATOR_FAMILY: "GENERATOR_FAMILY",
+        IsolationIdentityKind.MUTATION_LINEAGE: "MUTATION_LINEAGE",
+        IsolationIdentityKind.MUTATION_PARENT: "MUTATION_PARENT",
+    }
+    candidate_identity_digests: dict[str, set[str]] = {}
+    candidate_identity_values: dict[str, set[str]] = {}
+    for identity in candidate.isolation_identities:
+        tag = identity_tags.get(identity.kind)
+        if tag is not None:
+            candidate_identity_values.setdefault(tag, set()).add(identity.identity)
+            candidate_identity_digests.setdefault(tag, set()).add(
+                canonical_hash((tag, identity.identity))
+            )
+    if candidate.origin_class is CaseOrigin.EXPERT_AUTHORED_SEMANTIC:
+        candidate_identity_digests.setdefault("EXPERT_ISOLATION_CLUSTER", set()).add(
+            canonical_hash(("EXPERT_ISOLATION_CLUSTER", candidate.isolation_cluster_id))
+        )
+    elif candidate.origin_class is CaseOrigin.DETERMINISTIC_SYNTHETIC:
+        namespaces = tuple(
+            identity.identity
+            for identity in candidate.isolation_identities
+            if identity.kind is IsolationIdentityKind.GENERATOR_SEED_NAMESPACE
+        )
+        if len(namespaces) != 1 or candidate.locked_split is None:
+            raise ValueError(
+                "synthetic backfill candidate lacks its exact generator and split lock"
+            )
+        namespace = parse_production_seed_namespace(namespaces[0])
+        if namespace.split_name is not candidate.locked_split:
+            raise ValueError(
+                "synthetic backfill candidate seed namespace conflicts with its split lock"
+            )
+        if namespace.seed_block not in candidate.generator_seed_blocks:
+            raise ValueError("synthetic backfill candidate omits its bound generator seed block")
+        candidate_identity_digests.setdefault("SYNTHETIC_GENERATOR", set()).add(
+            canonical_hash(
+                ("SYNTHETIC_GENERATOR", namespace.generator_id, namespace.generator_version)
+            )
+        )
+        candidate_identity_digests.setdefault("SYNTHETIC_SPLIT_LOCK", set()).add(
+            canonical_hash(("SYNTHETIC_SPLIT_LOCK", candidate.locked_split))
+        )
+    elif candidate.origin_class is CaseOrigin.ADVERSARIAL_MUTATION and (
+        candidate.mutation_parent_candidate_id
+        not in candidate_identity_values.get("MUTATION_PARENT", set())
+        or candidate.mutation_lineage_id
+        not in candidate_identity_values.get("MUTATION_LINEAGE", set())
+    ):
+        raise ValueError("mutation candidate fields conflict with its lane lineage identities")
+
+    required_identity_tags = {
+        CaseOrigin.SOURCE_BACKED_EVIDENCE_EXTRACTION: ("SOURCE_FAMILY", "SOURCE_DOCUMENT"),
+        CaseOrigin.DETERMINISTIC_ENGINE_DERIVED: ("RES71_ENGINE_REFERENCE_CASE",),
+        CaseOrigin.DETERMINISTIC_SYNTHETIC: (
+            "SYNTHETIC_GENERATOR",
+            "GENERATOR_FAMILY",
+            "SYNTHETIC_SPLIT_LOCK",
+        ),
+        CaseOrigin.EXPERT_AUTHORED_SEMANTIC: (
+            "EXPERT_BATCH",
+            "PROTOCOL_TEMPLATE",
+            "EXPERT_ISOLATION_CLUSTER",
+        ),
+        CaseOrigin.ADVERSARIAL_MUTATION: ("MUTATION_PARENT", "MUTATION_LINEAGE"),
+    }
+    lane_identities = set(lane.isolation_identity_digests)
+    if (
+        not all(
+            candidate_identity_digests.get(tag)
+            for tag in required_identity_tags[candidate.origin_class]
+        )
+        or not lane_identities.issubset(
+            {digest for digests in candidate_identity_digests.values() for digest in digests}
+        )
+        or any(
+            not lane_identities.intersection(candidate_identity_digests[tag])
+            for tag in required_identity_tags[candidate.origin_class]
+        )
+    ):
+        raise ValueError(
+            "materialized backfill candidate lacks the lane's required authority identities"
+        )
+
+
 def derive_pool_backfill_needs(problem: FinalSelectionProblem) -> tuple[PoolBackfillNeedV1, ...]:
     """Derive necessary capacity before exact single-candidate-removal checks."""
 
@@ -868,16 +979,9 @@ def plan_variable_pool(
     use_counts: dict[str, int] = {}
     for binding in available:
         lane = lanes.get(binding.lane_id)
-        if (
-            lane is None
-            or not lane.may_author_backfill
-            or lane.origin_class is not binding.candidate.origin_class
-            or lane.authority_ref != binding.authority_ref
-            or lane.authority_digest != binding.authority_digest
-        ):
-            raise ValueError(
-                "materialized backfill candidate does not match an available authority lane"
-            )
+        if lane is None:
+            raise ValueError("materialized backfill candidate references an unknown authority lane")
+        validate_materialized_backfill_lane_binding(binding, lane)
         use_counts[binding.lane_id] = use_counts.get(binding.lane_id, 0) + 1
         if (
             lane.available_capacity is not None
@@ -950,20 +1054,47 @@ def plan_variable_pool(
         deficits, requests = _exact_deficits_and_requests(
             final_problem, baseline, removals, supply_inventory
         )
-        request_lanes = {lane_id for request in requests for lane_id in request.lane_ids}
-        next_candidate = next(
-            (
-                binding
-                for candidate_id, binding in sorted(
-                    remaining.items(), key=lambda item: (item[1].lane_id.encode(), item[0].encode())
+        candidates_by_digest = {
+            canonical_hash(item.candidate_id): item for item in final_problem.candidates
+        }
+        failed_scenarios = []
+        if baseline.status is FeasibilityStatus.INFEASIBLE:
+            failed_scenarios.append(final_problem)
+        else:
+            failed_scenarios.extend(
+                _problem_without_candidate(
+                    final_problem,
+                    candidates_by_digest[removal.candidate_digest].candidate_id,
                 )
-                if binding.lane_id in request_lanes
-                and _eligible(_planning_candidates((binding.candidate,))[0])
-            ),
-            None,
-        )
-        if next_candidate is None:
+                for removal in removals
+                if removal.status is FeasibilityStatus.INFEASIBLE
+            )
+        viable: list[MaterializedBackfillCandidateV1] = []
+        for binding in remaining.values():
+            if not _eligible(_planning_candidates((binding.candidate,))[0]):
+                continue
+            restores_failed_scenario = False
+            for scenario in failed_scenarios:
+                trial = solve_selection_feasibility(
+                    _build_problem(
+                        (*scenario.candidates, binding.candidate),
+                        parent_provenance_registry,
+                    ),
+                    solver_config=solver_config,
+                )
+                restores_failed_scenario |= trial.status is FeasibilityStatus.FEASIBLE
+            if restores_failed_scenario:
+                viable.append(binding)
+        if not viable:
             break
+        next_candidate = min(
+            viable,
+            key=lambda item: (
+                item.candidate.review_eligibility is not ReviewEligibility.APPROVED,
+                item.lane_id.encode(),
+                item.candidate.candidate_id.encode(),
+            ),
+        )
         pool.append(next_candidate.candidate)
         used_authorities[next_candidate.candidate.candidate_id] = (
             next_candidate.lane_id,

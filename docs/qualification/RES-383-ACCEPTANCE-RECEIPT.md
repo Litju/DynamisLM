@@ -37,11 +37,11 @@ remain in the external qualification store; the repository records only this
 count summary and the inventory/file digests.
 
 ```text
-SUPPLY_SCHEMA=PSE-V1-AUTHORITY-SUPPLY-INVENTORY@1.0.0
-SUPPLY_INVENTORY_DIGEST=sha256:d53b685cc717cef195788fb3f6bbea16ddee8756522a9c887282e2bb08946de1
-SUPPLY_EXTERNAL_FILE=qualification/RES-383/authority-supply-inventory.v1.json (external)
-SUPPLY_EXTERNAL_FILE_DIGEST=sha256:16e33f8044db08c5f0bee798113de8bde60a814f068cf5698e6c4e13bd950052
-SUPPLY_ASSESSMENT_DIGEST=sha256:56432d0ca1b479c55446dc3fc7130f33f983a18745fd885b21949a577e1ef293
+SUPPLY_SCHEMA=PSE-V1-AUTHORITY-SUPPLY-INVENTORY@1.1.0
+SUPPLY_INVENTORY_DIGEST=sha256:e6f0c601171822278898450e622fa953427733065c1c7e51c5ada807f67d80c1
+SUPPLY_EXTERNAL_FILE=qualification/RES-383/authority-supply-inventory.v1.1.json (external)
+SUPPLY_EXTERNAL_FILE_DIGEST=sha256:ac0df6382262a31f916b926da96a0634d27a8fe7adee8338db5fce78d4a7d719
+SUPPLY_ASSESSMENT_DIGEST=sha256:cadedbd36a0c01cb8242f8cb0573857ab2377d3b0987221ea1f0a8708d5d7106
 SUPPLY_ATOMS=890
 GOVERNED_RESERVE_LANES=273
 ```
@@ -108,9 +108,11 @@ not `AUTHORITY_EXPANSION_REQUIRED`.
 
 - Added immutable, versioned `AuthoritySupplyInventoryV1`, per-atom and
   per-lane digests, payload-free `ReserveCandidateLaneV1` and typed
-  `BackfillRequestV1`/`ReserveDeficitV1`. A lane has no candidate payload hash or
-  exact-shingle digest. The external inventory round-tripped with the recorded
-  digest.
+  `BackfillRequestV1`/`ReserveDeficitV1`. Schema 1.1.0 records exact authorized
+  capability-family cells. Materialized candidates bind those cells and their
+  source document/family, RES-71 reference, generator/split, expert batch/template,
+  or mutation parent/lineage identities. The external inventory round-tripped
+  with the recorded digest; the prior schema 1.0.0 file remains unchanged.
 - Kept actual `FinalSelectionCandidate` metadata in a separate
   materialized-backfill type. Simple count needs create lane-bound requests;
   exact baseline/removal failures create scenario-bound deficits and retry from
@@ -120,17 +122,23 @@ not `AUTHORITY_EXPANSION_REQUIRED`.
 - Pool feasibility uses the named
   `PSE-V1-POOL-FEASIBILITY-SOLVER@1.0.0` profile: 8 workers, seed 369,
   120-second timeout, chunk size 30, presolve disabled, and randomized search
-  disabled. The feasibility model does not use the canonical chunk size. The
-  profile was exercised on a critical/split/co-location scenario. Production
-  canonical profile v2 remains reserved for final confirmation.
+  disabled. Qualification ran on the existing RES-369 abstract production-shape
+  hard-constraint model with 435 candidates: base FEASIBLE in 2.956514 s; five
+  representative removals FEASIBLE in 2.120099 s (expert), 2.268977 s (source),
+  1.536938 s (engine), 1.681378 s (synthetic), and 1.910188 s (mutation).
+  `UNKNOWN_COUNT=0` across these six scenarios. Full real-pool removal
+  qualification remains pending candidate metadata. Production canonical profile
+  v2 remains reserved for final confirmation.
 - Receipts distinguish total planned candidates, eligible candidates, and
   usable reserve count. Rejected and qualification-excluded candidates are
   excluded from reserve counts.
 - The exact feasibility-only path continues to use RES-369 hard constraints
   and independent witness validation. Optimization and canonicalization are
-  not run for scenario enumeration.
+  not run for scenario enumeration. Exact-interaction repair tests every
+  available materialized candidate against the failed scenario and only retries
+  candidates with a FEASIBLE witness, ordered by review cost then lane/candidate ID.
 - No candidate prose, human review, protected membership, DR-001 change, or
   RES-71 reference change occurred. P4A.3n was not started. The PR remains draft.
-- Focused RES-383 tests: 18 passed.
+- Focused RES-383 tests: 20 passed.
 - Full `./scripts/ci.sh`: Ruff, formatting, strict mypy, repository policy, and
-  tracked-mutation checks passed; pytest passed all 1,184 tests.
+  tracked-mutation checks passed; pytest passed all 1,187 tests in 859.52 s.
