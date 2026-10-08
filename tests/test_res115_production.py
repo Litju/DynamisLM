@@ -901,6 +901,55 @@ def _production_packet(
     return bind_candidate_review_packet(packet)
 
 
+def _distinct_pool_packets(count: int) -> tuple[CandidateReviewPacket, ...]:
+    return tuple(
+        _production_packet(
+            " ".join(
+                hashlib.sha256(f"{index}:{word}".encode()).hexdigest()[:12] for word in range(30)
+            ),
+            candidate_id=f"PSE-V1-CANDIDATE:variable-pool-{index:02d}",
+        )
+        for index in range(count)
+    )
+
+
+def test_variable_production_candidate_pool_keeps_packet_set_and_duplication_gates() -> None:
+    from dynamislm.benchmark.production import (
+        validate_production_candidate_pool,
+        validate_production_candidate_set,
+    )
+
+    packets = _distinct_pool_packets(3)
+    commitments, duplication = validate_production_candidate_pool(packets)
+
+    assert tuple(item.candidate_id for item in commitments) == tuple(
+        packet.candidate_id for packet in packets
+    )
+    assert duplication.candidate_count == len(packets)
+    with pytest.raises(ValueError, match="exactly 434"):
+        validate_production_candidate_set(packets)
+
+
+def test_variable_production_candidate_pool_rejects_duplicates_and_empty_pools() -> None:
+    from dynamislm.benchmark.production import (
+        audit_production_duplicates,
+        validate_production_candidate_pool,
+    )
+
+    packets = _distinct_pool_packets(2)
+    duplicate_question = _production_packet(
+        packets[0].question, candidate_id="PSE-V1-CANDIDATE:variable-pool-duplicate"
+    )
+    with pytest.raises(ValueError, match="duplication audit"):
+        validate_production_candidate_pool((*packets, duplicate_question))
+    with pytest.raises(ValueError, match="unique packets"):
+        audit_production_duplicates((packets[0], packets[0]))
+    with pytest.raises(ValueError, match="non-empty"):
+        validate_production_candidate_pool(())
+    with pytest.raises(ValueError, match="unique packets"):
+        audit_production_duplicates(())
+
+
 def _qualification_exclusion(
     question: str,
     *,

@@ -9,15 +9,25 @@ import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from dynamislm.benchmark.constants import CAPABILITY_IDS, FAMILY_IDS, CaseOrigin, SplitName
 from dynamislm.benchmark.selection_contracts import FeatureKind
 from dynamislm.qualification.res115_authoring import SourceCellSelectionV1
 from dynamislm.serialization import canonical_hash, register_serializable_type
 
+if TYPE_CHECKING:
+    from dynamislm.benchmark.variable_pool import ProductionCandidateRecipeV1
+
 _SHA256 = re.compile(r"^sha256:[0-9a-f]{64}$")
-AUTHORITY_SUPPLY_SCHEMA = "PSE-V1-AUTHORITY-SUPPLY-INVENTORY@1.2.0"
-AUTHORITY_SUPPLY_INVENTORY_PATH = "qualification/RES-383/authority-supply-inventory.v1.2.json"
+# v1.3.0 inventories record authority and authorable capacity only. v1.2.0 inventories
+# encoded the historical 434 authoring slots as planned geometry; they remain readable as
+# historical RES-383 evidence but are never produced by the live builder.
+AUTHORITY_SUPPLY_SCHEMA = "PSE-V1-AUTHORITY-SUPPLY-INVENTORY@1.3.0"
+AUTHORITY_SUPPLY_SCHEMA_V1_2 = "PSE-V1-AUTHORITY-SUPPLY-INVENTORY@1.2.0"
+AUTHORITY_SUPPLY_INVENTORY_PATH = "qualification/RES-383/authority-supply-inventory.v1.3.json"
+AUTHORITY_SUPPLY_INVENTORY_PATH_V1_2 = "qualification/RES-383/authority-supply-inventory.v1.2.json"
+HISTORICAL_RECIPE_INPUT_BINDING = "HISTORICAL_RECIPE_INPUT_CONTENT"
 
 
 class AuthoritySupplyKind(enum.StrEnum):
@@ -33,9 +43,52 @@ class AuthoritySupplyKind(enum.StrEnum):
 
 class LaneCapacityStatus(enum.StrEnum):
     AVAILABLE = "AVAILABLE"
+    EXISTING_RECIPE_INVENTORY = "EXISTING_RECIPE_INVENTORY"
     RULE_GOVERNED = "RULE_GOVERNED"
     METADATA_REQUIRED = "METADATA_REQUIRED"
     EXHAUSTED = "EXHAUSTED"
+
+
+class AdditionalCapacityStatus(enum.StrEnum):
+    AVAILABLE = "AVAILABLE"
+    RULE_GOVERNED = "RULE_GOVERNED"
+    GOVERNED_UNRESOLVED = "GOVERNED_UNRESOLVED"
+    UNKNOWN = "UNKNOWN"
+    EXHAUSTED = "EXHAUSTED"
+
+
+@dataclass(frozen=True, slots=True)
+class SupplyLaneSemanticsV1:
+    lane_id: str
+    origin_class: CaseOrigin
+    existing_authorized_recipe_count: int | None
+    additional_authorable_capacity: int | None
+    capacity_status: AdditionalCapacityStatus
+
+
+@dataclass(frozen=True, slots=True)
+class AuthoritySupplySemanticsV1:
+    """Typed view separating historical recipes, extra capacity, and final bounds."""
+
+    active_supply_schema: str
+    inventory_digest: str
+    final_selection_bound: int
+    historical_recipe_inventory: tuple[SupplyLaneSemanticsV1, ...]
+    existing_authorized_recipe_count: tuple[tuple[CaseOrigin, int | None], ...]
+    additional_authorable_capacity: tuple[tuple[CaseOrigin, int | None], ...]
+    capacity_status: tuple[tuple[CaseOrigin, AdditionalCapacityStatus], ...]
+
+    @property
+    def structural_pool_floor(self) -> None:
+        return None
+
+    @property
+    def structural_backfill_requests(self) -> tuple[()]:
+        return ()
+
+    @property
+    def pool_n(self) -> None:
+        return None
 
 
 class ReserveDeficitKind(enum.StrEnum):
@@ -158,6 +211,8 @@ class SupplyAssessmentStatus(enum.StrEnum):
 @register_serializable_type
 @dataclass(frozen=True, slots=True)
 class AuthoritySupplyAssessmentV1:
+    """Legacy serialized shape retained for historical decoding only."""
+
     assessment_version: str
     status: SupplyAssessmentStatus
     inventory_digest: str
@@ -273,7 +328,10 @@ class ReserveCandidateLaneV1:
             raise ValueError("reserve lane has a malformed authority digest")
         if self.existing_planned_capacity < 0:
             raise ValueError("reserve lane planned capacity must be non-negative")
-        if self.capacity_status is LaneCapacityStatus.AVAILABLE:
+        if self.capacity_status in {
+            LaneCapacityStatus.AVAILABLE,
+            LaneCapacityStatus.EXISTING_RECIPE_INVENTORY,
+        }:
             if self.available_capacity is None or self.available_capacity < 1:
                 raise ValueError("available lane requires positive quantified capacity")
         elif self.capacity_status is LaneCapacityStatus.EXHAUSTED:
@@ -317,8 +375,67 @@ class ReserveCandidateLaneV1:
         object.__setattr__(self, "lane_digest", computed)
 
     @property
+    def supply_semantics(self) -> SupplyLaneSemanticsV1:
+        """Interpret inventory counts separately from additional authorable capacity."""
+
+        if self.capacity_status is LaneCapacityStatus.EXISTING_RECIPE_INVENTORY:
+            return SupplyLaneSemanticsV1(
+                self.lane_id,
+                self.origin_class,
+                self.available_capacity,
+                None,
+                AdditionalCapacityStatus.GOVERNED_UNRESOLVED,
+            )
+        if self.capacity_status is LaneCapacityStatus.RULE_GOVERNED:
+            return SupplyLaneSemanticsV1(
+                self.lane_id,
+                self.origin_class,
+                None,
+                None,
+                AdditionalCapacityStatus.RULE_GOVERNED,
+            )
+        if self.capacity_status is LaneCapacityStatus.METADATA_REQUIRED:
+            return SupplyLaneSemanticsV1(
+                self.lane_id,
+                self.origin_class,
+                None,
+                None,
+                AdditionalCapacityStatus.GOVERNED_UNRESOLVED,
+            )
+        if self.capacity_status is LaneCapacityStatus.EXHAUSTED:
+            return SupplyLaneSemanticsV1(
+                self.lane_id,
+                self.origin_class,
+                0,
+                0,
+                AdditionalCapacityStatus.EXHAUSTED,
+            )
+        return SupplyLaneSemanticsV1(
+            self.lane_id,
+            self.origin_class,
+            0,
+            self.available_capacity,
+            AdditionalCapacityStatus.AVAILABLE,
+        )
+
+    @property
+    def existing_authorized_recipe_count(self) -> int | None:
+        return self.supply_semantics.existing_authorized_recipe_count
+
+    @property
+    def additional_authorable_capacity(self) -> int | None:
+        return self.supply_semantics.additional_authorable_capacity
+
+    @property
+    def additional_capacity_status(self) -> AdditionalCapacityStatus:
+        return self.supply_semantics.capacity_status
+
+    @property
     def may_author_backfill(self) -> bool:
-        return self.capacity_status is not LaneCapacityStatus.EXHAUSTED
+        return self.additional_capacity_status in {
+            AdditionalCapacityStatus.AVAILABLE,
+            AdditionalCapacityStatus.RULE_GOVERNED,
+        }
 
 
 @register_serializable_type
@@ -336,8 +453,19 @@ class AuthoritySupplyInventoryV1:
     inventory_digest: str = ""
 
     def __post_init__(self) -> None:
-        if self.schema_version != AUTHORITY_SUPPLY_SCHEMA:
+        if self.schema_version not in {AUTHORITY_SUPPLY_SCHEMA, AUTHORITY_SUPPLY_SCHEMA_V1_2}:
             raise ValueError("unknown authority supply inventory schema")
+        if self.schema_version == AUTHORITY_SUPPLY_SCHEMA and (
+            self.planned_origin_counts
+            or self.planned_mutation_lineage_count
+            or any(lane.existing_planned_capacity for lane in self.reserve_candidate_lanes)
+        ):
+            raise ValueError("v1.3 authority supply cannot encode planned slot or lineage geometry")
+        if self.schema_version == AUTHORITY_SUPPLY_SCHEMA_V1_2 and any(
+            lane.capacity_status is LaneCapacityStatus.EXISTING_RECIPE_INVENTORY
+            for lane in self.reserve_candidate_lanes
+        ):
+            raise ValueError("v1.2 authority supply cannot use v1.3 recipe semantics")
         atom_ids = tuple(item.atom_id for item in self.atoms)
         lane_ids = tuple(item.lane_id for item in self.reserve_candidate_lanes)
         if atom_ids != tuple(sorted(set(atom_ids), key=str.encode)):
@@ -381,6 +509,80 @@ class AuthoritySupplyInventoryV1:
     @property
     def planned_candidate_count(self) -> int:
         return sum(count for _origin, count in self.planned_origin_counts)
+
+    @property
+    def encodes_planned_geometry(self) -> bool:
+        """True only for historical v1.2 inventories built from fixed authoring slots."""
+
+        return self.schema_version == AUTHORITY_SUPPLY_SCHEMA_V1_2
+
+    def evidence_binding(self, name: str) -> str | None:
+        return dict(self.evidence_bindings).get(name)
+
+    def semantics(self) -> AuthoritySupplySemanticsV1:
+        if self.encodes_planned_geometry:
+            raise ValueError(
+                "historical v1.2 inventory is preserved, not current execution authority"
+            )
+        from dynamislm.benchmark.selection_constraints import FINAL_CASE_COUNT
+
+        lanes = tuple(item.supply_semantics for item in self.reserve_candidate_lanes)
+
+        def totals(attribute: str) -> tuple[tuple[CaseOrigin, int | None], ...]:
+            result = []
+            for origin in CaseOrigin:
+                values = [getattr(lane, attribute) for lane in lanes if lane.origin_class is origin]
+                total = (
+                    sum(value for value in values if value is not None)
+                    if values and all(value is not None for value in values)
+                    else None
+                )
+                result.append((origin, total))
+            return tuple(sorted(result, key=lambda item: item[0].value.encode()))
+
+        status_by_origin = []
+        for origin in CaseOrigin:
+            statuses = tuple(lane.capacity_status for lane in lanes if lane.origin_class is origin)
+            if not statuses:
+                status = AdditionalCapacityStatus.UNKNOWN
+            elif AdditionalCapacityStatus.RULE_GOVERNED in statuses:
+                status = AdditionalCapacityStatus.RULE_GOVERNED
+            elif AdditionalCapacityStatus.GOVERNED_UNRESOLVED in statuses:
+                status = AdditionalCapacityStatus.GOVERNED_UNRESOLVED
+            elif AdditionalCapacityStatus.UNKNOWN in statuses:
+                status = AdditionalCapacityStatus.UNKNOWN
+            elif AdditionalCapacityStatus.AVAILABLE in statuses:
+                status = AdditionalCapacityStatus.AVAILABLE
+            else:
+                status = AdditionalCapacityStatus.EXHAUSTED
+            status_by_origin.append((origin, status))
+        return AuthoritySupplySemanticsV1(
+            active_supply_schema=self.schema_version,
+            inventory_digest=self.inventory_digest,
+            final_selection_bound=FINAL_CASE_COUNT,
+            historical_recipe_inventory=lanes,
+            existing_authorized_recipe_count=totals("existing_authorized_recipe_count"),
+            additional_authorable_capacity=totals("additional_authorable_capacity"),
+            capacity_status=tuple(
+                sorted(status_by_origin, key=lambda item: item[0].value.encode())
+            ),
+        )
+
+
+def require_current_execution_supply_inventory(
+    inventory: AuthoritySupplyInventoryV1,
+) -> AuthoritySupplyInventoryV1:
+    """Fail closed unless the inventory may authorize live authoring or pool planning.
+
+    Historical v1.2 inventories encode fixed authoring-slot geometry; they stay decodable
+    as RES-383 evidence but never authorize materialization, planning, or backfill.
+    """
+
+    if inventory.schema_version != AUTHORITY_SUPPLY_SCHEMA or inventory.encodes_planned_geometry:
+        raise ValueError(
+            "historical v1.2 authority supply is decode-only evidence, not execution authority"
+        )
+    return inventory
 
 
 def _opaque_id(kind: str, value: str) -> str:
@@ -430,19 +632,22 @@ def build_live_authority_supply_inventory(
     repository_root: str | Path,
     production_root: str | Path,
 ) -> AuthoritySupplyInventoryV1:
-    """Inventory actual authority inputs without reading or creating candidate prose."""
+    """Inventory authority and authorable capacity without reading or creating candidate prose.
+
+    The historical production authoring input is read only as a source of individual
+    recipes. Its slot totals, origin vector, batch membership, and lineage geometry are not
+    planned supply: every lane reports authority plus the recipes or rule that may author
+    from it, and ``existing_planned_capacity`` is always zero.
+    """
 
     import hashlib as _hashlib
-    from collections import Counter
 
     from dynamislm.benchmark.constants import CaseOrigin, SplitName
+    from dynamislm.benchmark.production import PRODUCTION_SYNTHETIC_QUESTION_SURFACE_VARIANTS
     from dynamislm.benchmark.production_authoring import (
         PRODUCTION_SYNTHETIC_GENERATOR_DIGEST,
         PRODUCTION_SYNTHETIC_GENERATORS,
         ProductionAuthoringInputsV1,
-        _engine_slot_specs,
-        _semantic_slot_specs,
-        _synthetic_slot_specs,
         eligible_production_source_selections,
         production_authoring_input_digest,
     )
@@ -455,16 +660,18 @@ def build_live_authority_supply_inventory(
         DEFAULT_PRODUCTION_ROOT,
         read_external_production_json,
     )
+    from dynamislm.benchmark.variable_pool import (
+        historical_recipes_from_authoring_inputs,
+        production_engine_reference_case_id,
+    )
     from dynamislm.qualification import (
         RES71_SEALED_REFERENCE_DIGEST,
-        ReferenceCaseStatus,
         build_registered_operation_inventory,
         get_reference_cases,
         reference_case_digest,
         validate_reference_cases,
         validate_registered_operation_inventory,
     )
-    from dynamislm.qualification.res115_authoring import _production_authoring_engine_references
 
     repository = Path(repository_root).resolve()
     root = Path(production_root or DEFAULT_PRODUCTION_ROOT).resolve()
@@ -541,18 +748,25 @@ def build_live_authority_supply_inventory(
             raise ValueError("accepted source is missing its source-tag support row")
         accepted_by_document[document_id] = row
 
-    selected_documents = {item.document_id for item in inputs.source_selections}
-    if (
-        len(inputs.source_selections) != 40
-        or not selected_documents.issubset(accepted_by_document)
-        or len(selected_documents) != len(inputs.source_selections)
-    ):
-        raise ValueError("current source authoring inputs do not bind 40 unique accepted documents")
-    for selection in inputs.source_selections:
-        retained = accepted_by_document[selection.document_id]["source_family_identity"]
-        assert isinstance(retained, dict)
-        if retained.get("source_family_id") != selection.source_family_id:
+    recipes = historical_recipes_from_authoring_inputs(inputs)
+    by_origin = {
+        origin: tuple(item for item in recipes if item.origin_class is origin)
+        for origin in CaseOrigin
+    }
+    recipe_by_document: dict[str, tuple[str, str]] = {}
+    for recipe in by_origin[CaseOrigin.SOURCE_BACKED_EVIDENCE_EXTRACTION]:
+        record = recipe.source_record
+        assert record is not None
+        accepted_row = accepted_by_document.get(record.document_id)
+        if accepted_row is None:
+            raise ValueError("historical source recipe does not resolve to accepted authority")
+        family = accepted_row["source_family_identity"]
+        assert isinstance(family, dict)
+        if family.get("source_family_id") != record.source_family_id:
             raise ValueError("production source selection has a stale source-family binding")
+        if record.document_id in recipe_by_document:
+            raise ValueError("historical source recipes share one source document")
+        recipe_by_document[record.document_id] = (recipe.capability_id, recipe.benchmark_family)
 
     eligible_source_selections = eligible_production_source_selections(
         qualification_exclusion,
@@ -561,25 +775,6 @@ def build_live_authority_supply_inventory(
     source_cells_by_document = _source_cells_by_document(
         accepted_by_document, eligible_source_selections
     )
-
-    semantic_ids = {item[0] for item in _semantic_slot_specs()}
-    engine_slots = _engine_slot_specs()
-    engine_ids = {item[0] for item in engine_slots}
-    synthetic_slots = _synthetic_slot_specs()
-    synthetic_ids = {item[0] for item in synthetic_slots}
-    mutation_ids = {
-        child_id for lineage in inputs.mutation_lineages for child_id in lineage.child_candidate_ids
-    }
-    scenario_ids = {candidate_id for candidate_id, _seed in inputs.scenario_seeds}
-    if (
-        scenario_ids != semantic_ids | engine_ids
-        or set(candidate_id for candidate_id, _seed in inputs.synthetic_seed_blocks)
-        != synthetic_ids
-        or set(candidate_id for candidate_id, _seed in inputs.mutation_seed_blocks) != mutation_ids
-    ):
-        raise ValueError("production seed inputs differ from the live authoring-slot registries")
-    if set().union(semantic_ids, engine_ids, synthetic_ids, mutation_ids) & selected_documents:
-        raise ValueError("production lane identities overlap across authority classes")
 
     references = get_reference_cases()
     validate_reference_cases(references)
@@ -639,39 +834,55 @@ def build_live_authority_supply_inventory(
             "Phase-A accepted-source and support registries",
             source_digest,
         )
-        if document_id in selected_documents:
-            continue
-        supported_cells = source_cells_by_document.get(document_id, ())
         family = row["source_family_identity"]
         assert isinstance(family, dict)
         family_id = family.get("source_family_id")
         if not isinstance(family_id, str):
             raise ValueError("accepted source is missing its resolved family identity")
-        lane = ReserveCandidateLaneV1(
-            lane_id=_opaque_id("source", document_id),
-            origin_class=CaseOrigin.SOURCE_BACKED_EVIDENCE_EXTRACTION,
-            authority_ref="Phase-A accepted document with retained support evidence",
-            authority_digest=source_digest,
-            capacity_unit="source-document-backed-candidate-slot",
-            existing_planned_capacity=0,
-            available_capacity=1 if supported_cells else 0,
-            capacity_status=(
-                LaneCapacityStatus.AVAILABLE if supported_cells else LaneCapacityStatus.EXHAUSTED
-            ),
-            supported_cells=supported_cells,
-            isolation_identity_digests=tuple(
-                sorted(
-                    {
-                        canonical_hash(("SOURCE_DOCUMENT", document_id)),
-                        canonical_hash(("SOURCE_FAMILY", family_id)),
-                    }
-                )
-            ),
+        recipe_cell = recipe_by_document.get(document_id)
+        supported_cells = (
+            (recipe_cell,) if recipe_cell else source_cells_by_document.get(document_id, ())
         )
-        source_lanes.append(lane)
+        source_lanes.append(
+            ReserveCandidateLaneV1(
+                lane_id=_opaque_id("source", document_id),
+                origin_class=CaseOrigin.SOURCE_BACKED_EVIDENCE_EXTRACTION,
+                authority_ref=(
+                    "Phase-A accepted document carrying one individually authorized recipe"
+                    if recipe_cell
+                    else "Phase-A accepted document with retained support evidence"
+                ),
+                authority_digest=source_digest,
+                capacity_unit="source-document-backed-candidate-slot",
+                existing_planned_capacity=0,
+                available_capacity=1 if supported_cells else 0,
+                capacity_status=(
+                    LaneCapacityStatus.EXISTING_RECIPE_INVENTORY
+                    if recipe_cell
+                    else (
+                        LaneCapacityStatus.AVAILABLE
+                        if supported_cells
+                        else LaneCapacityStatus.EXHAUSTED
+                    )
+                ),
+                supported_cells=supported_cells,
+                isolation_identity_digests=tuple(
+                    sorted(
+                        {
+                            canonical_hash(("SOURCE_DOCUMENT", document_id)),
+                            canonical_hash(("SOURCE_FAMILY", family_id)),
+                        }
+                    )
+                ),
+            )
+        )
 
     generator_lanes: list[ReserveCandidateLaneV1] = []
-    split_by_slot = {candidate_id: split for candidate_id, _family, split in synthetic_slots}
+    synthetic_cells = tuple(
+        sorted(
+            {("C08", family) for family, _variant in PRODUCTION_SYNTHETIC_QUESTION_SURFACE_VARIANTS}
+        )
+    )
     for generator in PRODUCTION_SYNTHETIC_GENERATORS:
         generator_digest = canonical_hash(generator)
         atom(
@@ -686,10 +897,6 @@ def build_live_authority_supply_inventory(
         )
         if split is None:
             raise ValueError("registered synthetic generator has an unknown split family")
-        current_blocks = sum(
-            split_by_slot[candidate_id] is split
-            for candidate_id, _seed in inputs.synthetic_seed_blocks
-        )
         generator_lanes.append(
             ReserveCandidateLaneV1(
                 lane_id="synthetic:" + generator.generator_family,
@@ -697,19 +904,11 @@ def build_live_authority_supply_inventory(
                 authority_ref="registered split-family synthetic generator",
                 authority_digest=generator_digest,
                 capacity_unit="unique split-locked synthetic seed block",
-                existing_planned_capacity=current_blocks,
+                existing_planned_capacity=0,
                 available_capacity=None,
                 capacity_status=LaneCapacityStatus.RULE_GOVERNED,
                 capacity_rule="registered generator and split-family seed-block namespace",
-                supported_cells=tuple(
-                    sorted(
-                        {
-                            ("C08", family)
-                            for _candidate_id, family, slot_split in synthetic_slots
-                            if slot_split is split
-                        }
-                    )
-                ),
+                supported_cells=synthetic_cells,
                 isolation_identity_digests=tuple(
                     sorted(
                         {
@@ -725,49 +924,42 @@ def build_live_authority_supply_inventory(
         )
 
     reference_by_id = {item.case_id: item for item in references}
-    engine_value_reference = _production_authoring_engine_references()[0]
-    value_references = tuple(
-        item for item in references if item.status is ReferenceCaseStatus.VALUE
-    )
-    engine_slots_by_lane: dict[tuple[str, str, str], list[str]] = {}
-    for candidate_id, capability, family, slot in engine_slots:
-        if capability == "C18":
-            reference_id = (
-                "res71-nonfinite-unit-refusal" if family == "F06" else "res71-bpt-mpv-refusal"
-            )
-        elif capability == "C08":
-            reference_id = engine_value_reference.case_id
-        else:
-            value_index = (slot + (0 if family == "F05" else 1)) % len(value_references)
-            reference_id = value_references[value_index].case_id
-        reference = reference_by_id[reference_id]
-        if capability != "C18" and reference.operation_id is None:
-            raise ValueError("numeric engine slot has no registered RES-71 operation")
-        engine_slots_by_lane.setdefault((capability, family, reference_id), []).append(candidate_id)
-    engine_lanes = []
-    for (capability, family, reference_id), slot_ids in engine_slots_by_lane.items():
-        if not set(slot_ids).issubset(scenario_ids):
-            raise ValueError("engine reference lane differs from current private seed slots")
-        reference = reference_by_id[reference_id]
-        lane_digest = canonical_hash(
-            (
-                reference_digest,
-                canonical_hash(reference),
-                capability,
-                family,
-                tuple(sorted(slot_ids, key=str.encode)),
-            )
+    engine_recipes_by_lane: dict[tuple[str, str, str], list[str]] = {}
+    for recipe in by_origin[CaseOrigin.DETERMINISTIC_ENGINE_DERIVED]:
+        reference_id = production_engine_reference_case_id(
+            recipe.capability_id, recipe.benchmark_family, recipe.slot_index or 0
         )
+        reference = reference_by_id[reference_id]
+        if recipe.capability_id != "C18" and reference.operation_id is None:
+            raise ValueError("numeric engine recipe has no registered RES-71 operation")
+        engine_recipes_by_lane.setdefault(
+            (recipe.capability_id, recipe.benchmark_family, reference_id), []
+        ).append(recipe.candidate_id)
+    engine_lanes = []
+    for (capability, family, reference_id), recipe_ids in engine_recipes_by_lane.items():
+        reference = reference_by_id[reference_id]
         engine_lanes.append(
             ReserveCandidateLaneV1(
                 lane_id=f"engine:{capability}:{family}:{reference_id}",
                 origin_class=CaseOrigin.DETERMINISTIC_ENGINE_DERIVED,
-                authority_ref="RES-71 reference, operation, and frozen production cell mapping",
-                authority_digest=lane_digest,
-                capacity_unit="planned RES-71 engine candidate slot",
-                existing_planned_capacity=len(slot_ids),
-                available_capacity=0,
-                capacity_status=LaneCapacityStatus.EXHAUSTED,
+                authority_ref="RES-71 reference, operation, and individually authorized recipes",
+                authority_digest=canonical_hash(
+                    (
+                        reference_digest,
+                        canonical_hash(reference),
+                        capability,
+                        family,
+                        tuple(sorted(recipe_ids, key=str.encode)),
+                    )
+                ),
+                capacity_unit="individually authorized RES-71 engine recipe",
+                existing_planned_capacity=0,
+                available_capacity=len(recipe_ids),
+                capacity_status=LaneCapacityStatus.EXISTING_RECIPE_INVENTORY,
+                capacity_rule=(
+                    "lower bound: existing individual recipes; further engine recipes need "
+                    "explicit RES-71 authoring authority"
+                ),
                 supported_cells=((capability, family),),
                 isolation_identity_digests=(
                     canonical_hash(("RES71_ENGINE_REFERENCE_CASE", reference_id)),
@@ -775,85 +967,95 @@ def build_live_authority_supply_inventory(
             )
         )
 
+    expert_recipes: dict[tuple[str, str, str], list[tuple[str, str]]] = {}
+    for recipe in by_origin[CaseOrigin.EXPERT_AUTHORED_SEMANTIC]:
+        batch = recipe.expert_batch
+        assert batch is not None
+        expert_recipes.setdefault(
+            (batch.author_batch_id, batch.protocol_template_id, batch.isolation_cluster_id), []
+        ).append((recipe.capability_id, recipe.benchmark_family))
     expert_lanes: list[ReserveCandidateLaneV1] = []
-    semantic_cell_by_id = {
-        candidate_id: (capability, family)
-        for candidate_id, capability, family, _slot in _semantic_slot_specs()
-    }
-    for batch in inputs.expert_batches:
-        batch_digest = canonical_hash(batch)
+    for (batch_id, template_id, cluster_id), cells in expert_recipes.items():
+        batch_digest = canonical_hash(("EXPERT_BATCH_IDENTITY", batch_id, template_id, cluster_id))
         atom(
             AuthoritySupplyKind.EXPERT_BATCH,
-            batch.author_batch_id,
-            "production expert batch and template registry",
+            batch_id,
+            "production expert batch and template identity",
             batch_digest,
         )
         expert_lanes.append(
             ReserveCandidateLaneV1(
-                lane_id=_opaque_id("expert-batch", batch.author_batch_id),
+                lane_id=_opaque_id("expert-batch", batch_id),
                 origin_class=CaseOrigin.EXPERT_AUTHORED_SEMANTIC,
-                authority_ref="existing bounded expert batch/template/isolation authority",
+                authority_ref="expert batch/template/isolation identity with individual recipes",
                 authority_digest=batch_digest,
-                capacity_unit="planned expert-semantic slot",
-                existing_planned_capacity=len(batch.candidate_ids),
-                available_capacity=0,
-                capacity_status=LaneCapacityStatus.EXHAUSTED,
-                supported_cells=tuple(
-                    sorted(
-                        {semantic_cell_by_id[candidate_id] for candidate_id in batch.candidate_ids}
-                    )
+                capacity_unit="individually authorized expert-semantic recipe",
+                existing_planned_capacity=0,
+                available_capacity=len(cells),
+                capacity_status=LaneCapacityStatus.EXISTING_RECIPE_INVENTORY,
+                capacity_rule=(
+                    "lower bound: existing individual recipes; further expert recipes need "
+                    "explicit expert authoring authority"
                 ),
+                supported_cells=tuple(sorted(set(cells))),
                 isolation_identity_digests=tuple(
                     sorted(
                         {
-                            canonical_hash(("EXPERT_BATCH", batch.author_batch_id)),
-                            canonical_hash(("PROTOCOL_TEMPLATE", batch.protocol_template_id)),
-                            canonical_hash(
-                                ("EXPERT_ISOLATION_CLUSTER", batch.isolation_cluster_id)
-                            ),
+                            canonical_hash(("EXPERT_BATCH", batch_id)),
+                            canonical_hash(("PROTOCOL_TEMPLATE", template_id)),
+                            canonical_hash(("EXPERT_ISOLATION_CLUSTER", cluster_id)),
                         }
                     )
                 ),
             )
         )
 
+    mutation_recipes: dict[str, list[ProductionCandidateRecipeV1]] = {}
+    for recipe in by_origin[CaseOrigin.ADVERSARIAL_MUTATION]:
+        mutation_recipes.setdefault(recipe.mutation_lineage_id or "", []).append(recipe)
     mutation_lanes: list[ReserveCandidateLaneV1] = []
-    parent_cell_by_id = semantic_cell_by_id
-    mutation_seed_ids = {candidate_id for candidate_id, _seed in inputs.mutation_seed_blocks}
-    for lineage in inputs.mutation_lineages:
-        lineage_digest = canonical_hash(lineage)
+    for lineage_id, children in mutation_recipes.items():
+        first_stage = next(item for item in children if item.mutation_stage == 1)
+        root_parent = first_stage.mutation_parent_candidate_id or ""
+        lineage_digest = canonical_hash(
+            (
+                "MUTATION_LINEAGE_AUTHORITY",
+                lineage_id,
+                root_parent,
+                first_stage.mutation_operator_id,
+            )
+        )
         atom(
             AuthoritySupplyKind.MUTATION_LINEAGE,
-            lineage.lineage_id,
-            "existing mutation root/operator/lineage authority",
+            lineage_id,
+            "mutation root/operator/lineage authority",
             lineage_digest,
         )
-        child_seed_count = len(mutation_seed_ids.intersection(lineage.child_candidate_ids))
-        parent_cell = parent_cell_by_id.get(lineage.parent_candidate_id)
-        if parent_cell is None:
-            raise ValueError("mutation parent does not resolve to a frozen PSE cell")
         mutation_lanes.append(
             ReserveCandidateLaneV1(
-                lane_id=_opaque_id("mutation-lineage", lineage.lineage_id),
+                lane_id=_opaque_id("mutation-lineage", lineage_id),
                 origin_class=CaseOrigin.ADVERSARIAL_MUTATION,
-                authority_ref="existing mutation parent, operator, and lineage authority",
+                authority_ref="mutation parent, operator, and lineage authority",
                 authority_digest=lineage_digest,
-                capacity_unit="mutation child seed block",
-                existing_planned_capacity=child_seed_count,
-                available_capacity=None,
-                capacity_status=LaneCapacityStatus.METADATA_REQUIRED,
+                capacity_unit="individually authorized mutation child recipe",
+                existing_planned_capacity=0,
+                available_capacity=len(children),
+                capacity_status=LaneCapacityStatus.EXISTING_RECIPE_INVENTORY,
                 capacity_rule=(
-                    "additional child capacity requires candidate-level parent and cell metadata"
+                    "lower bound: existing individual child recipes; further children need "
+                    "candidate-level parent and cell metadata"
                 ),
                 isolation_identity_digests=tuple(
                     sorted(
                         {
-                            canonical_hash(("MUTATION_PARENT", lineage.parent_candidate_id)),
-                            canonical_hash(("MUTATION_LINEAGE", lineage.lineage_id)),
+                            canonical_hash(("MUTATION_PARENT", root_parent)),
+                            canonical_hash(("MUTATION_LINEAGE", lineage_id)),
                         }
                     )
                 ),
-                supported_cells=(parent_cell,),
+                supported_cells=tuple(
+                    sorted({(item.capability_id, item.benchmark_family) for item in children})
+                ),
             )
         )
 
@@ -865,20 +1067,10 @@ def build_live_authority_supply_inventory(
         atom(
             AuthoritySupplyKind.AUTHORING_SEED_BLOCK,
             candidate_id,
-            "current private production authoring seed inputs",
+            "individual recipe seed from the historical production authoring input",
             canonical_hash((inputs.batch_id, candidate_id, seed)),
         )
 
-    counts = Counter(
-        {
-            CaseOrigin.EXPERT_AUTHORED_SEMANTIC: len(semantic_ids),
-            CaseOrigin.SOURCE_BACKED_EVIDENCE_EXTRACTION: len(inputs.source_selections),
-            CaseOrigin.DETERMINISTIC_ENGINE_DERIVED: len(engine_ids),
-            CaseOrigin.DETERMINISTIC_SYNTHETIC: len(inputs.synthetic_seed_blocks),
-            CaseOrigin.ADVERSARIAL_MUTATION: len(inputs.mutation_seed_blocks),
-        }
-    )
-    planned_counts = tuple(sorted(counts.items(), key=lambda item: item[0].value.encode()))
     candidate_key = hashlib.sha256(inputs.batch_id.encode("utf-8")).hexdigest()[:24]
     candidate_directory = root / "production" / "candidates" / candidate_key
     if candidate_directory.is_symlink():
@@ -890,14 +1082,14 @@ def build_live_authority_supply_inventory(
     )
 
     bindings = {
-        "RES71_REFERENCE_INVENTORY": reference_digest,
-        "RES71_OPERATION_INVENTORY": canonical_hash(operations),
+        HISTORICAL_RECIPE_INPUT_BINDING: inputs.input_digest,
+        "HISTORICAL_RECIPE_INPUT_FILE": input_file_digest,
         "PHASE_A_ACCEPTED_SOURCE_MANIFEST": accepted_manifest_digest,
         "PHASE_A_SOURCE_FAMILY_MANIFEST": family_manifest_digest,
         "PHASE_A_SOURCE_SUPPORT_MANIFEST": support_manifest_digest,
         "QUALIFICATION_EXCLUSION_COMMITMENT": qualification_exclusion.commitment_digest,
-        "PRODUCTION_AUTHORING_INPUT_FILE": input_file_digest,
-        "PRODUCTION_AUTHORING_INPUT_CONTENT": inputs.input_digest,
+        "RES71_OPERATION_INVENTORY": canonical_hash(operations),
+        "RES71_REFERENCE_INVENTORY": reference_digest,
         "SYNTHETIC_GENERATOR_REGISTRY": PRODUCTION_SYNTHETIC_GENERATOR_DIGEST,
     }
     return AuthoritySupplyInventoryV1(
@@ -915,8 +1107,8 @@ def build_live_authority_supply_inventory(
                 key=lambda item: item.lane_id.encode(),
             )
         ),
-        planned_origin_counts=planned_counts,
-        planned_mutation_lineage_count=len(inputs.mutation_lineages),
+        planned_origin_counts=(),
+        planned_mutation_lineage_count=0,
         materialized_candidate_count=materialized_count,
         evidence_bindings=tuple(sorted(bindings.items(), key=lambda item: item[0].encode())),
         authority_inventory_complete=True,
@@ -944,11 +1136,16 @@ def write_live_authority_supply_inventory(
 
 __all__ = [
     "AUTHORITY_SUPPLY_INVENTORY_PATH",
+    "AUTHORITY_SUPPLY_INVENTORY_PATH_V1_2",
     "AUTHORITY_SUPPLY_SCHEMA",
+    "AUTHORITY_SUPPLY_SCHEMA_V1_2",
+    "HISTORICAL_RECIPE_INPUT_BINDING",
+    "AdditionalCapacityStatus",
     "AuthoritySupplyAssessmentV1",
     "AuthoritySupplyAtomV1",
     "AuthoritySupplyInventoryV1",
     "AuthoritySupplyKind",
+    "AuthoritySupplySemanticsV1",
     "BackfillRequestKind",
     "BackfillRequestV1",
     "LaneCapacityStatus",
@@ -956,6 +1153,8 @@ __all__ = [
     "ReserveDeficitKind",
     "ReserveDeficitV1",
     "SupplyAssessmentStatus",
+    "SupplyLaneSemanticsV1",
     "build_live_authority_supply_inventory",
+    "require_current_execution_supply_inventory",
     "write_live_authority_supply_inventory",
 ]

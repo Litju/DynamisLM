@@ -10,7 +10,7 @@ and its [supersession map](../decisions/RES258-SUPERSESSION-MAP.md).
 ## Pool-first benchmark lifecycle
 
 ```text
-qualify a variable pre-review pool of at least 434 candidates
+qualify a variable pre-review pool large enough to permit the final 434-case selection
 -> validate scientific, source, provenance, contamination, and isolation identities
 -> qualify independent reserve inventory from eligible pool structure
 -> conduct human review
@@ -30,12 +30,14 @@ deterministic synthetic `>= 12`, adversarial mutation `>= 60`, and at least 20
 mutation lineages. These bounds do not cap or require exact counts in the
 pre-review pool.
 
-Reserve inventory is qualified before selection and is structurally derived
-from the actual eligible pool and hard constraints. An independent CRITICAL
-reserve is required at this pool-qualification stage as a reliability gate.
-This reserve does not increase the final CRITICAL minimum in DR-001. The final
-benchmark retains the DR-001 critical-error coverage minimum in each required
-protected split.
+Reserve qualification runs against the actual eligible candidate pool and hard
+constraints. The base problem must be `FEASIBLE` before any single-removal
+scenario runs. `INFEASIBLE` stops with a typed base deficit; `UNKNOWN` stops
+fail-closed. Only a feasible base permits the removal checks. An independent
+CRITICAL reserve is required at this pool-qualification stage as a reliability
+gate. This reserve does not increase the final CRITICAL minimum in DR-001. The
+final benchmark retains the DR-001 critical-error coverage minimum in each
+required protected split.
 
 Rejection removes that candidate from final eligibility. It does not turn the
 candidate into a Public case or move any other candidate into a predetermined
@@ -63,6 +65,66 @@ purpose is adversarial scientific-behavior evaluation. Its coverage supports
 capability-by-family coverage claims; it does not authorize high-precision
 cell-level performance estimates or fine-grained model ranking without
 additional statistical qualification.
+
+## Variable pool authoring boundary
+
+`dynamislm.benchmark.variable_pool` is the only pool-construction path under
+this lifecycle:
+
+```text
+ProductionCandidateRecipeV1     one individually authorized candidate recipe
+    -> VariablePoolAuthoringPlanV1  explicit variable recipe set; no N, origin, or lineage target
+    -> materialize_variable_pool    per-recipe production builders and current packet gates
+    -> ProductionAuthoringCandidatePoolV1 (pending review; bound to the plan digest)
+```
+
+A recipe is authorized either as an individual historical recipe or by a
+governed supply lane. Historical production inputs are decomposed into
+individual recipes. Their slot totals, origin vector, expert batch membership,
+mutation lineage geometry, RES-223 repair plans, RES-128 candidate-set digests,
+and legacy exact-feasibility receipts are not read on this path. A static
+call-path test enforces that boundary. The 434 bound comes from the exact final
+selection size; the pre-review pool remains variable and its actual `N` is not
+derived from the supply inventory. Existing authorized recipe counts are
+historical inventory, not a pool target or an additional-authoring capacity cap.
+Additional authorable capacity is reported separately as available,
+rule-governed, unresolved, unknown, or exhausted. Final-selection bounds apply
+only to the final selection.
+
+The live authority-supply inventory (`@1.3.0`) records authority, historical
+recipe inventory, and separately typed additional authorable capacity. It
+carries no planned slot or lineage geometry and derives no structural pool
+floor or backfill request. A v1.2 inventory is preserved as historical evidence
+and cannot be assessed as current execution authority. A v1.2 planned-slot floor
+of 436 and its source-plus-synthetic backfill request are superseded because
+they treated historical planned slots as the current variable-pool authority.
+
+## Proposed post-audit execution governance
+
+This is a documentation-only proposal; no Linear issues have been changed.
+RES-126 is proposed as `CANCEL_SUPERSEDED`, with a historical note that its
+operative execution scope was fixed-434 materialization. The new execution
+umbrella should be created under RES-115 with a title that does not inherit
+fixed-434 semantics:
+
+```text
+RES-115
+└── Post-Audit PSE V1 Execution & Freeze
+    ├── A0 Post-audit execution baseline integration
+    ├── A1 Variable pre-review pool construction
+    ├── A2 Candidate-level pool qualification
+    ├── A2b Conditional governed backfill
+    ├── A3 Human-review trust boundary
+    ├── A4 Human review
+    ├── A5 Final approved-pool selection
+    ├── A6 Protected-store provisioning
+    └── A7 Final contamination adjudication & freeze
+        └── Integrate completed PSE V1 into the main/default release line
+```
+
+A2b is created or activated only when A2 emits an actual typed deficit with
+feasibility evidence. It is not a default phase. Base `INFEASIBLE` or `UNKNOWN`
+never triggers removal checks, candidate repair trials, or backfill.
 
 ## Per-candidate review and promotion lifecycle
 

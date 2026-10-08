@@ -18,6 +18,11 @@ from dynamislm.benchmark.constants import (
     RefusalDecision,
     SplitName,
 )
+from dynamislm.benchmark.contamination import (
+    exact_13_token_shingles,
+    exact_shingle_digest,
+    normalized_text_sha256,
+)
 from dynamislm.benchmark.contracts import ContaminationBinding
 from dynamislm.benchmark.coverage import COVERAGE_MATRIX
 from dynamislm.benchmark.pre_review import CandidateReviewStatus, HumanReviewDecision
@@ -1420,6 +1425,57 @@ def test_commitment_adapter_uses_typed_review_and_coverage_features() -> None:
     assert SelectionFeature(FeatureKind.CELL, ("C01", "F01")) in candidate.features
     assert SelectionFeature(FeatureKind.ANSWERABLE) in candidate.features
     assert candidate.exact_shingle_digests == (_SHA,)
+    question = (
+        "thirteen distinct tokens prove each exact production question shingle identity here "
+        "with enough additional terms to expose every overlapping window"
+    )
+    bound_contamination = replace(
+        contamination,
+        normalized_text_sha256=normalized_text_sha256(question),
+        exact_shingle_digest=exact_shingle_digest(question),
+    )
+    projected = selection_candidate_from_commitment(
+        commitment,
+        review_eligibility=ReviewEligibility.PENDING,
+        contamination=bound_contamination,
+        question_text=question,
+    )
+    assert projected.exact_shingle_digests == tuple(
+        "sha256:" + value for value in sorted(exact_13_token_shingles(question))
+    )
+    assert len(projected.exact_shingle_digests) > 1
+    with pytest.raises(ValueError, match="differs from contamination commitments"):
+        selection_candidate_from_commitment(
+            commitment,
+            review_eligibility=ReviewEligibility.PENDING,
+            contamination=contamination,
+            question_text=question,
+        )
+    with pytest.raises(ValueError, match="differs from contamination commitments"):
+        selection_candidate_from_commitment(
+            commitment,
+            review_eligibility=ReviewEligibility.PENDING,
+            contamination=bound_contamination,
+            question_text=question + " tampered",
+        )
+    with pytest.raises(ValueError, match="exactly cover"):
+        build_final_selection_problem_from_commitments(
+            (commitment,),
+            review_eligibility={item.candidate_id: HumanReviewDecision.APPROVED},
+            contamination_bindings={item.candidate_id: bound_contamination},
+            question_texts={},
+        )
+    assert (
+        build_final_selection_problem_from_commitments(
+            (commitment,),
+            review_eligibility={item.candidate_id: HumanReviewDecision.APPROVED},
+            contamination_bindings={item.candidate_id: bound_contamination},
+            question_texts={item.candidate_id: question},
+        )
+        .candidates[0]
+        .exact_shingle_digests
+        == projected.exact_shingle_digests
+    )
     assert {identity.kind for identity in candidate.isolation_identities} >= {
         IsolationIdentityKind.SOURCE_FAMILY,
         IsolationIdentityKind.PROTOCOL_TEMPLATE,
