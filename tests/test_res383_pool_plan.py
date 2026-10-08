@@ -45,6 +45,7 @@ from dynamislm.benchmark.selection_pool import (
     MaterializedBackfillCandidateV1,
     PoolBackfillNeedV1,
     PoolPlanStatus,
+    PoolReserveReceiptV1,
     assess_authority_supply_inventory,
     derive_pool_backfill_needs,
     plan_variable_pool,
@@ -1563,6 +1564,80 @@ def test_source_inventory_cells_equal_production_eligible_selections(
     assert inventory_cells == {
         document_id: tuple(sorted(cells)) for document_id, cells in authoring_cells.items()
     }
+
+
+def _receipt_for(
+    monkeypatch: pytest.MonkeyPatch,
+    base_status: FeasibilityStatus,
+    removal_status: FeasibilityStatus = FeasibilityStatus.FEASIBLE,
+) -> PoolReserveReceiptV1:
+    from dynamislm.benchmark import selection_pool
+
+    monkeypatch.setattr(
+        selection_pool,
+        "_build_problem",
+        lambda values, _parents: _problem(
+            selection_pool._planning_candidates(values), final_count=1
+        ),
+    )
+    statuses = iter((base_status, removal_status, removal_status))
+
+    def solve(*_args: Any, **_kwargs: Any) -> Any:
+        status = next(statuses)
+        witness = status is FeasibilityStatus.FEASIBLE
+        return SimpleNamespace(
+            status=status,
+            plan_digest=canonical_hash("plan") if witness else None,
+            validation_digest=canonical_hash("validation") if witness else None,
+        )
+
+    monkeypatch.setattr(selection_pool, "solve_selection_feasibility", solve)
+    return plan_variable_pool((_candidate("a"), _candidate("b"))).receipt
+
+
+@pytest.mark.parametrize(
+    "status",
+    [item for item in PoolPlanStatus if item is not PoolPlanStatus.BASE_INFEASIBLE],
+)
+def test_infeasible_base_receipt_requires_base_infeasible_status(
+    monkeypatch: pytest.MonkeyPatch, status: PoolPlanStatus
+) -> None:
+    receipt = _receipt_for(monkeypatch, FeasibilityStatus.INFEASIBLE)
+    assert receipt.status is PoolPlanStatus.BASE_INFEASIBLE
+    with pytest.raises(ValueError, match="BASE_INFEASIBLE status must equal|qualified pool"):
+        replace(receipt, status=status, authority_exhaustion_proven=True)
+
+
+@pytest.mark.parametrize(
+    "status",
+    [item for item in PoolPlanStatus if item is not PoolPlanStatus.UNKNOWN],
+)
+def test_unknown_base_receipt_requires_unknown_status(
+    monkeypatch: pytest.MonkeyPatch, status: PoolPlanStatus
+) -> None:
+    receipt = _receipt_for(monkeypatch, FeasibilityStatus.UNKNOWN)
+    assert receipt.status is PoolPlanStatus.UNKNOWN
+    with pytest.raises(
+        ValueError, match="BASE_INFEASIBLE status must equal|unknown base feasibility|qualified"
+    ):
+        replace(receipt, status=status, authority_exhaustion_proven=True)
+
+
+def test_feasible_base_rejects_base_infeasible_and_keeps_unknown_removal_status(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    qualified = _receipt_for(monkeypatch, FeasibilityStatus.FEASIBLE)
+    assert qualified.status is PoolPlanStatus.QUALIFIED
+    with pytest.raises(ValueError, match="BASE_INFEASIBLE status must equal"):
+        replace(qualified, status=PoolPlanStatus.BASE_INFEASIBLE)
+
+    unknown = _receipt_for(monkeypatch, FeasibilityStatus.FEASIBLE, FeasibilityStatus.UNKNOWN)
+    assert unknown.baseline_feasibility_status is FeasibilityStatus.FEASIBLE
+    assert unknown.unknown_removal_count == 2
+    assert unknown.status is PoolPlanStatus.UNKNOWN
+    assert unknown.backfill_requests == ()
+    with pytest.raises(ValueError, match="BASE_INFEASIBLE status must equal"):
+        replace(unknown, status=PoolPlanStatus.BASE_INFEASIBLE)
 
 
 def test_historical_v12_inventory_cannot_authorize_pool_planning_or_backfill() -> None:

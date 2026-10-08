@@ -284,6 +284,15 @@ class PoolReserveReceiptV1:
             )
         if self.baseline_feasibility_status is not self.base_diagnosis.base_status:
             raise ValueError("base diagnosis and pool receipt statuses differ")
+        if (self.baseline_feasibility_status is FeasibilityStatus.INFEASIBLE) != (
+            self.status is PoolPlanStatus.BASE_INFEASIBLE
+        ):
+            raise ValueError("BASE_INFEASIBLE status must equal an infeasible base")
+        if (
+            self.baseline_feasibility_status is FeasibilityStatus.UNKNOWN
+            and self.status is not PoolPlanStatus.UNKNOWN
+        ):
+            raise ValueError("unknown base feasibility requires UNKNOWN pool status")
         object.__setattr__(
             self,
             "independent_critical_reserve_status",
