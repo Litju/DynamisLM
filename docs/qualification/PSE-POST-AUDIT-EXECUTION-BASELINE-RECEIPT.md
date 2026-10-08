@@ -3,21 +3,50 @@
 ```text
 MISSION=PSE-V1-POST-AUDIT-EXECUTION-BASELINE-001
 STATUS=PASS
+REQUIRED_ENTRY_HEAD=b13932c23d8d5c2071dcdbb3260083650fd0002a
 RECOVERY_ANCHOR=c689d5d057da0d5281d718cb25a7b33d26d2530b
 RECOVERY_ANCHOR_TREE=57fe054655b96ec69f751027eba5183ff5173d8b
 WORK_BRANCH=work/pse-post-audit-execution-baseline
-IMPLEMENTATION_HEAD=1584353825a4888d2ab0fb8b395b7e141feb10d9
-RECEIPT_COMMIT=CHILD_OF_IMPLEMENTATION_HEAD
+PRIOR_IMPLEMENTATION_HEAD=1584353825a4888d2ab0fb8b395b7e141feb10d9
+SUPPLY_AND_QUALIFICATION_COMMIT=7d09956
+ROADMAP_COMMIT=bc28306
+HARDENING_RECEIPT_COMMIT=THIS_COMMIT
 REMOTE_PUSH=NO
 INVALID_LOCAL_RES397_HEAD=e2d7f9bd616cb7f01e9c834ff8442e2cb8cb9288 (preserved unmodified as forensic evidence)
 
 POST_AUDIT_AUTHORITY=RES258/369/373/381/383
 FIXED_PRE_REVIEW_N=NO
+POOL_N=NOT_DERIVED
 HISTORICAL_ORIGIN_EQUALITY_ACTIVE=NO
 HISTORICAL_37X3_ACTIVE=NO
+HISTORICAL_434_TOPOLOGY_AUTHORITY=NO
+HISTORICAL_ORIGIN_VECTOR_AUTHORITY=NO
+HISTORICAL_37X3_AUTHORITY=NO
 RES223_TOPOLOGY_ACTIVE=NO
 RES128_FIXED_DIGEST_GATE_ACTIVE=NO
 LEGACY_EXACT_ORACLE_NEW_POOL_GATE=NO
+
+ACTIVE_SUPPLY_SCHEMA=PSE-V1-AUTHORITY-SUPPLY-INVENTORY@1.3.0
+HISTORICAL_RECIPE_INVENTORY=INVENTORY_ONLY
+EXISTING_AUTHORIZED_RECIPE_COUNT=INVENTORY_ONLY
+ADDITIONAL_AUTHORABLE_CAPACITY=SEPARATE_TYPED_VALUE
+CAPACITY_STATUS=PER_LANE_TYPED
+FINAL_SELECTION_BOUND=434_FINAL_SELECTION_ONLY
+STRUCTURAL_POOL_FLOOR=NOT_DERIVED
+STRUCTURAL_BACKFILL_REQUESTS=NONE
+RES383_V1_2_INVENTORY=HISTORICAL_PRESERVED
+RES383_V1_2_POOL_FLOOR_436=SUPERSEDED
+RES383_V1_2_SOURCE_PLUS_SYNTHETIC_BACKFILL=SUPERSEDED
+RES383_V1_2_MANDATORY_BACKFILL=SUPERSEDED
+EXISTING_RECIPE_COUNT_IS_NOT_POOL_TARGET=YES
+EXISTING_RECIPE_COUNT_IS_NOT_CAPACITY_CAP=YES
+FINAL_SELECTION_BOUNDS_APPLY_ONLY_TO_FINAL_SELECTION=YES
+BASE_INFEASIBLE_REMOVAL_SWEEP=FORBIDDEN
+BASE_UNKNOWN_REMOVAL_SWEEP=FORBIDDEN
+BACKFILL_WITHOUT_TYPED_DEFICIT=FORBIDDEN
+BACKFILL_WITHOUT_FEASIBILITY_EVIDENCE=FORBIDDEN
+RES126_EXECUTION_SCOPE=SUPERSEDED
+PROPOSED_NEW_LINEAR_ROOT=RES-115
 
 VARIABLE_POOL_AUTHORING_PATH=PASS
 INDIVIDUAL_RECIPE_REUSE=SUPPORTED
@@ -37,9 +66,15 @@ RES383_SUPPLY_SEMANTICS=CORRECTED
 NO_CANDIDATE_HUMAN_APPROVALS_CREATED=YES
 NO_PROTECTED_MEMBERSHIP_PERSISTED=YES
 NO_BENCHMARK_FREEZE=YES
+HUMAN_REVIEW_RUN=NO
+PROTECTED_MEMBERSHIP_PERSISTED=NO
+BENCHMARK_FROZEN=NO
 CANDIDATE_POOL_PERSISTED=NO
 EXTERNAL_STORE_WRITES=NONE
-SOLVER_RUNS=NONE
+SOLVER_RUNS=UNIT_TEST_FIXTURES_ONLY
+PRODUCTION_POOL_MATERIALIZATION=NOT_RUN
+PRODUCTION_POOL_QUALIFICATION=NOT_RUN
+PRODUCTION_ALL_REMOVAL_QUALIFICATION=NOT_RUN
 DR001_CHANGED=NO
 RES71_REFERENCES_CHANGED=NO
 SERIALIZATION_V3_CHANGED=NO
@@ -47,13 +82,15 @@ HISTORICAL_HASHES_CHANGED=NO
 
 RUFF=PASS
 FORMAT=PASS
-MYPY_STRICT=PASS (217 source files)
+MYPY_STRICT=PASS (218 source files)
 REPOSITORY_POLICY=PASS
-FULL_CI=PASS (./scripts/ci.sh at IMPLEMENTATION_HEAD; rerun at RECEIPT_COMMIT)
-PYTEST=PASS (1225 passed; RES-383 anchor baseline 1190)
+FULL_CI=PASS (./scripts/ci.sh; 1232 passed in 1296.35s)
+PYTEST=PASS (1232 passed)
+TEST_COUNT=1232
 QA_TRACKED_MUTATION=NONE
 
 PSE_V1_COMPLETE=NO
+BASELINE_READY_FOR_PR=YES
 NEXT=VARIABLE_PRE_REVIEW_POOL_CONSTRUCTION
 ```
 
@@ -82,7 +119,10 @@ recovery anchor, one concern per commit.
 | Pool-first materialization boundary | `789ad08` |
 | RES-383 supply decoupled from historical planned slots | `2fe22ec` |
 | Static call-path proof | `1584353` |
-| Lifecycle documentation and this receipt | receipt commit |
+| Prior lifecycle documentation and baseline receipt | `b13932c` |
+| Supply semantics and base-feasibility hardening | `7d09956` |
+| Post-audit execution roadmap | `bc28306` |
+| Final baseline receipt hardening | this receipt commit |
 
 ## Modern execution boundary
 
@@ -92,7 +132,7 @@ ProductionCandidateRecipeV1        one individually authorized recipe
     -> materialize_variable_pool   existing per-recipe production builders + current gates
     -> ProductionAuthoringCandidatePoolV1 (pending review, bound to the plan digest)
     -> project_variable_pool_selection_candidates -> unchanged RES-369 vocabulary
-    -> validate_variable_pre_review_pool (RES258 lower bound N >= 434 + packet gates)
+    -> validate_variable_pre_review_pool (candidate gates; final-selection bound 434)
 ```
 
 A recipe's basis is `HISTORICAL_INDIVIDUAL_RECIPE` or `GOVERNED_SUPPLY_LANE`.
@@ -101,6 +141,10 @@ into individual recipes. Expert recipes carry their batch, template and cluster
 *identity*, but not historical batch membership. Mutation recipes carry an
 explicit parent, lineage, operator and stage. Slot totals, the origin vector,
 lineage geometry, RES-223 plans and legacy receipts are discarded.
+
+The pre-review pool is variable. It must be large enough to permit the exact
+final selection, whose bound is 434; the supply inventory does not set the pool
+target or derive `POOL_N`.
 
 ## Removed from the active path
 
@@ -140,9 +184,15 @@ failing stub and still materializes a pool.
 
 ## RES-383 supply correction
 
-`build_live_authority_supply_inventory` now emits
-`PSE-V1-AUTHORITY-SUPPLY-INVENTORY@1.3.0`. That schema rejects planned origin
-counts, planned lineage counts, and any nonzero `existing_planned_capacity`.
+`build_live_authority_supply_inventory` emits
+`PSE-V1-AUTHORITY-SUPPLY-INVENTORY@1.3.0`. The serialized inventory remains
+hash-compatible; typed properties separate `HISTORICAL_RECIPE_INVENTORY`,
+`EXISTING_AUTHORIZED_RECIPE_COUNT`, `ADDITIONAL_AUTHORABLE_CAPACITY`, and
+`CAPACITY_STATUS`. Existing recipe counts do not set the pool target or cap
+future authoring. When extra authority is unproven, its capacity is
+`GOVERNED_UNRESOLVED`, `UNKNOWN`, or rule-governed rather than a fabricated
+number. The inventory carries no planned origin or lineage geometry.
+
 Its lanes are built as follows:
 
 - **Source:** one lane per accepted document. A document that already carries a
@@ -152,9 +202,12 @@ Its lanes are built as follows:
 - **Expert:** one lane per batch identity.
 - **Mutation:** one lane per lineage.
 
-Each of these lanes reports its individual recipes as a lower bound, plus a rule
-stating that more capacity needs explicit authority. Synthetic generators are
-rule-governed. The assessment reads lane supply.
+Historical recipe inventory is reported separately from additional authorable
+capacity. Engine, expert, and mutation recipe counts are inventory counts; their
+additional capacity remains governed-unresolved until separately authorized.
+Source availability counts eligible document lanes. Synthetic generators are
+rule-governed. The supply assessment reports these semantics only and derives
+no structural pool floor or backfill request.
 
 Historical v1.2 inventories remain readable, and their digests are byte-identical
 to the `c689d5d` implementation; that digest is pinned in a test.
@@ -167,19 +220,34 @@ SUPPLY_INVENTORY_DIGEST=sha256:e21545a8a06baaab67f436716a4e448abb575eedca78c9504
 PLANNED_ORIGIN_COUNTS=NONE
 PLANNED_MUTATION_LINEAGES=0
 SOURCE_LANES=55 AVAILABLE / 49 EXHAUSTED
-ENGINE_LANES=23 (31 individual recipes)
-EXPERT_LANES=146 (240 individual recipes)
-MUTATION_LANES=37 (111 individual child recipes)
+ENGINE_LANES=23
+ENGINE_EXISTING_AUTHORIZED_RECIPE_COUNT=31
+ENGINE_ADDITIONAL_AUTHORABLE_CAPACITY=GOVERNED_UNRESOLVED
+EXPERT_LANES=146
+EXPERT_EXISTING_AUTHORIZED_RECIPE_COUNT=240
+EXPERT_ADDITIONAL_AUTHORABLE_CAPACITY=GOVERNED_UNRESOLVED
+MUTATION_LANES=37
+MUTATION_EXISTING_AUTHORIZED_RECIPE_COUNT=111
+MUTATION_ADDITIONAL_AUTHORABLE_CAPACITY=GOVERNED_UNRESOLVED
 SYNTHETIC_LANES=3 RULE_GOVERNED
+EXISTING_RECIPE_COUNT_IS_NOT_POOL_TARGET=YES
+EXISTING_RECIPE_COUNT_IS_NOT_CAPACITY_CAP=YES
+FINAL_SELECTION_BOUND=434 (FINAL_SELECTION_ONLY)
+STRUCTURAL_POOL_FLOOR=NOT_DERIVED
+STRUCTURAL_BACKFILL_REQUESTS=NONE
 ASSESSMENT=METADATA_REQUIRED
-STRUCTURAL_BACKFILL_REQUESTS=0
-NECESSARY_POOL_FLOOR=435
-DERIVED_POOL_N=NOT_CLAIMED
+POOL_N=NOT_DERIVED
 ```
 
-The RES-383 receipt's "one source plus one synthetic backfill" was an artifact
-of fixed planned geometry. Under a variable pool, that capacity is now ordinary
-authoring supply.
+The historical RES-383 v1.2 receipt is preserved unchanged. Its `>=436` floor
+and mandatory one-source-plus-one-synthetic request were derived by applying
+the final-selection origin bounds and one-removal tolerance to the old
+434-slot planned origin vector. That calculation treated existing historical
+planned-slot geometry as current variable-pool authority. In v1.3, recipes are
+individual authoring inputs, while final-selection bounds apply only to the
+eventual final selection; inventory counts do not encode a collective pool
+topology. Therefore both v1.2 conclusions are superseded, and v1.2 inventory
+cannot be assessed as current execution authority.
 
 ## Individual-recipe reuse evidence
 
@@ -203,8 +271,13 @@ unreachable from the modern path:
 - the RES-222/224 exact-feasibility oracle;
 - v1.2 supply semantics.
 
-`selection_pool.plan_variable_pool` is RES-383 authority and is unchanged apart
-from the parent-provenance fix.
+`selection_pool.plan_variable_pool` now solves the base first. `INFEASIBLE`
+returns a typed base deficit and stops with no removal sweep, candidate repair
+trial, or backfill request. `UNKNOWN` also stops fail-closed. Only a `FEASIBLE`
+base proceeds to single-removal qualification. The solver supplies no IIS, so
+the typed diagnosis binds pool, problem, and constraint digests and reports no
+constraint IDs as causal findings. Existing recipe counts are not used as
+additional-capacity ceilings.
 
 ## Not carried forward from RES-397
 
@@ -229,21 +302,37 @@ New or extended tests:
 - `test_variable_pool_materialization.py`: per-recipe equivalence, subset plans,
   fail-closed lanes, and runtime non-reachability;
 - `test_variable_pool_reachability.py`: static proof;
-- `test_res383_pool_plan.py`: v1.3 supply, the pinned v1.2 digest, and the
-  parent-provenance regression, which fails without the fix;
+- `test_res383_pool_plan.py`: v1.3 supply semantics, v1.2 historical-only
+  assessment, base feasibility hard stops, and parent-provenance regression;
 - `test_res369_selection.py`: shingle projection and tamper rejection;
 - `test_res115_production.py`: the variable pool gate.
 
-## Next phase
+## Proposed Linear governance (documentation only)
 
-The next phase is variable pre-review pool construction. It starts from v1.3
-supply and authors a `VariablePoolAuthoringPlanV1` with no fixed N, then:
+Proposed disposition: RES-126 = `CANCEL_SUPERSEDED`. Preserve RES-126
+historically with a supersession note: its operative scope was fixed-434
+materialization. The new PSE execution hierarchy starts at RES-115 under a new
+umbrella whose title does not inherit fixed-434 semantics. No Linear issues
+were changed for this receipt.
 
-1. materializes the pool;
-2. qualifies the base and every single removal with the pool-feasibility profile;
-3. qualifies the independent CRITICAL reserve;
-4. confirms canonical selection under the production solver profile;
-5. hands the pool to human review.
+```text
+RES-115
+└── Post-Audit PSE V1 Execution & Freeze
+    ├── A0 Post-audit execution baseline integration
+    ├── A1 Variable pre-review pool construction
+    ├── A2 Candidate-level pool qualification
+    ├── A2b Conditional governed backfill
+    ├── A3 Human-review trust boundary
+    ├── A4 Human review
+    ├── A5 Final approved-pool selection
+    ├── A6 Protected-store provisioning
+    └── A7 Final contamination adjudication & freeze
+        └── Integrate completed PSE V1 into the main/default release line
+```
 
-Backfill only follows an observed deficit, using governed lanes and an exact
-witness. Topology repair is not a default phase. PSE V1 is not complete.
+A2b is created or activated only when A2 emits an actual typed deficit with
+feasibility evidence. It is conditional, not a default phase. A2 stops without
+removal checks or backfill when base feasibility is `INFEASIBLE` or `UNKNOWN`.
+
+PSE V1 is not complete. No human review, protected membership, or freeze has
+occurred.

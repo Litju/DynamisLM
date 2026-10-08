@@ -1,0 +1,64 @@
+from __future__ import annotations
+
+from pathlib import Path
+
+RECEIPT = (
+    Path(__file__).resolve().parents[1]
+    / "docs/qualification/PSE-POST-AUDIT-EXECUTION-BASELINE-RECEIPT.md"
+)
+
+
+def _fields() -> dict[str, str]:
+    lines = RECEIPT.read_text(encoding="utf-8").splitlines()
+    start = lines.index("```text") + 1
+    stop = lines.index("```", start)
+    return dict(line.split("=", 1) for line in lines[start:stop] if "=" in line)
+
+
+def test_receipt_seals_superseded_res383_conclusions_and_execution_authority() -> None:
+    fields = _fields()
+    assert fields["REQUIRED_ENTRY_HEAD"] == "b13932c23d8d5c2071dcdbb3260083650fd0002a"
+    assert fields["RECOVERY_ANCHOR"] == "c689d5d057da0d5281d718cb25a7b33d26d2530b"
+    assert fields["ACTIVE_SUPPLY_SCHEMA"] == "PSE-V1-AUTHORITY-SUPPLY-INVENTORY@1.3.0"
+    assert fields["HISTORICAL_RECIPE_INVENTORY"] == "INVENTORY_ONLY"
+    assert fields["EXISTING_AUTHORIZED_RECIPE_COUNT"] == "INVENTORY_ONLY"
+    assert fields["ADDITIONAL_AUTHORABLE_CAPACITY"] == "SEPARATE_TYPED_VALUE"
+    assert fields["CAPACITY_STATUS"] == "PER_LANE_TYPED"
+    assert fields["FINAL_SELECTION_BOUND"] == "434_FINAL_SELECTION_ONLY"
+    assert fields["RES383_V1_2_INVENTORY"] == "HISTORICAL_PRESERVED"
+    assert fields["RES383_V1_2_POOL_FLOOR_436"] == "SUPERSEDED"
+    assert fields["RES383_V1_2_SOURCE_PLUS_SYNTHETIC_BACKFILL"] == "SUPERSEDED"
+    assert fields["STRUCTURAL_POOL_FLOOR"] == "NOT_DERIVED"
+    assert fields["STRUCTURAL_BACKFILL_REQUESTS"] == "NONE"
+    assert fields["POOL_N"] == "NOT_DERIVED"
+    assert fields["EXISTING_RECIPE_COUNT_IS_NOT_POOL_TARGET"] == "YES"
+    assert fields["EXISTING_RECIPE_COUNT_IS_NOT_CAPACITY_CAP"] == "YES"
+    assert fields["FINAL_SELECTION_BOUNDS_APPLY_ONLY_TO_FINAL_SELECTION"] == "YES"
+
+
+def test_receipt_forbids_unresolved_base_sweeps_and_unconditional_backfill() -> None:
+    fields = _fields()
+    assert fields["BASE_INFEASIBLE_REMOVAL_SWEEP"] == "FORBIDDEN"
+    assert fields["BASE_UNKNOWN_REMOVAL_SWEEP"] == "FORBIDDEN"
+    assert fields["BACKFILL_WITHOUT_TYPED_DEFICIT"] == "FORBIDDEN"
+    assert fields["BACKFILL_WITHOUT_FEASIBILITY_EVIDENCE"] == "FORBIDDEN"
+
+
+def test_receipt_records_document_only_roadmap_and_no_finalization() -> None:
+    fields = _fields()
+    assert fields["RES126_EXECUTION_SCOPE"] == "SUPERSEDED"
+    assert fields["PROPOSED_NEW_LINEAR_ROOT"] == "RES-115"
+    assert fields["HUMAN_REVIEW_RUN"] == "NO"
+    assert fields["PROTECTED_MEMBERSHIP_PERSISTED"] == "NO"
+    assert fields["BENCHMARK_FROZEN"] == "NO"
+    assert fields["BASELINE_READY_FOR_PR"] == "YES"
+    assert fields["SOLVER_RUNS"] == "UNIT_TEST_FIXTURES_ONLY"
+    assert fields["PRODUCTION_POOL_MATERIALIZATION"] == "NOT_RUN"
+    assert fields["PRODUCTION_POOL_QUALIFICATION"] == "NOT_RUN"
+    assert fields["PRODUCTION_ALL_REMOVAL_QUALIFICATION"] == "NOT_RUN"
+    assert fields["FULL_CI"] == "PASS (./scripts/ci.sh; 1232 passed in 1296.35s)"
+    assert fields["QA_TRACKED_MUTATION"] == "NONE"
+    text = RECEIPT.read_text(encoding="utf-8")
+    assert "RES-126 = `CANCEL_SUPERSEDED`" in text
+    assert "A2b is created or activated only when A2 emits an actual typed deficit" in text
+    assert "Integrate completed PSE V1 into the main/default release line" in text
