@@ -337,7 +337,10 @@ class PoolReserveReceiptV1:
         ):
             raise ValueError("pool removal outcome counts do not equal checked cases")
         if self.baseline_feasibility_status is not FeasibilityStatus.FEASIBLE and (
-            self.checked_removal_count or self.backfill_candidate_count or self.backfill_requests
+            self.checked_removal_count
+            or self.backfill_candidate_count
+            or self.unresolved_backfill_needs
+            or self.backfill_requests
         ):
             raise ValueError("non-feasible base cannot enter removal qualification or backfill")
         if self.unknown_removal_count and (self.backfill_candidate_count or self.backfill_requests):

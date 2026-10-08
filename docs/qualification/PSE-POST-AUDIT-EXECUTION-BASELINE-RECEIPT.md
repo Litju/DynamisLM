@@ -11,7 +11,7 @@ PRIOR_IMPLEMENTATION_HEAD=1584353825a4888d2ab0fb8b395b7e141feb10d9
 SUPPLY_AND_QUALIFICATION_COMMIT=7d09956
 ROADMAP_COMMIT=bc28306
 HARDENING_RECEIPT_COMMIT=THIS_COMMIT
-REMOTE_PUSH=NO
+REMOTE_PUSH_AT_BASELINE_SEAL=NO
 INVALID_LOCAL_RES397_HEAD=e2d7f9bd616cb7f01e9c834ff8442e2cb8cb9288 (preserved unmodified as forensic evidence)
 
 POST_AUDIT_AUTHORITY=RES258/369/373/381/383
@@ -205,9 +205,9 @@ Its lanes are built as follows:
 Historical recipe inventory is reported separately from additional authorable
 capacity. Engine, expert, and mutation recipe counts are inventory counts; their
 additional capacity remains governed-unresolved until separately authorized.
-Source availability counts eligible document lanes. Synthetic generators are
-rule-governed. The supply assessment reports these semantics only and derives
-no structural pool floor or backfill request.
+Source lanes with an existing recipe do not count as additional authorable lanes.
+Synthetic generators are rule-governed. The supply assessment reports these
+semantics only and derives no structural pool floor or backfill request.
 
 Historical v1.2 inventories remain readable, and their digests are byte-identical
 to the `c689d5d` implementation; that digest is pinned in a test.
@@ -216,10 +216,12 @@ The live builder was then run read-only against the external store:
 
 ```text
 SUPPLY_SCHEMA=PSE-V1-AUTHORITY-SUPPLY-INVENTORY@1.3.0
-SUPPLY_INVENTORY_DIGEST=sha256:e21545a8a06baaab67f436716a4e448abb575eedca78c9504e29251dfb43f389
+SUPPLY_INVENTORY_DIGEST=sha256:4b7ee2d0f9b3f1b56a638b0b27aa01a5ba153e226f34c37bb995dd113292c616
 PLANNED_ORIGIN_COUNTS=NONE
 PLANNED_MUTATION_LINEAGES=0
-SOURCE_LANES=55 AVAILABLE / 49 EXHAUSTED
+SOURCE_EXISTING_RECIPE_LANES=40
+SOURCE_ADDITIONAL_AUTHORABLE_LANES=15
+SOURCE_EXHAUSTED_LANES=49
 ENGINE_LANES=23
 ENGINE_EXISTING_AUTHORIZED_RECIPE_COUNT=31
 ENGINE_ADDITIONAL_AUTHORABLE_CAPACITY=GOVERNED_UNRESOLVED

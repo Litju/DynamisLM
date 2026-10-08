@@ -42,6 +42,7 @@ class AuthoritySupplyKind(enum.StrEnum):
 
 class LaneCapacityStatus(enum.StrEnum):
     AVAILABLE = "AVAILABLE"
+    EXISTING_RECIPE_INVENTORY = "EXISTING_RECIPE_INVENTORY"
     RULE_GOVERNED = "RULE_GOVERNED"
     METADATA_REQUIRED = "METADATA_REQUIRED"
     EXHAUSTED = "EXHAUSTED"
@@ -326,7 +327,10 @@ class ReserveCandidateLaneV1:
             raise ValueError("reserve lane has a malformed authority digest")
         if self.existing_planned_capacity < 0:
             raise ValueError("reserve lane planned capacity must be non-negative")
-        if self.capacity_status is LaneCapacityStatus.AVAILABLE:
+        if self.capacity_status in {
+            LaneCapacityStatus.AVAILABLE,
+            LaneCapacityStatus.EXISTING_RECIPE_INVENTORY,
+        }:
             if self.available_capacity is None or self.available_capacity < 1:
                 raise ValueError("available lane requires positive quantified capacity")
         elif self.capacity_status is LaneCapacityStatus.EXHAUSTED:
@@ -373,22 +377,11 @@ class ReserveCandidateLaneV1:
     def supply_semantics(self) -> SupplyLaneSemanticsV1:
         """Interpret inventory counts separately from additional authorable capacity."""
 
-        if self.capacity_unit.startswith("individually authorized "):
+        if self.capacity_status is LaneCapacityStatus.EXISTING_RECIPE_INVENTORY:
             return SupplyLaneSemanticsV1(
                 self.lane_id,
                 self.origin_class,
                 self.available_capacity,
-                None,
-                AdditionalCapacityStatus.GOVERNED_UNRESOLVED,
-            )
-        if (
-            self.origin_class is CaseOrigin.SOURCE_BACKED_EVIDENCE_EXTRACTION
-            and "carrying one individually authorized recipe" in self.authority_ref
-        ):
-            return SupplyLaneSemanticsV1(
-                self.lane_id,
-                self.origin_class,
-                1,
                 None,
                 AdditionalCapacityStatus.GOVERNED_UNRESOLVED,
             )
@@ -467,6 +460,11 @@ class AuthoritySupplyInventoryV1:
             or any(lane.existing_planned_capacity for lane in self.reserve_candidate_lanes)
         ):
             raise ValueError("v1.3 authority supply cannot encode planned slot or lineage geometry")
+        if self.schema_version == AUTHORITY_SUPPLY_SCHEMA_V1_2 and any(
+            lane.capacity_status is LaneCapacityStatus.EXISTING_RECIPE_INVENTORY
+            for lane in self.reserve_candidate_lanes
+        ):
+            raise ValueError("v1.2 authority supply cannot use v1.3 recipe semantics")
         atom_ids = tuple(item.atom_id for item in self.atoms)
         lane_ids = tuple(item.lane_id for item in self.reserve_candidate_lanes)
         if atom_ids != tuple(sorted(set(atom_ids), key=str.encode)):
@@ -839,9 +837,13 @@ def build_live_authority_supply_inventory(
                 existing_planned_capacity=0,
                 available_capacity=1 if supported_cells else 0,
                 capacity_status=(
-                    LaneCapacityStatus.AVAILABLE
-                    if supported_cells
-                    else LaneCapacityStatus.EXHAUSTED
+                    LaneCapacityStatus.EXISTING_RECIPE_INVENTORY
+                    if recipe_cell
+                    else (
+                        LaneCapacityStatus.AVAILABLE
+                        if supported_cells
+                        else LaneCapacityStatus.EXHAUSTED
+                    )
                 ),
                 supported_cells=supported_cells,
                 isolation_identity_digests=tuple(
@@ -933,7 +935,7 @@ def build_live_authority_supply_inventory(
                 capacity_unit="individually authorized RES-71 engine recipe",
                 existing_planned_capacity=0,
                 available_capacity=len(recipe_ids),
-                capacity_status=LaneCapacityStatus.AVAILABLE,
+                capacity_status=LaneCapacityStatus.EXISTING_RECIPE_INVENTORY,
                 capacity_rule=(
                     "lower bound: existing individual recipes; further engine recipes need "
                     "explicit RES-71 authoring authority"
@@ -970,7 +972,7 @@ def build_live_authority_supply_inventory(
                 capacity_unit="individually authorized expert-semantic recipe",
                 existing_planned_capacity=0,
                 available_capacity=len(cells),
-                capacity_status=LaneCapacityStatus.AVAILABLE,
+                capacity_status=LaneCapacityStatus.EXISTING_RECIPE_INVENTORY,
                 capacity_rule=(
                     "lower bound: existing individual recipes; further expert recipes need "
                     "explicit expert authoring authority"
@@ -1018,7 +1020,7 @@ def build_live_authority_supply_inventory(
                 capacity_unit="individually authorized mutation child recipe",
                 existing_planned_capacity=0,
                 available_capacity=len(children),
-                capacity_status=LaneCapacityStatus.AVAILABLE,
+                capacity_status=LaneCapacityStatus.EXISTING_RECIPE_INVENTORY,
                 capacity_rule=(
                     "lower bound: existing individual child recipes; further children need "
                     "candidate-level parent and cell metadata"

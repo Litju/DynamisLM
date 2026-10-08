@@ -43,6 +43,7 @@ from dynamislm.benchmark.selection_contracts import (
 )
 from dynamislm.benchmark.selection_pool import (
     MaterializedBackfillCandidateV1,
+    PoolBackfillNeedV1,
     PoolPlanStatus,
     assess_authority_supply_inventory,
     derive_pool_backfill_needs,
@@ -1232,20 +1233,26 @@ def test_v13_recipe_inventory_is_not_a_pool_target_or_capacity_ceiling() -> None
         _lane(
             "source-existing-recipe",
             origin=CaseOrigin.SOURCE_BACKED_EVIDENCE_EXTRACTION,
-            authority_ref="Phase-A accepted document carrying one individually authorized recipe",
+            status=LaneCapacityStatus.EXISTING_RECIPE_INVENTORY,
+            capacity_unit="additional authorable source slot",
+            authority_ref="additional authorable source lane",
         ),
         _lane(
             "engine-c16",
             origin=CaseOrigin.DETERMINISTIC_ENGINE_DERIVED,
             capacity=31,
-            capacity_unit="individually authorized RES-71 engine recipe",
+            status=LaneCapacityStatus.EXISTING_RECIPE_INVENTORY,
+            capacity_unit="additional authorable engine slot",
+            authority_ref="additional authorable engine lane",
             supported_cells=(("C16", "F05"),),
         ),
         _lane(
             "expert-batch",
             origin=CaseOrigin.EXPERT_AUTHORED_SEMANTIC,
             capacity=240,
-            capacity_unit="individually authorized expert-semantic recipe",
+            status=LaneCapacityStatus.EXISTING_RECIPE_INVENTORY,
+            capacity_unit="additional authorable expert slot",
+            authority_ref="additional authorable expert lane",
         ),
         _lane(
             "synthetic-rule",
@@ -1259,7 +1266,9 @@ def test_v13_recipe_inventory_is_not_a_pool_target_or_capacity_ceiling() -> None
                 f"mutation-{index:02d}",
                 origin=CaseOrigin.ADVERSARIAL_MUTATION,
                 capacity=91 if index == 0 else 1,
-                capacity_unit="individually authorized mutation child recipe",
+                status=LaneCapacityStatus.EXISTING_RECIPE_INVENTORY,
+                capacity_unit="additional authorable mutation slot",
+                authority_ref="additional authorable mutation lane",
             )
             for index in range(21)
         ),
@@ -1273,9 +1282,18 @@ def test_v13_recipe_inventory_is_not_a_pool_target_or_capacity_ceiling() -> None
     expert = next(item for item in lanes if item.lane_id == "expert-batch")
     mutation = next(item for item in lanes if item.lane_id == "mutation-00")
     source_recipe = next(item for item in lanes if item.lane_id == "source-existing-recipe")
+    source_additional_lanes = tuple(
+        item
+        for item in lanes
+        if item.origin_class is CaseOrigin.SOURCE_BACKED_EVIDENCE_EXTRACTION
+        and item.capacity_status is LaneCapacityStatus.AVAILABLE
+    )
     assert counts[CaseOrigin.DETERMINISTIC_ENGINE_DERIVED] == 31
     assert counts[CaseOrigin.EXPERT_AUTHORED_SEMANTIC] == 240
     assert counts[CaseOrigin.ADVERSARIAL_MUTATION] == 111
+    assert counts[CaseOrigin.SOURCE_BACKED_EVIDENCE_EXTRACTION] == 1
+    assert len(source_additional_lanes) == 41
+    assert all(item.additional_authorable_capacity == 1 for item in source_additional_lanes)
     assert additional[CaseOrigin.DETERMINISTIC_ENGINE_DERIVED] is None
     assert additional[CaseOrigin.EXPERT_AUTHORED_SEMANTIC] is None
     assert additional[CaseOrigin.ADVERSARIAL_MUTATION] is None
@@ -1295,6 +1313,27 @@ def test_v13_recipe_inventory_is_not_a_pool_target_or_capacity_ceiling() -> None
     assert assessment.structural_backfill_requests == ()
     assert assessment.pool_n is None
     assert assessment.active_supply_schema == AUTHORITY_SUPPLY_SCHEMA
+
+
+def test_nonfeasible_receipt_rejects_unresolved_backfill_needs_but_allows_deficits() -> None:
+    receipt = plan_variable_pool(
+        (
+            _candidate("eligible"),
+            _candidate("rejected", review=ReviewEligibility.REJECTED),
+        )
+    ).receipt
+    assert receipt.baseline_feasibility_status is FeasibilityStatus.INFEASIBLE
+    assert receipt.reserve_deficits
+    need = PoolBackfillNeedV1(
+        constraint_id="RES383:ADVERSARIAL_NEED",
+        constraint_kind=ConstraintKind.ORIGIN_BOUNDS,
+        present_candidate_count=0,
+        required_candidate_count=1,
+        missing_candidate_count=1,
+        origin_class=CaseOrigin.SOURCE_BACKED_EVIDENCE_EXTRACTION,
+    )
+    with pytest.raises(ValueError, match="non-feasible base cannot enter removal qualification"):
+        replace(receipt, unresolved_backfill_needs=(need,))
 
 
 def test_historical_v12_inventory_digest_is_unchanged_by_v13() -> None:
@@ -1325,6 +1364,18 @@ def test_historical_v12_inventory_digest_is_unchanged_by_v13() -> None:
     assert inventory.inventory_digest == (
         "sha256:6c811ff6cf4806d00c3ac8c80a788b8cc6fc86a37480087e964a6a94eec9b2a3"
     )
+    with pytest.raises(ValueError, match="v1.2 authority supply cannot use v1.3 recipe semantics"):
+        replace(
+            inventory,
+            reserve_candidate_lanes=(
+                replace(
+                    lane,
+                    capacity_status=LaneCapacityStatus.EXISTING_RECIPE_INVENTORY,
+                    lane_digest="",
+                ),
+            ),
+            inventory_digest="",
+        )
 
 
 def test_inventory_digest_is_canonical_and_rejects_tampering() -> None:

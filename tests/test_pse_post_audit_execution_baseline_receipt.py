@@ -10,9 +10,17 @@ RECEIPT = (
 
 def _fields() -> dict[str, str]:
     lines = RECEIPT.read_text(encoding="utf-8").splitlines()
-    start = lines.index("```text") + 1
-    stop = lines.index("```", start)
-    return dict(line.split("=", 1) for line in lines[start:stop] if "=" in line)
+    fields: dict[str, str] = {}
+    in_text_block = False
+    for line in lines:
+        if line == "```text":
+            in_text_block = True
+        elif line == "```" and in_text_block:
+            in_text_block = False
+        elif in_text_block and "=" in line:
+            name, value = line.split("=", 1)
+            fields.setdefault(name, value)
+    return fields
 
 
 def test_receipt_seals_superseded_res383_conclusions_and_execution_authority() -> None:
@@ -34,6 +42,12 @@ def test_receipt_seals_superseded_res383_conclusions_and_execution_authority() -
     assert fields["EXISTING_RECIPE_COUNT_IS_NOT_POOL_TARGET"] == "YES"
     assert fields["EXISTING_RECIPE_COUNT_IS_NOT_CAPACITY_CAP"] == "YES"
     assert fields["FINAL_SELECTION_BOUNDS_APPLY_ONLY_TO_FINAL_SELECTION"] == "YES"
+    assert fields["SOURCE_EXISTING_RECIPE_LANES"] == "40"
+    assert fields["SOURCE_ADDITIONAL_AUTHORABLE_LANES"] == "15"
+    assert fields["SOURCE_EXHAUSTED_LANES"] == "49"
+    assert "SOURCE_LANES" not in fields
+    assert fields["REMOTE_PUSH_AT_BASELINE_SEAL"] == "NO"
+    assert "REMOTE_PUSH" not in fields
 
 
 def test_receipt_forbids_unresolved_base_sweeps_and_unconditional_backfill() -> None:
