@@ -70,7 +70,9 @@ def test_receipt_records_document_only_roadmap_and_no_finalization() -> None:
     assert fields["PRODUCTION_POOL_MATERIALIZATION"] == "NOT_RUN"
     assert fields["PRODUCTION_POOL_QUALIFICATION"] == "NOT_RUN"
     assert fields["PRODUCTION_ALL_REMOVAL_QUALIFICATION"] == "NOT_RUN"
-    assert fields["FULL_CI"] == "PASS (./scripts/ci.sh; 1232 passed in 1296.35s)"
+    assert fields["FULL_CI"] == "PASS (./scripts/ci.sh; 1233 passed in 1135.43s)"
+    assert fields["PYTEST"] == "PASS (1233 passed)"
+    assert fields["TEST_COUNT"] == "1233"
     assert fields["QA_TRACKED_MUTATION"] == "NONE"
     text = RECEIPT.read_text(encoding="utf-8")
     assert "RES-126 = `CANCEL_SUPERSEDED`" in text
