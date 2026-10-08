@@ -15,6 +15,7 @@ from dynamislm.benchmark.authority_supply import (
     ReserveCandidateLaneV1,
     ReserveDeficitKind,
     ReserveDeficitV1,
+    require_current_execution_supply_inventory,
 )
 from dynamislm.benchmark.constants import CaseOrigin, SplitName
 from dynamislm.benchmark.selection_constraints import (
@@ -877,6 +878,8 @@ def plan_variable_pool(
 
     if not initial_candidates:
         raise ValueError("pool planning requires existing candidate metadata")
+    if supply_inventory is not None:
+        require_current_execution_supply_inventory(supply_inventory)
     solver_config = _pool_solver_config(solver_config)
     initial = tuple(sorted(initial_candidates, key=lambda item: item.candidate_id.encode()))
     if len({item.candidate_id for item in initial}) != len(initial):

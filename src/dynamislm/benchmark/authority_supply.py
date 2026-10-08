@@ -27,6 +27,7 @@ AUTHORITY_SUPPLY_SCHEMA = "PSE-V1-AUTHORITY-SUPPLY-INVENTORY@1.3.0"
 AUTHORITY_SUPPLY_SCHEMA_V1_2 = "PSE-V1-AUTHORITY-SUPPLY-INVENTORY@1.2.0"
 AUTHORITY_SUPPLY_INVENTORY_PATH = "qualification/RES-383/authority-supply-inventory.v1.3.json"
 AUTHORITY_SUPPLY_INVENTORY_PATH_V1_2 = "qualification/RES-383/authority-supply-inventory.v1.2.json"
+HISTORICAL_RECIPE_INPUT_BINDING = "HISTORICAL_RECIPE_INPUT_CONTENT"
 
 
 class AuthoritySupplyKind(enum.StrEnum):
@@ -515,6 +516,9 @@ class AuthoritySupplyInventoryV1:
 
         return self.schema_version == AUTHORITY_SUPPLY_SCHEMA_V1_2
 
+    def evidence_binding(self, name: str) -> str | None:
+        return dict(self.evidence_bindings).get(name)
+
     def semantics(self) -> AuthoritySupplySemanticsV1:
         if self.encodes_planned_geometry:
             raise ValueError(
@@ -563,6 +567,22 @@ class AuthoritySupplyInventoryV1:
                 sorted(status_by_origin, key=lambda item: item[0].value.encode())
             ),
         )
+
+
+def require_current_execution_supply_inventory(
+    inventory: AuthoritySupplyInventoryV1,
+) -> AuthoritySupplyInventoryV1:
+    """Fail closed unless the inventory may authorize live authoring or pool planning.
+
+    Historical v1.2 inventories encode fixed authoring-slot geometry; they stay decodable
+    as RES-383 evidence but never authorize materialization, planning, or backfill.
+    """
+
+    if inventory.schema_version != AUTHORITY_SUPPLY_SCHEMA or inventory.encodes_planned_geometry:
+        raise ValueError(
+            "historical v1.2 authority supply is decode-only evidence, not execution authority"
+        )
+    return inventory
 
 
 def _opaque_id(kind: str, value: str) -> str:
@@ -1062,7 +1082,7 @@ def build_live_authority_supply_inventory(
     )
 
     bindings = {
-        "HISTORICAL_RECIPE_INPUT_CONTENT": inputs.input_digest,
+        HISTORICAL_RECIPE_INPUT_BINDING: inputs.input_digest,
         "HISTORICAL_RECIPE_INPUT_FILE": input_file_digest,
         "PHASE_A_ACCEPTED_SOURCE_MANIFEST": accepted_manifest_digest,
         "PHASE_A_SOURCE_FAMILY_MANIFEST": family_manifest_digest,
@@ -1119,6 +1139,7 @@ __all__ = [
     "AUTHORITY_SUPPLY_INVENTORY_PATH_V1_2",
     "AUTHORITY_SUPPLY_SCHEMA",
     "AUTHORITY_SUPPLY_SCHEMA_V1_2",
+    "HISTORICAL_RECIPE_INPUT_BINDING",
     "AdditionalCapacityStatus",
     "AuthoritySupplyAssessmentV1",
     "AuthoritySupplyAtomV1",
@@ -1134,5 +1155,6 @@ __all__ = [
     "SupplyAssessmentStatus",
     "SupplyLaneSemanticsV1",
     "build_live_authority_supply_inventory",
+    "require_current_execution_supply_inventory",
     "write_live_authority_supply_inventory",
 ]

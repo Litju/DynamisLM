@@ -22,8 +22,15 @@ import re
 from collections import Counter
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import TYPE_CHECKING
 
+from dynamislm.benchmark.authoring import production_seed_namespace
+from dynamislm.benchmark.authority_supply import (
+    HISTORICAL_RECIPE_INPUT_BINDING,
+    AuthoritySupplyInventoryV1,
+    ReserveCandidateLaneV1,
+    _opaque_id,
+    require_current_execution_supply_inventory,
+)
 from dynamislm.benchmark.constants import CaseOrigin, SplitName
 from dynamislm.benchmark.coverage import COVERAGE_MATRIX
 from dynamislm.benchmark.pre_review import CandidateReviewPacket, CandidateReviewStatus
@@ -62,9 +69,6 @@ from dynamislm.benchmark.selection_contracts import FinalSelectionCandidate
 from dynamislm.benchmark.source_artifacts import SourceArtifactResolver
 from dynamislm.qualification.res115_authoring import SourceCellSelectionV1
 from dynamislm.serialization import canonical_hash, register_serializable_type
-
-if TYPE_CHECKING:
-    from dynamislm.benchmark.authority_supply import AuthoritySupplyInventoryV1
 
 _SHA256 = re.compile(r"^sha256:[0-9a-f]{64}$")
 CANDIDATE_RECIPE_SCHEMA = "PSE-V1-CANDIDATE-RECIPE@1.0.0"
@@ -531,11 +535,150 @@ def production_source_selection_universe(
     return tuple(selections[item] for item in sorted(selections, key=str.encode))
 
 
+def _validate_historical_recipes(
+    recipes: tuple[ProductionCandidateRecipeV1, ...],
+    supply_inventory: AuthoritySupplyInventoryV1,
+    historical_inputs: ProductionAuthoringInputsV1 | None,
+) -> None:
+    """Prove each historical recipe is the exact recipe decomposed from bound inputs.
+
+    Subsets are allowed; only individual recipe identity is proven. The historical
+    collective topology is never compared or required.
+    """
+
+    historical = tuple(
+        item
+        for item in recipes
+        if item.authority_basis is RecipeAuthorityBasis.HISTORICAL_INDIVIDUAL_RECIPE
+    )
+    if not historical:
+        return
+    if historical_inputs is None:
+        raise ValueError("historical recipes require their exact historical authoring input")
+    bound = supply_inventory.evidence_binding(HISTORICAL_RECIPE_INPUT_BINDING)
+    if bound is None or bound != historical_inputs.input_digest:
+        raise ValueError("historical authoring input is not the one bound by the supply inventory")
+    canonical = {
+        item.candidate_id: item
+        for item in historical_recipes_from_authoring_inputs(historical_inputs)
+    }
+    for recipe in historical:
+        expected = canonical.get(recipe.candidate_id)
+        if expected is None or expected != recipe or expected.recipe_digest != recipe.recipe_digest:
+            raise ValueError("historical recipe differs from its canonical historical recipe")
+
+
+def _mutation_root_parent(
+    recipe: ProductionCandidateRecipeV1,
+    by_id: dict[str, ProductionCandidateRecipeV1],
+) -> str:
+    current = recipe
+    while current.mutation_stage != 1:
+        parent = by_id[current.mutation_parent_candidate_id or ""]
+        if (
+            parent.origin_class is not CaseOrigin.ADVERSARIAL_MUTATION
+            or parent.mutation_lineage_id != recipe.mutation_lineage_id
+            or parent.mutation_stage != (current.mutation_stage or 0) - 1
+        ):
+            raise ValueError("mutation recipe stage does not follow its lineage chain")
+        current = parent
+    return current.mutation_parent_candidate_id or ""
+
+
+def _lane_identity_matches(
+    recipe: ProductionCandidateRecipeV1,
+    lane: ReserveCandidateLaneV1,
+    by_id: dict[str, ProductionCandidateRecipeV1],
+) -> bool:
+    """Bind the recipe payload to the exact origin-specific authority its lane represents."""
+
+    identities = set(lane.isolation_identity_digests)
+    if recipe.origin_class is CaseOrigin.SOURCE_BACKED_EVIDENCE_EXTRACTION:
+        record = recipe.source_record
+        assert record is not None
+        return (
+            lane.lane_id == _opaque_id("source", record.document_id)
+            and {
+                canonical_hash(("SOURCE_DOCUMENT", record.document_id)),
+                canonical_hash(("SOURCE_FAMILY", record.source_family_id)),
+            }
+            == identities
+        )
+    if recipe.origin_class is CaseOrigin.DETERMINISTIC_SYNTHETIC:
+        generator = next(
+            (
+                item
+                for item in PRODUCTION_SYNTHETIC_GENERATORS
+                if item.generator_family == recipe.generator_family
+            ),
+            None,
+        )
+        if generator is None or recipe.split_lock is None:
+            return False
+        # Fails closed unless the seed block forms a strict split-qualified namespace.
+        production_seed_namespace(
+            recipe.split_lock, generator.generator_id, generator.version, recipe.seed_block or ""
+        )
+        return (
+            lane.lane_id == "synthetic:" + generator.generator_family
+            and lane.authority_digest == canonical_hash(generator)
+            and {
+                canonical_hash(("SYNTHETIC_GENERATOR", generator.generator_id, generator.version)),
+                canonical_hash(("GENERATOR_FAMILY", generator.generator_family)),
+                canonical_hash(("SYNTHETIC_SPLIT_LOCK", recipe.split_lock)),
+            }
+            == identities
+        )
+    if recipe.origin_class is CaseOrigin.DETERMINISTIC_ENGINE_DERIVED:
+        reference_id = production_engine_reference_case_id(
+            recipe.capability_id, recipe.benchmark_family, recipe.slot_index or 0
+        )
+        return lane.lane_id == (
+            f"engine:{recipe.capability_id}:{recipe.benchmark_family}:{reference_id}"
+        ) and identities == {canonical_hash(("RES71_ENGINE_REFERENCE_CASE", reference_id))}
+    if recipe.origin_class is CaseOrigin.EXPERT_AUTHORED_SEMANTIC:
+        batch = recipe.expert_batch
+        assert batch is not None
+        return (
+            lane.lane_id == _opaque_id("expert-batch", batch.author_batch_id)
+            and lane.authority_digest
+            == canonical_hash(
+                (
+                    "EXPERT_BATCH_IDENTITY",
+                    batch.author_batch_id,
+                    batch.protocol_template_id,
+                    batch.isolation_cluster_id,
+                )
+            )
+            and {
+                canonical_hash(("EXPERT_BATCH", batch.author_batch_id)),
+                canonical_hash(("PROTOCOL_TEMPLATE", batch.protocol_template_id)),
+                canonical_hash(("EXPERT_ISOLATION_CLUSTER", batch.isolation_cluster_id)),
+            }
+            == identities
+        )
+    lineage_id = recipe.mutation_lineage_id or ""
+    root_parent = _mutation_root_parent(recipe, by_id)
+    return (
+        lane.lane_id == _opaque_id("mutation-lineage", lineage_id)
+        and lane.authority_digest
+        == canonical_hash(
+            ("MUTATION_LINEAGE_AUTHORITY", lineage_id, root_parent, recipe.mutation_operator_id)
+        )
+        and {
+            canonical_hash(("MUTATION_PARENT", root_parent)),
+            canonical_hash(("MUTATION_LINEAGE", lineage_id)),
+        }
+        == identities
+    )
+
+
 def _governed_recipe_check(
     recipes: tuple[ProductionCandidateRecipeV1, ...],
     supply_inventory: AuthoritySupplyInventoryV1,
 ) -> None:
     lanes = {lane.lane_id: lane for lane in supply_inventory.reserve_candidate_lanes}
+    by_id = {item.candidate_id: item for item in recipes}
     uses: Counter[str] = Counter()
     for recipe in recipes:
         if recipe.authority_basis is not RecipeAuthorityBasis.GOVERNED_SUPPLY_LANE:
@@ -547,11 +690,20 @@ def _governed_recipe_check(
             or lane.origin_class is not recipe.origin_class
             or lane.authority_digest != recipe.authority_digest
             or (recipe.capability_id, recipe.benchmark_family) not in lane.supported_cells
+            or not _lane_identity_matches(recipe, lane, by_id)
         ):
             raise ValueError("governed recipe does not match an authorable supply lane")
         uses[lane.lane_id] += 1
-        if lane.available_capacity is not None and uses[lane.lane_id] > lane.available_capacity:
+        capacity = lane.additional_authorable_capacity
+        if capacity is not None and uses[lane.lane_id] > capacity:
             raise ValueError("governed recipes exceed their supply lane capacity")
+    seeds = [
+        item.seed_block
+        for item in recipes
+        if item.origin_class is CaseOrigin.DETERMINISTIC_SYNTHETIC and item.seed_block
+    ]
+    if len(seeds) != len(set(seeds)):
+        raise ValueError("synthetic recipes must use unique split-locked seed blocks")
 
 
 def _recipe_inputs(recipes: tuple[ProductionCandidateRecipeV1, ...]) -> ProductionAuthoringInputsV1:
@@ -589,20 +741,29 @@ def materialize_variable_pool(
     supply_inventory: AuthoritySupplyInventoryV1,
     exclusion: QualificationExclusionCommitmentV1,
     source_resolver: SourceArtifactResolver | None,
+    historical_inputs: ProductionAuthoringInputsV1 | None = None,
     source_selections: tuple[SourceCellSelectionV1, ...] = (),
+    external_root: Path | None = None,
 ) -> ProductionAuthoringCandidatePoolV1:
     """Author every planned recipe with the production builders and current validators.
 
     No fixed count, origin vector, lineage geometry, historical repair plan, historical
     candidate-set digest, or legacy exact-feasibility receipt participates. The returned
     pool is unqualified: reserve qualification and human review remain separate gates.
+
+    Historical recipes must equal the recipes decomposed from ``historical_inputs``, whose
+    digest the current supply inventory binds. ``source_selections`` may only reproduce
+    historical source records exactly; governed source recipes are resolved solely from
+    ``production_source_selection_universe`` under ``external_root``.
     """
 
+    require_current_execution_supply_inventory(supply_inventory)
     if (
         plan.supply_inventory_digest != supply_inventory.inventory_digest
         or plan.qualification_exclusion_digest != exclusion.commitment_digest
     ):
         raise ValueError("variable pool plan binds a different supply or exclusion authority")
+    _validate_historical_recipes(plan.recipes, supply_inventory, historical_inputs)
     _governed_recipe_check(plan.recipes, supply_inventory)
     by_origin: dict[CaseOrigin, tuple[ProductionCandidateRecipeV1, ...]] = {
         origin: tuple(item for item in plan.recipes if item.origin_class is origin)
@@ -640,13 +801,30 @@ def materialize_variable_pool(
     if source_recipes:
         if source_resolver is None:
             raise ValueError("source recipes require the canonical source artifact resolver")
-        selection_by_record = {
+        historical_by_record = {
             _source_authoring_records((selection,))[0]: selection for selection in source_selections
         }
+        governed_by_record: dict[ProductionSourceSelectionV1, SourceCellSelectionV1] = {}
+        if any(
+            item.authority_basis is RecipeAuthorityBasis.GOVERNED_SUPPLY_LANE
+            for item in source_recipes
+        ):
+            if external_root is None:
+                raise ValueError("governed source recipes require the external production root")
+            governed_by_record = {
+                _source_authoring_records((selection,))[0]: selection
+                for selection in production_source_selection_universe(
+                    exclusion, external_root=external_root
+                )
+            }
         chosen = []
         for recipe in source_recipes:
             assert recipe.source_record is not None
-            selection = selection_by_record.get(recipe.source_record)
+            selection = (
+                historical_by_record
+                if recipe.authority_basis is RecipeAuthorityBasis.HISTORICAL_INDIVIDUAL_RECIPE
+                else governed_by_record
+            ).get(recipe.source_record)
             if selection is None:
                 raise ValueError("source recipe is not an exact current source authority cell")
             chosen.append(selection)

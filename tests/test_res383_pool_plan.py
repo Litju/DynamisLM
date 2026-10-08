@@ -1563,3 +1563,24 @@ def test_source_inventory_cells_equal_production_eligible_selections(
     assert inventory_cells == {
         document_id: tuple(sorted(cells)) for document_id, cells in authoring_cells.items()
     }
+
+
+def test_historical_v12_inventory_cannot_authorize_pool_planning_or_backfill() -> None:
+    lane = _lane("source-lane")
+    inventory = _inventory((lane,), planned_counts=((CaseOrigin.EXPERT_AUTHORED_SEMANTIC, 240),))
+    assert inventory.encodes_planned_geometry
+    repair = _candidate(
+        "repair",
+        origin=CaseOrigin.SOURCE_BACKED_EVIDENCE_EXTRACTION,
+        review=ReviewEligibility.APPROVED,
+    )
+    with pytest.raises(ValueError, match="decode-only evidence"):
+        plan_variable_pool(
+            (_candidate("a"), _candidate("b")),
+            supply_inventory=inventory,
+            materialized_backfill_candidates=(
+                MaterializedBackfillCandidateV1(
+                    repair, lane.lane_id, lane.authority_ref, lane.authority_digest
+                ),
+            ),
+        )

@@ -8,6 +8,7 @@ import pytest
 from dynamislm.benchmark import production, production_authoring, res223_topology
 from dynamislm.benchmark.authority_supply import (
     AUTHORITY_SUPPLY_SCHEMA,
+    HISTORICAL_RECIPE_INPUT_BINDING,
     AuthoritySupplyInventoryV1,
 )
 from dynamislm.benchmark.constants import CaseOrigin, SplitName
@@ -130,7 +131,7 @@ def _inventory() -> AuthoritySupplyInventoryV1:
         planned_origin_counts=(),
         planned_mutation_lineage_count=0,
         materialized_candidate_count=0,
-        evidence_bindings=(),
+        evidence_bindings=((HISTORICAL_RECIPE_INPUT_BINDING, _historical_inputs().input_digest),),
         authority_inventory_complete=True,
         capacity_scope_complete=False,
     )
@@ -217,6 +218,7 @@ def test_individual_recipes_reproduce_historical_builder_packets_exactly() -> No
     pool = materialize_variable_pool(
         _plan(recipes),
         supply_inventory=_inventory(),
+        historical_inputs=_historical_inputs(),
         exclusion=_exclusion(),
         source_resolver=None,
     )
@@ -256,6 +258,7 @@ def test_any_recipe_subset_materializes_without_historical_counts_or_geometry() 
     pool = materialize_variable_pool(
         _plan(tuple(sorted(subset, key=lambda item: item.candidate_id.encode()))),
         supply_inventory=_inventory(),
+        historical_inputs=_historical_inputs(),
         exclusion=_exclusion(),
         source_resolver=None,
     )
@@ -274,6 +277,7 @@ def test_materialization_rejects_foreign_authority_and_unknown_governed_lanes() 
         materialize_variable_pool(
             _plan(recipes, inventory=other_inventory),
             supply_inventory=_inventory(),
+            historical_inputs=_historical_inputs(),
             exclusion=_exclusion(),
             source_resolver=None,
         )
@@ -289,6 +293,7 @@ def test_materialization_rejects_foreign_authority_and_unknown_governed_lanes() 
         materialize_variable_pool(
             _plan((governed,)),
             supply_inventory=_inventory(),
+            historical_inputs=_historical_inputs(),
             exclusion=_exclusion(),
             source_resolver=None,
         )
@@ -341,6 +346,7 @@ def test_modern_materialization_never_reaches_superseded_historical_gates(
     pool = materialize_variable_pool(
         _plan(historical_recipes_from_authoring_inputs(_historical_inputs())),
         supply_inventory=_inventory(),
+        historical_inputs=_historical_inputs(),
         exclusion=_exclusion(),
         source_resolver=None,
     )
