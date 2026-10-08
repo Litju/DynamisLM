@@ -9,7 +9,14 @@ from typing import Any
 
 import pytest
 
-from dynamislm.benchmark import variable_pool
+from dynamislm.benchmark import production as production_contracts
+from dynamislm.benchmark import (
+    production_authoring,
+    res223_topology,
+    selection_pool,
+    selection_solver,
+    variable_pool,
+)
 from dynamislm.benchmark.authority_supply import (
     AUTHORITY_SUPPLY_SCHEMA,
     AUTHORITY_SUPPLY_SCHEMA_V1_2,
@@ -31,10 +38,12 @@ from dynamislm.benchmark.variable_pool import (
     ProductionCandidateRecipeV1,
     RecipeAuthorityBasis,
     VariablePoolAuthoringPlanV1,
+    build_initial_variable_pool_authoring_plan,
     historical_recipes_from_authoring_inputs,
     materialize_variable_pool,
     production_engine_reference_case_id,
 )
+from dynamislm.qualification.res115_authoring import SourceCellSelectionV1
 from dynamislm.serialization import canonical_hash
 from test_variable_pool_materialization import (
     _ENGINE,
@@ -96,6 +105,28 @@ def _inventory(
         evidence_bindings=((HISTORICAL_RECIPE_INPUT_BINDING, bound.input_digest),),
         authority_inventory_complete=True,
         capacity_scope_complete=False,
+    )
+
+
+def _inventory_for_plan(
+    exclusion: Any,
+    lanes: tuple[ReserveCandidateLaneV1, ...] = (),
+    *,
+    inputs: ProductionAuthoringInputsV1 | None = None,
+) -> AuthoritySupplyInventoryV1:
+    inventory = _inventory(lanes, inputs=inputs)
+    return replace(
+        inventory,
+        evidence_bindings=tuple(
+            sorted(
+                (
+                    *inventory.evidence_bindings,
+                    ("QUALIFICATION_EXCLUSION_COMMITMENT", exclusion.commitment_digest),
+                ),
+                key=lambda item: item[0].encode(),
+            )
+        ),
+        inventory_digest="",
     )
 
 
@@ -459,6 +490,160 @@ def test_governed_source_lane_capacity_uses_additional_authorable_capacity() -> 
     )
     with pytest.raises(ValueError, match="exceed their supply lane capacity"):
         _materialize(recipes, inventory=_inventory((lane,)), source_resolver=object())
+
+
+def test_initial_variable_plan_uses_all_historical_recipes_without_solver_or_legacy_calls(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def forbidden(*_args: object, **_kwargs: object) -> object:
+        raise AssertionError("initial variable plan reached selection or legacy topology machinery")
+
+    for module, names in (
+        (selection_pool, ("plan_variable_pool",)),
+        (selection_solver, ("solve_selection_feasibility", "solve_final_selection")),
+        (
+            production_authoring,
+            (
+                "build_production_authoring_draft",
+                "_choose_supported_sources",
+                "_validate_res128_feasibility_baseline",
+                "_read_res225_materialization_plan",
+                "_apply_res225_materialization",
+                "_mutation_lineage_specs",
+                "_semantic_slot_specs",
+                "_engine_slot_specs",
+                "_synthetic_slot_specs",
+            ),
+        ),
+        (
+            res223_topology,
+            ("read_repair_plan", "apply_repair_actions", "validate_topology_only_packet_change"),
+        ),
+        (
+            production_contracts,
+            ("validate_production_exact_feasibility", "validate_production_hard_feasibility"),
+        ),
+    ):
+        for name in names:
+            if hasattr(module, name):
+                monkeypatch.setattr(module, name, forbidden)
+    monkeypatch.setattr(
+        variable_pool,
+        "production_source_selection_universe",
+        lambda *_args, **_kwargs: pytest.fail("source universe is unnecessary for these lanes"),
+    )
+
+    inputs = _historical_inputs()
+    exclusion = _exclusion()
+    inventory = _inventory_for_plan(exclusion, inputs=inputs)
+    plan = build_initial_variable_pool_authoring_plan(
+        inputs,
+        inventory,
+        exclusion,
+        external_root=Path("/unused-for-source-free-plan"),
+    )
+
+    assert plan.recipes == historical_recipes_from_authoring_inputs(inputs)
+    assert plan.supply_inventory_digest == inventory.inventory_digest
+    assert plan.qualification_exclusion_digest == exclusion.commitment_digest
+
+
+def test_initial_variable_plan_selects_current_source_cells_by_canonical_order_and_capacity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    document_id = "document:synthetic-current"
+    family_id = "family:synthetic-current"
+    lane = _source_lane(
+        document_id=document_id,
+        family_id=family_id,
+        capacity=1,
+        cells=(("C01", "F01"), ("C01", "F03")),
+    )
+    selections = (
+        SourceCellSelectionV1(
+            pmcid="PMC-SYNTHETIC-CURRENT",
+            capability_id="C01",
+            benchmark_family="F03",
+            applicability_scope="INDIRECT_MEASUREMENT_EVIDENCE",
+            source_family_id=family_id,
+            source_family_digest=_FORGED,
+            search_strata=("stratum-a",),
+            spans=(),
+            population_clause_values=(),
+        ),
+        SourceCellSelectionV1(
+            pmcid="PMC-SYNTHETIC-CURRENT",
+            capability_id="C01",
+            benchmark_family="F01",
+            applicability_scope="INDIRECT_MEASUREMENT_EVIDENCE",
+            source_family_id=family_id,
+            source_family_digest=_FORGED,
+            search_strata=("stratum-a",),
+            spans=(),
+            population_clause_values=(),
+        ),
+    )
+    records = {
+        "F03": _source_record(
+            "PSE-V1-CANDIDATE:SOURCE:synthetic-current-02",
+            document_id=document_id,
+            family_id=family_id,
+            cell=("C01", "F03"),
+        ),
+        "F01": _source_record(
+            "PSE-V1-CANDIDATE:SOURCE:synthetic-current-01",
+            document_id=document_id,
+            family_id=family_id,
+            cell=("C01", "F01"),
+        ),
+    }
+    universe = list(selections)
+    monkeypatch.setattr(
+        variable_pool,
+        "production_source_selection_universe",
+        lambda *_args, **_kwargs: tuple(universe),
+    )
+    monkeypatch.setattr(
+        variable_pool,
+        "_source_authoring_records",
+        lambda values: (records[values[0].benchmark_family],),
+    )
+    inputs = _historical_inputs()
+    exclusion = _exclusion()
+    inventory = _inventory_for_plan(exclusion, (lane,), inputs=inputs)
+
+    first = build_initial_variable_pool_authoring_plan(
+        inputs, inventory, exclusion, external_root=Path("/phase-a")
+    )
+    universe.reverse()
+    second = build_initial_variable_pool_authoring_plan(
+        inputs, inventory, exclusion, external_root=Path("/phase-a")
+    )
+    additions = tuple(
+        item
+        for item in first.recipes
+        if item.authority_basis is RecipeAuthorityBasis.GOVERNED_SUPPLY_LANE
+    )
+    assert len(additions) == 1
+    assert additions[0].candidate_id == "PSE-V1-CANDIDATE:SOURCE:synthetic-current-01"
+    assert additions[0].lane_id == lane.lane_id
+    assert first == second
+
+
+def test_initial_variable_plan_requires_exact_current_source_for_historical_source_recipe(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    inputs = _inputs_with_source()
+    exclusion = _exclusion()
+    inventory = _inventory_for_plan(exclusion, inputs=inputs)
+    monkeypatch.setattr(variable_pool, "production_source_selection_universe", lambda *_a, **_k: ())
+    with pytest.raises(ValueError, match="exact current Phase-A authority"):
+        build_initial_variable_pool_authoring_plan(
+            inputs,
+            inventory,
+            exclusion,
+            external_root=Path("/phase-a"),
+        )
 
 
 def _expert_lane(status: LaneCapacityStatus) -> ReserveCandidateLaneV1:

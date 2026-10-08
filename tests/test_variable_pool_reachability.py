@@ -16,6 +16,7 @@ import pytest
 Node = tuple[str, str]
 
 MODERN_ENTRYPOINTS: tuple[Node, ...] = (
+    ("dynamislm.benchmark.variable_pool", "build_initial_variable_pool_authoring_plan"),
     ("dynamislm.benchmark.variable_pool", "historical_recipes_from_authoring_inputs"),
     ("dynamislm.benchmark.variable_pool", "materialize_variable_pool"),
     ("dynamislm.benchmark.variable_pool", "production_source_selection_universe"),
@@ -25,6 +26,8 @@ MODERN_ENTRYPOINTS: tuple[Node, ...] = (
     ("dynamislm.benchmark.authority_supply", "build_live_authority_supply_inventory"),
     ("dynamislm.benchmark.selection_pool", "assess_authority_supply_inventory"),
     ("dynamislm.benchmark.selection_pool", "plan_variable_pool"),
+    ("dynamislm.benchmark.variable_pool_store", "write_variable_pool_store"),
+    ("dynamislm.benchmark.variable_pool_store", "read_variable_pool_store"),
 )
 _AUTHORING = "dynamislm.benchmark.production_authoring"
 _PRODUCTION = "dynamislm.benchmark.production"
@@ -209,6 +212,17 @@ def test_analyzer_detects_superseded_authority_on_the_historical_draft_path() ->
         "res223_topology.apply_repair_actions",
     ):
         assert any(expected in item for item in violations), expected
+
+
+def test_initial_plan_builder_and_store_are_public_benchmark_exports() -> None:
+    from dynamislm import benchmark
+    from dynamislm.benchmark import variable_pool, variable_pool_store
+
+    assert benchmark.build_initial_variable_pool_authoring_plan is (
+        variable_pool.build_initial_variable_pool_authoring_plan
+    )
+    assert benchmark.write_variable_pool_store is variable_pool_store.write_variable_pool_store
+    assert benchmark.read_variable_pool_store is variable_pool_store.read_variable_pool_store
 
 
 @pytest.mark.parametrize("entrypoint", MODERN_ENTRYPOINTS, ids=lambda item: item[1])
