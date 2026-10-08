@@ -70,11 +70,24 @@ def test_receipt_records_document_only_roadmap_and_no_finalization() -> None:
     assert fields["PRODUCTION_POOL_MATERIALIZATION"] == "NOT_RUN"
     assert fields["PRODUCTION_POOL_QUALIFICATION"] == "NOT_RUN"
     assert fields["PRODUCTION_ALL_REMOVAL_QUALIFICATION"] == "NOT_RUN"
-    assert fields["FULL_CI"] == "PASS (./scripts/ci.sh; 1233 passed in 1135.43s)"
-    assert fields["PYTEST"] == "PASS (1233 passed)"
-    assert fields["TEST_COUNT"] == "1233"
+    assert fields["FULL_CI"] == (
+        "PASS (./scripts/ci.sh at 8fcf670; 1273 passed in 811.70s; wall 815.70s)"
+    )
+    assert fields["PYTEST"] == "PASS (1273 passed)"
+    assert fields["TEST_COUNT"] == "1273"
     assert fields["QA_TRACKED_MUTATION"] == "NONE"
     text = RECEIPT.read_text(encoding="utf-8")
     assert "RES-126 = `CANCEL_SUPERSEDED`" in text
     assert "A2b is created or activated only when A2 emits an actual typed deficit" in text
     assert "Integrate completed PSE V1 into the main/default release line" in text
+
+
+def test_receipt_records_pr38_review_authority_fixes() -> None:
+    fields = _fields()
+    assert fields["HISTORICAL_RECIPE_AUTHORITY_BINDING"] == (
+        "EXACT_CANONICAL_RECIPE_FROM_INVENTORY_BOUND_INPUT"
+    )
+    assert fields["GOVERNED_LANE_AUTHORITY_BINDING"] == "EXACT_ORIGIN_SPECIFIC_IDENTITY"
+    assert fields["GOVERNED_SOURCE_SELECTION"] == "CURRENT_PRODUCTION_SOURCE_UNIVERSE_ONLY"
+    assert fields["V1_2_SUPPLY_EXECUTION_AUTHORITY"] == "REJECTED"
+    assert fields["POOL_RECEIPT_STATUS_INVARIANTS"] == "SEALED"

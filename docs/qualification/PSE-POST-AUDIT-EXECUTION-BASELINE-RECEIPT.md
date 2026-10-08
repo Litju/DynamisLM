@@ -51,6 +51,13 @@ PROPOSED_NEW_LINEAR_ROOT=RES-115
 VARIABLE_POOL_AUTHORING_PATH=PASS
 INDIVIDUAL_RECIPE_REUSE=SUPPORTED
 COLLECTIVE_434_TOPOLOGY_AUTHORITY=NO
+HISTORICAL_RECIPE_AUTHORITY_BINDING=EXACT_CANONICAL_RECIPE_FROM_INVENTORY_BOUND_INPUT
+GOVERNED_LANE_AUTHORITY_BINDING=EXACT_ORIGIN_SPECIFIC_IDENTITY
+GOVERNED_SOURCE_SELECTION=CURRENT_PRODUCTION_SOURCE_UNIVERSE_ONLY
+GOVERNED_CAPACITY_FIELD=ADDITIONAL_AUTHORABLE_CAPACITY
+V1_2_SUPPLY_EXECUTION_AUTHORITY=REJECTED
+POOL_RECEIPT_STATUS_INVARIANTS=SEALED
+PR38_REVIEW_FIX_COMMITS=f703980,d149eeb,8fcf670
 
 SOURCE_AUTHORITY=PASS
 RES71_AUTHORITY=PASS
@@ -82,11 +89,11 @@ HISTORICAL_HASHES_CHANGED=NO
 
 RUFF=PASS
 FORMAT=PASS
-MYPY_STRICT=PASS (218 source files)
+MYPY_STRICT=PASS (219 source files)
 REPOSITORY_POLICY=PASS
-FULL_CI=PASS (./scripts/ci.sh; 1233 passed in 1135.43s)
-PYTEST=PASS (1233 passed)
-TEST_COUNT=1233
+FULL_CI=PASS (./scripts/ci.sh at 8fcf670; 1273 passed in 811.70s; wall 815.70s)
+PYTEST=PASS (1273 passed)
+TEST_COUNT=1273
 QA_TRACKED_MUTATION=NONE
 
 PSE_V1_COMPLETE=NO
@@ -304,10 +311,39 @@ New or extended tests:
 - `test_variable_pool_materialization.py`: per-recipe equivalence, subset plans,
   fail-closed lanes, and runtime non-reachability;
 - `test_variable_pool_reachability.py`: static proof;
+- `test_variable_pool_authority.py`: forged historical recipes (seed, slot,
+  cell, expert identity, source record, generator/split, mutation
+  parent/lineage/operator/stage/seed, authority digest/ref), unbound or
+  mismatched historical input, governed lane identity substitution (source
+  document/family, synthetic generator/split, engine reference, expert
+  cluster), governed source universe, lane capacity, and v1.2 rejection;
 - `test_res383_pool_plan.py`: v1.3 supply semantics, v1.2 historical-only
-  assessment, base feasibility hard stops, and parent-provenance regression;
+  assessment, base feasibility hard stops, parent-provenance regression,
+  receipt status invariants, and v1.2 planning rejection;
 - `test_res369_selection.py`: shingle projection and tamper rejection;
 - `test_res115_production.py`: the variable pool gate.
+
+## PR #38 review fixes
+
+The final adversarial review of PR #38 found that historical recipe authority was
+caller-selectable at the materialization boundary, that a historical v1.2
+inventory was accepted as live supply, and that the pool receipt did not tie
+`status` to base feasibility. The fixes are:
+
+- `materialize_variable_pool` takes the historical authoring input, requires the
+  supply inventory's `HISTORICAL_RECIPE_INPUT_CONTENT` binding to equal its digest,
+  and requires every historical recipe to equal its canonical decomposed recipe.
+  Subsets remain valid; no collective topology is compared.
+- Governed recipes must match their lane's exact origin-specific identity.
+  Governed source recipes resolve only from `production_source_selection_universe`
+  under an explicit external root; caller-supplied source selections may only
+  reproduce historical source records. Engine, expert, and mutation recipe
+  inventory stays non-authorable.
+- `require_current_execution_supply_inventory` rejects v1.2 inventories in
+  `materialize_variable_pool` and `plan_variable_pool`; v1.2 decoding and its
+  pinned digest are unchanged.
+- `PoolReserveReceiptV1` requires `BASE_INFEASIBLE` exactly for an infeasible
+  base and `UNKNOWN` for an unknown base.
 
 ## Proposed Linear governance (documentation only)
 
