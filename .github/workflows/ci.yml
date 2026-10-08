@@ -2,9 +2,13 @@ name: CI
 
 on:
   pull_request:
-    branches: [main]
+    branches:
+      - main
+      - work/res-21-performance-science-eval-v1
   push:
-    branches: [main]
+    branches:
+      - main
+      - work/res-21-performance-science-eval-v1
 
 permissions:
   contents: read
