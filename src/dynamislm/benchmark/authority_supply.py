@@ -47,6 +47,48 @@ class LaneCapacityStatus(enum.StrEnum):
     EXHAUSTED = "EXHAUSTED"
 
 
+class AdditionalCapacityStatus(enum.StrEnum):
+    AVAILABLE = "AVAILABLE"
+    RULE_GOVERNED = "RULE_GOVERNED"
+    GOVERNED_UNRESOLVED = "GOVERNED_UNRESOLVED"
+    UNKNOWN = "UNKNOWN"
+    EXHAUSTED = "EXHAUSTED"
+
+
+@dataclass(frozen=True, slots=True)
+class SupplyLaneSemanticsV1:
+    lane_id: str
+    origin_class: CaseOrigin
+    existing_authorized_recipe_count: int | None
+    additional_authorable_capacity: int | None
+    capacity_status: AdditionalCapacityStatus
+
+
+@dataclass(frozen=True, slots=True)
+class AuthoritySupplySemanticsV1:
+    """Typed view separating historical recipes, extra capacity, and final bounds."""
+
+    active_supply_schema: str
+    inventory_digest: str
+    final_selection_bound: int
+    historical_recipe_inventory: tuple[SupplyLaneSemanticsV1, ...]
+    existing_authorized_recipe_count: tuple[tuple[CaseOrigin, int | None], ...]
+    additional_authorable_capacity: tuple[tuple[CaseOrigin, int | None], ...]
+    capacity_status: tuple[tuple[CaseOrigin, AdditionalCapacityStatus], ...]
+
+    @property
+    def structural_pool_floor(self) -> None:
+        return None
+
+    @property
+    def structural_backfill_requests(self) -> tuple[()]:
+        return ()
+
+    @property
+    def pool_n(self) -> None:
+        return None
+
+
 class ReserveDeficitKind(enum.StrEnum):
     STRUCTURAL_COUNT = "STRUCTURAL_COUNT"
     EXACT_BASELINE_INFEASIBLE = "EXACT_BASELINE_INFEASIBLE"
@@ -167,6 +209,8 @@ class SupplyAssessmentStatus(enum.StrEnum):
 @register_serializable_type
 @dataclass(frozen=True, slots=True)
 class AuthoritySupplyAssessmentV1:
+    """Legacy serialized shape retained for historical decoding only."""
+
     assessment_version: str
     status: SupplyAssessmentStatus
     inventory_digest: str
@@ -326,8 +370,78 @@ class ReserveCandidateLaneV1:
         object.__setattr__(self, "lane_digest", computed)
 
     @property
+    def supply_semantics(self) -> SupplyLaneSemanticsV1:
+        """Interpret inventory counts separately from additional authorable capacity."""
+
+        if self.capacity_unit.startswith("individually authorized "):
+            return SupplyLaneSemanticsV1(
+                self.lane_id,
+                self.origin_class,
+                self.available_capacity,
+                None,
+                AdditionalCapacityStatus.GOVERNED_UNRESOLVED,
+            )
+        if (
+            self.origin_class is CaseOrigin.SOURCE_BACKED_EVIDENCE_EXTRACTION
+            and "carrying one individually authorized recipe" in self.authority_ref
+        ):
+            return SupplyLaneSemanticsV1(
+                self.lane_id,
+                self.origin_class,
+                1,
+                None,
+                AdditionalCapacityStatus.GOVERNED_UNRESOLVED,
+            )
+        if self.capacity_status is LaneCapacityStatus.RULE_GOVERNED:
+            return SupplyLaneSemanticsV1(
+                self.lane_id,
+                self.origin_class,
+                None,
+                None,
+                AdditionalCapacityStatus.RULE_GOVERNED,
+            )
+        if self.capacity_status is LaneCapacityStatus.METADATA_REQUIRED:
+            return SupplyLaneSemanticsV1(
+                self.lane_id,
+                self.origin_class,
+                None,
+                None,
+                AdditionalCapacityStatus.GOVERNED_UNRESOLVED,
+            )
+        if self.capacity_status is LaneCapacityStatus.EXHAUSTED:
+            return SupplyLaneSemanticsV1(
+                self.lane_id,
+                self.origin_class,
+                0,
+                0,
+                AdditionalCapacityStatus.EXHAUSTED,
+            )
+        return SupplyLaneSemanticsV1(
+            self.lane_id,
+            self.origin_class,
+            0,
+            self.available_capacity,
+            AdditionalCapacityStatus.AVAILABLE,
+        )
+
+    @property
+    def existing_authorized_recipe_count(self) -> int | None:
+        return self.supply_semantics.existing_authorized_recipe_count
+
+    @property
+    def additional_authorable_capacity(self) -> int | None:
+        return self.supply_semantics.additional_authorable_capacity
+
+    @property
+    def additional_capacity_status(self) -> AdditionalCapacityStatus:
+        return self.supply_semantics.capacity_status
+
+    @property
     def may_author_backfill(self) -> bool:
-        return self.capacity_status is not LaneCapacityStatus.EXHAUSTED
+        return self.additional_capacity_status in {
+            AdditionalCapacityStatus.AVAILABLE,
+            AdditionalCapacityStatus.RULE_GOVERNED,
+        }
 
 
 @register_serializable_type
@@ -402,6 +516,55 @@ class AuthoritySupplyInventoryV1:
         """True only for historical v1.2 inventories built from fixed authoring slots."""
 
         return self.schema_version == AUTHORITY_SUPPLY_SCHEMA_V1_2
+
+    def semantics(self) -> AuthoritySupplySemanticsV1:
+        if self.encodes_planned_geometry:
+            raise ValueError(
+                "historical v1.2 inventory is preserved, not current execution authority"
+            )
+        from dynamislm.benchmark.selection_constraints import FINAL_CASE_COUNT
+
+        lanes = tuple(item.supply_semantics for item in self.reserve_candidate_lanes)
+
+        def totals(attribute: str) -> tuple[tuple[CaseOrigin, int | None], ...]:
+            result = []
+            for origin in CaseOrigin:
+                values = [getattr(lane, attribute) for lane in lanes if lane.origin_class is origin]
+                total = (
+                    sum(value for value in values if value is not None)
+                    if values and all(value is not None for value in values)
+                    else None
+                )
+                result.append((origin, total))
+            return tuple(sorted(result, key=lambda item: item[0].value.encode()))
+
+        status_by_origin = []
+        for origin in CaseOrigin:
+            statuses = tuple(lane.capacity_status for lane in lanes if lane.origin_class is origin)
+            if not statuses:
+                status = AdditionalCapacityStatus.UNKNOWN
+            elif AdditionalCapacityStatus.RULE_GOVERNED in statuses:
+                status = AdditionalCapacityStatus.RULE_GOVERNED
+            elif AdditionalCapacityStatus.GOVERNED_UNRESOLVED in statuses:
+                status = AdditionalCapacityStatus.GOVERNED_UNRESOLVED
+            elif AdditionalCapacityStatus.UNKNOWN in statuses:
+                status = AdditionalCapacityStatus.UNKNOWN
+            elif AdditionalCapacityStatus.AVAILABLE in statuses:
+                status = AdditionalCapacityStatus.AVAILABLE
+            else:
+                status = AdditionalCapacityStatus.EXHAUSTED
+            status_by_origin.append((origin, status))
+        return AuthoritySupplySemanticsV1(
+            active_supply_schema=self.schema_version,
+            inventory_digest=self.inventory_digest,
+            final_selection_bound=FINAL_CASE_COUNT,
+            historical_recipe_inventory=lanes,
+            existing_authorized_recipe_count=totals("existing_authorized_recipe_count"),
+            additional_authorable_capacity=totals("additional_authorable_capacity"),
+            capacity_status=tuple(
+                sorted(status_by_origin, key=lambda item: item[0].value.encode())
+            ),
+        )
 
 
 def _opaque_id(kind: str, value: str) -> str:
@@ -954,10 +1117,12 @@ __all__ = [
     "AUTHORITY_SUPPLY_INVENTORY_PATH_V1_2",
     "AUTHORITY_SUPPLY_SCHEMA",
     "AUTHORITY_SUPPLY_SCHEMA_V1_2",
+    "AdditionalCapacityStatus",
     "AuthoritySupplyAssessmentV1",
     "AuthoritySupplyAtomV1",
     "AuthoritySupplyInventoryV1",
     "AuthoritySupplyKind",
+    "AuthoritySupplySemanticsV1",
     "BackfillRequestKind",
     "BackfillRequestV1",
     "LaneCapacityStatus",
@@ -965,6 +1130,7 @@ __all__ = [
     "ReserveDeficitKind",
     "ReserveDeficitV1",
     "SupplyAssessmentStatus",
+    "SupplyLaneSemanticsV1",
     "build_live_authority_supply_inventory",
     "write_live_authority_supply_inventory",
 ]
