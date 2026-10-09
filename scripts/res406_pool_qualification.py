@@ -12,6 +12,7 @@ import sys
 from collections import Counter
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
+from importlib import import_module
 from importlib.metadata import version
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -64,7 +65,12 @@ from dynamislm.serialization import (
     canonical_json,
     type_identifier,
 )
-from scripts.res405_variable_pool import _build_authority, _private_material
+
+_res405 = import_module(
+    f"{__package__}.res405_variable_pool" if __package__ else "res405_variable_pool"
+)
+_build_authority = _res405._build_authority
+_private_material = _res405._private_material
 
 ENTRY_HEAD = "b6b4722c189117302057a27adb4d62dcfaa3a288"
 RES405_RECEIPT_DIGEST = "sha256:8e4dfb324d0aab00196903229814170e0e1f16e54ec348082f57cedb74e65272"
