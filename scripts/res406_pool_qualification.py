@@ -585,8 +585,8 @@ def _reserve_result(
             "base_diagnosis": _wire(diagnosis),
             "removal_checks": [],
             "removal_records": [],
-            "critical_obligation_count": 0,
-            "critical_obligations_with_structural_reserve": 0,
+            "critical_obligation_count": None,
+            "critical_obligations_with_structural_reserve": None,
             "critical_reserve_status": "NOT_EVALUATED",
             "backfill_needs": [],
             "reserve_deficits": [_wire(item) for item in deficits],
@@ -1153,6 +1153,12 @@ def _write_public_outputs(repository_root: Path, final: Record) -> None:
         json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
     )
     deficit_text = json.dumps(summary["typed_deficit_categories"], sort_keys=True)
+    critical_count = final["critical_obligation_count"]
+    critical_count_text = "NOT_EVALUATED" if critical_count is None else str(critical_count)
+    critical_reserve_count = final["critical_obligations_with_structural_reserve"]
+    critical_reserve_count_text = (
+        "NOT_EVALUATED" if critical_reserve_count is None else str(critical_reserve_count)
+    )
     lines = (
         "# RES-406 Acceptance Receipt",
         "",
@@ -1173,8 +1179,8 @@ def _write_public_outputs(repository_root: Path, final: Record) -> None:
         f"FEASIBLE_REMOVALS={final['feasible_removal_count']}",
         f"INFEASIBLE_REMOVALS={final['infeasible_removal_count']}",
         f"UNKNOWN_REMOVALS={final['unknown_removal_count']}",
-        f"CRITICAL_OBLIGATION_COUNT={final['critical_obligation_count']}",
-        f"CRITICAL_WITH_STRUCTURAL_RESERVE={final['critical_obligations_with_structural_reserve']}",
+        f"CRITICAL_OBLIGATION_COUNT={critical_count_text}",
+        f"CRITICAL_WITH_STRUCTURAL_RESERVE={critical_reserve_count_text}",
         f"RESERVE_STATUS={final['critical_reserve_status']}",
         f"TYPED_DEFICIT_CATEGORIES={deficit_text}",
         f"BACKFILL_NEED_COUNT={len(final['backfill_needs'])}",
