@@ -106,6 +106,25 @@ def test_variable_pool_store_round_trips_and_identical_retry_is_idempotent(
         assert seed not in receipt_json
 
 
+def test_variable_pool_store_reader_rejects_redigested_historical_input_substitution(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    plan, pool, kwargs = _stored_fixture(monkeypatch, tmp_path)
+    receipt = _write(plan, pool, kwargs)
+    substituted_digest = "sha256:" + "0" * 64
+    if substituted_digest == receipt.historical_input_digest:
+        substituted_digest = "sha256:" + "1" * 64
+    tampered_receipt = store._bind_receipt(
+        replace(receipt, historical_input_digest=substituted_digest)
+    )
+    receipt_path = Path(kwargs["production_root"]) / receipt.store_relative_path / "receipt.json"
+    receipt_path.write_text(canonical_json(tampered_receipt) + "\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="historical input digest"):
+        store.read_variable_pool_store(tampered_receipt, **kwargs)
+
+
 def test_variable_pool_store_receipt_is_the_last_commit_marker(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

@@ -30,7 +30,10 @@ from dynamislm.benchmark.production_store import (
     DEFAULT_PRODUCTION_ROOT,
     read_external_production_json,
 )
-from dynamislm.benchmark.public_repository import validate_production_private_material_absent
+from dynamislm.benchmark.public_repository import (
+    ProductionRepositoryLeakGuardV1,
+    validate_production_private_material_absent,
+)
 from dynamislm.benchmark.res115_authoring import build_res115_source_artifact_resolver
 from dynamislm.benchmark.source_artifacts import PhaseASourceArtifactResolver
 from dynamislm.benchmark.variable_pool import (
@@ -247,12 +250,10 @@ def _public_summary(
     }
 
 
-def _write_public_exact(path: Path, payload: bytes) -> None:
+def _write_public_output(path: Path, payload: bytes) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    if path.exists() or path.is_symlink():
-        if path.is_symlink() or not path.is_file() or path.read_bytes() != payload:
-            raise ValueError(f"RES-405 public artifact conflicts with existing bytes: {path}")
-        return
+    if path.is_symlink() or (path.exists() and not path.is_file()):
+        raise ValueError(f"RES-405 public artifact is not a regular file: {path}")
     path.write_bytes(payload)
 
 
@@ -260,7 +261,10 @@ def _write_public_outputs(
     repository_root: Path,
     pool: ProductionAuthoringCandidatePoolV1,
     receipt: VariablePoolStoreReceiptV1,
+    leak_guard: ProductionRepositoryLeakGuardV1,
 ) -> tuple[Path, Path]:
+    if leak_guard.status != "PASS":
+        raise ValueError("RES-405 public receipt requires a passing leak guard")
     summary = _public_summary(pool, receipt)
     summary_bytes = (
         json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
@@ -287,6 +291,8 @@ def _write_public_outputs(
         "VARIABLE_POOL_VALIDATION=PASS",
         "ROUND_TRIP=PASS",
         "PUBLIC_LEAK_GUARD=PASS",
+        f"PUBLIC_LEAK_GUARD_HEAD={leak_guard.repository_head}",
+        f"PUBLIC_REPOSITORY_ARTIFACT_DIGEST={leak_guard.repository_artifact_digest}",
         "SOLVER_RUNS=0",
         "HUMAN_REVIEW_PERFORMED=NO",
         "FINAL_SPLITS_ALLOCATED=NO",
@@ -300,8 +306,8 @@ def _write_public_outputs(
     receipt_bytes = "\n".join(lines).encode("utf-8")
     summary_path = repository_root / _SUMMARY_PATH
     public_receipt_path = repository_root / _PUBLIC_RECEIPT_PATH
-    _write_public_exact(summary_path, summary_bytes)
-    _write_public_exact(public_receipt_path, receipt_bytes)
+    _write_public_output(summary_path, summary_bytes)
+    _write_public_output(public_receipt_path, receipt_bytes)
     return summary_path, public_receipt_path
 
 
@@ -437,11 +443,16 @@ def main() -> int:
     ) != tuple(canonical_json(packet) for packet in stored_pool.packets):
         raise ValueError("stored variable pool differs from in-memory authority regeneration")
 
-    summary_path, public_receipt_path = _write_public_outputs(repository_root, stored_pool, receipt)
     leak_guard = validate_production_private_material_absent(
         _private_material(stored_plan, stored_pool, historical_inputs, exclusion),
         repository_root=repository_root,
         candidate_count=stored_pool.candidate_count,
+    )
+    summary_path, public_receipt_path = _write_public_outputs(
+        repository_root,
+        stored_pool,
+        receipt,
+        leak_guard,
     )
     print(
         json.dumps(

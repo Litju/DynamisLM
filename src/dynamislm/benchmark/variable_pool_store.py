@@ -450,6 +450,8 @@ def read_variable_pool_store(
     """Read all committed files and verify exact inventory and authority bindings."""
 
     validate_variable_pool_store_receipt(receipt)
+    if receipt.historical_input_digest != historical_input_digest:
+        raise ValueError("variable pool store historical input digest mismatch")
     repository = Path(repository_root).resolve()
     root, _repository = _safe_external_root(Path(production_root), repository)
     relative = _store_relative_path(receipt.variable_pool_authoring_plan_digest)
