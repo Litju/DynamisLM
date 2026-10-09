@@ -286,9 +286,8 @@ def _profile_key() -> str:
 def _checkpoint_root(problem: FinalSelectionProblem) -> str:
     return "/".join(
         (
-            "production/variable-pools",
+            "production/variable-pools/qualification",
             PLAN_DIGEST.removeprefix("sha256:"),
-            "qualification",
             ENTRY_HEAD,
             _profile_key().removeprefix("sha256:"),
             problem.problem_digest.removeprefix("sha256:"),
@@ -728,6 +727,11 @@ def _confirm_action(repository_root: Path, production_root: Path, expected_probl
     if base_read is None:
         raise ValueError("RES-406 fresh process cannot find the base receipt")
     base = base_read[0]
+    fresh_process_head = inputs.runner_head
+    saved_base_head = base.get("input", {}).get("runner_head")
+    if not isinstance(saved_base_head, str):
+        raise ValueError("RES-406 base checkpoint has no runner Git head")
+    inputs = replace(inputs, runner_head=saved_base_head)
     if base["input"] != _base_input(inputs):
         raise ValueError("RES-406 fresh process base receipt is bound to different solver inputs")
     fresh_base = solve_selection_feasibility(
@@ -781,7 +785,7 @@ def _confirm_action(repository_root: Path, production_root: Path, expected_probl
         "schema_version": _CONFIRM_SCHEMA,
         "input": {
             "entry_head": ENTRY_HEAD,
-            "runner_head": base["input"]["runner_head"],
+            "runner_head": fresh_process_head,
             "res405_receipt_digest": RES405_RECEIPT_DIGEST,
             "plan_digest": PLAN_DIGEST,
             "pool_digest": POOL_DIGEST,
@@ -884,6 +888,7 @@ def _final_body(
         "mission": "RES-406",
         "entry_head": ENTRY_HEAD,
         "runner_head": base["input"]["runner_head"],
+        "fresh_process_runner_head": confirmation["input"]["runner_head"],
         "execution_baseline": DYNAMISLM_EXECUTION_BASELINE,
         "res405_receipt_digest": RES405_RECEIPT_DIGEST,
         "plan_digest": PLAN_DIGEST,
@@ -950,9 +955,30 @@ def _validate_confirmation(
     removals: tuple[Record, ...],
     confirmation: Record,
 ) -> None:
+    fresh_process_head = confirmation.get("input", {}).get("runner_head")
+    if not isinstance(fresh_process_head, str):
+        raise ValueError("RES-406 fresh-process confirmation has no runner Git head")
+    current_head = _git(inputs.repository_root, "rev-parse", "HEAD")
+    for ancestor, descendant in (
+        (base["input"]["runner_head"], fresh_process_head),
+        (fresh_process_head, current_head),
+    ):
+        subprocess.run(
+            (
+                "git",
+                "-C",
+                str(inputs.repository_root),
+                "merge-base",
+                "--is-ancestor",
+                ancestor,
+                descendant,
+            ),
+            check=True,
+            capture_output=True,
+        )
     expected_input = {
         "entry_head": ENTRY_HEAD,
-        "runner_head": base["input"]["runner_head"],
+        "runner_head": fresh_process_head,
         "res405_receipt_digest": RES405_RECEIPT_DIGEST,
         "plan_digest": PLAN_DIGEST,
         "pool_digest": POOL_DIGEST,

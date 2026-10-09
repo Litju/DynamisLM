@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from scripts import res406_pool_qualification as qualification
@@ -50,3 +51,11 @@ def test_production_public_profile_omits_random_seed() -> None:
         "randomize_search": False,
     }
     assert "seed" not in " ".join(profile)
+
+
+def test_checkpoint_namespace_is_outside_the_immutable_pool_directory() -> None:
+    problem = SimpleNamespace(problem_digest="sha256:" + "1" * 64)
+    checkpoint = qualification._checkpoint_root(problem)  # type: ignore[arg-type]
+    plan_key = qualification.PLAN_DIGEST.removeprefix("sha256:")
+    assert checkpoint.startswith(f"production/variable-pools/qualification/{plan_key}/")
+    assert f"production/variable-pools/{plan_key}/qualification" not in checkpoint
