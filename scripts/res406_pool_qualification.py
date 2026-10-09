@@ -31,7 +31,8 @@ from dynamislm.benchmark.production_store import (
 )
 from dynamislm.benchmark.public_repository import validate_production_private_material_absent
 from dynamislm.benchmark.selection_contracts import (
-    PSE_V1_PRODUCTION_SELECTION_SOLVER_PROFILE_V2,
+    POOL_FEASIBILITY_SOLVER_PROFILE_VERSION,
+    PSE_V1_POOL_FEASIBILITY_SOLVER_PROFILE_V1,
     ConstraintKind,
     FeasibilityStatus,
     FeatureKind,
@@ -82,8 +83,8 @@ QUALIFICATION_EXCLUSION_DIGEST = (
 )
 POOL_COUNT = 449
 BRANCH = "julitocrztuga/res-406-p4a-r2-candidate-level-pool-qualification-exact-single"
-PROFILE_NAME = "PSE_V1_PRODUCTION_SELECTION_SOLVER_PROFILE_V2"
-PROFILE_VERSION = "PSE-V1-PRODUCTION-SELECTION-SOLVER@2.0.0"
+PROFILE_NAME = "PSE_V1_POOL_FEASIBILITY_SOLVER_PROFILE_V1"
+PROFILE_VERSION = POOL_FEASIBILITY_SOLVER_PROFILE_VERSION
 _SUMMARY_PATH = Path("reports/performance_science_eval/res406_pool_qualification.json")
 _PUBLIC_RECEIPT_PATH = Path("docs/qualification/RES-406-ACCEPTANCE-RECEIPT.md")
 _BASE_SCHEMA = "RES406-BASE-FEASIBILITY-RECEIPT@1.0.0"
@@ -264,7 +265,7 @@ def _load_inputs(repository_root: Path, production_root: Path) -> QualificationI
 
 
 def _profile(*, public: bool = False) -> Record:
-    config = PSE_V1_PRODUCTION_SELECTION_SOLVER_PROFILE_V2
+    config = PSE_V1_POOL_FEASIBILITY_SOLVER_PROFILE_V1
     values: Record = {
         "name": PROFILE_NAME,
         "version": PROFILE_VERSION,
@@ -431,7 +432,7 @@ def _base_receipt(
     expected_input = _base_input(inputs)
     result = solve_selection_feasibility(
         inputs.problem,
-        solver_config=PSE_V1_PRODUCTION_SELECTION_SOLVER_PROFILE_V2,
+        solver_config=PSE_V1_POOL_FEASIBILITY_SOLVER_PROFILE_V1,
     )
     body: Record = {
         "schema_version": _BASE_SCHEMA,
@@ -503,7 +504,7 @@ def _removal_receipt(
 
     result = solve_selection_feasibility(
         scenario,
-        solver_config=PSE_V1_PRODUCTION_SELECTION_SOLVER_PROFILE_V2,
+        solver_config=PSE_V1_POOL_FEASIBILITY_SOLVER_PROFILE_V1,
     )
     return _write_record(
         relative,
@@ -736,7 +737,7 @@ def _confirm_action(repository_root: Path, production_root: Path, expected_probl
         raise ValueError("RES-406 fresh process base receipt is bound to different solver inputs")
     fresh_base = solve_selection_feasibility(
         inputs.problem,
-        solver_config=PSE_V1_PRODUCTION_SELECTION_SOLVER_PROFILE_V2,
+        solver_config=PSE_V1_POOL_FEASIBILITY_SOLVER_PROFILE_V1,
     )
     samples: list[Record] = []
     pass_status = (
@@ -752,7 +753,7 @@ def _confirm_action(repository_root: Path, production_root: Path, expected_probl
             scenario = _problem_without_candidate(inputs.problem, candidate.candidate_id)
             result = solve_selection_feasibility(
                 scenario,
-                solver_config=PSE_V1_PRODUCTION_SELECTION_SOLVER_PROFILE_V2,
+                solver_config=PSE_V1_POOL_FEASIBILITY_SOLVER_PROFILE_V1,
             )
             saved = _read_record(
                 _removal_relative(root, index, candidate.candidate_id),
@@ -1104,7 +1105,7 @@ def _verify_action(repository_root: Path, production_root: Path) -> int:
     return 0
 
 
-def _public_payload(final: Record) -> Record:
+def _public_payload(final: Record, leak_guard: Any) -> Record:
     deficit_counts = Counter(item["deficit_kind"] for item in final["reserve_deficits"])
     request_counts = Counter(item["request_kind"] for item in final["backfill_requests"])
     return {
@@ -1119,6 +1120,9 @@ def _public_payload(final: Record) -> Record:
         "candidate_count": POOL_COUNT,
         "selection_problem_digest": final["problem_digest"],
         "solver_profile": _profile(public=True),
+        "public_leak_guard": leak_guard.status,
+        "public_leak_guard_head": leak_guard.repository_head,
+        "public_repository_artifact_digest": leak_guard.repository_artifact_digest,
         "base_status": final["base_status"],
         "base_plan_digest": final["base_plan_digest"],
         "base_validation_digest": final["base_validation_digest"],
@@ -1143,8 +1147,8 @@ def _public_payload(final: Record) -> Record:
     }
 
 
-def _write_public_outputs(repository_root: Path, final: Record) -> None:
-    summary = _public_payload(final)
+def _write_public_outputs(repository_root: Path, final: Record, leak_guard: Any) -> None:
+    summary = _public_payload(final, leak_guard)
     summary_path = repository_root / _SUMMARY_PATH
     summary_path.parent.mkdir(parents=True, exist_ok=True)
     if summary_path.is_symlink() or (summary_path.exists() and not summary_path.is_file()):
@@ -1159,6 +1163,13 @@ def _write_public_outputs(repository_root: Path, final: Record) -> None:
     critical_reserve_count_text = (
         "NOT_EVALUATED" if critical_reserve_count is None else str(critical_reserve_count)
     )
+    reserve_statement = (
+        f"The base selection problem was {final['base_status']}; "
+        "critical reserve was not evaluated."
+        if final["critical_reserve_status"] == "NOT_EVALUATED"
+        else "The existing DR-001 final minimum remains unchanged. Critical reserve is "
+        "reported as structural pool capacity against current final obligations."
+    )
     lines = (
         "# RES-406 Acceptance Receipt",
         "",
@@ -1171,6 +1182,7 @@ def _write_public_outputs(repository_root: Path, final: Record) -> None:
         f"POOL_DIGEST={POOL_DIGEST}",
         f"POOL_COUNT={POOL_COUNT}",
         f"SOLVER_PROFILE={PROFILE_NAME}",
+        f"SOLVER_PROFILE_VERSION={PROFILE_VERSION}",
         f"BASE_STATUS={final['base_status']}",
         f"BASE_PROBLEM_DIGEST={final['problem_digest']}",
         f"BASE_PLAN_DIGEST={final['base_plan_digest']}",
@@ -1189,6 +1201,9 @@ def _write_public_outputs(repository_root: Path, final: Record) -> None:
         f"CHECKPOINT_PATH={final['checkpoint_path']}",
         f"ARTIFACT_INVENTORY_DIGEST={final['artifact_inventory_digest']}",
         f"PRIVATE_QUALIFICATION_RECEIPT_DIGEST={final['receipt_digest']}",
+        f"PUBLIC_LEAK_GUARD={leak_guard.status}",
+        f"PUBLIC_LEAK_GUARD_HEAD={leak_guard.repository_head}",
+        f"PUBLIC_REPOSITORY_ARTIFACT_DIGEST={leak_guard.repository_artifact_digest}",
         f"OUTCOME={final['outcome']}",
         f"NEXT={final['next']}",
         "DR001_CHANGED=NO",
@@ -1196,8 +1211,7 @@ def _write_public_outputs(repository_root: Path, final: Record) -> None:
         "BACKFILL_EXECUTED=NO",
         "```",
         "",
-        "The existing DR-001 final minimum remains unchanged. Critical reserve is",
-        "reported as structural pool capacity against current final obligations.",
+        reserve_statement,
         "Private candidate packets and source text remain in the external store.",
         "",
     )
@@ -1258,7 +1272,6 @@ def _qualify(repository_root: Path, production_root: Path) -> int:
         check=True,
         cwd=repository_root,
     )
-    _write_public_outputs(repository_root, final)
     leak_guard = validate_production_private_material_absent(
         _private_material(inputs.plan, inputs.pool, inputs.historical_inputs, inputs.exclusion),
         repository_root=repository_root,
@@ -1266,7 +1279,15 @@ def _qualify(repository_root: Path, production_root: Path) -> int:
     )
     if leak_guard.status != "PASS":
         raise ValueError("RES-406 production private-material leak guard failed")
-    summary = _public_payload(final)
+    _write_public_outputs(repository_root, final, leak_guard)
+    final_leak_guard = validate_production_private_material_absent(
+        _private_material(inputs.plan, inputs.pool, inputs.historical_inputs, inputs.exclusion),
+        repository_root=repository_root,
+        candidate_count=POOL_COUNT,
+    )
+    if final_leak_guard.status != "PASS":
+        raise ValueError("RES-406 post-write production private-material leak scan failed")
+    summary = _public_payload(final, leak_guard)
     result = {
         "ENTRY_HEAD": ENTRY_HEAD,
         "RES405_RECEIPT_DIGEST": RES405_RECEIPT_DIGEST,
@@ -1294,6 +1315,11 @@ def _qualify(repository_root: Path, production_root: Path) -> int:
         "PRIVATE_QUALIFICATION_RECEIPT_DIGEST": final["receipt_digest"],
         "FRESH_PROCESS_CONFIRMATION": confirmation["status"],
         "PUBLIC_LEAK_GUARD": leak_guard.status,
+        "PUBLIC_LEAK_GUARD_HEAD": leak_guard.repository_head,
+        "PUBLIC_REPOSITORY_ARTIFACT_DIGEST": leak_guard.repository_artifact_digest,
+        "POST_WRITE_PUBLIC_LEAK_GUARD": final_leak_guard.status,
+        "POST_WRITE_PUBLIC_LEAK_GUARD_HEAD": final_leak_guard.repository_head,
+        "POST_WRITE_PUBLIC_REPOSITORY_ARTIFACT_DIGEST": final_leak_guard.repository_artifact_digest,
         "OUTCOME": final["outcome"],
         "NEXT": final["next"],
     }

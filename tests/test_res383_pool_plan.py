@@ -622,14 +622,13 @@ def test_feasibility_only_rejects_a_witness_denied_by_the_semantic_validator(
     assert receipt.diagnostics[0].code == "SEMANTIC_VALIDATION_FAILED"
 
 
-def test_production_profile_v2_supports_exact_feasibility_confirmation() -> None:
+def test_production_profile_v2_is_reserved_for_final_canonical_confirmation() -> None:
     problem = _problem((_candidate("a"), _candidate("b")), final_count=1)
-    receipt = solve_selection_feasibility(
-        problem,
-        solver_config=PSE_V1_PRODUCTION_SELECTION_SOLVER_PROFILE_V2,
-    )
-    assert receipt.status is FeasibilityStatus.FEASIBLE
-    assert receipt.solver_config == PSE_V1_PRODUCTION_SELECTION_SOLVER_PROFILE_V2
+    with pytest.raises(ValueError, match="reserved for final canonical confirmation"):
+        solve_selection_feasibility(
+            problem,
+            solver_config=PSE_V1_PRODUCTION_SELECTION_SOLVER_PROFILE_V2,
+        )
 
 
 def test_pool_qualification_rejects_generic_solver_configuration() -> None:

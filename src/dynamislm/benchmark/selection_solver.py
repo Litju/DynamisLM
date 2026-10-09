@@ -12,6 +12,7 @@ from ortools.sat.python import cp_model
 
 from dynamislm.benchmark.constants import SPLIT_ORDER, CaseOrigin, SplitName
 from dynamislm.benchmark.selection_contracts import (
+    PSE_V1_PRODUCTION_SELECTION_SOLVER_PROFILE_V2,
     SELECTION_RECEIPT_VERSION,
     AssignmentState,
     CandidateAssignment,
@@ -536,6 +537,10 @@ def solve_selection_feasibility(
 
     started = time.perf_counter()
     config = solver_config or SelectionSolverConfig()
+    if config == PSE_V1_PRODUCTION_SELECTION_SOLVER_PROFILE_V2:
+        raise ValueError(
+            "production solver profile v2 is reserved for final canonical confirmation"
+        )
     model, assignment_vars, _, _ = _model_for(problem, include_objectives=False)
     solver, status, deterministic_time = _solve_once(model, config)
     plan_digest = None
