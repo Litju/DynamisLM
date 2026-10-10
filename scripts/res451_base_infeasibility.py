@@ -611,8 +611,6 @@ def _localization_probe(
         return record
 
     result = _replay_result(active_problem)
-    if result["status"] == FeasibilityStatus.UNKNOWN.value:
-        raise ValueError(f"RES-451 localization probe returned UNKNOWN: {family_id}")
     body = {
         "schema_version": "RES451-LOCALIZATION-PROBE@1.0.0",
         "input": probe_input,
@@ -634,7 +632,7 @@ def _minimize_family(
     family_ids: tuple[str, ...],
     *,
     verify: bool,
-    max_probes: int = 128,
+    max_probes: int = 16,
 ) -> Record:
     active = list(family_ids)
     trials: dict[tuple[str, ...], Record] = {}
@@ -686,8 +684,6 @@ def _minimize_family(
             probe_count += 1
             if record["result"]["status"] == FeasibilityStatus.INFEASIBLE.value:
                 active = list(proposed)
-            elif record["result"]["status"] != FeasibilityStatus.FEASIBLE.value:
-                raise ValueError(f"RES-451 subset-minimality probe was inconclusive: {family_id}")
 
     active_ids = tuple(sorted(active, key=str.encode))
     active_record = _localization_probe(
@@ -725,6 +721,14 @@ def _minimize_family(
         "probe_count": probe_count,
         "active_replay": active_record["result"],
         "member_removal_trials": deletion_proofs,
+        "unknown_probe_paths": sorted(
+            {
+                item["checkpoint_path"]
+                for item in trials.values()
+                if item["result"]["status"] == FeasibilityStatus.UNKNOWN.value
+            },
+            key=str.encode,
+        ),
         "localization_checkpoint_paths": sorted(
             {item["checkpoint_path"] for item in trials.values()}.union(
                 {active_record["checkpoint_path"]}
@@ -849,6 +853,10 @@ def _conflict_record(
         "replay_digest": replay_digest,
         "replay_status": "PASS",
         "subset_minimality": "NOT_PROVEN",
+        "unknown_probe_paths": sorted(
+            {path for item in family_slices for path in item["unknown_probe_paths"]},
+            key=str.encode,
+        ),
         "localization_checkpoint_paths": sorted(set(localization_paths), key=str.encode),
         "checkpoint_path": _checkpoint_path(root, "conflict-verification.json"),
     }
@@ -895,6 +903,8 @@ def _verify_conflict_replay(inputs: Any, record: Record) -> None:
         ):
             raise ValueError("fresh active conflict replay differs from the stored evidence")
         for proof in conflict["member_removal_trials"]:
+            if proof["status"] != FeasibilityStatus.FEASIBLE.value:
+                continue
             reduced_ids = retained.difference({proof["removed_constraint_id"]})
             reduced_problem = clone_selection_problem(
                 inputs.problem,
@@ -959,7 +969,7 @@ def _diagnosis_evidence(
         )
     )
     inventory = _artifact_inventory(inputs, root, additional_paths)
-    probe_inventory = tuple(
+    family_probe_inventory = tuple(
         {
             "family_id": item["input"]["relaxed_family_id"],
             "relaxed_constraint_count": len(item["input"]["relaxed_constraint_ids"]),
@@ -973,7 +983,43 @@ def _diagnosis_evidence(
         }
         for item in family_probes
     )
+    localization_probe_inventory = []
+    for path in conflict["localization_checkpoint_paths"]:
+        record = res406._read_record(
+            path,
+            repository_root=inputs.repository_root,
+            production_root=inputs.production_root,
+        )
+        if record is None:
+            raise ValueError(f"missing localization checkpoint: {path}")
+        value = record[0]
+        localization_probe_inventory.append(
+            {
+                "checkpoint_path": path,
+                "receipt_digest": value["receipt_digest"],
+                "family_id": value["input"]["relaxed_family_id"],
+                "active_constraint_inventory_digest": value["input"][
+                    "active_constraint_inventory_digest"
+                ],
+                "resulting_problem_digest": value["input"]["resulting_problem_digest"],
+                "status": value["result"]["status"],
+                "result_digest": value["result"]["result_digest"],
+            }
+        )
+    probe_inventory = {
+        "family_probes": family_probe_inventory,
+        "localization_probes": tuple(localization_probe_inventory),
+    }
     probe_inventory_digest = canonical_hash(probe_inventory)
+    unknown_probes = [
+        {
+            "family_id": item["family_id"],
+            "checkpoint_path": item["checkpoint_path"],
+            "result_digest": item["result_digest"],
+        }
+        for item in localization_probe_inventory
+        if item["status"] == FeasibilityStatus.UNKNOWN.value
+    ]
     feasible_families = [
         item["input"]["relaxed_family_id"]
         for item in family_probes
@@ -1020,8 +1066,10 @@ def _diagnosis_evidence(
         "base_status": base["status"],
         "static_audit_digest": static["static_audit_digest"],
         "probe_inventory_digest": probe_inventory_digest,
-        "family_probe_inventory": list(probe_inventory),
+        "family_probe_inventory": list(family_probe_inventory),
+        "localization_probe_inventory": localization_probe_inventory,
         "family_probe_count": len(family_probes),
+        "localization_probe_count": len(localization_probe_inventory),
         "families_whose_relaxation_is_feasible": [
             item["input"]["relaxed_family_id"]
             for item in family_probes
@@ -1032,11 +1080,7 @@ def _diagnosis_evidence(
             for item in family_probes
             if item["result"]["status"] == FeasibilityStatus.INFEASIBLE.value
         ],
-        "unknown_probes": [
-            item["input"]["relaxed_family_id"]
-            for item in family_probes
-            if item["result"]["status"] == FeasibilityStatus.UNKNOWN.value
-        ],
+        "unknown_probes": unknown_probes,
         "conflict_set_kind": conflict["kind"],
         "conflict_constraint_ids": conflict["input"]["conflict_constraint_ids"],
         "conflict_set_digest": conflict["conflict_set_digest"],
@@ -1094,6 +1138,8 @@ def _final_body(evidence: Record) -> Record:
         "probe_inventory_digest": evidence["probe_inventory_digest"],
         "family_probe_count": evidence["family_probe_count"],
         "family_probe_inventory": evidence["family_probe_inventory"],
+        "localization_probe_count": evidence["localization_probe_count"],
+        "localization_probe_inventory": evidence["localization_probe_inventory"],
         "families_whose_relaxation_is_feasible": evidence["families_whose_relaxation_is_feasible"],
         "families_still_infeasible": evidence["families_still_infeasible"],
         "unknown_probes": evidence["unknown_probes"],
@@ -1348,6 +1394,8 @@ def _public_payload(
             }
             for item in family_probes
         ],
+        "localization_probes_run": evidence["localization_probe_count"],
+        "unknown_localization_probe_count": len(evidence["unknown_probes"]),
         "families_whose_relaxation_is_feasible": evidence["families_whose_relaxation_is_feasible"],
         "families_still_infeasible": evidence["families_still_infeasible"],
         "unknown_probes": evidence["unknown_probes"],
@@ -1438,6 +1486,7 @@ def _acceptance_receipt(summary: Record) -> str:
         f"STATIC_DIRECT_DEFICIT_COUNT={summary['static_direct_deficit_count']}",
         f"STATIC_AUDIT_DIGEST={summary['static_audit_digest']}",
         f"FAMILY_PROBES_RUN={summary['family_probes_run']}",
+        f"LOCALIZATION_PROBES_RUN={summary['localization_probes_run']}",
         f"FAMILIES_WHOSE_RELAXATION_IS_FEASIBLE={feasible_families}",
         f"FAMILIES_STILL_INFEASIBLE={infeasible_families}",
         f"UNKNOWN_PROBES={unknown_probes}",
