@@ -632,7 +632,7 @@ def _minimize_family(
     family_ids: tuple[str, ...],
     *,
     verify: bool,
-    max_probes: int = 16,
+    max_probes: int = 8,
 ) -> Record:
     active = list(family_ids)
     trials: dict[tuple[str, ...], Record] = {}
@@ -696,22 +696,24 @@ def _minimize_family(
     )
     if active_record["result"]["status"] != FeasibilityStatus.INFEASIBLE.value:
         raise ValueError(f"localized family conflict does not replay as INFEASIBLE: {family_id}")
-    subset_minimality = True
+    subset_minimality = probe_count + len(active_ids) <= max_probes
     deletion_proofs = []
-    for constraint_id in active_ids:
-        proposed = tuple(item for item in active_ids if item != constraint_id)
-        record = _localization_probe(
-            inputs,
-            root,
-            family_id,
-            family_ids,
-            proposed,
-            verify=verify,
-        )
-        trials[proposed] = record
-        if record["result"]["status"] != FeasibilityStatus.FEASIBLE.value:
-            subset_minimality = False
-        deletion_proofs.append({"removed_constraint_id": constraint_id, **record["result"]})
+    if subset_minimality:
+        for constraint_id in active_ids:
+            proposed = tuple(item for item in active_ids if item != constraint_id)
+            record = _localization_probe(
+                inputs,
+                root,
+                family_id,
+                family_ids,
+                proposed,
+                verify=verify,
+            )
+            trials[proposed] = record
+            probe_count += 1
+            if record["result"]["status"] != FeasibilityStatus.FEASIBLE.value:
+                subset_minimality = False
+            deletion_proofs.append({"removed_constraint_id": constraint_id, **record["result"]})
 
     return {
         "family_id": family_id,
