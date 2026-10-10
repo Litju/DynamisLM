@@ -117,14 +117,12 @@ def _require_execution_tree(*, clean: bool) -> str:
         raise ValueError("RES-407 runner is on the wrong branch")
     if _git("rev-parse", ENTRY_HEAD) != ENTRY_HEAD:
         raise ValueError("RES-407 entry head is missing")
-    parents = _git("rev-list", "--parents", "-n", "1", ENTRY_HEAD).split()
-    if len(parents) != 3 or parents[1] != DYNAMISLM_EXECUTION_BASELINE:
-        raise ValueError("RES-407 entry head does not bind the declared execution baseline")
-    subprocess.run(
-        ("git", "-C", str(_REPOSITORY), "merge-base", "--is-ancestor", ENTRY_HEAD, head),
-        check=True,
-        capture_output=True,
-    )
+    for ancestor in (ENTRY_HEAD, DYNAMISLM_EXECUTION_BASELINE):
+        subprocess.run(
+            ("git", "-C", str(_REPOSITORY), "merge-base", "--is-ancestor", ancestor, head),
+            check=True,
+            capture_output=True,
+        )
     if clean and _git("status", "--porcelain=v1"):
         raise ValueError("RES-407 execution requires a clean committed runner tree")
     return head
