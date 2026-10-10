@@ -205,6 +205,48 @@ def test_unknown_solver_case_never_authorizes_a_repair() -> None:
     assert calls == 1
 
 
+def test_infeasible_full_option_set_prunes_every_subset() -> None:
+    options = tuple(_option(char) for char in "abc")
+    screen_calls: list[tuple[str, ...]] = []
+    evaluated: list[tuple[str, ...]] = []
+
+    def screen(values: tuple[dict[str, str], ...]) -> dict[str, str]:
+        screen_calls.append(tuple(item["candidate_digest"] for item in values))
+        return {"qualification_status": "INFEASIBLE"}
+
+    def evaluate(values: tuple[dict[str, str], ...]) -> dict[str, str]:
+        evaluated.append(tuple(item["candidate_digest"] for item in values))
+        return {"qualification_status": "INFEASIBLE"}
+
+    selected, status, outcomes = res407._search_repair_sets(
+        options, evaluate, superset_screen=screen
+    )
+    assert selected is None
+    assert status == "NO_FEASIBLE_SET_IN_BOUNDED_OPTIONS"
+    assert len(screen_calls) == 1 and len(screen_calls[0]) == len(options)
+    assert evaluated == []
+    assert len(outcomes) == 1
+
+
+def test_unknown_full_option_screen_stops_without_searching_subsets() -> None:
+    options = tuple(_option(char) for char in "abc")
+    evaluated = False
+
+    def evaluate(_values: tuple[dict[str, str], ...]) -> dict[str, str]:
+        nonlocal evaluated
+        evaluated = True
+        return {"qualification_status": "QUALIFIED"}
+
+    selected, status, _outcomes = res407._search_repair_sets(
+        options,
+        evaluate,
+        superset_screen=lambda _values: {"qualification_status": "UNKNOWN"},
+    )
+    assert selected is None
+    assert status == "UNKNOWN"
+    assert not evaluated
+
+
 def test_new_plan_uses_a_new_content_addressed_pool_path_and_original_is_immutable() -> None:
     original = _synthetic_plan()
     addition = res407._synthetic_option_recipes(

@@ -534,8 +534,20 @@ def _addition_sets(options: tuple[Record, ...]) -> Iterator[tuple[Record, ...]]:
 def _search_repair_sets(
     options: tuple[Record, ...],
     evaluate: Callable[[tuple[Record, ...]], Record],
+    *,
+    superset_screen: Callable[[tuple[Record, ...]], Record] | None = None,
 ) -> tuple[tuple[Record, ...] | None, str, tuple[Record, ...]]:
     outcomes: list[Record] = []
+    ordered = _option_order(options)
+    if superset_screen is not None and ordered:
+        screened = superset_screen(ordered)
+        outcomes.append(screened)
+        if screened["qualification_status"] == "UNKNOWN":
+            return None, "UNKNOWN", tuple(outcomes)
+        if screened["qualification_status"] == "INFEASIBLE":
+            return None, "NO_FEASIBLE_SET_IN_BOUNDED_OPTIONS", tuple(outcomes)
+        if screened["qualification_status"] != "BASE_FEASIBLE":
+            raise ValueError("RES-407 maximum-set screen returned an invalid status")
     for selected in _addition_sets(options):
         result = evaluate(tuple(selected))
         outcomes.append(result)
@@ -1144,7 +1156,7 @@ def _run_qualification(repository_root: Path, production_root: Path) -> Record:
     qualification_results: dict[tuple[str, ...], Record] = {}
     minimization_records: list[Record] = []
 
-    def evaluate(selected: tuple[Record, ...]) -> Record:
+    def evaluate(selected: tuple[Record, ...], *, base_only: bool = False) -> Record:
         candidate_digests = tuple(item["candidate_digest"] for item in selected)
         selected_key = tuple(candidate_digests)
         plan, pool, problem = _problem_for_options(inputs, selected, staged_projected)
@@ -1207,6 +1219,8 @@ def _run_qualification(repository_root: Path, production_root: Path) -> Record:
             return {"qualification_status": "UNKNOWN", "trial": trial}
         if trial["status"] == FeasibilityStatus.INFEASIBLE.value:
             return {"qualification_status": "INFEASIBLE", "trial": trial}
+        if base_only:
+            return {"qualification_status": "BASE_FEASIBLE", "trial": trial}
         base = {
             "receipt_digest": trial["receipt_digest"],
             "status": trial["status"],
@@ -1268,7 +1282,11 @@ def _run_qualification(repository_root: Path, production_root: Path) -> Record:
             "minimization_status": minimization_status,
         }
 
-    selected, search_status, outcomes = _search_repair_sets(options, evaluate)
+    selected, search_status, outcomes = _search_repair_sets(
+        options,
+        evaluate,
+        superset_screen=lambda values: evaluate(values, base_only=True),
+    )
     if selected is None and not options:
         authority_expansion = _authority_exhaustion_proven(
             inputs.inventory,
@@ -1302,7 +1320,13 @@ def _run_qualification(repository_root: Path, production_root: Path) -> Record:
         "repair_demand_digest": demand_digest,
         "candidate_option_inventory_digest": option_inventory_record["receipt_digest"],
         "solver_profile": res406._profile(),
-        "order": "addition_count_then_candidate_digest; no authoritative review-cost metric",
+        "order": "maximum-option feasibility screen, then addition_count_then_candidate_digest",
+        "subset_pruning_basis": (
+            "infeasible full option set excludes every subset because omitted candidates "
+            "can be assigned OUT"
+            if search_status == "NO_FEASIBLE_SET_IN_BOUNDED_OPTIONS"
+            else None
+        ),
         "trial_receipt_digests": tuple(
             record["receipt_digest"] for _key, record in sorted(trial_results.items())
         ),
@@ -1331,7 +1355,7 @@ def _run_qualification(repository_root: Path, production_root: Path) -> Record:
         "necessity_receipt_digests": tuple(
             record["receipt_digest"] for record in minimization_records
         ),
-        "evaluated_set_count": len(trial_results),
+        "evaluated_set_count": len(trial_results) - 1,
     }
     search_inventory_record = _write_or_reuse(
         _path(repair_root, "repair-search-inventory.json"),
@@ -1354,7 +1378,7 @@ def _run_qualification(repository_root: Path, production_root: Path) -> Record:
         ),
         "repair_set_digest": repair_set_digest,
         "search_status": search_status,
-        "search_trial_count": len(outcomes) + 1,
+        "search_trial_count": len(trial_results) - 1,
         "review_cost": None,
         "review_cost_authority": None,
         "minimality_status": (
@@ -1587,7 +1611,7 @@ def _run_qualification(repository_root: Path, production_root: Path) -> Record:
         "repaired_origin_counts": repaired_origin_counts,
         "repaired_cell_counts": repaired_cell_counts,
         "repair_search_inventory_digest": search_inventory_record["receipt_digest"],
-        "repair_trial_count": len(outcomes) + 1,
+        "repair_trial_count": len(trial_results) - 1,
         "repair_set_receipt_digest": repair_set_record["receipt_digest"],
         "repair_set_digest": repair_set_digest,
         "retained_addition_count": len(retained_options),
