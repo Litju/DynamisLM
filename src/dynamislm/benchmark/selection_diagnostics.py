@@ -8,6 +8,7 @@ from typing import Any
 from dynamislm.benchmark.constants import SPLIT_ORDER
 from dynamislm.benchmark.selection_contracts import (
     ConstraintKind,
+    FeatureKind,
     FinalSelectionProblem,
     SelectionConstraint,
     SelectionConstraintSet,
@@ -187,6 +188,95 @@ def selection_support_audit_digest(rows: tuple[dict[str, Any], ...]) -> str:
     return canonical_hash(rows)
 
 
+def selection_constraint_families(
+    problem: FinalSelectionProblem,
+) -> tuple[tuple[str, tuple[str, ...]], ...]:
+    """Return present hard-constraint families, keeping one-state constraints separate."""
+
+    constraints = problem.constraint_set.constraints
+    families: list[tuple[str, tuple[str, ...]]] = []
+    groups: tuple[tuple[str, tuple[SelectionConstraint, ...]], ...] = (
+        (
+            "FINAL_COUNT",
+            tuple(item for item in constraints if item.kind is ConstraintKind.FINAL_COUNT),
+        ),
+        (
+            "SPLIT_COUNT",
+            tuple(item for item in constraints if item.kind is ConstraintKind.SPLIT_COUNT),
+        ),
+        *(
+            (
+                f"FEATURE_MINIMUM:{feature_kind.value}",
+                tuple(
+                    item
+                    for item in constraints
+                    if item.kind is ConstraintKind.FEATURE_MINIMUM
+                    and item.feature is not None
+                    and item.feature.kind is feature_kind
+                ),
+            )
+            for feature_kind in FeatureKind
+        ),
+        (
+            "ORIGIN_BOUNDS",
+            tuple(item for item in constraints if item.kind is ConstraintKind.ORIGIN_BOUNDS),
+        ),
+        (
+            "MUTATION_LINEAGE_MINIMUM",
+            tuple(
+                item for item in constraints if item.kind is ConstraintKind.MUTATION_LINEAGE_MINIMUM
+            ),
+        ),
+        (
+            "SYNTHETIC_SPLIT_LOCK",
+            tuple(item for item in constraints if item.kind is ConstraintKind.SYNTHETIC_SPLIT_LOCK),
+        ),
+        (
+            "CONDITIONAL_COLOCATION / isolation",
+            tuple(
+                item for item in constraints if item.kind is ConstraintKind.CONDITIONAL_COLOCATION
+            ),
+        ),
+        (
+            "MUTATION_PARENT_PROVENANCE",
+            tuple(
+                item
+                for item in constraints
+                if item.kind is ConstraintKind.MUTATION_PARENT_PROVENANCE
+            ),
+        ),
+        (
+            "MUTATION_PARENT_CELL_INHERITANCE",
+            tuple(
+                item
+                for item in constraints
+                if item.kind is ConstraintKind.MUTATION_PARENT_CELL_INHERITANCE
+            ),
+        ),
+        (
+            "QUALIFICATION/ELIGIBILITY_FORCING",
+            tuple(
+                item
+                for item in constraints
+                if item.kind
+                in {
+                    ConstraintKind.REVIEW_OUT_ONLY,
+                    ConstraintKind.QUALIFICATION_OUT_ONLY,
+                }
+            ),
+        ),
+    )
+    for family_id, members in groups:
+        if members:
+            families.append(
+                (
+                    family_id,
+                    tuple(sorted((item.constraint_id for item in members), key=str.encode)),
+                )
+            )
+    return tuple(families)
+
+
 def clone_selection_problem(
     problem: FinalSelectionProblem,
     constraints: Iterable[SelectionConstraint],
@@ -228,56 +318,9 @@ def clone_selection_problem(
     return clone
 
 
-def final_count_forced_out_core(
-    problem: FinalSelectionProblem,
-) -> tuple[str, ...] | None:
-    """Return a deterministic minimal count conflict from explicit OUT constraints."""
-
-    final_count = next(
-        (
-            item
-            for item in problem.constraint_set.constraints
-            if item.kind is ConstraintKind.FINAL_COUNT
-        ),
-        None,
-    )
-    if final_count is None or final_count.minimum is None:
-        return None
-    if final_count.minimum > len(problem.candidates):
-        return (final_count.constraint_id,)
-    constraints_by_candidate: dict[str, list[str]] = {}
-    for constraint in problem.constraint_set.constraints:
-        if constraint.kind in {
-            ConstraintKind.REVIEW_OUT_ONLY,
-            ConstraintKind.QUALIFICATION_OUT_ONLY,
-        }:
-            constraints_by_candidate.setdefault(constraint.candidate_ids[0], []).append(
-                constraint.constraint_id
-            )
-    needed = len(problem.candidates) - final_count.minimum + 1
-    if len(constraints_by_candidate) < needed:
-        return None
-    chosen = tuple(
-        min(constraints_by_candidate[candidate_id], key=str.encode)
-        for candidate_id in sorted(constraints_by_candidate, key=str.encode)[:needed]
-    )
-    return tuple(sorted((final_count.constraint_id, *chosen), key=str.encode))
-
-
-def constraint_rows_by_id(
-    problem: FinalSelectionProblem, constraint_ids: Iterable[str]
-) -> tuple[SelectionConstraint, ...]:
-    by_id = {item.constraint_id: item for item in problem.constraint_set.constraints}
-    ids = tuple(sorted(set(constraint_ids), key=str.encode))
-    if any(constraint_id not in by_id for constraint_id in ids):
-        raise ValueError("diagnostic constraint set references an unknown constraint ID")
-    return tuple(by_id[constraint_id] for constraint_id in ids)
-
-
 __all__ = [
     "clone_selection_problem",
-    "constraint_rows_by_id",
-    "final_count_forced_out_core",
+    "selection_constraint_families",
     "selection_support_audit",
     "selection_support_audit_digest",
 ]

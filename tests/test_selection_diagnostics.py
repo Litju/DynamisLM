@@ -17,7 +17,7 @@ from dynamislm.benchmark.selection_contracts import (
 )
 from dynamislm.benchmark.selection_diagnostics import (
     clone_selection_problem,
-    final_count_forced_out_core,
+    selection_constraint_families,
     selection_support_audit,
 )
 from dynamislm.benchmark.selection_solver import solve_selection_feasibility
@@ -117,17 +117,10 @@ def test_static_support_audit_finds_forced_out_feature_deficit() -> None:
     assert feature_row["individually_impossible"] is True
 
 
-def test_final_count_forced_out_core_replays_and_is_subset_minimal() -> None:
+def test_family_ablation_keeps_one_state_and_validates_its_witness() -> None:
     problem = _problem()
-    core_ids = final_count_forced_out_core(problem)
-    assert core_ids is not None
-    core = clone_selection_problem(
-        problem,
-        (
-            item
-            for item in problem.constraint_set.constraints
-            if item.kind is ConstraintKind.ONE_STATE_PER_CANDIDATE or item.constraint_id in core_ids
-        ),
+    family_ids = set(
+        dict(selection_constraint_families(problem))["QUALIFICATION/ELIGIBILITY_FORCING"]
     )
     config = SelectionSolverConfig(
         workers=1,
@@ -135,22 +128,45 @@ def test_final_count_forced_out_core_replays_and_is_subset_minimal() -> None:
         timeout_s=5.0,
         cp_model_presolve=False,
     )
-
-    assert (
-        solve_selection_feasibility(core, solver_config=config).status
-        is FeasibilityStatus.INFEASIBLE
+    baseline = solve_selection_feasibility(problem, solver_config=config)
+    relaxed = clone_selection_problem(
+        problem,
+        (
+            item
+            for item in problem.constraint_set.constraints
+            if item.constraint_id not in family_ids
+        ),
     )
-    for removed_id in core_ids:
-        reduced = clone_selection_problem(
-            problem,
-            (
-                item
-                for item in problem.constraint_set.constraints
-                if item.kind is ConstraintKind.ONE_STATE_PER_CANDIDATE
-                or (item.constraint_id in core_ids and item.constraint_id != removed_id)
-            ),
-        )
-        assert (
-            solve_selection_feasibility(reduced, solver_config=config).status
-            is FeasibilityStatus.FEASIBLE
-        )
+
+    assert baseline.status is FeasibilityStatus.INFEASIBLE
+    assert relaxed.candidates == problem.candidates
+    assert sum(
+        item.kind is ConstraintKind.ONE_STATE_PER_CANDIDATE
+        for item in relaxed.constraint_set.constraints
+    ) == len(problem.candidates)
+    result = solve_selection_feasibility(relaxed, solver_config=config)
+    assert result.status is FeasibilityStatus.FEASIBLE
+    assert result.plan_digest is not None and result.validation_digest is not None
+
+
+def test_family_inventory_omits_one_state_and_groups_by_feature_kind() -> None:
+    problem = _problem()
+
+    families = dict(selection_constraint_families(problem))
+
+    assert "ONE_STATE_PER_CANDIDATE" not in families
+    assert families["FEATURE_MINIMUM:CELL"] == ("TEST:FEATURE_MINIMUM",)
+    assert len(families["QUALIFICATION/ELIGIBILITY_FORCING"]) == 2
+    without_feature = clone_selection_problem(
+        problem,
+        (
+            item
+            for item in problem.constraint_set.constraints
+            if item.constraint_id != "TEST:FEATURE_MINIMUM"
+        ),
+    )
+    assert without_feature.candidates == problem.candidates
+    assert sum(
+        item.kind is ConstraintKind.ONE_STATE_PER_CANDIDATE
+        for item in without_feature.constraint_set.constraints
+    ) == len(problem.candidates)

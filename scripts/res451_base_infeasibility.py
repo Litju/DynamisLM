@@ -9,7 +9,7 @@ import os
 import subprocess
 import sys
 from collections import Counter
-from dataclasses import replace
+from dataclasses import fields, replace
 from pathlib import Path
 from typing import Any
 
@@ -31,12 +31,15 @@ from dynamislm.benchmark.selection_contracts import (  # noqa: E402
 )
 from dynamislm.benchmark.selection_diagnostics import (  # noqa: E402
     clone_selection_problem,
-    constraint_rows_by_id,
-    final_count_forced_out_core,
+    selection_constraint_families,
     selection_support_audit,
     selection_support_audit_digest,
 )
+from dynamislm.benchmark.selection_pool import _planning_candidates  # noqa: E402
 from dynamislm.benchmark.selection_solver import solve_selection_feasibility  # noqa: E402
+from dynamislm.benchmark.variable_pool import (  # noqa: E402
+    project_variable_pool_selection_candidates,
+)
 from dynamislm.serialization import canonical_hash  # noqa: E402
 from scripts import res406_pool_qualification as res406  # noqa: E402
 
@@ -238,28 +241,61 @@ def _base_checkpoint(inputs: Any, root: str, *, run_solver: bool) -> Record:
 
 def _review_projection_evidence(inputs: Any) -> Record:
     packet_by_id = {item.candidate_id: item for item in inputs.pool.packets}
-    candidate_by_id = {item.candidate_id: item for item in inputs.problem.candidates}
-    mismatches = []
+    raw_projection = project_variable_pool_selection_candidates(
+        inputs.pool,
+        source_resolver=inputs.source_resolver,
+    )
+    raw_by_id = {item.candidate_id: item for item in raw_projection}
+    planned_projection = _planning_candidates(raw_projection)
+    planned_by_id = {item.candidate_id: item for item in planned_projection}
+    current_by_id = {item.candidate_id: item for item in inputs.problem.candidates}
+    packet_projection_mismatches = []
     packet_counts: Counter[str] = Counter()
-    projection_counts: Counter[str] = Counter()
+    raw_projection_counts: Counter[str] = Counter()
+    planned_projection_counts: Counter[str] = Counter()
     for candidate_id, packet in packet_by_id.items():
         packet_status = packet.review_status.value
-        projected = candidate_by_id[candidate_id].review_eligibility
+        projected = raw_by_id[candidate_id].review_eligibility
+        planned = planned_by_id[candidate_id].review_eligibility
         packet_counts[packet_status] += 1
-        projection_counts[projected.value] += 1
+        raw_projection_counts[projected.value] += 1
+        planned_projection_counts[planned.value] += 1
         if _review_eligibility(packet.review_status) is not projected:
-            mismatches.append(
+            packet_projection_mismatches.append(
                 {
                     "candidate_id": candidate_id,
                     "packet_review_status": packet_status,
-                    "projected_review_eligibility": projected.value,
+                    "raw_projected_review_eligibility": projected.value,
                 }
             )
+    planning_mismatches = []
+    for candidate_id in sorted(current_by_id, key=str.encode):
+        expected = planned_by_id[candidate_id]
+        observed = current_by_id[candidate_id]
+        differing_fields = [
+            item.name
+            for item in fields(expected)
+            if getattr(expected, item.name) != getattr(observed, item.name)
+        ]
+        if differing_fields:
+            planning_mismatches.append(
+                {"candidate_id": candidate_id, "differing_fields": differing_fields}
+            )
+    overrides = sum(
+        raw_by_id[candidate_id].review_eligibility
+        is not planned_by_id[candidate_id].review_eligibility
+        for candidate_id in raw_by_id
+    )
     return {
         "packet_review_status_counts": dict(sorted(packet_counts.items())),
-        "projected_review_eligibility_counts": dict(sorted(projection_counts.items())),
-        "projection_mismatch_count": len(mismatches),
-        "projection_mismatches": mismatches,
+        "raw_projected_review_eligibility_counts": dict(sorted(raw_projection_counts.items())),
+        "planning_review_eligibility_counts": dict(sorted(planned_projection_counts.items())),
+        "planning_eligibility_override_count": overrides,
+        "packet_projection_mismatch_count": len(packet_projection_mismatches),
+        "packet_projection_mismatches": packet_projection_mismatches,
+        "planning_problem_mismatch_count": len(planning_mismatches),
+        "planning_problem_mismatches": planning_mismatches,
+        "projection_mismatch_count": len(packet_projection_mismatches) + len(planning_mismatches),
     }
 
 
@@ -447,60 +483,343 @@ def _replay_result(problem: FinalSelectionProblem) -> Record:
     }
 
 
-def _conflict_record(inputs: Any, root: str, rows: tuple[Record, ...]) -> Record:
-    constraint_ids = final_count_forced_out_core(inputs.problem)
-    if constraint_ids is None:
-        raise ValueError("no deterministic final-count forced-OUT conflict can be established")
-    one_state_ids = {
-        item.constraint_id
-        for item in inputs.problem.constraint_set.constraints
-        if item.kind is ConstraintKind.ONE_STATE_PER_CANDIDATE
-    }
-    core_rows = constraint_rows_by_id(inputs.problem, constraint_ids)
-    keep_ids = one_state_ids.union(constraint_ids)
-    core_problem = clone_selection_problem(
+def _slug(value: str) -> str:
+    result = "".join(char.lower() if char.isalnum() else "-" for char in value)
+    return "-".join(part for part in result.split("-") if part)
+
+
+def _family_probe(
+    inputs: Any,
+    root: str,
+    family_id: str,
+    relaxed_ids: tuple[str, ...],
+    *,
+    verify: bool,
+) -> Record:
+    path = _checkpoint_path(root, f"family-probes/{_slug(family_id)}.json")
+    relaxed = set(relaxed_ids)
+    active_problem = clone_selection_problem(
         inputs.problem,
         (
             item
             for item in inputs.problem.constraint_set.constraints
-            if item.constraint_id in keep_ids
+            if item.constraint_id not in relaxed
         ),
     )
-    active_replay = _replay_result(core_problem)
-    if active_replay["status"] != FeasibilityStatus.INFEASIBLE.value:
-        raise ValueError("reported conflict constraints did not replay as INFEASIBLE")
+    probe_input = {
+        **_binding(inputs),
+        "relaxed_family_id": family_id,
+        "relaxed_constraint_ids": list(relaxed_ids),
+        "active_constraint_inventory_digest": active_problem.constraint_inventory_digest,
+        "resulting_problem_digest": active_problem.problem_digest,
+        "solver_profile": _core_profile(),
+    }
+    existing = res406._read_record(
+        path,
+        repository_root=inputs.repository_root,
+        production_root=inputs.production_root,
+    )
+    if existing is not None:
+        record = existing[0]
+        if (
+            record.get("schema_version") != "RES451-FAMILY-PROBE@1.0.0"
+            or record.get("input") != probe_input
+        ):
+            raise ValueError(f"RES-451 family probe checkpoint is stale: {family_id}")
+        if verify:
+            observed = _replay_result(active_problem)
+            if observed != record.get("result"):
+                raise ValueError(f"fresh family probe differs from checkpoint: {family_id}")
+        return record
 
-    deletion_trials = []
-    for removed_id in constraint_ids:
-        reduced_problem = clone_selection_problem(
+    result = _replay_result(active_problem)
+    body = {
+        "schema_version": "RES451-FAMILY-PROBE@1.0.0",
+        "input": probe_input,
+        "result": result,
+        "checkpoint_path": path,
+    }
+    return res406._write_record(
+        path,
+        body,
+        repository_root=inputs.repository_root,
+        production_root=inputs.production_root,
+    )
+
+
+def _family_probes(inputs: Any, root: str, *, verify: bool) -> tuple[Record, ...]:
+    records = []
+    for family_id, relaxed_ids in selection_constraint_families(inputs.problem):
+        record = _family_probe(inputs, root, family_id, relaxed_ids, verify=verify)
+        status = record["result"]["status"]
+        if status == FeasibilityStatus.UNKNOWN.value:
+            raise ValueError(f"RES-451 family probe returned UNKNOWN: {family_id}")
+        records.append(record)
+    return tuple(records)
+
+
+def _localization_probe(
+    inputs: Any,
+    root: str,
+    family_id: str,
+    family_ids: tuple[str, ...],
+    retained_family_ids: tuple[str, ...],
+    *,
+    verify: bool,
+) -> Record:
+    relaxed_ids = tuple(sorted(set(family_ids).difference(retained_family_ids), key=str.encode))
+    relaxed = set(relaxed_ids)
+    active_problem = clone_selection_problem(
+        inputs.problem,
+        (
+            item
+            for item in inputs.problem.constraint_set.constraints
+            if item.constraint_id not in relaxed
+        ),
+    )
+    path_key = canonical_hash(retained_family_ids).removeprefix("sha256:")[:20]
+    path = _checkpoint_path(
+        root,
+        f"localization/{_slug(family_id)}/{path_key}.json",
+    )
+    probe_input = {
+        **_binding(inputs),
+        "relaxed_family_id": family_id,
+        "family_constraint_ids": list(family_ids),
+        "retained_family_constraint_ids": list(retained_family_ids),
+        "relaxed_constraint_ids": list(relaxed_ids),
+        "active_constraint_inventory_digest": active_problem.constraint_inventory_digest,
+        "resulting_problem_digest": active_problem.problem_digest,
+        "solver_profile": _core_profile(),
+    }
+    existing = res406._read_record(
+        path,
+        repository_root=inputs.repository_root,
+        production_root=inputs.production_root,
+    )
+    if existing is not None:
+        record = existing[0]
+        if (
+            record.get("schema_version") != "RES451-LOCALIZATION-PROBE@1.0.0"
+            or record.get("input") != probe_input
+        ):
+            raise ValueError(f"RES-451 localization checkpoint is stale: {family_id}")
+        if verify:
+            observed = _replay_result(active_problem)
+            if observed != record.get("result"):
+                raise ValueError(f"fresh localization probe differs from checkpoint: {family_id}")
+        return record
+
+    result = _replay_result(active_problem)
+    if result["status"] == FeasibilityStatus.UNKNOWN.value:
+        raise ValueError(f"RES-451 localization probe returned UNKNOWN: {family_id}")
+    body = {
+        "schema_version": "RES451-LOCALIZATION-PROBE@1.0.0",
+        "input": probe_input,
+        "result": result,
+        "checkpoint_path": path,
+    }
+    return res406._write_record(
+        path,
+        body,
+        repository_root=inputs.repository_root,
+        production_root=inputs.production_root,
+    )
+
+
+def _minimize_family(
+    inputs: Any,
+    root: str,
+    family_id: str,
+    family_ids: tuple[str, ...],
+    *,
+    verify: bool,
+    max_probes: int = 128,
+) -> Record:
+    active = list(family_ids)
+    trials: dict[tuple[str, ...], Record] = {}
+    probe_count = 0
+    granularity = 2
+    while len(active) > 1 and probe_count < max_probes:
+        chunk_size = (len(active) + granularity - 1) // granularity
+        chunks = [active[index : index + chunk_size] for index in range(0, len(active), chunk_size)]
+        reduced = False
+        for chunk in chunks:
+            proposed = tuple(item for item in active if item not in set(chunk))
+            record = _localization_probe(
+                inputs,
+                root,
+                family_id,
+                family_ids,
+                proposed,
+                verify=verify,
+            )
+            trials[proposed] = record
+            probe_count += 1
+            if record["result"]["status"] == FeasibilityStatus.INFEASIBLE.value:
+                active = list(proposed)
+                granularity = max(2, granularity - 1)
+                reduced = True
+                break
+        if reduced:
+            continue
+        if granularity >= len(active):
+            break
+        granularity = min(len(active), granularity * 2)
+
+    if probe_count < max_probes:
+        for constraint_id in tuple(active):
+            if constraint_id not in active:
+                continue
+            if probe_count >= max_probes:
+                break
+            proposed = tuple(item for item in active if item != constraint_id)
+            record = _localization_probe(
+                inputs,
+                root,
+                family_id,
+                family_ids,
+                proposed,
+                verify=verify,
+            )
+            trials[proposed] = record
+            probe_count += 1
+            if record["result"]["status"] == FeasibilityStatus.INFEASIBLE.value:
+                active = list(proposed)
+            elif record["result"]["status"] != FeasibilityStatus.FEASIBLE.value:
+                raise ValueError(f"RES-451 subset-minimality probe was inconclusive: {family_id}")
+
+    active_ids = tuple(sorted(active, key=str.encode))
+    active_record = _localization_probe(
+        inputs,
+        root,
+        family_id,
+        family_ids,
+        active_ids,
+        verify=verify,
+    )
+    if active_record["result"]["status"] != FeasibilityStatus.INFEASIBLE.value:
+        raise ValueError(f"localized family conflict does not replay as INFEASIBLE: {family_id}")
+    subset_minimality = True
+    deletion_proofs = []
+    for constraint_id in active_ids:
+        proposed = tuple(item for item in active_ids if item != constraint_id)
+        record = _localization_probe(
+            inputs,
+            root,
+            family_id,
+            family_ids,
+            proposed,
+            verify=verify,
+        )
+        trials[proposed] = record
+        if record["result"]["status"] != FeasibilityStatus.FEASIBLE.value:
+            subset_minimality = False
+        deletion_proofs.append({"removed_constraint_id": constraint_id, **record["result"]})
+
+    return {
+        "family_id": family_id,
+        "family_constraint_ids": list(family_ids),
+        "localized_family_constraint_ids": list(active_ids),
+        "subset_minimality": "PROVEN" if subset_minimality else "NOT_PROVEN",
+        "probe_count": probe_count,
+        "active_replay": active_record["result"],
+        "member_removal_trials": deletion_proofs,
+        "localization_checkpoint_paths": sorted(
+            {item["checkpoint_path"] for item in trials.values()}.union(
+                {active_record["checkpoint_path"]}
+            ),
+            key=str.encode,
+        ),
+    }
+
+
+def _conflict_record(
+    inputs: Any,
+    root: str,
+    rows: tuple[Record, ...],
+    family_probes: tuple[Record, ...],
+    *,
+    verify: bool,
+) -> Record:
+    families = dict(selection_constraint_families(inputs.problem))
+    probe_by_family = {item["input"]["relaxed_family_id"]: item for item in family_probes}
+    feasible_families = [
+        family_id
+        for family_id, record in probe_by_family.items()
+        if record["result"]["status"] == FeasibilityStatus.FEASIBLE.value
+    ]
+    if not feasible_families:
+        raise ValueError("no single-family relaxation proves a feasible counterfactual")
+
+    family_slices = []
+    localization_paths = []
+    for family_id in feasible_families:
+        localized = _minimize_family(
+            inputs,
+            root,
+            family_id,
+            families[family_id],
+            verify=False,
+        )
+        localization_paths.extend(localized["localization_checkpoint_paths"])
+        retained = set(localized["localized_family_constraint_ids"])
+        relaxed = set(families[family_id]).difference(retained)
+        active_problem = clone_selection_problem(
             inputs.problem,
             (
                 item
                 for item in inputs.problem.constraint_set.constraints
-                if item.kind is ConstraintKind.ONE_STATE_PER_CANDIDATE
-                or (item.constraint_id in constraint_ids and item.constraint_id != removed_id)
+                if item.constraint_id not in relaxed
             ),
         )
-        result = _replay_result(reduced_problem)
-        if result["status"] != FeasibilityStatus.FEASIBLE.value:
-            raise ValueError(f"removing conflict member did not prove feasibility: {removed_id}")
-        deletion_trials.append({"removed_constraint_id": removed_id, **result})
+        active_ids = tuple(item.constraint_id for item in active_problem.constraint_set.constraints)
+        audit_by_id = {item["constraint_id"]: item for item in rows}
+        active_rows = tuple(audit_by_id[item] for item in active_ids)
+        localized_rows = tuple(
+            audit_by_id[item] for item in localized["localized_family_constraint_ids"]
+        )
+        conflict_digest = canonical_hash(
+            {
+                "kind": "BOUNDED_CONFLICT_SET",
+                "family_id": family_id,
+                "active_constraint_inventory_digest": active_problem.constraint_inventory_digest,
+                "active_problem_digest": active_problem.problem_digest,
+                "active_constraints": active_rows,
+                "localized_family_constraints": localized_rows,
+            }
+        )
+        family_slices.append(
+            {
+                **localized,
+                "active_constraint_ids": list(active_ids),
+                "active_constraint_inventory_digest": active_problem.constraint_inventory_digest,
+                "active_problem_digest": active_problem.problem_digest,
+                "active_constraints": list(active_rows),
+                "localized_family_constraints": list(localized_rows),
+                "conflict_set_digest": conflict_digest,
+            }
+        )
 
-    audit_by_id = {item["constraint_id"]: item for item in rows}
-    conflict_rows = tuple(audit_by_id[item.constraint_id] for item in core_rows)
-    conflict_digest = canonical_hash(
+    replay_digest = canonical_hash(
+        tuple(
+            {
+                "family_id": item["family_id"],
+                "active_replay": item["active_replay"],
+                "member_removal_trials": item["member_removal_trials"],
+            }
+            for item in family_slices
+        )
+    )
+    kind = "BOUNDED_CONFLICT_SET"
+    overall_digest = canonical_hash(
         {
-            "kind": "SUBSET_MINIMAL_CONFLICT_SET",
-            "always_active_family": "ONE_STATE_PER_CANDIDATE",
-            "constraints": conflict_rows,
+            "kind": kind,
+            "family_conflicts": tuple(
+                (item["family_id"], item["conflict_set_digest"]) for item in family_slices
+            ),
         }
     )
-    replay = {
-        "active_constraints": active_replay,
-        "member_removal_trials": deletion_trials,
-        "subset_minimality": "PROVEN",
-    }
-    replay["replay_digest"] = canonical_hash(replay)
     body = {
         "schema_version": _CONFLICT_SCHEMA,
         "input": {
@@ -508,27 +827,104 @@ def _conflict_record(inputs: Any, root: str, rows: tuple[Record, ...]) -> Record
             "base_status": FeasibilityStatus.INFEASIBLE.value,
             "core_replay_solver_profile": _core_profile(),
             "static_audit_digest": selection_support_audit_digest(rows),
-            "retained_constraint_inventory_digest": core_problem.constraint_inventory_digest,
-            "conflict_constraint_ids": list(constraint_ids),
+            "family_probe_inventory_digest": canonical_hash(
+                tuple(
+                    (item["input"]["relaxed_family_id"], item["receipt_digest"])
+                    for item in family_probes
+                )
+            ),
+            "conflict_family_ids": feasible_families,
+            "conflict_constraint_ids": sorted(
+                {
+                    constraint_id
+                    for item in family_slices
+                    for constraint_id in item["localized_family_constraint_ids"]
+                },
+                key=str.encode,
+            ),
         },
-        "kind": "SUBSET_MINIMAL_CONFLICT_SET",
-        "constraints": list(conflict_rows),
-        "conflict_set_digest": conflict_digest,
-        "replay": replay,
+        "kind": kind,
+        "family_conflicts": family_slices,
+        "conflict_set_digest": overall_digest,
+        "replay_digest": replay_digest,
+        "replay_status": "PASS",
+        "subset_minimality": "NOT_PROVEN",
+        "localization_checkpoint_paths": sorted(set(localization_paths), key=str.encode),
+        "checkpoint_path": _checkpoint_path(root, "conflict-verification.json"),
     }
-    return _write_or_reuse(
-        _checkpoint_path(root, "conflict-verification.json"),
+    relative = _checkpoint_path(root, "conflict-verification.json")
+    existing = res406._read_record(
+        relative,
+        repository_root=inputs.repository_root,
+        production_root=inputs.production_root,
+    )
+    if existing is not None:
+        record = existing[0]
+        if record != res406._bound(body):
+            raise ValueError("RES-451 conflict checkpoint differs from current family evidence")
+        if verify:
+            _verify_conflict_replay(inputs, record)
+        return record
+    record = res406._write_record(
+        relative,
         body,
         repository_root=inputs.repository_root,
         production_root=inputs.production_root,
     )
+    _verify_conflict_replay(inputs, record)
+    return record
 
 
-def _artifact_inventory(inputs: Any, root: str) -> tuple[tuple[str, str, int], ...]:
-    relative_paths = (
-        _checkpoint_path(root, "base-confirmation.json"),
-        _checkpoint_path(root, "static-audit.json"),
-        _checkpoint_path(root, "conflict-verification.json"),
+def _verify_conflict_replay(inputs: Any, record: Record) -> None:
+    for conflict in record["family_conflicts"]:
+        retained = set(conflict["active_constraint_ids"])
+        active_problem = clone_selection_problem(
+            inputs.problem,
+            (
+                item
+                for item in inputs.problem.constraint_set.constraints
+                if item.constraint_id in retained
+            ),
+        )
+        active = _replay_result(active_problem)
+        if (
+            active != conflict["active_replay"]
+            or active_problem.problem_digest != conflict["active_problem_digest"]
+            or active_problem.constraint_inventory_digest
+            != conflict["active_constraint_inventory_digest"]
+        ):
+            raise ValueError("fresh active conflict replay differs from the stored evidence")
+        for proof in conflict["member_removal_trials"]:
+            reduced_ids = retained.difference({proof["removed_constraint_id"]})
+            reduced_problem = clone_selection_problem(
+                inputs.problem,
+                (
+                    item
+                    for item in inputs.problem.constraint_set.constraints
+                    if item.constraint_id in reduced_ids
+                ),
+            )
+            observed = _replay_result(reduced_problem)
+            expected = {key: proof[key] for key in observed}
+            if observed != expected:
+                raise ValueError(
+                    "fresh conflict member-removal replay differs from stored evidence"
+                )
+
+
+def _artifact_inventory(
+    inputs: Any, root: str, additional_paths: tuple[str, ...]
+) -> tuple[tuple[str, str, int], ...]:
+    relative_paths = tuple(
+        sorted(
+            {
+                _checkpoint_path(root, "base-confirmation.json"),
+                _checkpoint_path(root, "static-audit.json"),
+                _checkpoint_path(root, "conflict-verification.json"),
+                *additional_paths,
+            },
+            key=str.encode,
+        )
     )
     inventory = []
     for relative in relative_paths:
@@ -551,9 +947,64 @@ def _diagnosis_evidence(
     conflict: Record,
     authority_check: Record,
     review_evidence: Record,
+    family_probes: tuple[Record, ...],
 ) -> Record:
-    inventory = _artifact_inventory(inputs, root)
-    probe_inventory_digest = canonical_hash(())
+    additional_paths = tuple(
+        sorted(
+            {
+                *(item["checkpoint_path"] for item in family_probes),
+                *conflict["localization_checkpoint_paths"],
+            },
+            key=str.encode,
+        )
+    )
+    inventory = _artifact_inventory(inputs, root, additional_paths)
+    probe_inventory = tuple(
+        {
+            "family_id": item["input"]["relaxed_family_id"],
+            "relaxed_constraint_count": len(item["input"]["relaxed_constraint_ids"]),
+            "receipt_digest": item["receipt_digest"],
+            "resulting_problem_digest": item["input"]["resulting_problem_digest"],
+            "active_constraint_inventory_digest": item["input"][
+                "active_constraint_inventory_digest"
+            ],
+            "status": item["result"]["status"],
+            "result_digest": item["result"]["result_digest"],
+        }
+        for item in family_probes
+    )
+    probe_inventory_digest = canonical_hash(probe_inventory)
+    feasible_families = [
+        item["input"]["relaxed_family_id"]
+        for item in family_probes
+        if item["result"]["status"] == FeasibilityStatus.FEASIBLE.value
+    ]
+    if authority_check["authority_arithmetic_conflicts"]:
+        disposition = "FIX_CONSTRAINT_AUTHORITY"
+        root_cause_summary = (
+            "The current final, split, and origin bounds contain an independent arithmetic "
+            "contradiction, so the base infeasibility cannot be attributed to pool support alone."
+        )
+    elif review_evidence["projection_mismatch_count"]:
+        disposition = "IMPLEMENTATION_DEFECT"
+        root_cause_summary = (
+            "The RES-369 projection does not match the packet-to-selection adapter or the "
+            "RES-406 planning transformation; exact candidate and field mismatches are retained "
+            "privately."
+        )
+    elif feasible_families:
+        disposition = "POOL_DEFICIT"
+        root_cause_summary = (
+            "The static audit found no individually impossible bounded obligation. Removing each "
+            "listed family in isolation produced a validated witness, while the immutable current "
+            "pool is infeasible with all current constraints active. This is a joint compatible-"
+            "support deficit in the pool; relaxing constraints is counterfactual evidence only."
+        )
+    else:
+        disposition = "UNRESOLVED"
+        root_cause_summary = (
+            "Static support and one-family ablations did not isolate a single-family pool deficit."
+        )
     final_count = next(
         row for row in static["constraints"] if row["kind"] == ConstraintKind.FINAL_COUNT.value
     )
@@ -569,27 +1020,58 @@ def _diagnosis_evidence(
         "base_status": base["status"],
         "static_audit_digest": static["static_audit_digest"],
         "probe_inventory_digest": probe_inventory_digest,
+        "family_probe_inventory": list(probe_inventory),
+        "family_probe_count": len(family_probes),
+        "families_whose_relaxation_is_feasible": [
+            item["input"]["relaxed_family_id"]
+            for item in family_probes
+            if item["result"]["status"] == FeasibilityStatus.FEASIBLE.value
+        ],
+        "families_still_infeasible": [
+            item["input"]["relaxed_family_id"]
+            for item in family_probes
+            if item["result"]["status"] == FeasibilityStatus.INFEASIBLE.value
+        ],
+        "unknown_probes": [
+            item["input"]["relaxed_family_id"]
+            for item in family_probes
+            if item["result"]["status"] == FeasibilityStatus.UNKNOWN.value
+        ],
         "conflict_set_kind": conflict["kind"],
         "conflict_constraint_ids": conflict["input"]["conflict_constraint_ids"],
         "conflict_set_digest": conflict["conflict_set_digest"],
-        "conflict_replay_digest": conflict["replay"]["replay_digest"],
+        "conflict_replay_digest": conflict["replay_digest"],
         "authority_arithmetic": authority_check,
         "review_projection_evidence_digest": canonical_hash(review_evidence),
         "packet_review_status_counts": review_evidence["packet_review_status_counts"],
-        "projected_review_eligibility_counts": review_evidence[
-            "projected_review_eligibility_counts"
+        "raw_projected_review_eligibility_counts": review_evidence[
+            "raw_projected_review_eligibility_counts"
+        ],
+        "planning_review_eligibility_counts": review_evidence["planning_review_eligibility_counts"],
+        "planning_eligibility_override_count": review_evidence[
+            "planning_eligibility_override_count"
         ],
         "review_projection_mismatch_count": review_evidence["projection_mismatch_count"],
+        "review_projection_mismatches": review_evidence["packet_projection_mismatches"],
+        "planning_problem_mismatches": review_evidence["planning_problem_mismatches"],
         "final_count_required": final_count["minimum"],
         "final_count_maximum_support": final_count["maximum_support_compatible_with_split_locks"],
         "final_count_forced_out_count": final_count["forced_out_count"],
+        "root_cause_disposition": disposition,
+        "root_cause_summary": root_cause_summary,
         "artifact_inventory": [list(item) for item in inventory],
         "artifact_inventory_digest": canonical_hash(inventory),
         "checkpoint_path": root,
-        "family_probes_run": 0,
-        "families_whose_relaxation_is_feasible": [],
-        "families_still_infeasible": "NOT_RUN_STATIC_PROOF",
-        "unknown_probes": [],
+        "conflict_family_slices": [
+            {
+                "family_id": item["family_id"],
+                "localized_family_constraint_ids": item["localized_family_constraint_ids"],
+                "subset_minimality": item["subset_minimality"],
+                "conflict_set_digest": item["conflict_set_digest"],
+                "active_constraint_inventory_digest": item["active_constraint_inventory_digest"],
+            }
+            for item in conflict["family_conflicts"]
+        ],
     }
     evidence["reconstruction_digest"] = canonical_hash(evidence)
     return evidence
@@ -610,23 +1092,39 @@ def _final_body(evidence: Record) -> Record:
         "base_status": evidence["base_status"],
         "static_audit_digest": evidence["static_audit_digest"],
         "probe_inventory_digest": evidence["probe_inventory_digest"],
+        "family_probe_count": evidence["family_probe_count"],
+        "family_probe_inventory": evidence["family_probe_inventory"],
+        "families_whose_relaxation_is_feasible": evidence["families_whose_relaxation_is_feasible"],
+        "families_still_infeasible": evidence["families_still_infeasible"],
+        "unknown_probes": evidence["unknown_probes"],
         "conflict_set_kind": evidence["conflict_set_kind"],
         "conflict_constraint_ids": evidence["conflict_constraint_ids"],
         "conflict_set_digest": evidence["conflict_set_digest"],
         "conflict_replay_digest": evidence["conflict_replay_digest"],
-        "root_cause_disposition": "POOL_DEFICIT",
+        "root_cause_disposition": evidence["root_cause_disposition"],
+        "root_cause_summary": evidence["root_cause_summary"],
         "root_cause_evidence": {
             "pool_candidate_count": POOL_COUNT,
             "packet_review_status_counts": evidence["packet_review_status_counts"],
-            "projected_review_eligibility_counts": evidence["projected_review_eligibility_counts"],
+            "raw_projected_review_eligibility_counts": evidence[
+                "raw_projected_review_eligibility_counts"
+            ],
+            "planning_review_eligibility_counts": evidence["planning_review_eligibility_counts"],
+            "planning_eligibility_override_count": evidence["planning_eligibility_override_count"],
             "review_projection_evidence_digest": evidence["review_projection_evidence_digest"],
             "review_projection_mismatch_count": evidence["review_projection_mismatch_count"],
+            "review_projection_mismatches": evidence["review_projection_mismatches"],
+            "planning_problem_mismatches": evidence["planning_problem_mismatches"],
             "authority_arithmetic_conflicts": evidence["authority_arithmetic"][
                 "authority_arithmetic_conflicts"
             ],
             "final_count_required": evidence["final_count_required"],
             "final_count_maximum_support": evidence["final_count_maximum_support"],
             "final_count_forced_out_count": evidence["final_count_forced_out_count"],
+            "families_whose_relaxation_is_feasible": evidence[
+                "families_whose_relaxation_is_feasible"
+            ],
+            "conflict_family_slices": evidence["conflict_family_slices"],
         },
         "next_authorized_action": "NONE; RES-451 grants diagnosis authority only",
         "artifact_inventory_digest": evidence["artifact_inventory_digest"],
@@ -646,8 +1144,8 @@ def _final_body(evidence: Record) -> Record:
 
 
 def _make_diagnostic(
-    inputs: Any, *, run_base_solver: bool
-) -> tuple[Record, Record, Record, Record, Record, Record, str]:
+    inputs: Any, *, run_base_solver: bool, verify_probes: bool
+) -> tuple[Record, Record, Record, Record, Record, Record, tuple[Record, ...], str]:
     if inputs.problem.problem_digest != BASE_PROBLEM_DIGEST:
         raise ValueError("RES-451 base problem digest drift; stop diagnosis")
     root = _checkpoint_root(inputs.problem)
@@ -677,23 +1175,18 @@ def _make_diagnostic(
 
     authority_check = _authority_arithmetic(inputs.problem)
     review_evidence = _review_projection_evidence(inputs)
-    final_count_row = next(row for row in rows if row["kind"] == ConstraintKind.FINAL_COUNT.value)
-    expected_packet_statuses = {"PENDING_HUMAN_REVIEW": POOL_COUNT}
-    expected_projection_statuses = {"PENDING": POOL_COUNT}
     if (
-        not final_count_row["individually_impossible"]
-        or final_count_row["maximum_support_compatible_with_split_locks"] != 0
-        or review_evidence["projection_mismatch_count"]
-        or review_evidence["packet_review_status_counts"] != expected_packet_statuses
-        or review_evidence["projected_review_eligibility_counts"] != expected_projection_statuses
-        or authority_check["authority_arithmetic_conflicts"]
+        review_evidence["packet_review_status_counts"] != {"PENDING_HUMAN_REVIEW": POOL_COUNT}
+        or review_evidence["raw_projected_review_eligibility_counts"] != {"PENDING": POOL_COUNT}
+        or review_evidence["planning_review_eligibility_counts"] != {"APPROVED": POOL_COUNT}
+        or review_evidence["planning_eligibility_override_count"] != POOL_COUNT
     ):
         raise ValueError(
-            "static evidence does not establish the expected direct pool deficit; "
-            "stop for further diagnosis"
+            "RES-406 planning eligibility projection differs from exact packet metadata"
         )
 
-    conflict = _conflict_record(inputs, root, rows)
+    family_probes = _family_probes(inputs, root, verify=verify_probes)
+    conflict = _conflict_record(inputs, root, rows, family_probes, verify=verify_probes)
     evidence = _diagnosis_evidence(
         inputs,
         root,
@@ -702,15 +1195,26 @@ def _make_diagnostic(
         conflict,
         authority_check,
         review_evidence,
+        family_probes,
     )
-    return base, static, conflict, evidence, authority_check, review_evidence, root
+    return (
+        base,
+        static,
+        conflict,
+        evidence,
+        authority_check,
+        review_evidence,
+        family_probes,
+        root,
+    )
 
 
 def _confirm(repository_root: Path, production_root: Path) -> Record:
     inputs = _load_inputs(repository_root, production_root)
-    base, static, conflict, evidence, _authority, _review, root = _make_diagnostic(
+    base, static, conflict, evidence, _authority, _review, _probes, root = _make_diagnostic(
         inputs,
         run_base_solver=True,
+        verify_probes=True,
     )
     final = _read_receipt(
         _checkpoint_path(root, "final-private-diagnosis-receipt.json"),
@@ -726,7 +1230,7 @@ def _confirm(repository_root: Path, production_root: Path) -> Record:
         "base_problem_digest": inputs.problem.problem_digest,
         "static_audit_digest": static["static_audit_digest"],
         "conflict_set_digest": conflict["conflict_set_digest"],
-        "conflict_replay_digest": conflict["replay"]["replay_digest"],
+        "conflict_replay_digest": conflict["replay_digest"],
         "private_diagnosis_receipt_digest": final["receipt_digest"],
         "reconstruction_digest": evidence["reconstruction_digest"],
     }
@@ -763,13 +1267,20 @@ def _public_constraint_row(row: Record) -> Record:
         )
     }
     if row["kind"] in {
+        ConstraintKind.ONE_STATE_PER_CANDIDATE.value,
         ConstraintKind.REVIEW_OUT_ONLY.value,
         ConstraintKind.QUALIFICATION_OUT_ONLY.value,
+        ConstraintKind.SYNTHETIC_SPLIT_LOCK.value,
+        ConstraintKind.CONDITIONAL_COLOCATION.value,
+        ConstraintKind.MUTATION_PARENT_PROVENANCE.value,
+        ConstraintKind.MUTATION_PARENT_CELL_INHERITANCE.value,
     }:
         public["constraint_id"] = (
             f"{row['kind']}:sha256:{canonical_hash(row['constraint_id']).removeprefix('sha256:')}"
         )
-        public["candidate_scoped_constraint_id_redacted"] = True
+        public["private_constraint_reference_redacted"] = True
+        if row["kind"] == ConstraintKind.SYNTHETIC_SPLIT_LOCK.value:
+            public["split"] = None
     else:
         public["constraint_id"] = row["constraint_id"]
     return public
@@ -781,15 +1292,15 @@ def _public_payload(
     static: Record,
     conflict: Record,
     evidence: Record,
+    review_evidence: Record,
     leak_guard: Any,
 ) -> Record:
-    audit_rows = static["constraints"]
-    audit_by_id = {item["constraint_id"]: item for item in audit_rows}
-    conflict_rows = [
-        _public_constraint_row(audit_by_id[item])
-        for item in conflict["input"]["conflict_constraint_ids"]
+    localized_rows = [
+        _public_constraint_row(row)
+        for family in conflict["family_conflicts"]
+        for row in family["localized_family_constraints"]
     ]
-    review_evidence = _review_projection_evidence(inputs)
+    family_probes = evidence["family_probe_inventory"]
     summary = static["static_summary"]
     return {
         "schema_version": "RES451-BASE-INFEASIBILITY-DIAGNOSIS@1.0.0",
@@ -816,42 +1327,70 @@ def _public_payload(
             "conditional_colocation_member_count_sum"
         ],
         "review_status_counts": review_evidence["packet_review_status_counts"],
-        "projected_review_eligibility_counts": review_evidence[
-            "projected_review_eligibility_counts"
+        "raw_projected_review_eligibility_counts": review_evidence[
+            "raw_projected_review_eligibility_counts"
+        ],
+        "planning_review_eligibility_counts": review_evidence["planning_review_eligibility_counts"],
+        "planning_eligibility_override_count": review_evidence[
+            "planning_eligibility_override_count"
         ],
         "review_projection_mismatch_count": review_evidence["projection_mismatch_count"],
         "authority_arithmetic": evidence["authority_arithmetic"],
-        "family_probes_run": 0,
-        "family_probes_skipped_reason": (
-            "static direct support deficit proves the exact base infeasible"
-        ),
-        "families_whose_relaxation_is_feasible": [],
-        "families_still_infeasible": "NOT_RUN_STATIC_PROOF",
-        "unknown_probes": [],
+        "family_probes_run": len(family_probes),
+        "family_probes": [
+            {
+                "family_id": item["family_id"],
+                "relaxed_constraint_count": item["relaxed_constraint_count"],
+                "status": item["status"],
+                "resulting_problem_digest": item["resulting_problem_digest"],
+                "active_constraint_inventory_digest": item["active_constraint_inventory_digest"],
+                "result_digest": item["result_digest"],
+            }
+            for item in family_probes
+        ],
+        "families_whose_relaxation_is_feasible": evidence["families_whose_relaxation_is_feasible"],
+        "families_still_infeasible": evidence["families_still_infeasible"],
+        "unknown_probes": evidence["unknown_probes"],
         "conflict_set_kind": conflict["kind"],
-        "conflict_constraint_ids": [row["constraint_id"] for row in conflict_rows],
-        "conflict_constraints": conflict_rows,
+        "conflict_constraint_ids": [row["constraint_id"] for row in localized_rows],
+        "conflict_constraints": localized_rows,
+        "conflict_family_slices": [
+            {
+                "family_id": family["family_id"],
+                "localized_family_constraint_ids": [
+                    _public_constraint_row(row)["constraint_id"]
+                    for row in family["localized_family_constraints"]
+                ],
+                "localized_constraint_count": len(family["localized_family_constraints"]),
+                "subset_minimality_within_family": family["subset_minimality"],
+                "active_constraint_inventory_digest": family["active_constraint_inventory_digest"],
+                "conflict_set_digest": family["conflict_set_digest"],
+            }
+            for family in conflict["family_conflicts"]
+        ],
         "conflict_set_digest": conflict["conflict_set_digest"],
         "conflict_replay": {
-            "status": "PASS",
-            "active_set_status": conflict["replay"]["active_constraints"]["status"],
-            "member_removal_count": len(conflict["replay"]["member_removal_trials"]),
-            "member_removal_statuses": sorted(
-                {item["status"] for item in conflict["replay"]["member_removal_trials"]}
+            "status": conflict["replay_status"],
+            "active_set_statuses": sorted(
+                {item["active_replay"]["status"] for item in conflict["family_conflicts"]}
             ),
-            "subset_minimality": conflict["replay"]["subset_minimality"],
+            "member_removal_count": sum(
+                len(item["member_removal_trials"]) for item in conflict["family_conflicts"]
+            ),
+            "member_removal_statuses": sorted(
+                {
+                    proof["status"]
+                    for item in conflict["family_conflicts"]
+                    for proof in item["member_removal_trials"]
+                }
+            ),
+            "subset_minimality": conflict["subset_minimality"],
         },
-        "root_cause_disposition": "POOL_DEFICIT",
-        "root_cause_summary": (
-            f"All {POOL_COUNT} pre-review packets remain pending human review and project to "
-            f"PENDING. RES-369 therefore forces every candidate OUT; the "
-            f"{evidence['final_count_required']}-case final-count minimum has maximum support "
-            f"{evidence['final_count_maximum_support']}. The constraint bounds are "
-            "arithmetically coherent, and the review projection matches packet metadata."
-        ),
+        "root_cause_disposition": evidence["root_cause_disposition"],
+        "root_cause_summary": evidence["root_cause_summary"],
         "next_authorized_action": "NONE; RES-451 grants diagnosis authority only",
         "probe_inventory_digest": evidence["probe_inventory_digest"],
-        "conflict_replay_digest": conflict["replay"]["replay_digest"],
+        "conflict_replay_digest": conflict["replay_digest"],
         "private_diagnosis_receipt_digest": evidence["private_diagnosis_receipt_digest"],
         "artifact_inventory_digest": evidence["artifact_inventory_digest"],
         "checkpoint_path": evidence["checkpoint_path"],
@@ -878,6 +1417,9 @@ def _write_public_outputs(repository_root: Path, summary: Record) -> None:
 
 
 def _acceptance_receipt(summary: Record) -> str:
+    feasible_families = json.dumps(summary["families_whose_relaxation_is_feasible"], sort_keys=True)
+    infeasible_families = json.dumps(summary["families_still_infeasible"], sort_keys=True)
+    unknown_probes = json.dumps(summary["unknown_probes"], sort_keys=True)
     lines = (
         "# RES-451 Base Infeasibility Diagnosis",
         "",
@@ -896,7 +1438,9 @@ def _acceptance_receipt(summary: Record) -> str:
         f"STATIC_DIRECT_DEFICIT_COUNT={summary['static_direct_deficit_count']}",
         f"STATIC_AUDIT_DIGEST={summary['static_audit_digest']}",
         f"FAMILY_PROBES_RUN={summary['family_probes_run']}",
-        f"FAMILY_PROBES_SKIPPED_REASON={summary['family_probes_skipped_reason']}",
+        f"FAMILIES_WHOSE_RELAXATION_IS_FEASIBLE={feasible_families}",
+        f"FAMILIES_STILL_INFEASIBLE={infeasible_families}",
+        f"UNKNOWN_PROBES={unknown_probes}",
         f"CONFLICT_SET_KIND={summary['conflict_set_kind']}",
         f"CONFLICT_SET_DIGEST={summary['conflict_set_digest']}",
         f"CONFLICT_REPLAY={summary['conflict_replay']['status']}",
@@ -915,9 +1459,9 @@ def _acceptance_receipt(summary: Record) -> str:
         "",
         summary["root_cause_summary"],
         "",
-        "The candidate-scoped review constraint references are redacted as hashes in this public "
-        "receipt. Exact conflict rows and candidate identifiers are retained only in the external "
-        "private diagnosis receipt.",
+        "Candidate and relation-scoped constraint references are hashed in this public receipt. "
+        "Exact conflict rows and candidate identifiers remain only in the external private "
+        "diagnosis receipt.",
         "",
     )
     return "\n".join(lines)
@@ -925,10 +1469,16 @@ def _acceptance_receipt(summary: Record) -> str:
 
 def _run_diagnose(repository_root: Path, production_root: Path) -> Record:
     inputs = _load_inputs(repository_root, production_root)
-    base, static, conflict, evidence, authority_check, review_evidence, root = _make_diagnostic(
-        inputs,
-        run_base_solver=False,
-    )
+    (
+        base,
+        static,
+        conflict,
+        evidence,
+        authority_check,
+        review_evidence,
+        _family_probes,
+        root,
+    ) = _make_diagnostic(inputs, run_base_solver=False, verify_probes=False)
     expected_reconstruction_digest = evidence["reconstruction_digest"]
     private_body = _final_body(evidence)
     private_relative = _checkpoint_path(root, "final-private-diagnosis-receipt.json")
@@ -979,7 +1529,15 @@ def _run_diagnose(repository_root: Path, production_root: Path) -> Record:
         repository_root=repository_root,
         candidate_count=POOL_COUNT,
     )
-    summary = _public_payload(inputs, base, static, conflict, evidence, leak_guard)
+    summary = _public_payload(
+        inputs,
+        base,
+        static,
+        conflict,
+        evidence,
+        review_evidence,
+        leak_guard,
+    )
     _write_public_outputs(repository_root, summary)
     post_write_guard = validate_production_private_material_absent(
         private_material,
@@ -1004,15 +1562,15 @@ def _run_diagnose(repository_root: Path, production_root: Path) -> Record:
         "BASE_RECONFIRMATION": base["status"],
         "STATIC_DIRECT_DEFICITS": summary["static_direct_deficit_count"],
         "STATIC_AUDIT_DIGEST": summary["static_audit_digest"],
-        "FAMILY_PROBES_RUN": 0,
-        "FAMILIES_WHOSE_RELAXATION_IS_FEASIBLE": [],
-        "FAMILIES_STILL_INFEASIBLE": "NOT_RUN_STATIC_PROOF",
-        "UNKNOWN_PROBES": [],
+        "FAMILY_PROBES_RUN": evidence["family_probe_count"],
+        "FAMILIES_WHOSE_RELAXATION_IS_FEASIBLE": evidence["families_whose_relaxation_is_feasible"],
+        "FAMILIES_STILL_INFEASIBLE": evidence["families_still_infeasible"],
+        "UNKNOWN_PROBES": evidence["unknown_probes"],
         "CONFLICT_SET_KIND": conflict["kind"],
         "CONFLICT_CONSTRAINT_IDS": summary["conflict_constraint_ids"],
         "CONFLICT_SET_DIGEST": conflict["conflict_set_digest"],
-        "CONFLICT_REPLAY": "PASS",
-        "SUBSET_MINIMALITY": conflict["replay"]["subset_minimality"],
+        "CONFLICT_REPLAY": conflict["replay_status"],
+        "SUBSET_MINIMALITY": conflict["subset_minimality"],
         "ROOT_CAUSE_DISPOSITION": summary["root_cause_disposition"],
         "ROOT_CAUSE_SUMMARY": summary["root_cause_summary"],
         "POOL_MUTATED": "NO",
