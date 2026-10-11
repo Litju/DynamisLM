@@ -190,6 +190,8 @@ def test_rule_governed_capacity_is_not_infinite_concrete_supply() -> None:
     assert a.remaining_finite_capacity is None
     assert a.capacity_rule == lane.capacity_rule
     assert a.fresh_independent_identity_guaranteed is False
+    evidence = classify_archetype_repair(_geometry(), (a,))
+    assert any("C08 refusal" in reason for reason in evidence.evidence)
     with pytest.raises(ValueError, match="concrete"):
         replace(a, remaining_finite_capacity=1000000)
 
@@ -200,6 +202,9 @@ def test_unknown_behavior_cannot_establish_repair_or_impossibility() -> None:
     evidence = classify_archetype_repair(_geometry(), archetypes)
     assert evidence.classification is RepairClassification.UNRESOLVED
     assert evidence.archetype_inventory_digest == canonical_hash(archetypes)
+    assert evidence.potentially_supported_coverage_ids == ()
+    assert evidence.unsupported_row_coverage_ids == ()
+    assert "unknown" in evidence.evidence[0]
 
 
 def test_legacy_qualification_cli_is_disabled(monkeypatch: pytest.MonkeyPatch) -> None:

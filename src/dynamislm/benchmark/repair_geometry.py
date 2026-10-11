@@ -355,6 +355,24 @@ class ArchetypeRepairEvidence:
 def classify_archetype_repair(
     geometry: RepairGeometry, archetypes: tuple[RepairArchetype, ...]
 ) -> ArchetypeRepairEvidence:
+    registered = {
+        (g.generator_id, g.version, g.output_contract) for g in PRODUCTION_SYNTHETIC_GENERATORS
+    }
+    if not archetypes or any(
+        a.cell[0] != "C08"
+        or a.origin is not CaseOrigin.DETERMINISTIC_SYNTHETIC
+        or (a.materializer_identity, a.materializer_version, a.materializer_contract)
+        not in registered
+        for a in archetypes
+    ):
+        return ArchetypeRepairEvidence(
+            geometry.geometry_digest,
+            canonical_hash(archetypes),
+            RepairClassification.UNRESOLVED,
+            (),
+            (),
+            ("Behavior outside the evidenced C08 refusal contracts remains unknown.",),
+        )
     capabilities = {a.cell[0] for a in archetypes}
     coverage = geometry.constraints(ConstraintKind.FEATURE_MINIMUM)
     potential = tuple(
