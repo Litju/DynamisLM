@@ -526,6 +526,7 @@ def _option_inventory_body(options: tuple[Record, ...], demand_digest: str) -> R
 
 
 def _addition_sets(options: tuple[Record, ...]) -> Iterator[tuple[Record, ...]]:
+    """Legacy WIP subset search; unreachable from the structural geometry runner."""
     ordered = _option_order(options)
     for size in range(1, len(ordered) + 1):
         yield from itertools.combinations(ordered, size)
@@ -537,6 +538,7 @@ def _search_repair_sets(
     *,
     superset_screen: Callable[[tuple[Record, ...]], Record] | None = None,
 ) -> tuple[tuple[Record, ...] | None, str, tuple[Record, ...]]:
+    """Legacy WIP retained for historical evidence, not structural repair."""
     outcomes: list[Record] = []
     ordered = _option_order(options)
     if superset_screen is not None and ordered:
@@ -562,6 +564,7 @@ def _minimize_repair_set(
     selected: tuple[Record, ...],
     reduced_status: Callable[[tuple[Record, ...]], str],
 ) -> tuple[tuple[Record, ...], str]:
+    """Legacy WIP retained for historical evidence, not structural repair."""
     retained = list(_option_order(selected))
     index = 0
     while index < len(retained):
@@ -2073,8 +2076,9 @@ def main() -> int:
             raise ValueError("RES-407 confirm requires the expected private receipt digest")
         print(json.dumps(_confirm(_REPOSITORY, production_root, args.expected_receipt_digest)))
         return 0
-    _run_qualification(_REPOSITORY, production_root)
-    return 0
+    raise ValueError(
+        "legacy RES-407 subset qualification is disabled; use res407_repair_geometry.py"
+    )
 
 
 if __name__ == "__main__":

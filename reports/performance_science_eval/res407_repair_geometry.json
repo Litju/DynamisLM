@@ -1,0 +1,72 @@
+{
+  "archetype_record_digest": "sha256:0b6f20ccf5f4f94d76949ae11e7962fc0a86a6b4887f07c5b8c5a58af7e2f6f9",
+  "authorable_lane_count": 3,
+  "capacity_certificate_digest": "sha256:cb5716b766984ab0d0613ebc1d04554b1581bac527d26dfcd4bced85a2ca47ba",
+  "classification_evidence": [
+    "Split-locked additions can occupy their own split and displace existing selections.",
+    "C08 refusal supply cannot directly cover other capability rows or ANSWERABLE.",
+    "Shared split clusters do not guarantee independent isolation; shingle relations unknown.",
+    "Feature guarantees are incomplete: no concrete seed is extrapolated to a full domain.",
+    "No augmentation proof establishes sufficient repair or impossibility; authority expansion remains unresolved."
+  ],
+  "current_c08_archetype_repair_classification": "UNRESOLVED",
+  "entry_authority": "1935c25e4fe2774063ac2289807deae5d49b0d63",
+  "external_namespace": "production/variable-pools/backfill/e42cd6316da25f622203eb1a2340b34a56c4d3baa411773599d1f278b0bce845/1935c25e4fe2774063ac2289807deae5d49b0d63/geometry/v2",
+  "fresh_process_confirmation": "PASS",
+  "geometry_record_digest": "sha256:d003f6777857aaad2a66a10de1b03f186143685d3bab6894739073317b678c70",
+  "mission": "RES-407",
+  "old_brute_force_path_reachable": false,
+  "original_pool_count": 449,
+  "original_problem_digest": "sha256:29b85a7b7518c09a40093326a4e4832c6cee7b564d4384806dc9fceeb0abc5c0",
+  "pool_original_mutated": false,
+  "public_evidence_digest": "sha256:1f5761772f3a2879a9330fad393f3bee06c9b313a788aefe1875f610495cf2c8",
+  "public_max_without_colocation": 260,
+  "public_max_without_feature_minima": 426,
+  "repair_archetype_count": 12,
+  "repair_archetype_inventory_digest": "sha256:a964fcf19d7751f9bb058a5e5b2d15c6b57af46ca059d5a14fcb7e67f30557e0",
+  "repair_geometry_digest": "sha256:7f7734aafa3bfac11af5714d6873df260a0dac7854c4c2805e7c5a9f19bc5e68",
+  "schema_version": "RES407-STRUCTURAL-GEOMETRY-AGGREGATE@1.0.0",
+  "selected_support_summary": {
+    "FROZEN_VALIDATION": {
+      "active_coverage_obligation_count": 676,
+      "conditional_colocation_relation_count": 773,
+      "relation_coverage_intersection_count": 20460,
+      "selected_count": 434,
+      "selected_locked_count": 12,
+      "tight_coverage_obligation_count": 366
+    },
+    "HIDDEN_FINAL": {
+      "active_coverage_obligation_count": 676,
+      "conditional_colocation_relation_count": 773,
+      "relation_coverage_intersection_count": 20460,
+      "selected_count": 434,
+      "selected_locked_count": 12,
+      "tight_coverage_obligation_count": 365
+    },
+    "PUBLIC_DEVELOPMENT": {
+      "active_coverage_obligation_count": 676,
+      "conditional_colocation_relation_count": 773,
+      "relation_coverage_intersection_count": 20460,
+      "selected_count": 434,
+      "selected_locked_count": 12,
+      "tight_coverage_obligation_count": 359
+    }
+  },
+  "split_capacities": {
+    "FROZEN_VALIDATION": {
+      "capacity_deficit": 0,
+      "maximum": 212,
+      "required": 87
+    },
+    "HIDDEN_FINAL": {
+      "capacity_deficit": 0,
+      "maximum": 212,
+      "required": 87
+    },
+    "PUBLIC_DEVELOPMENT": {
+      "capacity_deficit": 48,
+      "maximum": 212,
+      "required": 260
+    }
+  }
+}
