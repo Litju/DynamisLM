@@ -9,7 +9,7 @@ An OUT member can break a chain of intersecting hyperedges.
 Run `python scripts/res407_repair_geometry.py --fresh-process` in the project environment.
 The runner reconstructs RES-405, RES-406, RES-451 and live v1.3 supply authority. It writes
 atomic, canonical, digest-bound external diagnostics under
-`production/variable-pools/backfill/<original-plan-digest>/<RES-451-merge-sha>/geometry/v2/`.
+`production/variable-pools/backfill/<original-plan-digest>/<RES-451-merge-sha>/geometry/v3/`.
 Earlier exploratory diagnostics remain preserved outside this versioned namespace.
 The original variable-pool store is hashed before and after execution.
 
@@ -18,10 +18,13 @@ other two counts together with final N=434 would fix the target count by subtrac
 Final N=434, coverage, origin bounds, mutation lineages, split locks, conditional
 colocation, qualification/review forcing, and parent provenance/inheritance remain active.
 The two ablations additionally remove only their named constraint family. Soft production
-objectives do not enter a capacity solve. The certificate records every relaxed ID,
-original and active inventory digests, solver version/configuration, an OPTIMAL maximum,
-and an independently validated diagnostic witness. These witnesses allocate no final
-production membership.
+objectives do not enter a capacity solve. A versioned semantic binding beside each stable
+Serialization V3 certificate lists every relaxed and retained constraint ID, the retained
+inventory digest, `FINAL_N=434`, solver configuration, target-split maximization objective,
+`OPTIMAL` status, objective value and bound, and the certificate result digest. The
+independently validated witness remains diagnostic and allocates no final production
+membership. All three split equalities are removed for each envelope solve; ablations add
+only their named relaxation.
 
 | Diagnostic | Public maximum | Validation maximum | Hidden maximum |
 | --- | ---: | ---: | ---: |
@@ -45,28 +48,28 @@ Synthetic materialization guarantees a shared cluster for its split; fresh indep
 isolation is not guaranteed, and other relations, including exact shingle collisions,
 remain unknown.
 
-Current C08 supply is classified **UNRESOLVED**. It may occupy its locked split and
-displace existing selections. It cannot directly cover other capability rows or the
-ANSWERABLE obligation. The capacity loss and these facts do not prove sufficiency or
-impossibility of repair. `AUTHORITY_EXPANSION_REQUIRED` needs a valid structural proof.
-The historical subset helpers remain labelled legacy WIP, and their qualification CLI
-is disabled. The structural runner does not invoke them or materialize packets.
+Current C08 supply is classified **UNRESOLVED**. Its governed contract guarantees the
+cell binding, split lock, and repeated-instance coupling through a shared split cluster
+and generator family. Exact feature vectors, contamination/shingle behavior, and full
+interchangeability remain unknown; unique seed-block identity is bounded by the lane rule
+without a defined repeat sequence. The structural contract digest is
+`sha256:a66311b193d258047a1dd8584541facb408fee731ad9f1bc88cf96361ce2ead6`.
 
-## Next direct optimizer
+The ideal structural master minimizes additions over typed selection signatures while
+preserving the exact hard benchmark authority. Its search domain is bounded by
+`FINAL_N=434`, since no feasible assignment can select more added units. The exact run
+returned `IDEAL_REPAIR_STATUS=UNKNOWN`; it did not prove a minimum or produce an ideal
+repair vector. The optimistic current-C08 relaxation also returned `UNKNOWN`, so
+`CURRENT_C08_REPAIR_CAPABILITY=UNRESOLVED`. It preserves C08 origin, split locks, and lane
+capacity, grants maximal per-cell feature support, and relaxes relation coupling to
+independence. Neither timeout proves authority exhaustion. The governed master remains
+`UNRESOLVED` because the repeated-archetype semantics are insufficient, and the missing
+capability comparison remains unresolved without an optimal ideal vector.
 
-Introduce integer `y[a] >= 0`, the number of additions of governed archetype `a`, and
-minimize `sum(y[a])`. The master augments the structural model, restores normal production
-split equalities, and retains every other hard authority. Impose lane-wide finite
-capacity bounds: `sum(y[a] for a in lane) <= remaining_lane_capacity`. A rule-governed
-lane requires an authority-validated materializability rule; it grants no infinite
-concrete supply. Unknown feature or identity behavior requires contract refinement or
-an explicit unresolved result before the optimizer can assert a repair.
-
-Robustness is a hard requirement. Couple the structural master to the exact
-`FinalSelectionProblem` oracle. Add removal scenarios whenever the oracle finds a
-failing removal, and require an exact feasible production assignment for every required
-scenario before accepting the master repair. UNKNOWN remains inconclusive. Abstract
-exchangeable additions may share scenario representatives only with a proved identity
-and relation equivalence. Materialize only the winning, authority-backed repair, then
-run exact production qualification and its complete robustness gate. Do not enumerate
-concrete candidate subsets. A structural optimum alone authorizes no final membership.
+The next architecture is first-stage governed `y[a]` counts with exact benchmark
+assignment recourse, the base scenario initially, and the exact `FinalSelectionProblem`
+feasibility oracle. Each failed removal found by the oracle becomes a master scenario;
+the exhaustive removal sweep remains the final proof. No removal sweep, concrete
+candidate, new seed, packet, human review, or final allocation ran at this checkpoint.
+The historical subset helpers remain labelled legacy WIP, their qualification CLI is
+disabled, and tests prove the RES-407 path cannot reach them.

@@ -7,6 +7,7 @@ import pytest
 
 from dynamislm.benchmark.authority_supply import (
     AUTHORITY_SUPPLY_SCHEMA,
+    AdditionalCapacityStatus,
     AuthoritySupplyInventoryV1,
     LaneCapacityStatus,
     ReserveCandidateLaneV1,
@@ -14,13 +15,19 @@ from dynamislm.benchmark.authority_supply import (
 from dynamislm.benchmark.constants import CaseOrigin, SplitName
 from dynamislm.benchmark.production_authoring import PRODUCTION_SYNTHETIC_GENERATORS
 from dynamislm.benchmark.repair_geometry import (
+    ContractCertainty,
     RepairClassification,
     RepairGeometry,
+    RepairSignature,
     SplitCapacityCertificate,
+    archetype_structural_contracts,
+    bind_split_capacity_certificate,
+    build_optimistic_c08_signatures,
     classify_archetype_repair,
     compute_split_capacity_envelope,
     derive_governed_archetypes,
     remaining_lane_capacity,
+    solve_structural_repair_master,
     structural_bottleneck_evidence,
 )
 from dynamislm.benchmark.selection_contracts import (
@@ -126,6 +133,33 @@ def test_relaxations_are_bound_and_capacity_is_derived() -> None:
     assert evidence.conditional_colocation_relation_count == 0
 
 
+def test_capacity_binding_spells_out_retained_constraints_final_n_and_objective() -> None:
+    geometry = _geometry()
+    (certificate,) = compute_split_capacity_envelope(geometry, splits=(PUBLIC,))
+    binding = bind_split_capacity_certificate(geometry, certificate)
+    active_ids = tuple(
+        sorted(
+            c.constraint_id
+            for c in geometry.problem.constraint_set.constraints
+            if c.kind is not ConstraintKind.SPLIT_COUNT
+        )
+    )
+    assert binding.relaxed_constraint_ids == tuple(
+        sorted(
+            c.constraint_id
+            for c in geometry.problem.constraint_set.constraints
+            if c.kind is ConstraintKind.SPLIT_COUNT
+        )
+    )
+    assert binding.retained_constraint_ids == active_ids
+    assert binding.final_count == 2
+    assert binding.objective == "MAXIMIZE_TARGET_SPLIT_COUNT:PUBLIC_DEVELOPMENT"
+    assert binding.objective_value == binding.objective_bound == certificate.maximum
+    assert binding.optimality_status == "OPTIMAL"
+    assert binding.solver_config == certificate.solver_config
+    assert binding.result_digest == certificate.result_digest
+
+
 def _lane() -> ReserveCandidateLaneV1:
     return ReserveCandidateLaneV1(
         "synthetic:test",
@@ -207,6 +241,117 @@ def test_unknown_behavior_cannot_establish_repair_or_impossibility() -> None:
     assert "unknown" in evidence.evidence[0]
 
 
+def test_unknown_archetype_contract_fields_remain_unknown() -> None:
+    lane = _lane()
+    archetypes = derive_governed_archetypes(_inventory((lane,)), ((lane.lane_id, 0),))
+    contracts = archetype_structural_contracts(_geometry(), archetypes)
+    claims = {claim.field: claim for claim in contracts[0].claims}
+    assert claims["exact_feature_vector"].certainty is ContractCertainty.UNKNOWN
+    assert claims["contamination_and_shingles"].certainty is ContractCertainty.UNKNOWN
+    assert claims["unique_seed_block_identity"].certainty is ContractCertainty.UNKNOWN
+    assert archetypes[0].guaranteed_features == ()
+
+
+def _repair_signature(
+    origin: CaseOrigin,
+    *,
+    lane_id: str | None = None,
+    lane_capacity: int | None = None,
+    capacity_status: AdditionalCapacityStatus | None = None,
+) -> RepairSignature:
+    return RepairSignature(
+        origin=origin,
+        cell=("C01", "F01"),
+        guaranteed_features=(),
+        split_compatibility=(PUBLIC,),
+        relation_behavior="INDEPENDENT_FROM_BASE_AND_OTHER_ADDITIONS",
+        isolation_identity_behavior="FRESH_UNIQUE",
+        lineage_behavior="NOT_MUTATION",
+        lane_id=lane_id,
+        lane_capacity=lane_capacity,
+        capacity_status=capacity_status,
+    )
+
+
+def test_ideal_master_proves_minimum_structural_cardinality() -> None:
+    problem = _toy_problem((_candidate("a"),), ((PUBLIC, 2),))
+    result = solve_structural_repair_master(
+        RepairGeometry(problem),
+        (_repair_signature(CaseOrigin.EXPERT_AUTHORED_SEMANTIC),),
+        optimality_scope="toy domain; additions <= FINAL_N",
+    )
+    assert result.status == "OPTIMAL"
+    assert result.minimum_additions == 1
+    assert result.objective == "MINIMIZE_TOTAL_ADDED_STRUCTURAL_UNITS"
+    assert result.objective_bound == 1
+    assert result.repair_vector[0].total_count == 1
+
+
+def test_exhausted_finite_lane_has_zero_addition_capacity() -> None:
+    problem = _toy_problem((_candidate("a"),), ((PUBLIC, 2),))
+    signature = _repair_signature(
+        CaseOrigin.EXPERT_AUTHORED_SEMANTIC,
+        lane_id="source:exhausted",
+        lane_capacity=0,
+        capacity_status=AdditionalCapacityStatus.EXHAUSTED,
+    )
+    result = solve_structural_repair_master(
+        RepairGeometry(problem),
+        (signature,),
+        optimality_scope="toy exhausted-lane domain",
+    )
+    assert result.status == "INFEASIBLE"
+    assert result.minimum_additions is None
+    assert result.repair_vector == ()
+
+
+def test_repair_master_order_and_digest_do_not_depend_on_input_order() -> None:
+    geometry = RepairGeometry(_toy_problem((_candidate("a"),), ((PUBLIC, 2),)))
+    signatures = (
+        _repair_signature(CaseOrigin.EXPERT_AUTHORED_SEMANTIC),
+        _repair_signature(CaseOrigin.SOURCE_BACKED_EVIDENCE_EXTRACTION),
+    )
+    first = solve_structural_repair_master(
+        geometry, signatures, optimality_scope="toy deterministic ordering"
+    )
+    second = solve_structural_repair_master(
+        geometry, tuple(reversed(signatures)), optimality_scope="toy deterministic ordering"
+    )
+    assert first.repair_vector == second.repair_vector
+    assert first.result_digest == second.result_digest
+    assert tuple(item.signature.signature_id for item in first.repair_vector) == tuple(
+        sorted(item.signature.signature_id for item in first.repair_vector)
+    )
+
+
+def test_optimistic_c08_model_only_relaxes_guaranteed_behavior() -> None:
+    generator = next(
+        item
+        for item in PRODUCTION_SYNTHETIC_GENERATORS
+        if item.generator_family.endswith("public_development")
+    )
+    lane = replace(
+        _lane(),
+        lane_id=f"synthetic:{generator.generator_family}",
+        authority_digest=canonical_hash(generator),
+        available_capacity=None,
+        capacity_status=LaneCapacityStatus.RULE_GOVERNED,
+        capacity_rule="registered split-family seed namespace",
+        lane_digest="",
+    )
+    archetypes = derive_governed_archetypes(_inventory((lane,)), ((lane.lane_id, 0),))
+    optimistic = build_optimistic_c08_signatures(_geometry(), archetypes)
+    assert len(optimistic) == 1
+    signature = optimistic[0]
+    assert signature.cell == archetypes[0].cell
+    assert signature.origin is archetypes[0].origin
+    assert signature.split_compatibility == (PUBLIC,)
+    assert signature.lane_id == lane.lane_id
+    assert signature.capacity_status is AdditionalCapacityStatus.RULE_GOVERNED
+    assert signature.relation_behavior == "OPTIMISTICALLY_INDEPENDENT_RELAXATION"
+    assert set(archetypes[0].guaranteed_features).issubset(signature.guaranteed_features)
+
+
 def test_legacy_qualification_cli_is_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
     from scripts import res407_governed_backfill
 
@@ -237,7 +382,7 @@ def test_exact_external_res407_regression(monkeypatch: pytest.MonkeyPatch) -> No
         "materialize_variable_pool",
     ):
         monkeypatch.setattr(res407_governed_backfill, name, forbidden)
-    result = run(DEFAULT_PRODUCTION_ROOT, replay=True)
+    result = run(DEFAULT_PRODUCTION_ROOT, replay=False)
     capacities = result["split_capacities"]
     assert capacities[PUBLIC.value]["required"] == 260
     assert capacities[PUBLIC.value]["maximum"] == 212
@@ -246,3 +391,38 @@ def test_exact_external_res407_regression(monkeypatch: pytest.MonkeyPatch) -> No
     assert result["public_max_without_feature_minima"] == 426
     assert result["authorable_lane_count"] == 3
     assert result["repair_archetype_count"] == 12
+    assert result["old_brute_force_path_reachable"] is False
+    assert result["CAPACITY_CERTIFICATE_SEMANTICS"] == "PASS"
+    assert result["concrete_candidates_materialized"] is False
+    assert result["removal_sweep_run"] is False
+    assert result["GOVERNED_MASTER_STATUS"] == "UNRESOLVED"
+    if result["IDEAL_REPAIR_STATUS"] != "OPTIMAL":
+        assert result["IDEAL_MIN_ADDITIONS"] is None
+        assert result["MISSING_GOVERNED_CAPABILITIES_STATUS"] == (
+            "UNRESOLVED_NO_OPTIMAL_IDEAL_VECTOR"
+        )
+    master = res407_governed_backfill._read_record(
+        f"{result['external_namespace']}/structural-augmentation-master.json",
+        DEFAULT_PRODUCTION_ROOT,
+    )
+    assert master is not None
+    for binding in master[0]["capacity_certificate_bindings"]:
+        assert binding["final_count"] == 434
+        assert binding["objective"].startswith("MAXIMIZE_TARGET_SPLIT_COUNT:")
+        assert binding["optimality_status"] == "OPTIMAL"
+        assert binding["objective_bound"] == binding["objective_value"]
+        assert len(binding["result_digest"]) == len("sha256:") + 64
+        assert (
+            len(
+                {
+                    constraint_id
+                    for constraint_id in binding["relaxed_constraint_ids"]
+                    if constraint_id.startswith("RES258:SPLIT_COUNT:")
+                }
+            )
+            == 3
+        )
+        assert not any(
+            constraint_id.startswith("RES258:SPLIT_COUNT:")
+            for constraint_id in binding["retained_constraint_ids"]
+        )

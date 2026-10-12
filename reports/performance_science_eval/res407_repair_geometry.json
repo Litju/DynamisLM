@@ -1,7 +1,30 @@
 {
   "archetype_record_digest": "sha256:0b6f20ccf5f4f94d76949ae11e7962fc0a86a6b4887f07c5b8c5a58af7e2f6f9",
   "authorable_lane_count": 3,
-  "capacity_certificate_digest": "sha256:cb5716b766984ab0d0613ebc1d04554b1581bac527d26dfcd4bced85a2ca47ba",
+  "capacity_certificate_binding_digests": [
+    "sha256:7e08b6e38fb6b986bfd07c8c43ca29f7b3bd8aca128923fef6506e3e83d623f6",
+    "sha256:4f2b19d5c90736d8a0ed5cad7e5912dfcf566e387b1fc46205def39ed59279cd",
+    "sha256:6070af8051379c4bd0ef6b401be0c1969401a3e9d7288edc87a989977b6b51a2",
+    "sha256:0efe5c67e84f67a77244ca99d7dc14f12150c7d6a10c620ff009c46f7af13cdf",
+    "sha256:af292d8930fe94490ebae671c0114614fbf9d1d63aacb7868145535f43b23242"
+  ],
+  "capacity_certificate_digest": "sha256:4529706ec1c4f5150daacc0b72eeaa59884f6e0f3b001132a49ce16ea3d03b4f",
+  "capacity_certificate_semantics": "PASS",
+  "capacity_certificate_schema": "RES407-SPLIT-CAPACITY@1.1.0",
+  "capacity_certificate_binding_contract": {
+    "final_count": 434,
+    "relaxed_constraint_ids": [
+      "RES258:SPLIT_COUNT:FROZEN_VALIDATION",
+      "RES258:SPLIT_COUNT:HIDDEN_FINAL",
+      "RES258:SPLIT_COUNT:PUBLIC_DEVELOPMENT"
+    ],
+    "retained_constraint_inventory_explicit": true,
+    "retained_inventory_digest_bound": true,
+    "solver_config_bound": true,
+    "objective": "MAXIMIZE_TARGET_SPLIT_COUNT:<split>",
+    "optimality_proof": "OPTIMAL and objective bound equals objective value",
+    "result_digest_bound": true
+  },
   "classification_evidence": [
     "Split-locked additions can occupy their own split and displace existing selections.",
     "C08 refusal supply cannot directly cover other capability rows or ANSWERABLE.",
@@ -10,11 +33,33 @@
     "No augmentation proof establishes sufficient repair or impossibility; authority expansion remains unresolved."
   ],
   "current_c08_archetype_repair_classification": "UNRESOLVED",
+  "current_c08_repair_capability": "UNRESOLVED",
   "entry_authority": "1935c25e4fe2774063ac2289807deae5d49b0d63",
-  "external_namespace": "production/variable-pools/backfill/e42cd6316da25f622203eb1a2340b34a56c4d3baa411773599d1f278b0bce845/1935c25e4fe2774063ac2289807deae5d49b0d63/geometry/v2",
+  "external_namespace": "production/variable-pools/backfill/e42cd6316da25f622203eb1a2340b34a56c4d3baa411773599d1f278b0bce845/1935c25e4fe2774063ac2289807deae5d49b0d63/geometry/v3",
   "fresh_process_confirmation": "PASS",
   "geometry_record_digest": "sha256:d003f6777857aaad2a66a10de1b03f186143685d3bab6894739073317b678c70",
   "mission": "RES-407",
+  "ideal_repair_digest": "sha256:1159e9fc16a9ca66339472259e3668e430c8f50e3c8ac0b17f476878786acdab",
+  "ideal_repair_signatures": [],
+  "ideal_repair_status": "UNKNOWN",
+  "ideal_min_additions": null,
+  "archetype_structural_contract_digest": "sha256:a66311b193d258047a1dd8584541facb408fee731ad9f1bc88cf96361ce2ead6",
+  "governed_master_status": "UNRESOLVED",
+  "governed_min_additions": null,
+  "governed_repair_digest": "sha256:a81ab4b69ab1f081eaa476e80d1b4b8c7aee48f62a4a86d294bc6e85f978a1dd",
+  "optimistic_c08_master_status": "UNKNOWN",
+  "optimistic_c08_repair_digest": "sha256:1e2ad68c21f0f88b6cf5166e903e5b8ac910306e7117da7a486ac85ace4ca068",
+  "missing_governed_capabilities_status": "UNRESOLVED_NO_OPTIMAL_IDEAL_VECTOR",
+  "robust_master_architecture": {
+    "first_stage": "GOVERNED_ARCHETYPE_ADDITION_COUNTS_Y[A]",
+    "recourse": "EXACT_BENCHMARK_ASSIGNMENT",
+    "initial_scenarios": ["BASE"],
+    "oracle": "EXACT_FINAL_SELECTION_PROBLEM_FEASIBILITY",
+    "scenario_generation": "Add failed removal scenarios found by the exact oracle.",
+    "final_proof": "EXHAUSTIVE_REMOVAL_SWEEP_AFTER_SCENARIO_CONVERGENCE"
+  },
+  "removal_sweep_run": false,
+  "concrete_candidates_materialized": false,
   "old_brute_force_path_reachable": false,
   "original_pool_count": 449,
   "original_problem_digest": "sha256:29b85a7b7518c09a40093326a4e4832c6cee7b564d4384806dc9fceeb0abc5c0",
