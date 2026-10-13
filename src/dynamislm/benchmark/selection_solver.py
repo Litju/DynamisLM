@@ -85,6 +85,8 @@ def _model_for(
     problem: FinalSelectionProblem,
     *,
     include_objectives: bool = True,
+    compact_colocation_indicators: bool = False,
+    compact_candidate_states: bool = False,
 ) -> tuple[
     Any,
     dict[tuple[str, AssignmentState], Any],
@@ -96,12 +98,21 @@ def _model_for(
     candidates = problem.candidates
     by_id = {item.candidate_id: item for item in candidates}
     for index, candidate in enumerate(candidates):
-        states = tuple(
-            model.new_bool_var(f"a[{index},{rank}]") for rank in range(len(_STATE_ORDER))
-        )
-        model.add_exactly_one(states)
-        for state, variable in zip(_STATE_ORDER, states, strict=True):
-            assignment_vars[(candidate.candidate_id, state)] = variable
+        if compact_candidate_states:
+            split_vars = tuple(
+                model.new_bool_var(f"a[{index},{rank}]") for rank in range(1, len(_STATE_ORDER))
+            )
+            model.add_at_most_one(split_vars)
+            assignment_vars[(candidate.candidate_id, AssignmentState.OUT)] = 1 - sum(split_vars)
+            for state, variable in zip(_STATE_ORDER[1:], split_vars, strict=True):
+                assignment_vars[(candidate.candidate_id, state)] = variable
+        else:
+            states = tuple(
+                model.new_bool_var(f"a[{index},{rank}]") for rank in range(len(_STATE_ORDER))
+            )
+            model.add_exactly_one(states)
+            for state, variable in zip(_STATE_ORDER, states, strict=True):
+                assignment_vars[(candidate.candidate_id, state)] = variable
 
     lineages: dict[str, list[str]] = defaultdict(list)
     for candidate in candidates:
@@ -148,15 +159,15 @@ def _model_for(
         elif constraint.kind is ConstraintKind.MUTATION_LINEAGE_MINIMUM:
             lineage_selected: list[Any] = []
             for index, members in enumerate(sorted(lineages.values(), key=lambda ids: tuple(ids))):
-                selected = model.new_bool_var(f"lineage[{index}]")
+                lineage_indicator = model.new_bool_var(f"lineage[{index}]")
                 member_terms = [
                     variable
                     for candidate_id in members
                     for variable in _selection_literals(assignment_vars, candidate_id)
                 ]
-                model.add(sum(member_terms) >= 1).only_enforce_if(selected)
-                model.add(sum(member_terms) == 0).only_enforce_if(selected.Not())
-                lineage_selected.append(selected)
+                model.add(sum(member_terms) >= 1).only_enforce_if(lineage_indicator)
+                model.add(sum(member_terms) == 0).only_enforce_if(lineage_indicator.Not())
+                lineage_selected.append(lineage_indicator)
             terms = lineage_selected
         elif constraint.kind in {
             ConstraintKind.REVIEW_OUT_ONLY,
@@ -184,7 +195,10 @@ def _model_for(
                 ]
                 for term in terms:
                     model.add(term <= indicator)
-                model.add(indicator <= sum(terms))
+                if not compact_colocation_indicators:
+                    # Reverse links only fix unused indicators.
+                    # Assignment feasibility does not need them.
+                    model.add(indicator <= sum(terms))
             model.add(sum(split_indicators) <= 1)
             continue
         elif constraint.kind is ConstraintKind.MUTATION_PARENT_PROVENANCE:

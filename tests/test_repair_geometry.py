@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
+import dynamislm.benchmark.repair_geometry as repair_geometry_module
 from dynamislm.benchmark.authority_supply import (
     AUTHORITY_SUPPLY_SCHEMA,
     AdditionalCapacityStatus,
@@ -13,7 +14,7 @@ from dynamislm.benchmark.authority_supply import (
     LaneCapacityStatus,
     ReserveCandidateLaneV1,
 )
-from dynamislm.benchmark.constants import CaseOrigin, SplitName
+from dynamislm.benchmark.constants import SPLIT_ORDER, CaseOrigin, SplitName
 from dynamislm.benchmark.coverage import COVERAGE_MATRIX
 from dynamislm.benchmark.production_authoring import PRODUCTION_SYNTHETIC_GENERATORS
 from dynamislm.benchmark.repair_geometry import (
@@ -515,12 +516,75 @@ def test_feasible_trial_hints_a_smaller_cardinality_decision() -> None:
     structural = _structural_repair_model(
         geometry, (_repair_signature(CaseOrigin.EXPERT_AUTHORED_SEMANTIC),)
     )
+    assert not hasattr(structural.assignments["a", AssignmentState.OUT], "index")
+    assert all(
+        hasattr(structural.assignments["a", AssignmentState(split.value)], "index")
+        for split in SPLIT_ORDER
+    )
     config = replace(RES407_STRUCTURAL_REPAIR_MASTER_PROFILE_V1, workers=1)
     high = solve_repair_cardinality_decision(structural, 2, solver_config=config)
     lower = solve_repair_cardinality_decision(structural, 1, solver_config=config)
     assert high.status == "FEASIBLE"
     assert lower.status == "FEASIBLE"
     assert lower.hint_source_trial_digest == high.trial_digest
+
+
+def test_structural_master_compaction_reduces_model_and_preserves_decisions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    candidates = (_candidate("a"), _candidate("b"))
+    relation = SelectionConstraint(
+        "TEST:STRUCTURAL:COLOCATION",
+        "synthetic bounded structural master",
+        ConstraintKind.CONDITIONAL_COLOCATION,
+        candidate_ids=("a", "b"),
+        relation_kind=RelationKind.ISOLATION_CLUSTER,
+    )
+    geometry = RepairGeometry(
+        _toy_problem(
+            candidates,
+            ((PUBLIC, 1), (VALIDATION, 1)),
+            extra=(relation,),
+        )
+    )
+    signature = _repair_signature(
+        CaseOrigin.EXPERT_AUTHORED_SEMANTIC,
+        splits=(PUBLIC, VALIDATION),
+    )
+    compact = _structural_repair_model(geometry, (signature,))
+
+    with monkeypatch.context() as patch:
+        patch.setattr(
+            repair_geometry_module,
+            "_model_for",
+            lambda problem, **kwargs: _model_for(
+                problem, include_objectives=kwargs.get("include_objectives", True)
+            ),
+        )
+        original = _structural_repair_model(geometry, (signature,))
+
+    original_counts = (
+        len(original.model.proto.variables),
+        len(original.model.proto.constraints),
+    )
+    compact_counts = (
+        len(compact.model.proto.variables),
+        len(compact.model.proto.constraints),
+    )
+    assert original_counts == (15, 19)
+    assert compact_counts == (13, 16)
+
+    config = replace(RES407_STRUCTURAL_REPAIR_MASTER_PROFILE_V1, workers=1)
+    original_zero = solve_repair_cardinality_decision(original, 0, solver_config=config)
+    compact_zero = solve_repair_cardinality_decision(compact, 0, solver_config=config)
+    original_one = solve_repair_cardinality_decision(original, 1, solver_config=config)
+    compact_one = solve_repair_cardinality_decision(compact, 1, solver_config=config)
+    assert (original_zero.status, compact_zero.status) == ("INFEASIBLE", "INFEASIBLE")
+    assert (original_one.status, compact_one.status) == ("FEASIBLE", "FEASIBLE")
+    assert original_one.diagnostics is not None
+    assert compact_one.diagnostics is not None
+    assert original_one.diagnostics.incumbent_addition_count == 1
+    assert compact_one.diagnostics.incumbent_addition_count == 1
 
 
 def test_duplicate_colocation_hyperedges_and_reverse_indicators_are_redundant() -> None:
