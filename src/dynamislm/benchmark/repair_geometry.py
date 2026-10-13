@@ -22,6 +22,8 @@ from dynamislm.benchmark.constants import (
 from dynamislm.benchmark.coverage import COVERAGE_MATRIX
 from dynamislm.benchmark.production_authoring import PRODUCTION_SYNTHETIC_GENERATORS
 from dynamislm.benchmark.selection_contracts import (
+    POOL_FEASIBILITY_SOLVER_PROFILE_VERSION,
+    PSE_V1_POOL_FEASIBILITY_SOLVER_PROFILE_V1,
     AssignmentState,
     CandidateAssignment,
     ConstraintKind,
@@ -435,6 +437,32 @@ class RepairSignatureCount:
 
 @register_serializable_type
 @dataclass(frozen=True, slots=True)
+class RepairMasterDiagnostics:
+    model_variable_count: int
+    boolean_variable_count: int
+    integer_variable_count: int
+    constraint_count: int
+    objective_term_count: int
+    solver_status: str
+    feasible_incumbent_present: bool
+    incumbent_addition_count: int | None
+    best_objective_bound: float | None
+    absolute_gap: float | None
+    conflicts: int
+    branches: int
+    restarts: int
+    wall_seconds: float
+    deterministic_time: float
+    unknown_classification: str | None
+    solver_profile_version: str = "UNVERSIONED"
+    source_relation_constraint_count: int = 0
+    unique_relation_member_set_count: int = 0
+    redundant_relation_constraints_removed: int = 0
+    relation_compaction_digest: str = ""
+
+
+@register_serializable_type
+@dataclass(frozen=True, slots=True)
 class RepairMasterResult:
     status: str
     minimum_additions: int | None
@@ -446,6 +474,7 @@ class RepairMasterResult:
     geometry_digest: str
     signature_catalog_digest: str
     optimality_scope: str
+    solver_diagnostics: RepairMasterDiagnostics | None = None
     result_digest: str = ""
 
     def __post_init__(self) -> None:
@@ -477,8 +506,248 @@ class RepairMasterResult:
         object.__setattr__(self, "result_digest", digest)
 
 
+@register_serializable_type
+@dataclass(frozen=True, slots=True)
+class RepairCardinalityTrial:
+    maximum_additions: int
+    status: str
+    solver_profile_version: str
+    solver_config: SelectionSolverConfig
+    solver_version: str
+    geometry_digest: str
+    signature_inventory_digest: str
+    diagnostics: RepairMasterDiagnostics | None
+    minimum_additions: int = 0
+    witness: tuple[RepairSignatureCount, ...] = ()
+    lower_bound_source_trial_digest: str | None = None
+    proof_source_schema: str | None = None
+    proof_source_digest: str | None = None
+    proof_source_problem_digest: str | None = None
+    proof_source_constraint_inventory_digest: str | None = None
+    proof_source_status: str | None = None
+    proof_source_method: str | None = None
+    hint_source_trial_digest: str | None = None
+    trial_digest: str = ""
+
+    def __post_init__(self) -> None:
+        if self.maximum_additions < 0 or self.status not in {"FEASIBLE", "INFEASIBLE", "UNKNOWN"}:
+            raise ValueError("invalid structural cardinality decision trial")
+        if not 0 <= self.minimum_additions <= self.maximum_additions:
+            raise ValueError("invalid structural cardinality interval")
+        if (self.minimum_additions == 0) != (self.lower_bound_source_trial_digest is None):
+            raise ValueError("positive cardinality lower bounds require their infeasibility proof")
+        if self.status == "FEASIBLE":
+            if self.diagnostics is None or not self.diagnostics.feasible_incumbent_present:
+                raise ValueError("feasible cardinality trial requires a solver witness")
+            if self.diagnostics.solver_status not in {"FEASIBLE", "OPTIMAL"}:
+                raise ValueError("feasible cardinality trial has a non-feasible solver status")
+            if (
+                sum(item.total_count for item in self.witness)
+                != self.diagnostics.incumbent_addition_count
+                or sum(item.total_count for item in self.witness) < self.minimum_additions
+                or sum(item.total_count for item in self.witness) > self.maximum_additions
+            ):
+                raise ValueError("feasible cardinality trial witness does not match its budget")
+        if self.status != "FEASIBLE" and self.witness:
+            raise ValueError("non-feasible cardinality trial cannot contain a repair witness")
+        if self.status == "INFEASIBLE":
+            if self.diagnostics is not None and self.diagnostics.solver_status != "INFEASIBLE":
+                raise ValueError(
+                    "infeasible cardinality trial requires an exact infeasibility proof"
+                )
+            if self.diagnostics is None and not all(
+                (
+                    self.maximum_additions == 0,
+                    self.proof_source_schema,
+                    self.proof_source_digest,
+                    self.proof_source_problem_digest,
+                    self.proof_source_constraint_inventory_digest,
+                    self.proof_source_status == "INFEASIBLE",
+                    self.proof_source_method == "EXACT_FEASIBILITY_ORACLE",
+                )
+            ):
+                raise ValueError("inherited infeasibility proof lacks exact source bindings")
+        elif self.status == "UNKNOWN" and (
+            self.diagnostics is None or self.diagnostics.solver_status != "UNKNOWN"
+        ):
+            raise ValueError("unknown cardinality trial must retain its UNKNOWN solver response")
+        elif self.diagnostics is None:
+            raise ValueError("only inherited zero-addition infeasibility may omit diagnostics")
+        digest = canonical_hash(
+            {
+                "maximum_additions": self.maximum_additions,
+                "minimum_additions": self.minimum_additions,
+                "status": self.status,
+                "solver_profile_version": self.solver_profile_version,
+                "solver_config": self.solver_config,
+                "solver_version": self.solver_version,
+                "geometry_digest": self.geometry_digest,
+                "signature_inventory_digest": self.signature_inventory_digest,
+                "diagnostics": self.diagnostics,
+                "witness": self.witness,
+                "lower_bound_source_trial_digest": self.lower_bound_source_trial_digest,
+                "proof_source_schema": self.proof_source_schema,
+                "proof_source_digest": self.proof_source_digest,
+                "proof_source_problem_digest": self.proof_source_problem_digest,
+                "proof_source_constraint_inventory_digest": (
+                    self.proof_source_constraint_inventory_digest
+                ),
+                "proof_source_status": self.proof_source_status,
+                "proof_source_method": self.proof_source_method,
+                "hint_source_trial_digest": self.hint_source_trial_digest,
+            }
+        )
+        if self.trial_digest and self.trial_digest != digest:
+            raise ValueError("cardinality trial digest does not match its evidence")
+        object.__setattr__(self, "trial_digest", digest)
+
+
+@register_serializable_type
+@dataclass(frozen=True, slots=True)
+class IdealRepairCardinalityResult:
+    status: str
+    minimum_additions: int | None
+    repair_vector: tuple[RepairSignatureCount, ...]
+    profile_version: str
+    solver_config: SelectionSolverConfig
+    solver_version: str
+    signature_count: int
+    signature_inventory_digest: str
+    geometry_digest: str
+    model_is_relaxation: bool
+    relaxation_definition: str
+    trials: tuple[RepairCardinalityTrial, ...]
+    lower_proof: RepairCardinalityTrial | None
+    upper_proof: RepairCardinalityTrial | None
+    optimality_scope: str
+    result_digest: str = ""
+
+    def __post_init__(self) -> None:
+        if self.status not in {"OPTIMAL", "INFEASIBLE", "UNKNOWN"}:
+            raise ValueError("invalid ideal repair cardinality result status")
+        if not self.model_is_relaxation or not self.relaxation_definition:
+            raise ValueError("ideal repair cardinality model must declare its relaxation")
+        trials_by_digest = {trial.trial_digest: trial for trial in self.trials}
+        if len(trials_by_digest) != len(self.trials):
+            raise ValueError("ideal cardinality search contains duplicate trial receipts")
+        for trial in self.trials:
+            if trial.minimum_additions == 0:
+                continue
+            source = trials_by_digest.get(trial.lower_bound_source_trial_digest or "")
+            if (
+                source is None
+                or source.status != "INFEASIBLE"
+                or source.maximum_additions != trial.minimum_additions - 1
+                or source.geometry_digest != trial.geometry_digest
+                or source.signature_inventory_digest != trial.signature_inventory_digest
+            ):
+                raise ValueError("cardinality trial lower bound lacks its retained proof chain")
+        if self.status == "OPTIMAL":
+            if (
+                self.lower_proof is not None
+                and self.lower_proof.trial_digest not in trials_by_digest
+            ) or (
+                self.upper_proof is not None
+                and self.upper_proof.trial_digest not in trials_by_digest
+            ):
+                raise ValueError("optimality receipts must be retained in the trial inventory")
+            if self.minimum_additions is None or self.upper_proof is None:
+                raise ValueError(
+                    "optimal cardinality result requires its minimum and feasible proof"
+                )
+            if self.upper_proof.status != "FEASIBLE" or (
+                self.upper_proof.maximum_additions != self.minimum_additions
+            ):
+                raise ValueError("optimal cardinality upper proof does not match the minimum")
+            if self.minimum_additions == 0:
+                if self.lower_proof is not None:
+                    raise ValueError("zero minimum uses the nonnegative-domain lower proof")
+            elif (
+                self.lower_proof is None
+                or self.lower_proof.status != "INFEASIBLE"
+                or self.lower_proof.maximum_additions != self.minimum_additions - 1
+            ):
+                raise ValueError("optimal cardinality lower proof must establish K-1 infeasible")
+            if sum(item.total_count for item in self.repair_vector) != self.minimum_additions:
+                raise ValueError("canonical ideal witness does not contain exactly K additions")
+        elif self.minimum_additions is not None or self.repair_vector:
+            raise ValueError("non-optimal cardinality result cannot claim a minimum or vector")
+        if self.status == "INFEASIBLE" and (
+            self.lower_proof is None
+            or self.lower_proof.status != "INFEASIBLE"
+            or self.upper_proof is not None
+        ):
+            raise ValueError("infeasible ideal result requires a terminal infeasible proof")
+        digest = canonical_hash(
+            {
+                "status": self.status,
+                "minimum_additions": self.minimum_additions,
+                "repair_vector": self.repair_vector,
+                "profile_version": self.profile_version,
+                "solver_config": self.solver_config,
+                "solver_version": self.solver_version,
+                "signature_count": self.signature_count,
+                "signature_inventory_digest": self.signature_inventory_digest,
+                "geometry_digest": self.geometry_digest,
+                "model_is_relaxation": self.model_is_relaxation,
+                "relaxation_definition": self.relaxation_definition,
+                "trials": self.trials,
+                "lower_proof": self.lower_proof,
+                "upper_proof": self.upper_proof,
+                "optimality_scope": self.optimality_scope,
+            }
+        )
+        if self.result_digest and self.result_digest != digest:
+            raise ValueError("ideal cardinality result digest does not match its evidence")
+        object.__setattr__(self, "result_digest", digest)
+
+    @property
+    def model_variable_count(self) -> int | None:
+        diagnostic = next(
+            (trial.diagnostics for trial in reversed(self.trials) if trial.diagnostics is not None),
+            None,
+        )
+        return None if diagnostic is None else diagnostic.model_variable_count
+
+    @property
+    def model_constraint_count(self) -> int | None:
+        diagnostic = next(
+            (trial.diagnostics for trial in reversed(self.trials) if trial.diagnostics is not None),
+            None,
+        )
+        return None if diagnostic is None else diagnostic.constraint_count
+
+    @property
+    def cardinality_optimality(self) -> str:
+        return "PROVEN" if self.status == "OPTIMAL" else "NOT_PROVEN"
+
+    @property
+    def ideal_repair_digest(self) -> str:
+        return canonical_hash(
+            {
+                "schema": "RES407-IDEAL-REPAIR-WITNESS@1.0.0",
+                "status": self.status,
+                "geometry_digest": self.geometry_digest,
+                "signature_inventory_digest": self.signature_inventory_digest,
+                "minimum_additions": self.minimum_additions,
+                "repair_vector": self.repair_vector,
+                "optimality_scope": self.optimality_scope,
+            }
+        )
+
+
 REPAIR_MASTER_SOLVER_CONFIG = SelectionSolverConfig(
     workers=1, random_seed=369, timeout_s=120.0, cp_model_presolve=True
+)
+RES407_STRUCTURAL_REPAIR_MASTER_PROFILE_VERSION = "RES407-STRUCTURAL-REPAIR-MASTER@1.0.0"
+RES407_STRUCTURAL_REPAIR_MASTER_PROFILE_V1 = SelectionSolverConfig(
+    workers=8, random_seed=369, timeout_s=300.0, cp_model_presolve=True
+)
+IDEAL_REPAIR_IS_RELAXATION = True
+IDEAL_REPAIR_RELAXATION_DEFINITION = (
+    "Typed maximum feature support per authorized cell/origin, flexible non-synthetic splits, "
+    "fresh independent identity, no new colocation or contamination edges; existing 449 "
+    "candidates and all hard benchmark rules remain exact."
 )
 _REPAIR_GLOBAL_CONSTRAINTS = {
     ConstraintKind.FINAL_COUNT,
@@ -597,7 +866,7 @@ def _cell_feature_profiles(
 
 
 def build_ideal_repair_signatures(geometry: RepairGeometry) -> tuple[RepairSignature, ...]:
-    signatures = []
+    signatures: list[RepairSignature] = []
     for cell, origin, features in _cell_feature_profiles(geometry):
         split_options = (
             tuple((split,) for split in SPLIT_ORDER)
@@ -607,6 +876,591 @@ def build_ideal_repair_signatures(geometry: RepairGeometry) -> tuple[RepairSigna
         for splits in split_options:
             signatures.append(_signature(origin, cell, features, splits))
     return tuple(sorted(set(signatures), key=lambda item: item.signature_id))
+
+
+def build_compact_ideal_repair_signatures(
+    geometry: RepairGeometry,
+) -> tuple[RepairSignature, ...]:
+    """Build maximal, canonical feature signatures without dominated answerability variants."""
+
+    answerable_has_maximum = any(
+        constraint.feature == SelectionFeature(FeatureKind.ANSWERABLE)
+        and constraint.maximum is not None
+        for constraint in geometry.constraints(ConstraintKind.FEATURE_MINIMUM)
+    )
+    signatures: list[RepairSignature] = []
+    for cell, origin, features in _cell_feature_profiles(geometry):
+        capability = cell[0]
+        if (
+            capability != "C18"
+            and origin is not CaseOrigin.DETERMINISTIC_SYNTHETIC
+            and not answerable_has_maximum
+            and SelectionFeature(FeatureKind.ANSWERABLE) not in features
+        ):
+            continue
+        splits = (
+            tuple((split,) for split in SPLIT_ORDER)
+            if origin is CaseOrigin.DETERMINISTIC_SYNTHETIC
+            else (SPLIT_ORDER,)
+        )
+        signatures.extend(_signature(origin, cell, features, allowed) for allowed in splits)
+    return tuple(sorted(set(signatures), key=lambda item: item.signature_id))
+
+
+@dataclass(slots=True)
+class _StructuralRepairModel:
+    geometry: RepairGeometry
+    model: Any
+    assignments: dict[tuple[str, AssignmentState], Any]
+    additions: dict[str, Any]
+    recourse: dict[tuple[str, SplitName], Any]
+    signatures: tuple[RepairSignature, ...]
+    final_n: int
+    source_relation_constraint_count: int
+    unique_relation_member_set_count: int
+    relation_compaction_digest: str
+    assignment_hint: tuple[tuple[str, AssignmentState], ...] = ()
+    repair_hint: tuple[RepairSignatureCount, ...] = ()
+    hint_source_trial_digest: str | None = None
+
+
+def _structural_repair_model(
+    geometry: RepairGeometry,
+    signatures: tuple[RepairSignature, ...],
+) -> _StructuralRepairModel:
+    signatures = tuple(sorted(set(signatures), key=lambda item: item.signature_id))
+    problem = geometry.problem
+    final_n = next(
+        constraint.minimum
+        for constraint in problem.constraint_set.constraints
+        if constraint.kind is ConstraintKind.FINAL_COUNT
+    )
+    assert final_n is not None
+    source_relations = geometry.constraints(ConstraintKind.CONDITIONAL_COLOCATION)
+    relation_classes: dict[tuple[str, ...], list[str]] = defaultdict(list)
+    for relation in source_relations:
+        relation_classes[relation.candidate_ids].append(relation.constraint_id)
+    maximal_relation_sets: set[tuple[str, ...]] = {
+        members
+        for members in relation_classes
+        if not any(frozenset(members) < frozenset(other) for other in relation_classes)
+    }
+    relation_compaction_digest = canonical_hash(
+        {
+            "source_classes": tuple(
+                (members, tuple(sorted(ids, key=str.encode)))
+                for members, ids in sorted(relation_classes.items())
+            ),
+            "retained_maximal_member_sets": tuple(sorted(maximal_relation_sets)),
+            "equivalence": "A conditional-colocation superset subsumes every member subset.",
+        }
+    )
+    seen_relation_sets: set[tuple[str, ...]] = set()
+    local_constraints = []
+    for constraint in problem.constraint_set.constraints:
+        if constraint.kind in _REPAIR_GLOBAL_CONSTRAINTS:
+            continue
+        if constraint.kind is ConstraintKind.CONDITIONAL_COLOCATION:
+            if constraint.candidate_ids not in maximal_relation_sets:
+                continue
+            if constraint.candidate_ids in seen_relation_sets:
+                continue
+            seen_relation_sets.add(constraint.candidate_ids)
+        local_constraints.append(constraint)
+    local_problem = clone_selection_problem(problem, local_constraints)
+    model, assignments, _balance, _hash = _model_for(
+        local_problem,
+        include_objectives=False,
+        compact_colocation_indicators=True,
+        compact_candidate_states=True,
+    )
+    additions: dict[str, Any] = {}
+    recourse: dict[tuple[str, SplitName], Any] = {}
+    lane_capacities: dict[str, int | None] = {}
+    for signature in signatures:
+        cap = signature.lane_capacity
+        if signature.lane_id is not None:
+            prior = lane_capacities.setdefault(signature.lane_id, cap)
+            if prior != cap:
+                raise ValueError("archetypes in one lane disagree on remaining lane capacity")
+        upper = min(final_n, final_n if cap is None else cap)
+        addition = model.new_int_var(0, upper, f"y[{signature.signature_id[:12]}]")
+        additions[signature.signature_id] = addition
+        split_counts = []
+        for split in SPLIT_ORDER:
+            compatible = split in signature.split_compatibility
+            allocation = model.new_int_var(
+                0,
+                upper if compatible else 0,
+                f"z[{signature.signature_id[:12]},{split.value}]",
+            )
+            recourse[signature.signature_id, split] = allocation
+            split_counts.append(allocation)
+            if not compatible:
+                model.add(allocation == 0)
+        # This bound follows from nonnegative z and sum(z) <= y below.
+        model.add(sum(split_counts) <= addition)
+        # Base-only independent units with no selected placement can be deleted from y.
+        model.add(addition <= sum(split_counts))
+    for lane_id, capacity in lane_capacities.items():
+        if capacity is not None:
+            model.add(
+                sum(
+                    additions[signature.signature_id]
+                    for signature in signatures
+                    if signature.lane_id == lane_id
+                )
+                <= capacity
+            )
+    model.add(sum(additions.values()) <= final_n)
+
+    candidates = problem.candidates
+    placed_states = (
+        AssignmentState.PUBLIC_DEVELOPMENT,
+        AssignmentState.FROZEN_VALIDATION,
+        AssignmentState.HIDDEN_FINAL,
+    )
+    for signature in signatures:
+        if signature.lineage_behavior != "UNIQUE_PER_ADDITION_WITH_SAME_CELL_PARENT":
+            continue
+        for split in SPLIT_ORDER:
+            mutation_count = recourse[signature.signature_id, split]
+            parent_terms = [
+                assignments[candidate.candidate_id, AssignmentState(split.value)]
+                for candidate in candidates
+                if candidate.cell == signature.cell
+            ]
+            parent_terms.extend(
+                recourse[parent_signature.signature_id, split]
+                for parent_signature in signatures
+                if parent_signature.cell == signature.cell
+                and parent_signature.lineage_behavior == "NOT_MUTATION"
+            )
+            if parent_terms:
+                model.add(mutation_count <= final_n * sum(parent_terms))
+            else:
+                model.add(mutation_count == 0)
+
+    for constraint in problem.constraint_set.constraints:
+        if constraint.kind is ConstraintKind.FINAL_COUNT:
+            assert constraint.minimum is not None
+            if constraint.maximum != constraint.minimum:
+                raise ValueError("repair master requires an exact FINAL_COUNT equality")
+            model.add(
+                sum(
+                    assignments[candidate.candidate_id, split]
+                    for candidate in candidates
+                    for split in placed_states
+                )
+                + sum(recourse.values())
+                == constraint.minimum
+            )
+        elif constraint.kind is ConstraintKind.SPLIT_COUNT:
+            assert constraint.split is not None and constraint.minimum is not None
+            if constraint.maximum != constraint.minimum:
+                raise ValueError("repair master requires exact SPLIT_COUNT equalities")
+            state = AssignmentState(constraint.split.value)
+            model.add(
+                sum(assignments[candidate.candidate_id, state] for candidate in candidates)
+                + sum(
+                    recourse[signature.signature_id, constraint.split] for signature in signatures
+                )
+                == constraint.minimum
+            )
+        elif constraint.kind is ConstraintKind.FEATURE_MINIMUM:
+            assert constraint.split is not None and constraint.feature is not None
+            base_count = sum(
+                assignments[candidate.candidate_id, AssignmentState(constraint.split.value)]
+                for candidate in candidates
+                if constraint.feature in candidate.features
+            )
+            repair_count = sum(
+                recourse[signature.signature_id, constraint.split]
+                for signature in signatures
+                if constraint.feature in signature.guaranteed_features
+            )
+            assert constraint.minimum is not None
+            model.add(base_count + repair_count >= constraint.minimum)
+            if constraint.maximum is not None:
+                model.add(base_count + repair_count <= constraint.maximum)
+        elif constraint.kind is ConstraintKind.ORIGIN_BOUNDS:
+            assert constraint.origin_class is not None and constraint.minimum is not None
+            base_count = sum(
+                assignments[candidate.candidate_id, split]
+                for candidate in candidates
+                if candidate.origin_class is constraint.origin_class
+                for split in placed_states
+            )
+            repair_count = sum(
+                recourse[signature.signature_id, split]
+                for signature in signatures
+                if signature.origin is constraint.origin_class
+                for split in SPLIT_ORDER
+            )
+            model.add(base_count + repair_count >= constraint.minimum)
+            if constraint.maximum is not None:
+                model.add(base_count + repair_count <= constraint.maximum)
+        elif constraint.kind is ConstraintKind.MUTATION_LINEAGE_MINIMUM:
+            assert constraint.minimum is not None
+            lineages: dict[str, list[Any]] = defaultdict(list)
+            for candidate in candidates:
+                if (
+                    candidate.origin_class is CaseOrigin.ADVERSARIAL_MUTATION
+                    and candidate.mutation_lineage_id is not None
+                ):
+                    lineages[candidate.mutation_lineage_id].extend(
+                        assignments[candidate.candidate_id, split] for split in placed_states
+                    )
+            lineage_vars = []
+            for index, lineage_id in enumerate(sorted(lineages, key=str.encode)):
+                members = lineages[lineage_id]
+                present = model.new_bool_var(f"existing_lineage[{index}]")
+                model.add(sum(members) >= 1).only_enforce_if(present)
+                model.add(sum(members) == 0).only_enforce_if(present.Not())
+                lineage_vars.append(present)
+            new_lineages = sum(
+                recourse[signature.signature_id, split]
+                for signature in signatures
+                if signature.lineage_behavior == "UNIQUE_PER_ADDITION_WITH_SAME_CELL_PARENT"
+                for split in SPLIT_ORDER
+            )
+            model.add(sum(lineage_vars) + new_lineages >= constraint.minimum)
+
+    return _StructuralRepairModel(
+        geometry,
+        model,
+        assignments,
+        additions,
+        recourse,
+        signatures,
+        final_n,
+        len(source_relations),
+        len(maximal_relation_sets),
+        relation_compaction_digest,
+    )
+
+
+def solve_repair_cardinality_decision(
+    structural_model: _StructuralRepairModel,
+    maximum_additions: int,
+    *,
+    minimum_additions: int = 0,
+    lower_bound_proof: RepairCardinalityTrial | None = None,
+    solver_config: SelectionSolverConfig = RES407_STRUCTURAL_REPAIR_MASTER_PROFILE_V1,
+) -> RepairCardinalityTrial:
+    if not 0 <= maximum_additions <= structural_model.final_n:
+        raise ValueError("cardinality decision budget must be within FINAL_N")
+    if not 0 <= minimum_additions <= maximum_additions:
+        raise ValueError("cardinality decision interval must be within FINAL_N")
+    if minimum_additions == 0:
+        if lower_bound_proof is not None:
+            raise ValueError("zero lower bound cannot carry an infeasibility proof")
+    elif (
+        lower_bound_proof is None
+        or lower_bound_proof.status != "INFEASIBLE"
+        or lower_bound_proof.maximum_additions != minimum_additions - 1
+        or lower_bound_proof.geometry_digest != structural_model.geometry.geometry_digest
+        or lower_bound_proof.signature_inventory_digest
+        != canonical_hash(structural_model.signatures)
+    ):
+        raise ValueError("cardinality lower bound lacks its exact preceding infeasibility proof")
+    model = structural_model.model.clone()
+    additions = {
+        signature_id: model.get_int_var_from_proto_index(variable.index)
+        for signature_id, variable in structural_model.additions.items()
+    }
+    recourse = {
+        key: model.get_int_var_from_proto_index(variable.index)
+        for key, variable in structural_model.recourse.items()
+    }
+    model.add(sum(additions.values()) <= maximum_additions)
+    if minimum_additions:
+        model.add(sum(additions.values()) >= minimum_additions)
+    if structural_model.hint_source_trial_digest is not None:
+        states = dict(structural_model.assignment_hint)
+        for candidate in structural_model.geometry.problem.candidates:
+            state = states[candidate.candidate_id]
+            for split in SPLIT_ORDER:
+                original = structural_model.assignments[
+                    candidate.candidate_id, AssignmentState(split.value)
+                ]
+                model.add_hint(
+                    model.get_bool_var_from_proto_index(original.index),
+                    int(state is AssignmentState(split.value)),
+                )
+        counts = {
+            signature_id: dict(item.split_counts)
+            for signature_id, item in (
+                (item.signature.signature_id, item) for item in structural_model.repair_hint
+            )
+        }
+        for signature_id, variable in additions.items():
+            model.add_hint(
+                variable,
+                sum(counts.get(signature_id, {}).values()),
+            )
+        for (signature_id, split), variable in recourse.items():
+            model.add_hint(variable, counts.get(signature_id, {}).get(split, 0))
+    proto = model.proto
+    domains = tuple(tuple(variable.domain) for variable in proto.variables)
+    boolean_count = sum(domain == (0, 1) for domain in domains)
+    solver, raw_status, _deterministic = _solve_once(model, solver_config)
+    response = solver.response_proto
+    has_solution = bool(response.solution)
+    decision_status = (
+        "INFEASIBLE" if raw_status == "INFEASIBLE" else ("FEASIBLE" if has_solution else "UNKNOWN")
+    )
+    witness: tuple[RepairSignatureCount, ...] = ()
+    incumbent = None
+    if has_solution:
+        counts_by_signature: dict[str, list[tuple[SplitName, int]]] = defaultdict(list)
+        for (signature_id, split), variable in recourse.items():
+            count = int(solver.value(variable))
+            if count:
+                counts_by_signature[signature_id].append((split, count))
+        signature_by_id = {item.signature_id: item for item in structural_model.signatures}
+        witness = tuple(
+            RepairSignatureCount(
+                signature_by_id[signature_id],
+                tuple(sorted(counts, key=lambda item: SPLIT_ORDER.index(item[0]))),
+            )
+            for signature_id, counts in sorted(counts_by_signature.items())
+        )
+        incumbent = sum(item.total_count for item in witness)
+        selected_additions = sum(int(solver.value(variable)) for variable in additions.values())
+        if selected_additions != incumbent or selected_additions > maximum_additions:
+            raise ValueError("cardinality witness has unused or over-budget repair additions")
+    diagnostics = RepairMasterDiagnostics(
+        model_variable_count=len(domains),
+        boolean_variable_count=boolean_count,
+        integer_variable_count=len(domains) - boolean_count,
+        constraint_count=len(proto.constraints),
+        objective_term_count=len(proto.objective.vars),
+        solver_status=raw_status,
+        feasible_incumbent_present=has_solution,
+        incumbent_addition_count=incumbent,
+        best_objective_bound=None,
+        absolute_gap=None,
+        conflicts=int(response.num_conflicts),
+        branches=int(response.num_branches),
+        restarts=int(response.num_restarts),
+        wall_seconds=float(response.wall_time),
+        deterministic_time=float(response.deterministic_time),
+        unknown_classification=classify_repair_master_unknown(raw_status, has_solution, None),
+        solver_profile_version=RES407_STRUCTURAL_REPAIR_MASTER_PROFILE_VERSION,
+        source_relation_constraint_count=structural_model.source_relation_constraint_count,
+        unique_relation_member_set_count=structural_model.unique_relation_member_set_count,
+        redundant_relation_constraints_removed=(
+            structural_model.source_relation_constraint_count
+            - structural_model.unique_relation_member_set_count
+        ),
+        relation_compaction_digest=structural_model.relation_compaction_digest,
+    )
+    trial = RepairCardinalityTrial(
+        maximum_additions=maximum_additions,
+        minimum_additions=minimum_additions,
+        status=decision_status,
+        solver_profile_version=RES407_STRUCTURAL_REPAIR_MASTER_PROFILE_VERSION,
+        solver_config=solver_config,
+        solver_version=version("ortools"),
+        geometry_digest=structural_model.geometry.geometry_digest,
+        signature_inventory_digest=canonical_hash(structural_model.signatures),
+        diagnostics=diagnostics,
+        witness=witness,
+        lower_bound_source_trial_digest=(
+            None if lower_bound_proof is None else lower_bound_proof.trial_digest
+        ),
+        hint_source_trial_digest=structural_model.hint_source_trial_digest,
+    )
+    if decision_status == "FEASIBLE":
+        state_hints = []
+        for candidate in structural_model.geometry.problem.candidates:
+            state = next(
+                (
+                    AssignmentState(split.value)
+                    for split in SPLIT_ORDER
+                    if solver.value(
+                        structural_model.assignments[
+                            candidate.candidate_id, AssignmentState(split.value)
+                        ]
+                    )
+                ),
+                AssignmentState.OUT,
+            )
+            state_hints.append((candidate.candidate_id, state))
+        structural_model.assignment_hint = tuple(state_hints)
+        structural_model.repair_hint = witness
+        structural_model.hint_source_trial_digest = trial.trial_digest
+    return trial
+
+
+def solve_ideal_repair_minimum(
+    geometry: RepairGeometry,
+    *,
+    signatures: tuple[RepairSignature, ...] | None = None,
+    solver_config: SelectionSolverConfig = RES407_STRUCTURAL_REPAIR_MASTER_PROFILE_V1,
+    zero_addition_infeasibility_proof: RepairCardinalityTrial | None = None,
+) -> IdealRepairCardinalityResult:
+    signature_inventory = tuple(
+        sorted(
+            set(
+                build_compact_ideal_repair_signatures(geometry)
+                if signatures is None
+                else signatures
+            ),
+            key=lambda item: item.signature_id,
+        )
+    )
+    model = _structural_repair_model(geometry, signature_inventory)
+    inventory_digest = canonical_hash(signature_inventory)
+    trials_by_k: dict[int, RepairCardinalityTrial] = {}
+    trials: list[RepairCardinalityTrial] = []
+
+    if zero_addition_infeasibility_proof is not None:
+        proof = zero_addition_infeasibility_proof
+        if (
+            proof.maximum_additions != 0
+            or proof.status != "INFEASIBLE"
+            or proof.diagnostics is not None
+            or proof.geometry_digest != geometry.geometry_digest
+            or proof.signature_inventory_digest != inventory_digest
+            or proof.proof_source_schema != "RES406-BASE-FEASIBILITY-RECEIPT@1.0.0"
+            or proof.proof_source_status != "INFEASIBLE"
+            or proof.proof_source_method != "EXACT_FEASIBILITY_ORACLE"
+            or proof.solver_profile_version != POOL_FEASIBILITY_SOLVER_PROFILE_VERSION
+            or proof.solver_config != PSE_V1_POOL_FEASIBILITY_SOLVER_PROFILE_V1
+            or proof.solver_version != version("ortools")
+            or proof.proof_source_problem_digest != geometry.problem.problem_digest
+            or proof.proof_source_constraint_inventory_digest
+            != geometry.problem.constraint_inventory_digest
+        ):
+            raise ValueError("inherited zero-addition proof does not bind this exact geometry")
+        trials_by_k[0] = proof
+        trials.append(proof)
+
+    def decide(
+        k: int,
+        *,
+        lower_bound_proof: RepairCardinalityTrial | None = None,
+    ) -> RepairCardinalityTrial:
+        cached = trials_by_k.get(k)
+        if cached is not None:
+            if cached.status != "FEASIBLE" or (
+                cached.diagnostics is not None
+                and cached.diagnostics.incumbent_addition_count is not None
+                and cached.diagnostics.incumbent_addition_count <= k
+            ):
+                return cached
+        minimum = 0 if lower_bound_proof is None else lower_bound_proof.maximum_additions + 1
+        trial = solve_repair_cardinality_decision(
+            model,
+            k,
+            minimum_additions=minimum,
+            lower_bound_proof=lower_bound_proof,
+            solver_config=solver_config,
+        )
+        trials_by_k[k] = trial
+        trials.append(trial)
+        return trial
+
+    def result(
+        status: str,
+        *,
+        minimum: int | None = None,
+        vector: tuple[RepairSignatureCount, ...] = (),
+        lower: RepairCardinalityTrial | None = None,
+        upper: RepairCardinalityTrial | None = None,
+        scope: str,
+    ) -> IdealRepairCardinalityResult:
+        return IdealRepairCardinalityResult(
+            status=status,
+            minimum_additions=minimum,
+            repair_vector=vector,
+            profile_version=RES407_STRUCTURAL_REPAIR_MASTER_PROFILE_VERSION,
+            solver_config=solver_config,
+            solver_version=version("ortools"),
+            signature_count=len(signature_inventory),
+            signature_inventory_digest=inventory_digest,
+            geometry_digest=geometry.geometry_digest,
+            model_is_relaxation=IDEAL_REPAIR_IS_RELAXATION,
+            relaxation_definition=IDEAL_REPAIR_RELAXATION_DEFINITION,
+            trials=tuple(trials),
+            lower_proof=lower,
+            upper_proof=upper,
+            optimality_scope=scope,
+        )
+
+    scope = (
+        "IDEAL_RELAXATION; finite canonical signature domain; total additions <= FINAL_N="
+        f"{model.final_n}; feasibility monotone in K because K is an upper bound"
+    )
+    zero = trials_by_k.get(0) or decide(0)
+    if zero.status == "UNKNOWN":
+        return result("UNKNOWN", scope=scope)
+    if zero.status == "FEASIBLE":
+        return result("OPTIMAL", minimum=0, vector=zero.witness, upper=zero, scope=scope)
+
+    low = zero
+    k = 1
+    high: RepairCardinalityTrial | None = None
+    while True:
+        trial = decide(k, lower_bound_proof=low)
+        if trial.status == "UNKNOWN":
+            return result("UNKNOWN", lower=low, upper=high, scope=scope)
+        if trial.status == "INFEASIBLE":
+            low = trial
+            if k == model.final_n:
+                return result("INFEASIBLE", lower=low, scope=scope)
+            k = min(model.final_n, 2 * k)
+            continue
+        high = trial
+        assert high.diagnostics is not None
+        while high.diagnostics.incumbent_addition_count is not None and (
+            high.diagnostics.incumbent_addition_count < high.maximum_additions
+        ):
+            smaller_k = high.diagnostics.incumbent_addition_count
+            if smaller_k <= low.maximum_additions:
+                raise ValueError("feasible witness contradicts the proven infeasible lower bound")
+            smaller = decide(smaller_k, lower_bound_proof=low)
+            if smaller.status == "UNKNOWN":
+                return result("UNKNOWN", lower=low, upper=smaller, scope=scope)
+            if smaller.status != "FEASIBLE":
+                raise ValueError("normalized feasible witness did not replay at its cardinality")
+            high = smaller
+        break
+
+    while high.maximum_additions - low.maximum_additions > 1:
+        middle = (low.maximum_additions + high.maximum_additions) // 2
+        trial = decide(middle, lower_bound_proof=low)
+        if trial.status == "UNKNOWN":
+            return result("UNKNOWN", lower=low, upper=high, scope=scope)
+        if trial.status == "INFEASIBLE":
+            low = trial
+            continue
+        high = trial
+        assert high.diagnostics is not None
+        while high.diagnostics.incumbent_addition_count is not None and (
+            high.diagnostics.incumbent_addition_count < high.maximum_additions
+        ):
+            smaller_k = high.diagnostics.incumbent_addition_count
+            if smaller_k <= low.maximum_additions:
+                raise ValueError("feasible witness contradicts the proven infeasible lower bound")
+            smaller = decide(smaller_k, lower_bound_proof=low)
+            if smaller.status == "UNKNOWN":
+                return result("UNKNOWN", lower=low, upper=smaller, scope=scope)
+            if smaller.status != "FEASIBLE":
+                raise ValueError("normalized feasible witness did not replay at its cardinality")
+            high = smaller
+
+    assert high.maximum_additions == low.maximum_additions + 1
+    return result(
+        "OPTIMAL",
+        minimum=high.maximum_additions,
+        vector=high.witness,
+        lower=low,
+        upper=high,
+        scope=scope,
+    )
 
 
 def build_optimistic_c08_signatures(
@@ -653,6 +1507,20 @@ def build_optimistic_c08_signatures(
             )
         )
     return tuple(sorted(set(signatures), key=lambda item: item.signature_id))
+
+
+def classify_repair_master_unknown(
+    solver_status: str,
+    feasible_incumbent: bool,
+    best_objective_bound: float | None,
+) -> str | None:
+    if solver_status != "UNKNOWN":
+        return None
+    if feasible_incumbent:
+        return "FEASIBLE_INCUMBENT_NOT_PROVEN_OPTIMAL"
+    if best_objective_bound is not None and best_objective_bound > 0:
+        return "BOUND_ONLY_NO_INCUMBENT"
+    return "NO_USEFUL_BOUND_OR_INCUMBENT"
 
 
 def solve_structural_repair_master(
@@ -820,14 +1688,49 @@ def solve_structural_repair_master(
 
     objective = sum(additions)
     model.minimize(objective)
+    proto = model.proto
+    variable_domains = tuple(tuple(variable.domain) for variable in proto.variables)
+    variable_count = len(variable_domains)
+    boolean_count = sum(domain == (0, 1) for domain in variable_domains)
     solver, status, _deterministic = _solve_once(model, solver_config)
+    response = solver.response_proto
+    feasible_incumbent = bool(response.solution)
+    incumbent = int(solver.value(objective)) if feasible_incumbent else None
+    best_bound = (
+        float(response.best_objective_bound)
+        if status in {"OPTIMAL", "FEASIBLE", "UNKNOWN"}
+        else None
+    )
+    diagnostics = RepairMasterDiagnostics(
+        model_variable_count=variable_count,
+        boolean_variable_count=boolean_count,
+        integer_variable_count=variable_count - boolean_count,
+        constraint_count=len(proto.constraints),
+        objective_term_count=len(proto.objective.vars),
+        solver_status=status,
+        feasible_incumbent_present=feasible_incumbent,
+        incumbent_addition_count=incumbent,
+        best_objective_bound=best_bound,
+        absolute_gap=(
+            None if incumbent is None or best_bound is None else abs(incumbent - best_bound)
+        ),
+        conflicts=int(response.num_conflicts),
+        branches=int(response.num_branches),
+        restarts=int(response.num_restarts),
+        wall_seconds=float(response.wall_time),
+        deterministic_time=float(response.deterministic_time),
+        unknown_classification=classify_repair_master_unknown(
+            status, feasible_incumbent, best_bound
+        ),
+    )
     solver_version = version("ortools")
     minimum = None
     bound = None
     vector: tuple[RepairSignatureCount, ...] = ()
     if status == "OPTIMAL":
         minimum = int(solver.value(objective))
-        bound = int(solver.best_objective_bound)
+        assert best_bound is not None
+        bound = int(best_bound)
         if bound != minimum:
             raise ValueError("repair master OPTIMAL status has a non-matching objective bound")
         counts = []
@@ -856,6 +1759,7 @@ def solve_structural_repair_master(
         geometry_digest=geometry.geometry_digest,
         signature_catalog_digest=canonical_hash(signatures),
         optimality_scope=optimality_scope,
+        solver_diagnostics=diagnostics,
     )
 
 

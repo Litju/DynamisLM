@@ -1,6 +1,21 @@
 {
   "archetype_record_digest": "sha256:0b6f20ccf5f4f94d76949ae11e7962fc0a86a6b4887f07c5b8c5a58af7e2f6f9",
+  "archetype_structural_contract_digest": "sha256:a66311b193d258047a1dd8584541facb408fee731ad9f1bc88cf96361ce2ead6",
   "authorable_lane_count": 3,
+  "capacity_certificate_binding_contract": {
+    "final_count": 434,
+    "objective": "MAXIMIZE_TARGET_SPLIT_COUNT:<split>",
+    "optimality_proof": "OPTIMAL and objective bound equals objective value",
+    "relaxed_constraint_ids": [
+      "RES258:SPLIT_COUNT:FROZEN_VALIDATION",
+      "RES258:SPLIT_COUNT:HIDDEN_FINAL",
+      "RES258:SPLIT_COUNT:PUBLIC_DEVELOPMENT"
+    ],
+    "result_digest_bound": true,
+    "retained_constraint_inventory_explicit": true,
+    "retained_inventory_digest_bound": true,
+    "solver_config_bound": true
+  },
   "capacity_certificate_binding_digests": [
     "sha256:7e08b6e38fb6b986bfd07c8c43ca29f7b3bd8aca128923fef6506e3e83d623f6",
     "sha256:4f2b19d5c90736d8a0ed5cad7e5912dfcf566e387b1fc46205def39ed59279cd",
@@ -9,22 +24,8 @@
     "sha256:af292d8930fe94490ebae671c0114614fbf9d1d63aacb7868145535f43b23242"
   ],
   "capacity_certificate_digest": "sha256:4529706ec1c4f5150daacc0b72eeaa59884f6e0f3b001132a49ce16ea3d03b4f",
-  "capacity_certificate_semantics": "PASS",
   "capacity_certificate_schema": "RES407-SPLIT-CAPACITY@1.1.0",
-  "capacity_certificate_binding_contract": {
-    "final_count": 434,
-    "relaxed_constraint_ids": [
-      "RES258:SPLIT_COUNT:FROZEN_VALIDATION",
-      "RES258:SPLIT_COUNT:HIDDEN_FINAL",
-      "RES258:SPLIT_COUNT:PUBLIC_DEVELOPMENT"
-    ],
-    "retained_constraint_inventory_explicit": true,
-    "retained_inventory_digest_bound": true,
-    "solver_config_bound": true,
-    "objective": "MAXIMIZE_TARGET_SPLIT_COUNT:<split>",
-    "optimality_proof": "OPTIMAL and objective bound equals objective value",
-    "result_digest_bound": true
-  },
+  "capacity_certificate_semantics": "PASS",
   "classification_evidence": [
     "Split-locked additions can occupy their own split and displace existing selections.",
     "C08 refusal supply cannot directly cover other capability rows or ANSWERABLE.",
@@ -32,45 +33,716 @@
     "Feature guarantees are incomplete: no concrete seed is extrapolated to a full domain.",
     "No augmentation proof establishes sufficient repair or impossibility; authority expansion remains unresolved."
   ],
+  "concrete_candidates_generated": 0,
+  "concrete_candidates_materialized": false,
   "current_c08_archetype_repair_classification": "UNRESOLVED",
   "current_c08_repair_capability": "UNRESOLVED",
   "entry_authority": "1935c25e4fe2774063ac2289807deae5d49b0d63",
   "external_namespace": "production/variable-pools/backfill/e42cd6316da25f622203eb1a2340b34a56c4d3baa411773599d1f278b0bce845/1935c25e4fe2774063ac2289807deae5d49b0d63/geometry/v3",
   "fresh_process_confirmation": "PASS",
   "geometry_record_digest": "sha256:d003f6777857aaad2a66a10de1b03f186143685d3bab6894739073317b678c70",
-  "mission": "RES-407",
-  "ideal_repair_digest": "sha256:1159e9fc16a9ca66339472259e3668e430c8f50e3c8ac0b17f476878786acdab",
-  "ideal_repair_signatures": [],
-  "ideal_repair_status": "UNKNOWN",
-  "ideal_min_additions": null,
-  "archetype_structural_contract_digest": "sha256:a66311b193d258047a1dd8584541facb408fee731ad9f1bc88cf96361ce2ead6",
+  "governed_comparison_performed": false,
   "governed_master_status": "UNRESOLVED",
   "governed_min_additions": null,
   "governed_repair_digest": "sha256:a81ab4b69ab1f081eaa476e80d1b4b8c7aee48f62a4a86d294bc6e85f978a1dd",
+  "ideal_cardinality_lower_proof_digest": "sha256:b532557bbcb63d848f7c9807f0ebc51a09d8f4a7af49c24de9e21fff2181570b",
+  "ideal_cardinality_optimality": "PROVEN",
+  "ideal_cardinality_result_digest": "sha256:fa85a270f25652870959ffa4b9b327e7836e4a001613fd654dfc151dd314a9e8",
+  "ideal_cardinality_search_schema": "RES407-IDEAL-CARDINALITY-DECISION@1.0.0",
+  "ideal_cardinality_trials": [
+    {
+      "diagnostics": null,
+      "geometry_digest": "sha256:7f7734aafa3bfac11af5714d6873df260a0dac7854c4c2805e7c5a9f19bc5e68",
+      "hint_source_trial_digest": null,
+      "lower_bound_source_trial_digest": null,
+      "maximum_additions": 0,
+      "minimum_additions": 0,
+      "proof_source_constraint_inventory_digest": "sha256:a6e9de8c5db8fdb42f989118360d06d0c0e921e5993ccb42cf7ffd79436db78c",
+      "proof_source_digest": "sha256:f1b98ebfebceb3cb3ff90a353e46d342bf50c791b024b60bace1a7b91b9c3b01",
+      "proof_source_method": "EXACT_FEASIBILITY_ORACLE",
+      "proof_source_problem_digest": "sha256:29b85a7b7518c09a40093326a4e4832c6cee7b564d4384806dc9fceeb0abc5c0",
+      "proof_source_schema": "RES406-BASE-FEASIBILITY-RECEIPT@1.0.0",
+      "proof_source_status": "INFEASIBLE",
+      "signature_inventory_digest": "sha256:f2538e519bc61aebc7a45500c69b4a70ef6f4e7aaa2af20c15615623096bfe00",
+      "solver_config": {
+        "canonical_chunk_size": 30,
+        "cp_model_presolve": false,
+        "random_seed": 369,
+        "randomize_search": false,
+        "timeout_seconds": 120.0,
+        "workers": 8
+      },
+      "solver_profile_version": "PSE-V1-POOL-FEASIBILITY-SOLVER@1.0.0",
+      "solver_version": "9.15.6755",
+      "status": "INFEASIBLE",
+      "trial_digest": "sha256:4ef58034a9df5e24037d8287fde575d6d07b09282368dc2b4cb083da98b5889b",
+      "witness": []
+    },
+    {
+      "diagnostics": {
+        "absolute_gap": null,
+        "best_objective_bound": null,
+        "boolean_variable_count": 1747,
+        "branches": 126583,
+        "conflicts": 4150,
+        "constraint_count": 3522,
+        "deterministic_time": 316.19931628223776,
+        "feasible_incumbent_present": false,
+        "incumbent_addition_count": null,
+        "integer_variable_count": 1476,
+        "model_variable_count": 3223,
+        "objective_term_count": 0,
+        "redundant_relation_constraints_removed": 652,
+        "relation_compaction_digest": "sha256:8e157272b506f1dc3a376d239c2f2e337e94cc6529672fc1298a6d4b79c22146",
+        "restarts": 16,
+        "solver_profile_version": "RES407-STRUCTURAL-REPAIR-MASTER@1.0.0",
+        "solver_status": "INFEASIBLE",
+        "source_relation_constraint_count": 773,
+        "unique_relation_member_set_count": 121,
+        "unknown_classification": null,
+        "wall_seconds": 80.582862414
+      },
+      "geometry_digest": "sha256:7f7734aafa3bfac11af5714d6873df260a0dac7854c4c2805e7c5a9f19bc5e68",
+      "hint_source_trial_digest": null,
+      "lower_bound_source_trial_digest": "sha256:4ef58034a9df5e24037d8287fde575d6d07b09282368dc2b4cb083da98b5889b",
+      "maximum_additions": 8,
+      "minimum_additions": 1,
+      "proof_source_constraint_inventory_digest": null,
+      "proof_source_digest": null,
+      "proof_source_method": null,
+      "proof_source_problem_digest": null,
+      "proof_source_schema": null,
+      "proof_source_status": null,
+      "signature_inventory_digest": "sha256:f2538e519bc61aebc7a45500c69b4a70ef6f4e7aaa2af20c15615623096bfe00",
+      "solver_config": {
+        "canonical_chunk_size": 30,
+        "cp_model_presolve": true,
+        "random_seed": 369,
+        "randomize_search": false,
+        "timeout_seconds": 300.0,
+        "workers": 8
+      },
+      "solver_profile_version": "RES407-STRUCTURAL-REPAIR-MASTER@1.0.0",
+      "solver_version": "9.15.6755",
+      "status": "INFEASIBLE",
+      "trial_digest": "sha256:a5de5d3d84707be4377c337e42024176a204fd52c46874d60a07722c010b1e56",
+      "witness": []
+    },
+    {
+      "diagnostics": {
+        "absolute_gap": null,
+        "best_objective_bound": null,
+        "boolean_variable_count": 1747,
+        "branches": 239822,
+        "conflicts": 3231,
+        "constraint_count": 3522,
+        "deterministic_time": 509.5150763864239,
+        "feasible_incumbent_present": false,
+        "incumbent_addition_count": null,
+        "integer_variable_count": 1476,
+        "model_variable_count": 3223,
+        "objective_term_count": 0,
+        "redundant_relation_constraints_removed": 652,
+        "relation_compaction_digest": "sha256:8e157272b506f1dc3a376d239c2f2e337e94cc6529672fc1298a6d4b79c22146",
+        "restarts": 31,
+        "solver_profile_version": "RES407-STRUCTURAL-REPAIR-MASTER@1.0.0",
+        "solver_status": "INFEASIBLE",
+        "source_relation_constraint_count": 773,
+        "unique_relation_member_set_count": 121,
+        "unknown_classification": null,
+        "wall_seconds": 132.472813873
+      },
+      "geometry_digest": "sha256:7f7734aafa3bfac11af5714d6873df260a0dac7854c4c2805e7c5a9f19bc5e68",
+      "hint_source_trial_digest": null,
+      "lower_bound_source_trial_digest": "sha256:a5de5d3d84707be4377c337e42024176a204fd52c46874d60a07722c010b1e56",
+      "maximum_additions": 10,
+      "minimum_additions": 9,
+      "proof_source_constraint_inventory_digest": null,
+      "proof_source_digest": null,
+      "proof_source_method": null,
+      "proof_source_problem_digest": null,
+      "proof_source_schema": null,
+      "proof_source_status": null,
+      "signature_inventory_digest": "sha256:f2538e519bc61aebc7a45500c69b4a70ef6f4e7aaa2af20c15615623096bfe00",
+      "solver_config": {
+        "canonical_chunk_size": 30,
+        "cp_model_presolve": true,
+        "random_seed": 369,
+        "randomize_search": false,
+        "timeout_seconds": 300.0,
+        "workers": 8
+      },
+      "solver_profile_version": "RES407-STRUCTURAL-REPAIR-MASTER@1.0.0",
+      "solver_version": "9.15.6755",
+      "status": "INFEASIBLE",
+      "trial_digest": "sha256:d5493a5582a3570ca5e2b9766a45288e637cebd0710d26ca05e5f581d5c69e19",
+      "witness": []
+    },
+    {
+      "diagnostics": {
+        "absolute_gap": null,
+        "best_objective_bound": null,
+        "boolean_variable_count": 1747,
+        "branches": 14133,
+        "conflicts": 9,
+        "constraint_count": 3522,
+        "deterministic_time": 1068.5920235826022,
+        "feasible_incumbent_present": false,
+        "incumbent_addition_count": null,
+        "integer_variable_count": 1476,
+        "model_variable_count": 3223,
+        "objective_term_count": 0,
+        "redundant_relation_constraints_removed": 652,
+        "relation_compaction_digest": "sha256:8e157272b506f1dc3a376d239c2f2e337e94cc6529672fc1298a6d4b79c22146",
+        "restarts": 0,
+        "solver_profile_version": "RES407-STRUCTURAL-REPAIR-MASTER@1.0.0",
+        "solver_status": "UNKNOWN",
+        "source_relation_constraint_count": 773,
+        "unique_relation_member_set_count": 121,
+        "unknown_classification": "NO_USEFUL_BOUND_OR_INCUMBENT",
+        "wall_seconds": 300.07284590200004
+      },
+      "geometry_digest": "sha256:7f7734aafa3bfac11af5714d6873df260a0dac7854c4c2805e7c5a9f19bc5e68",
+      "hint_source_trial_digest": null,
+      "lower_bound_source_trial_digest": "sha256:d5493a5582a3570ca5e2b9766a45288e637cebd0710d26ca05e5f581d5c69e19",
+      "maximum_additions": 12,
+      "minimum_additions": 11,
+      "proof_source_constraint_inventory_digest": null,
+      "proof_source_digest": null,
+      "proof_source_method": null,
+      "proof_source_problem_digest": null,
+      "proof_source_schema": null,
+      "proof_source_status": null,
+      "signature_inventory_digest": "sha256:f2538e519bc61aebc7a45500c69b4a70ef6f4e7aaa2af20c15615623096bfe00",
+      "solver_config": {
+        "canonical_chunk_size": 30,
+        "cp_model_presolve": true,
+        "random_seed": 369,
+        "randomize_search": false,
+        "timeout_seconds": 300.0,
+        "workers": 8
+      },
+      "solver_profile_version": "RES407-STRUCTURAL-REPAIR-MASTER@1.0.0",
+      "solver_version": "9.15.6755",
+      "status": "UNKNOWN",
+      "trial_digest": "sha256:ffce74caed4c5664827a9f11e89ff1919b781c3aeca8d4ba7586d2f60648d102",
+      "witness": []
+    },
+    {
+      "diagnostics": {
+        "absolute_gap": null,
+        "best_objective_bound": null,
+        "boolean_variable_count": 1747,
+        "branches": 33113,
+        "conflicts": 119,
+        "constraint_count": 3522,
+        "deterministic_time": 4.153232580274881,
+        "feasible_incumbent_present": true,
+        "incumbent_addition_count": 16,
+        "integer_variable_count": 1476,
+        "model_variable_count": 3223,
+        "objective_term_count": 0,
+        "redundant_relation_constraints_removed": 652,
+        "relation_compaction_digest": "sha256:8e157272b506f1dc3a376d239c2f2e337e94cc6529672fc1298a6d4b79c22146",
+        "restarts": 1,
+        "solver_profile_version": "RES407-STRUCTURAL-REPAIR-MASTER@1.0.0",
+        "solver_status": "OPTIMAL",
+        "source_relation_constraint_count": 773,
+        "unique_relation_member_set_count": 121,
+        "unknown_classification": null,
+        "wall_seconds": 4.302967992
+      },
+      "geometry_digest": "sha256:7f7734aafa3bfac11af5714d6873df260a0dac7854c4c2805e7c5a9f19bc5e68",
+      "hint_source_trial_digest": null,
+      "lower_bound_source_trial_digest": "sha256:d5493a5582a3570ca5e2b9766a45288e637cebd0710d26ca05e5f581d5c69e19",
+      "maximum_additions": 16,
+      "minimum_additions": 11,
+      "proof_source_constraint_inventory_digest": null,
+      "proof_source_digest": null,
+      "proof_source_method": null,
+      "proof_source_problem_digest": null,
+      "proof_source_schema": null,
+      "proof_source_status": null,
+      "signature_inventory_digest": "sha256:f2538e519bc61aebc7a45500c69b4a70ef6f4e7aaa2af20c15615623096bfe00",
+      "solver_config": {
+        "canonical_chunk_size": 30,
+        "cp_model_presolve": true,
+        "random_seed": 369,
+        "randomize_search": false,
+        "timeout_seconds": 300.0,
+        "workers": 8
+      },
+      "solver_profile_version": "RES407-STRUCTURAL-REPAIR-MASTER@1.0.0",
+      "solver_version": "9.15.6755",
+      "status": "FEASIBLE",
+      "trial_digest": "sha256:624fcf2c4b70cdf39f4568f521330f81a634366cbf37953140e9cb0ba831fb9c",
+      "witness": [
+        {
+          "count": 1,
+          "signature_digest": "sha256:0b3dcd3f5292f22354e76b29084869697b7263234d535c1141d8e9087beaf665",
+          "split_counts": {
+            "FROZEN_VALIDATION": 1
+          }
+        },
+        {
+          "count": 1,
+          "signature_digest": "sha256:350d195e0128097ab3a53f8f331c9550ea6bfa4cc06d3e90e56fc9a2f66ce231",
+          "split_counts": {
+            "FROZEN_VALIDATION": 1
+          }
+        },
+        {
+          "count": 2,
+          "signature_digest": "sha256:4faf087af59c544d6412db04b240ccd1fdc7f7fef16976af26a0b140c6e9f2ac",
+          "split_counts": {
+            "FROZEN_VALIDATION": 1,
+            "HIDDEN_FINAL": 1
+          }
+        },
+        {
+          "count": 1,
+          "signature_digest": "sha256:5f2b074725e10fa52484f0f8da51b6f0782cdfc5b2e1db550d7e43b838682f99",
+          "split_counts": {
+            "FROZEN_VALIDATION": 1
+          }
+        },
+        {
+          "count": 1,
+          "signature_digest": "sha256:698117fa66196c2db4eeccfd2688c698144f914e6ecdadc1141f342cadc39aad",
+          "split_counts": {
+            "FROZEN_VALIDATION": 1
+          }
+        },
+        {
+          "count": 1,
+          "signature_digest": "sha256:6e7f73d0dbfa45df485e710eca23d49153fe4c7b471552664cbf8fbf8f78396d",
+          "split_counts": {
+            "HIDDEN_FINAL": 1
+          }
+        },
+        {
+          "count": 1,
+          "signature_digest": "sha256:7834ddee60757858eb278ad30c9398a818f30e7c083bc5021f2d5bc99fa11fae",
+          "split_counts": {
+            "FROZEN_VALIDATION": 1
+          }
+        },
+        {
+          "count": 1,
+          "signature_digest": "sha256:97afbb5654d7d357eb1ce018e2416ef6a6cb685a2b1eeab02471cabd8447600c",
+          "split_counts": {
+            "FROZEN_VALIDATION": 1
+          }
+        },
+        {
+          "count": 1,
+          "signature_digest": "sha256:9e9801955825ba15a9e6c58d4c02d450e92e8a4d474f7ced6ab2ec2db539691b",
+          "split_counts": {
+            "HIDDEN_FINAL": 1
+          }
+        },
+        {
+          "count": 1,
+          "signature_digest": "sha256:a992bc4207880d7c33bcd8f60defe31debf01c946ac3f693a88c201519ede54d",
+          "split_counts": {
+            "HIDDEN_FINAL": 1
+          }
+        },
+        {
+          "count": 1,
+          "signature_digest": "sha256:bb8e737d653f5d21ee9792319e4566ff691ea65044b040e3a4d3ba27e5bfdef5",
+          "split_counts": {
+            "HIDDEN_FINAL": 1
+          }
+        },
+        {
+          "count": 1,
+          "signature_digest": "sha256:dc0ed0f0956bdaa7597eb44a14c927d6f3306b9bc43007f9c12399ef0aaaef3d",
+          "split_counts": {
+            "HIDDEN_FINAL": 1
+          }
+        },
+        {
+          "count": 1,
+          "signature_digest": "sha256:e9a96dd5c2b4fe1c5b3de417df4b63f0307e28555bad49c3679177b11f1ef8b4",
+          "split_counts": {
+            "HIDDEN_FINAL": 1
+          }
+        },
+        {
+          "count": 1,
+          "signature_digest": "sha256:f09caf9461459418a6e571e2e7ea3ac38ca78b831973fe23ae9a158da6c16ebb",
+          "split_counts": {
+            "HIDDEN_FINAL": 1
+          }
+        },
+        {
+          "count": 1,
+          "signature_digest": "sha256:f931fb9bd3f951af18ab36e66cabb9527a45cb9ced2a6461f8d6fb81a6df53b1",
+          "split_counts": {
+            "HIDDEN_FINAL": 1
+          }
+        }
+      ]
+    },
+    {
+      "diagnostics": {
+        "absolute_gap": null,
+        "best_objective_bound": null,
+        "boolean_variable_count": 1747,
+        "branches": 738385,
+        "conflicts": 9128,
+        "constraint_count": 3522,
+        "deterministic_time": 813.536755827203,
+        "feasible_incumbent_present": true,
+        "incumbent_addition_count": 12,
+        "integer_variable_count": 1476,
+        "model_variable_count": 3223,
+        "objective_term_count": 0,
+        "redundant_relation_constraints_removed": 652,
+        "relation_compaction_digest": "sha256:8e157272b506f1dc3a376d239c2f2e337e94cc6529672fc1298a6d4b79c22146",
+        "restarts": 77,
+        "solver_profile_version": "RES407-STRUCTURAL-REPAIR-MASTER@1.0.0",
+        "solver_status": "OPTIMAL",
+        "source_relation_constraint_count": 773,
+        "unique_relation_member_set_count": 121,
+        "unknown_classification": null,
+        "wall_seconds": 284.344116986
+      },
+      "geometry_digest": "sha256:7f7734aafa3bfac11af5714d6873df260a0dac7854c4c2805e7c5a9f19bc5e68",
+      "hint_source_trial_digest": "sha256:624fcf2c4b70cdf39f4568f521330f81a634366cbf37953140e9cb0ba831fb9c",
+      "lower_bound_source_trial_digest": "sha256:d5493a5582a3570ca5e2b9766a45288e637cebd0710d26ca05e5f581d5c69e19",
+      "maximum_additions": 12,
+      "minimum_additions": 11,
+      "proof_source_constraint_inventory_digest": null,
+      "proof_source_digest": null,
+      "proof_source_method": null,
+      "proof_source_problem_digest": null,
+      "proof_source_schema": null,
+      "proof_source_status": null,
+      "signature_inventory_digest": "sha256:f2538e519bc61aebc7a45500c69b4a70ef6f4e7aaa2af20c15615623096bfe00",
+      "solver_config": {
+        "canonical_chunk_size": 30,
+        "cp_model_presolve": true,
+        "random_seed": 369,
+        "randomize_search": false,
+        "timeout_seconds": 300.0,
+        "workers": 8
+      },
+      "solver_profile_version": "RES407-STRUCTURAL-REPAIR-MASTER@1.0.0",
+      "solver_version": "9.15.6755",
+      "status": "FEASIBLE",
+      "trial_digest": "sha256:ae6c42616f0aaec9fada0c3d902abcc70f97a73f32f86f877190b1ca9d437a2a",
+      "witness": [
+        {
+          "count": 1,
+          "signature_digest": "sha256:350d195e0128097ab3a53f8f331c9550ea6bfa4cc06d3e90e56fc9a2f66ce231",
+          "split_counts": {
+            "HIDDEN_FINAL": 1
+          }
+        },
+        {
+          "count": 1,
+          "signature_digest": "sha256:357d06f227f28639596d30a271e09102f4755b37ca27ace8dd0f65d2a9949182",
+          "split_counts": {
+            "FROZEN_VALIDATION": 1
+          }
+        },
+        {
+          "count": 1,
+          "signature_digest": "sha256:54d866da48827e5a6e9ba623ac37bca904ace3cad59c5f99be68185bfe9e5f06",
+          "split_counts": {
+            "FROZEN_VALIDATION": 1
+          }
+        },
+        {
+          "count": 1,
+          "signature_digest": "sha256:5f2b074725e10fa52484f0f8da51b6f0782cdfc5b2e1db550d7e43b838682f99",
+          "split_counts": {
+            "HIDDEN_FINAL": 1
+          }
+        },
+        {
+          "count": 1,
+          "signature_digest": "sha256:698117fa66196c2db4eeccfd2688c698144f914e6ecdadc1141f342cadc39aad",
+          "split_counts": {
+            "HIDDEN_FINAL": 1
+          }
+        },
+        {
+          "count": 1,
+          "signature_digest": "sha256:837b19ce4926d255af034844f04183fba10713b5d207e0dfb4133896233ced25",
+          "split_counts": {
+            "FROZEN_VALIDATION": 1
+          }
+        },
+        {
+          "count": 1,
+          "signature_digest": "sha256:97afbb5654d7d357eb1ce018e2416ef6a6cb685a2b1eeab02471cabd8447600c",
+          "split_counts": {
+            "FROZEN_VALIDATION": 1
+          }
+        },
+        {
+          "count": 2,
+          "signature_digest": "sha256:9e9801955825ba15a9e6c58d4c02d450e92e8a4d474f7ced6ab2ec2db539691b",
+          "split_counts": {
+            "FROZEN_VALIDATION": 1,
+            "HIDDEN_FINAL": 1
+          }
+        },
+        {
+          "count": 2,
+          "signature_digest": "sha256:dc0ed0f0956bdaa7597eb44a14c927d6f3306b9bc43007f9c12399ef0aaaef3d",
+          "split_counts": {
+            "FROZEN_VALIDATION": 1,
+            "HIDDEN_FINAL": 1
+          }
+        },
+        {
+          "count": 1,
+          "signature_digest": "sha256:f09caf9461459418a6e571e2e7ea3ac38ca78b831973fe23ae9a158da6c16ebb",
+          "split_counts": {
+            "FROZEN_VALIDATION": 1
+          }
+        }
+      ]
+    },
+    {
+      "diagnostics": {
+        "absolute_gap": null,
+        "best_objective_bound": null,
+        "boolean_variable_count": 1747,
+        "branches": 396624,
+        "conflicts": 10478,
+        "constraint_count": 3522,
+        "deterministic_time": 823.5606773346327,
+        "feasible_incumbent_present": false,
+        "incumbent_addition_count": null,
+        "integer_variable_count": 1476,
+        "model_variable_count": 3223,
+        "objective_term_count": 0,
+        "redundant_relation_constraints_removed": 652,
+        "relation_compaction_digest": "sha256:8e157272b506f1dc3a376d239c2f2e337e94cc6529672fc1298a6d4b79c22146",
+        "restarts": 46,
+        "solver_profile_version": "RES407-STRUCTURAL-REPAIR-MASTER@1.0.0",
+        "solver_status": "INFEASIBLE",
+        "source_relation_constraint_count": 773,
+        "unique_relation_member_set_count": 121,
+        "unknown_classification": null,
+        "wall_seconds": 254.75893100800002
+      },
+      "geometry_digest": "sha256:7f7734aafa3bfac11af5714d6873df260a0dac7854c4c2805e7c5a9f19bc5e68",
+      "hint_source_trial_digest": "sha256:ae6c42616f0aaec9fada0c3d902abcc70f97a73f32f86f877190b1ca9d437a2a",
+      "lower_bound_source_trial_digest": "sha256:d5493a5582a3570ca5e2b9766a45288e637cebd0710d26ca05e5f581d5c69e19",
+      "maximum_additions": 11,
+      "minimum_additions": 11,
+      "proof_source_constraint_inventory_digest": null,
+      "proof_source_digest": null,
+      "proof_source_method": null,
+      "proof_source_problem_digest": null,
+      "proof_source_schema": null,
+      "proof_source_status": null,
+      "signature_inventory_digest": "sha256:f2538e519bc61aebc7a45500c69b4a70ef6f4e7aaa2af20c15615623096bfe00",
+      "solver_config": {
+        "canonical_chunk_size": 30,
+        "cp_model_presolve": true,
+        "random_seed": 369,
+        "randomize_search": false,
+        "timeout_seconds": 300.0,
+        "workers": 8
+      },
+      "solver_profile_version": "RES407-STRUCTURAL-REPAIR-MASTER@1.0.0",
+      "solver_version": "9.15.6755",
+      "status": "INFEASIBLE",
+      "trial_digest": "sha256:b532557bbcb63d848f7c9807f0ebc51a09d8f4a7af49c24de9e21fff2181570b",
+      "witness": []
+    }
+  ],
+  "ideal_cardinality_upper_proof_digest": "sha256:ae6c42616f0aaec9fada0c3d902abcc70f97a73f32f86f877190b1ca9d437a2a",
+  "ideal_min_additions": 12,
+  "ideal_model_is_relaxation": "YES",
+  "ideal_optimality_scope": "IDEAL_RELAXATION; finite canonical signature domain; FINAL_N=434; K=11 infeasible and K=12 feasible; lower cuts are bound to retained exact infeasibility receipts.",
+  "ideal_relaxation_definition": "Typed maximum feature support per authorized cell/origin, flexible non-synthetic splits, fresh independent identity, no new colocation or contamination edges; existing 449 candidates and all hard benchmark rules remain exact.",
+  "ideal_repair_digest": "sha256:af6ee9a7124421722640e4b89cb9fa2eff76fb57322c11d2693839b29a048d23",
+  "ideal_repair_signatures": [
+    {
+      "count": 1,
+      "signature_digest": "sha256:350d195e0128097ab3a53f8f331c9550ea6bfa4cc06d3e90e56fc9a2f66ce231",
+      "split_counts": {
+        "HIDDEN_FINAL": 1
+      }
+    },
+    {
+      "count": 1,
+      "signature_digest": "sha256:357d06f227f28639596d30a271e09102f4755b37ca27ace8dd0f65d2a9949182",
+      "split_counts": {
+        "FROZEN_VALIDATION": 1
+      }
+    },
+    {
+      "count": 1,
+      "signature_digest": "sha256:54d866da48827e5a6e9ba623ac37bca904ace3cad59c5f99be68185bfe9e5f06",
+      "split_counts": {
+        "FROZEN_VALIDATION": 1
+      }
+    },
+    {
+      "count": 1,
+      "signature_digest": "sha256:5f2b074725e10fa52484f0f8da51b6f0782cdfc5b2e1db550d7e43b838682f99",
+      "split_counts": {
+        "HIDDEN_FINAL": 1
+      }
+    },
+    {
+      "count": 1,
+      "signature_digest": "sha256:698117fa66196c2db4eeccfd2688c698144f914e6ecdadc1141f342cadc39aad",
+      "split_counts": {
+        "HIDDEN_FINAL": 1
+      }
+    },
+    {
+      "count": 1,
+      "signature_digest": "sha256:837b19ce4926d255af034844f04183fba10713b5d207e0dfb4133896233ced25",
+      "split_counts": {
+        "FROZEN_VALIDATION": 1
+      }
+    },
+    {
+      "count": 1,
+      "signature_digest": "sha256:97afbb5654d7d357eb1ce018e2416ef6a6cb685a2b1eeab02471cabd8447600c",
+      "split_counts": {
+        "FROZEN_VALIDATION": 1
+      }
+    },
+    {
+      "count": 2,
+      "signature_digest": "sha256:9e9801955825ba15a9e6c58d4c02d450e92e8a4d474f7ced6ab2ec2db539691b",
+      "split_counts": {
+        "FROZEN_VALIDATION": 1,
+        "HIDDEN_FINAL": 1
+      }
+    },
+    {
+      "count": 2,
+      "signature_digest": "sha256:dc0ed0f0956bdaa7597eb44a14c927d6f3306b9bc43007f9c12399ef0aaaef3d",
+      "split_counts": {
+        "FROZEN_VALIDATION": 1,
+        "HIDDEN_FINAL": 1
+      }
+    },
+    {
+      "count": 1,
+      "signature_digest": "sha256:f09caf9461459418a6e571e2e7ea3ac38ca78b831973fe23ae9a158da6c16ebb",
+      "split_counts": {
+        "FROZEN_VALIDATION": 1
+      }
+    }
+  ],
+  "ideal_repair_status": "OPTIMAL",
+  "ideal_signature_count": 369,
+  "ideal_signature_inventory_digest": "sha256:f2538e519bc61aebc7a45500c69b4a70ef6f4e7aaa2af20c15615623096bfe00",
+  "ideal_witness_encoding": "signature_digest -> count; split_counts are aggregate ideal recourse counts only, not a candidate allocation.",
+  "master_profile": {
+    "authority": "DIAGNOSTIC_DESIGN_ONLY; production feasibility profile unchanged",
+    "config": {
+      "canonical_chunk_size": 30,
+      "cp_model_presolve": true,
+      "random_seed": 369,
+      "randomize_search": false,
+      "timeout_seconds": 300.0,
+      "workers": 8
+    },
+    "version": "RES407-STRUCTURAL-REPAIR-MASTER@1.0.0"
+  },
+  "missing_governed_capabilities": null,
+  "missing_governed_capabilities_status": "NOT_EVALUATED_PENDING_GOVERNED_COMPARISON",
+  "mission": "RES-407",
+  "old_brute_force_path_reachable": false,
   "optimistic_c08_master_status": "UNKNOWN",
   "optimistic_c08_repair_digest": "sha256:1e2ad68c21f0f88b6cf5166e903e5b8ac910306e7117da7a486ac85ace4ca068",
-  "missing_governed_capabilities_status": "UNRESOLVED_NO_OPTIMAL_IDEAL_VECTOR",
-  "robust_master_architecture": {
-    "first_stage": "GOVERNED_ARCHETYPE_ADDITION_COUNTS_Y[A]",
-    "recourse": "EXACT_BENCHMARK_ASSIGNMENT",
-    "initial_scenarios": ["BASE"],
-    "oracle": "EXACT_FINAL_SELECTION_PROBLEM_FEASIBILITY",
-    "scenario_generation": "Add failed removal scenarios found by the exact oracle.",
-    "final_proof": "EXHAUSTIVE_REMOVAL_SWEEP_AFTER_SCENARIO_CONVERGENCE"
-  },
-  "removal_sweep_run": false,
-  "concrete_candidates_materialized": false,
-  "old_brute_force_path_reachable": false,
   "original_pool_count": 449,
   "original_problem_digest": "sha256:29b85a7b7518c09a40093326a4e4832c6cee7b564d4384806dc9fceeb0abc5c0",
   "pool_original_mutated": false,
+  "post_refactor_boolean_variables": 1747,
+  "post_refactor_integer_variables": 1476,
+  "post_refactor_model_constraints": 3522,
+  "post_refactor_model_variables": 3223,
+  "post_refactor_objective_terms": 0,
+  "pre_refactor_master_diagnostics": {
+    "ideal": {
+      "absolute_gap": null,
+      "best_objective_bound": 0.0,
+      "boolean_variable_count": 4152,
+      "branches": 97160,
+      "conflicts": 25527,
+      "constraint_count": 11999,
+      "deterministic_time": 7.594984958706656,
+      "feasible_incumbent_present": false,
+      "incumbent_addition_count": null,
+      "integer_variable_count": 1818,
+      "model_variable_count": 5970,
+      "objective_term_count": 1818,
+      "restarts": 7,
+      "signature_count": 614,
+      "signature_inventory_digest": "sha256:319c8ff53fda7925be3b1c308eb1b5bce231ad4004c1c7dd751a1af2888058c1",
+      "solver_status": "UNKNOWN",
+      "unknown_classification": "NO_USEFUL_BOUND_OR_INCUMBENT",
+      "wall_seconds": 120.004071159
+    },
+    "optimistic_c08": {
+      "absolute_gap": null,
+      "best_objective_bound": 0.0,
+      "boolean_variable_count": 4152,
+      "branches": 1811991,
+      "conflicts": 297753,
+      "constraint_count": 11477,
+      "deterministic_time": 112.28953648873204,
+      "feasible_incumbent_present": false,
+      "incumbent_addition_count": null,
+      "integer_variable_count": 12,
+      "model_variable_count": 4164,
+      "objective_term_count": 12,
+      "restarts": 113,
+      "signature_count": 12,
+      "signature_inventory_digest": "sha256:daddcea42c8a3092892274ad14fb9cef9d4e0a6ff97c8e8748b13381065b0f8c",
+      "solver_status": "UNKNOWN",
+      "unknown_classification": "NO_USEFUL_BOUND_OR_INCUMBENT",
+      "wall_seconds": 120.00474629300001
+    }
+  },
+  "pre_refactor_structural_master_profile": {
+    "cp_model_presolve": true,
+    "random_seed": 369,
+    "randomize_search": false,
+    "timeout_seconds": 120.0,
+    "workers": 1
+  },
   "public_evidence_digest": "sha256:1f5761772f3a2879a9330fad393f3bee06c9b313a788aefe1875f610495cf2c8",
   "public_max_without_colocation": 260,
   "public_max_without_feature_minima": 426,
+  "relation_compaction": {
+    "digest": "sha256:8e157272b506f1dc3a376d239c2f2e337e94cc6529672fc1298a6d4b79c22146",
+    "redundant_relation_constraints_removed": 652,
+    "retained_maximal_member_sets": 121,
+    "source_relation_constraints": 773
+  },
+  "removal_sweep_run": false,
   "repair_archetype_count": 12,
   "repair_archetype_inventory_digest": "sha256:a964fcf19d7751f9bb058a5e5b2d15c6b57af46ca059d5a14fcb7e67f30557e0",
   "repair_geometry_digest": "sha256:7f7734aafa3bfac11af5714d6873df260a0dac7854c4c2805e7c5a9f19bc5e68",
+  "robust_master_architecture": {
+    "final_proof": "EXHAUSTIVE_REMOVAL_SWEEP_AFTER_SCENARIO_CONVERGENCE",
+    "first_stage": "GOVERNED_ARCHETYPE_ADDITION_COUNTS_Y[A]",
+    "initial_scenarios": [
+      "BASE"
+    ],
+    "oracle": "EXACT_FINAL_SELECTION_PROBLEM_FEASIBILITY",
+    "recourse": "EXACT_BENCHMARK_ASSIGNMENT",
+    "scenario_generation": "Add failed removal scenarios found by the exact oracle."
+  },
   "schema_version": "RES407-STRUCTURAL-GEOMETRY-AGGREGATE@1.0.0",
+  "seeds_generated": 0,
   "selected_support_summary": {
     "FROZEN_VALIDATION": {
       "active_coverage_obligation_count": 676,

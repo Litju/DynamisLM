@@ -1,6 +1,7 @@
 """Synthetic falsification cases and the external, exact RES-407 regression."""
 
 from dataclasses import replace
+from importlib.metadata import version
 from types import SimpleNamespace
 
 import pytest
@@ -13,30 +14,47 @@ from dynamislm.benchmark.authority_supply import (
     ReserveCandidateLaneV1,
 )
 from dynamislm.benchmark.constants import CaseOrigin, SplitName
+from dynamislm.benchmark.coverage import COVERAGE_MATRIX
 from dynamislm.benchmark.production_authoring import PRODUCTION_SYNTHETIC_GENERATORS
 from dynamislm.benchmark.repair_geometry import (
+    IDEAL_REPAIR_IS_RELAXATION,
+    IDEAL_REPAIR_RELAXATION_DEFINITION,
+    RES407_STRUCTURAL_REPAIR_MASTER_PROFILE_V1,
+    RES407_STRUCTURAL_REPAIR_MASTER_PROFILE_VERSION,
     ContractCertainty,
+    RepairCardinalityTrial,
     RepairClassification,
     RepairGeometry,
     RepairSignature,
     SplitCapacityCertificate,
+    _structural_repair_model,
     archetype_structural_contracts,
     bind_split_capacity_certificate,
+    build_compact_ideal_repair_signatures,
+    build_ideal_repair_signatures,
     build_optimistic_c08_signatures,
     classify_archetype_repair,
+    classify_repair_master_unknown,
     compute_split_capacity_envelope,
     derive_governed_archetypes,
     remaining_lane_capacity,
-    solve_structural_repair_master,
+    solve_ideal_repair_minimum,
+    solve_repair_cardinality_decision,
     structural_bottleneck_evidence,
 )
 from dynamislm.benchmark.selection_contracts import (
+    POOL_FEASIBILITY_SOLVER_PROFILE_VERSION,
+    PSE_V1_POOL_FEASIBILITY_SOLVER_PROFILE_V1,
     AssignmentState,
     ConstraintKind,
+    FeatureKind,
     RelationKind,
+    ReviewEligibility,
     SelectionConstraint,
+    SelectionFeature,
     SelectionSolverConfig,
 )
+from dynamislm.benchmark.selection_solver import _model_for, _solve_once
 from dynamislm.serialization import canonical_hash, canonical_json, from_canonical_json
 from test_res369_selection import _candidate, _toy_problem
 
@@ -255,15 +273,18 @@ def test_unknown_archetype_contract_fields_remain_unknown() -> None:
 def _repair_signature(
     origin: CaseOrigin,
     *,
+    cell: tuple[str, str] = ("C01", "F01"),
+    features: tuple[SelectionFeature, ...] = (),
+    splits: tuple[SplitName, ...] = (PUBLIC,),
     lane_id: str | None = None,
     lane_capacity: int | None = None,
     capacity_status: AdditionalCapacityStatus | None = None,
 ) -> RepairSignature:
     return RepairSignature(
         origin=origin,
-        cell=("C01", "F01"),
-        guaranteed_features=(),
-        split_compatibility=(PUBLIC,),
+        cell=cell,
+        guaranteed_features=features,
+        split_compatibility=splits,
         relation_behavior="INDEPENDENT_FROM_BASE_AND_OTHER_ADDITIONS",
         isolation_identity_behavior="FRESH_UNIQUE",
         lineage_behavior="NOT_MUTATION",
@@ -275,16 +296,328 @@ def _repair_signature(
 
 def test_ideal_master_proves_minimum_structural_cardinality() -> None:
     problem = _toy_problem((_candidate("a"),), ((PUBLIC, 2),))
-    result = solve_structural_repair_master(
+    result = solve_ideal_repair_minimum(
         RepairGeometry(problem),
-        (_repair_signature(CaseOrigin.EXPERT_AUTHORED_SEMANTIC),),
-        optimality_scope="toy domain; additions <= FINAL_N",
+        signatures=(_repair_signature(CaseOrigin.EXPERT_AUTHORED_SEMANTIC),),
     )
     assert result.status == "OPTIMAL"
     assert result.minimum_additions == 1
-    assert result.objective == "MINIMIZE_TOTAL_ADDED_STRUCTURAL_UNITS"
-    assert result.objective_bound == 1
     assert result.repair_vector[0].total_count == 1
+    assert result.lower_proof is not None
+    assert result.lower_proof.maximum_additions == 0
+    assert result.lower_proof.status == "INFEASIBLE"
+    assert result.upper_proof is not None
+    assert result.upper_proof.maximum_additions == 1
+    assert result.upper_proof.status == "FEASIBLE"
+    assert result.cardinality_optimality == "PROVEN"
+    first_diagnostics = result.trials[0].diagnostics
+    final_diagnostics = result.trials[-1].diagnostics
+    assert first_diagnostics is not None and final_diagnostics is not None
+    assert result.model_variable_count == first_diagnostics.model_variable_count
+    assert final_diagnostics.objective_term_count == 0
+    assert result.ideal_repair_digest
+
+
+def test_unknown_master_diagnostics_do_not_promote_incumbents_or_bounds() -> None:
+    assert classify_repair_master_unknown("UNKNOWN", False, 0.0) == ("NO_USEFUL_BOUND_OR_INCUMBENT")
+    assert classify_repair_master_unknown("UNKNOWN", False, 2.0) == "BOUND_ONLY_NO_INCUMBENT"
+    assert classify_repair_master_unknown("UNKNOWN", True, 2.0) == (
+        "FEASIBLE_INCUMBENT_NOT_PROVEN_OPTIMAL"
+    )
+    assert classify_repair_master_unknown("OPTIMAL", True, 1.0) is None
+
+
+def test_unknown_cardinality_decision_never_claims_a_minimum(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    response = SimpleNamespace(
+        solution=(),
+        num_conflicts=0,
+        num_branches=0,
+        num_restarts=0,
+        wall_time=0.1,
+        deterministic_time=0.0,
+        objective_value=0.0,
+        best_objective_bound=0.0,
+    )
+    solver = SimpleNamespace(response_proto=response)
+    monkeypatch.setattr(
+        "dynamislm.benchmark.repair_geometry._solve_once",
+        lambda *_args, **_kwargs: (solver, "UNKNOWN", 0.0),
+    )
+    problem = _toy_problem((_candidate("a"),), ((PUBLIC, 2),))
+    result = solve_ideal_repair_minimum(
+        RepairGeometry(problem),
+        signatures=(_repair_signature(CaseOrigin.EXPERT_AUTHORED_SEMANTIC),),
+    )
+    assert result.status == "UNKNOWN"
+    assert result.minimum_additions is None
+    assert result.repair_vector == ()
+    diagnostics = result.trials[0].diagnostics
+    assert diagnostics is not None
+    assert diagnostics.unknown_classification == "NO_USEFUL_BOUND_OR_INCUMBENT"
+    structural = _structural_repair_model(
+        RepairGeometry(problem),
+        (_repair_signature(CaseOrigin.EXPERT_AUTHORED_SEMANTIC),),
+    )
+    unknown_trial = solve_repair_cardinality_decision(structural, 0)
+    with pytest.raises(ValueError, match="preceding infeasibility proof"):
+        solve_repair_cardinality_decision(
+            structural,
+            1,
+            minimum_additions=1,
+            lower_bound_proof=unknown_trial,
+        )
+
+
+def test_compact_ideal_signature_inventory_is_canonical_and_a_relaxation() -> None:
+    row = next(item for item in COVERAGE_MATRIX if item.capability_id == "C01")
+    cell = (row.capability_id, row.benchmark_families[0])
+    cell_feature = SelectionFeature(FeatureKind.CELL, cell)
+    answerable = SelectionFeature(FeatureKind.ANSWERABLE)
+    obligations = tuple(
+        SelectionConstraint(
+            f"TEST:FEATURE:{index}",
+            "RES-407 synthetic signature fixture",
+            ConstraintKind.FEATURE_MINIMUM,
+            split=PUBLIC,
+            feature=feature,
+            minimum=1,
+        )
+        for index, feature in enumerate((cell_feature, answerable))
+    )
+    geometry = RepairGeometry(
+        _toy_problem(
+            (_candidate("a", features=(cell_feature, answerable)),),
+            ((PUBLIC, 1),),
+            extra=obligations,
+        )
+    )
+    compact = build_compact_ideal_repair_signatures(geometry)
+    legacy_domain = build_ideal_repair_signatures(geometry)
+    assert compact
+    assert compact == tuple(sorted(set(compact), key=lambda item: item.signature_id))
+    assert len(compact) < len(legacy_domain)
+    assert all(answerable in signature.guaranteed_features for signature in compact)
+    assert all(
+        signature.relation_behavior == "INDEPENDENT_FROM_BASE_AND_OTHER_ADDITIONS"
+        for signature in compact
+    )
+    assert all(signature.isolation_identity_behavior == "FRESH_UNIQUE" for signature in compact)
+    assert IDEAL_REPAIR_IS_RELAXATION is True
+    assert "no new colocation" in IDEAL_REPAIR_RELAXATION_DEFINITION
+
+
+def test_structural_profile_is_separate_from_production_feasibility_profile() -> None:
+    assert RES407_STRUCTURAL_REPAIR_MASTER_PROFILE_VERSION == (
+        "RES407-STRUCTURAL-REPAIR-MASTER@1.0.0"
+    )
+    assert RES407_STRUCTURAL_REPAIR_MASTER_PROFILE_V1 != (PSE_V1_POOL_FEASIBILITY_SOLVER_PROFILE_V1)
+    assert RES407_STRUCTURAL_REPAIR_MASTER_PROFILE_V1.cp_model_presolve is True
+    assert RES407_STRUCTURAL_REPAIR_MASTER_PROFILE_V1.random_seed == 369
+    assert RES407_STRUCTURAL_REPAIR_MASTER_PROFILE_V1.workers == 8
+    assert PSE_V1_POOL_FEASIBILITY_SOLVER_PROFILE_V1.timeout_s == 120.0
+
+
+def test_aggregate_model_has_y_and_z_counts_without_repair_candidate_replicas() -> None:
+    problem = _toy_problem((_candidate("a"),), ((PUBLIC, 2),))
+    signature = _repair_signature(CaseOrigin.EXPERT_AUTHORED_SEMANTIC)
+    structural = _structural_repair_model(RepairGeometry(problem), (signature,))
+    names = tuple(variable.name for variable in structural.model.proto.variables)
+    assert len(structural.additions) == 1
+    assert len(structural.recourse) == 3
+    assert sum(name.startswith("y[") for name in names) == 1
+    assert sum(name.startswith("z[") for name in names) == 3
+    assert tuple(name for name in names if name.startswith("a[")) == (
+        "a[0,1]",
+        "a[0,2]",
+        "a[0,3]",
+    )
+    assert not any("repair_candidate" in name for name in names)
+
+    locked = RepairSignature(
+        origin=CaseOrigin.DETERMINISTIC_SYNTHETIC,
+        cell=("C08", "F05"),
+        guaranteed_features=(),
+        split_compatibility=(PUBLIC,),
+        relation_behavior="INDEPENDENT_FROM_BASE_AND_OTHER_ADDITIONS",
+        isolation_identity_behavior="FRESH_UNIQUE",
+        lineage_behavior="NOT_MUTATION",
+    )
+    locked_model = _structural_repair_model(RepairGeometry(problem), (locked,))
+    domains = {var.name: tuple(var.domain) for var in locked_model.model.proto.variables}
+    for split in (SplitName.FROZEN_VALIDATION, SplitName.HIDDEN_FINAL):
+        name = f"z[{locked.signature_id[:12]},{split.value}]"
+        assert domains[name] == (0, 0)
+
+
+def test_duplicate_relation_compaction_preserves_assignment_feasibility() -> None:
+    candidates = (_candidate("a"), _candidate("b"))
+    edges = tuple(
+        SelectionConstraint(
+            constraint_id=f"TEST:COLOCATION:{index}",
+            authority_ref="RES-407 synthetic relation fixture",
+            kind=ConstraintKind.CONDITIONAL_COLOCATION,
+            candidate_ids=("a", "b"),
+            relation_kind=kind,
+        )
+        for index, kind in enumerate((RelationKind.ISOLATION_CLUSTER, RelationKind.EXACT_SHINGLE))
+    )
+    problem = _toy_problem(candidates, ((PUBLIC, 1), (VALIDATION, 1)), extra=edges)
+    full_model, _assignments, _balance, _hash = _model_for(problem, include_objectives=False)
+    compact_model, _assignments, _balance, _hash = _model_for(
+        problem, include_objectives=False, compact_colocation_indicators=True
+    )
+    config = SelectionSolverConfig(workers=1, timeout_s=5.0)
+    assert _solve_once(full_model, config)[1] == "INFEASIBLE"
+    assert _solve_once(compact_model, config)[1] == "INFEASIBLE"
+    structural = _structural_repair_model(RepairGeometry(problem), ())
+    assert structural.source_relation_constraint_count == 2
+    assert structural.unique_relation_member_set_count == 1
+    assert (
+        structural.source_relation_constraint_count - structural.unique_relation_member_set_count
+        == 1
+    )
+
+
+def test_cardinality_decision_is_monotone_and_proves_k_minus_1_then_k() -> None:
+    geometry = RepairGeometry(_toy_problem((_candidate("a"),), ((PUBLIC, 2),)))
+    signature = _repair_signature(CaseOrigin.EXPERT_AUTHORED_SEMANTIC)
+    structural = _structural_repair_model(geometry, (signature,))
+    deterministic_config = replace(RES407_STRUCTURAL_REPAIR_MASTER_PROFILE_V1, workers=1)
+    zero = solve_repair_cardinality_decision(structural, 0, solver_config=deterministic_config)
+    one = solve_repair_cardinality_decision(structural, 1, solver_config=deterministic_config)
+    two = solve_repair_cardinality_decision(structural, 2, solver_config=deterministic_config)
+    assert zero.status == "INFEASIBLE"
+    assert one.status == "FEASIBLE"
+    assert two.status == "FEASIBLE"
+
+    result = solve_ideal_repair_minimum(
+        geometry, signatures=(signature,), solver_config=deterministic_config
+    )
+    assert result.status == "OPTIMAL"
+    assert result.minimum_additions == 1
+    assert result.lower_proof is not None and result.lower_proof.maximum_additions == 0
+    assert result.lower_proof.status == "INFEASIBLE"
+    assert result.upper_proof is not None and result.upper_proof.maximum_additions == 1
+    assert result.upper_proof.status == "FEASIBLE"
+    assert result.upper_proof.minimum_additions == 1
+    assert result.upper_proof.lower_bound_source_trial_digest == result.lower_proof.trial_digest
+    replay = solve_ideal_repair_minimum(
+        geometry, signatures=(signature,), solver_config=deterministic_config
+    )
+    assert replay.repair_vector == result.repair_vector
+    assert replay.ideal_repair_digest == result.ideal_repair_digest
+
+
+def test_feasible_trial_hints_a_smaller_cardinality_decision() -> None:
+    geometry = RepairGeometry(_toy_problem((_candidate("a"),), ((PUBLIC, 2),)))
+    structural = _structural_repair_model(
+        geometry, (_repair_signature(CaseOrigin.EXPERT_AUTHORED_SEMANTIC),)
+    )
+    config = replace(RES407_STRUCTURAL_REPAIR_MASTER_PROFILE_V1, workers=1)
+    high = solve_repair_cardinality_decision(structural, 2, solver_config=config)
+    lower = solve_repair_cardinality_decision(structural, 1, solver_config=config)
+    assert high.status == "FEASIBLE"
+    assert lower.status == "FEASIBLE"
+    assert lower.hint_source_trial_digest == high.trial_digest
+
+
+def test_duplicate_colocation_hyperedges_and_reverse_indicators_are_redundant() -> None:
+    candidates = (_candidate("a"), _candidate("b"))
+    edges = tuple(
+        SelectionConstraint(
+            constraint_id=f"TEST:RELATION:{index}",
+            authority_ref="RES-407 synthetic relation fixture",
+            kind=ConstraintKind.CONDITIONAL_COLOCATION,
+            candidate_ids=("a", "b"),
+            relation_kind=kind,
+        )
+        for index, kind in enumerate((RelationKind.ISOLATION_CLUSTER, RelationKind.EXACT_SHINGLE))
+    )
+    problem = _toy_problem(candidates, ((PUBLIC, 1), (VALIDATION, 1)), extra=edges)
+    full, _vars, _balance, _hash = _model_for(problem, include_objectives=False)
+    compact, _vars, _balance, _hash = _model_for(
+        problem, include_objectives=False, compact_colocation_indicators=True
+    )
+    config = SelectionSolverConfig(workers=1, timeout_s=5.0)
+    assert _solve_once(full, config)[1] == "INFEASIBLE"
+    assert _solve_once(compact, config)[1] == "INFEASIBLE"
+    structural = _structural_repair_model(RepairGeometry(problem), ())
+    assert structural.source_relation_constraint_count == 2
+    assert structural.unique_relation_member_set_count == 1
+
+
+def test_relation_superset_subsumes_member_subset_without_changing_feasibility() -> None:
+    candidates = (
+        _candidate("a"),
+        _candidate("b", review=ReviewEligibility.REJECTED),
+        _candidate("c"),
+    )
+    edges = (
+        SelectionConstraint(
+            constraint_id="TEST:RELATION:SUBSET",
+            authority_ref="RES-407 synthetic relation fixture",
+            kind=ConstraintKind.CONDITIONAL_COLOCATION,
+            candidate_ids=("a", "b"),
+            relation_kind=RelationKind.ISOLATION_CLUSTER,
+        ),
+        SelectionConstraint(
+            constraint_id="TEST:RELATION:SUPERSET",
+            authority_ref="RES-407 synthetic relation fixture",
+            kind=ConstraintKind.CONDITIONAL_COLOCATION,
+            candidate_ids=("a", "b", "c"),
+            relation_kind=RelationKind.EXACT_SHINGLE,
+        ),
+    )
+    config = SelectionSolverConfig(workers=1, timeout_s=5.0)
+    for split_counts, expected in (
+        (((PUBLIC, 2),), "FEASIBLE"),
+        (((PUBLIC, 1), (VALIDATION, 1)), "INFEASIBLE"),
+    ):
+        problem = _toy_problem(candidates, split_counts, extra=edges)
+        full, _assignments, _balance, _hash = _model_for(problem, include_objectives=False)
+        compact = _structural_repair_model(RepairGeometry(problem), ()).model
+        assert (
+            "FEASIBLE" if _solve_once(full, config)[1] != "INFEASIBLE" else "INFEASIBLE"
+        ) == expected
+        assert (
+            "FEASIBLE" if _solve_once(compact, config)[1] != "INFEASIBLE" else "INFEASIBLE"
+        ) == expected
+    structural = _structural_repair_model(
+        RepairGeometry(_toy_problem(candidates, ((PUBLIC, 2),), extra=edges)), ()
+    )
+    assert structural.source_relation_constraint_count == 2
+    assert structural.unique_relation_member_set_count == 1
+
+
+def test_inherited_k_zero_proof_is_bound_to_exact_base_receipt() -> None:
+    geometry = RepairGeometry(_toy_problem((_candidate("a"),), ((PUBLIC, 2),)))
+    signature = _repair_signature(CaseOrigin.EXPERT_AUTHORED_SEMANTIC)
+    proof = RepairCardinalityTrial(
+        maximum_additions=0,
+        status="INFEASIBLE",
+        solver_profile_version=POOL_FEASIBILITY_SOLVER_PROFILE_VERSION,
+        solver_config=PSE_V1_POOL_FEASIBILITY_SOLVER_PROFILE_V1,
+        solver_version=version("ortools"),
+        geometry_digest=geometry.geometry_digest,
+        signature_inventory_digest=canonical_hash((signature,)),
+        diagnostics=None,
+        proof_source_schema="RES406-BASE-FEASIBILITY-RECEIPT@1.0.0",
+        proof_source_digest=canonical_hash("exact source receipt"),
+        proof_source_problem_digest=geometry.problem.problem_digest,
+        proof_source_constraint_inventory_digest=geometry.problem.constraint_inventory_digest,
+        proof_source_status="INFEASIBLE",
+        proof_source_method="EXACT_FEASIBILITY_ORACLE",
+    )
+    result = solve_ideal_repair_minimum(
+        geometry,
+        signatures=(signature,),
+        zero_addition_infeasibility_proof=proof,
+    )
+    assert result.status == "OPTIMAL"
+    assert result.lower_proof == proof
+    assert result.upper_proof is not None and result.upper_proof.maximum_additions == 1
 
 
 def test_exhausted_finite_lane_has_zero_addition_capacity() -> None:
@@ -295,30 +628,28 @@ def test_exhausted_finite_lane_has_zero_addition_capacity() -> None:
         lane_capacity=0,
         capacity_status=AdditionalCapacityStatus.EXHAUSTED,
     )
-    result = solve_structural_repair_master(
-        RepairGeometry(problem),
-        (signature,),
-        optimality_scope="toy exhausted-lane domain",
-    )
-    assert result.status == "INFEASIBLE"
-    assert result.minimum_additions is None
-    assert result.repair_vector == ()
+    structural_model = _structural_repair_model(RepairGeometry(problem), (signature,))
+    trial = solve_repair_cardinality_decision(structural_model, 2)
+    assert trial.status == "INFEASIBLE"
+    assert trial.diagnostics is not None
+    assert trial.diagnostics.incumbent_addition_count is None
 
 
-def test_repair_master_order_and_digest_do_not_depend_on_input_order() -> None:
+def test_ideal_witness_order_and_digest_do_not_depend_on_input_order() -> None:
     geometry = RepairGeometry(_toy_problem((_candidate("a"),), ((PUBLIC, 2),)))
     signatures = (
         _repair_signature(CaseOrigin.EXPERT_AUTHORED_SEMANTIC),
         _repair_signature(CaseOrigin.SOURCE_BACKED_EVIDENCE_EXTRACTION),
     )
-    first = solve_structural_repair_master(
-        geometry, signatures, optimality_scope="toy deterministic ordering"
+    deterministic_config = replace(RES407_STRUCTURAL_REPAIR_MASTER_PROFILE_V1, workers=1)
+    first = solve_ideal_repair_minimum(
+        geometry, signatures=signatures, solver_config=deterministic_config
     )
-    second = solve_structural_repair_master(
-        geometry, tuple(reversed(signatures)), optimality_scope="toy deterministic ordering"
+    second = solve_ideal_repair_minimum(
+        geometry, signatures=tuple(reversed(signatures)), solver_config=deterministic_config
     )
     assert first.repair_vector == second.repair_vector
-    assert first.result_digest == second.result_digest
+    assert first.ideal_repair_digest == second.ideal_repair_digest
     assert tuple(item.signature.signature_id for item in first.repair_vector) == tuple(
         sorted(item.signature.signature_id for item in first.repair_vector)
     )
