@@ -437,6 +437,79 @@ class RepairSignatureCount:
 
 @register_serializable_type
 @dataclass(frozen=True, slots=True)
+class ArchetypeSaturationBound:
+    signature_id: str
+    lane_id: str
+    cell: tuple[str, str]
+    origin: CaseOrigin
+    split: SplitName
+    upper_bound: int
+    limits: tuple[tuple[str, int], ...]
+
+
+def derive_archetype_saturation_bounds(
+    geometry: RepairGeometry,
+    signatures: tuple[RepairSignature, ...],
+) -> tuple[ArchetypeSaturationBound, ...]:
+    constraints = geometry.problem.constraint_set.constraints
+    final_n = next(
+        constraint.minimum
+        for constraint in constraints
+        if constraint.kind is ConstraintKind.FINAL_COUNT
+    )
+    assert final_n is not None
+    split_maxima = {
+        constraint.split: constraint.maximum
+        for constraint in constraints
+        if constraint.kind is ConstraintKind.SPLIT_COUNT
+    }
+    origin_maxima = {
+        constraint.origin_class: constraint.maximum
+        for constraint in constraints
+        if constraint.kind is ConstraintKind.ORIGIN_BOUNDS
+    }
+    feature_maxima = tuple(
+        constraint
+        for constraint in constraints
+        if constraint.kind is ConstraintKind.FEATURE_MINIMUM and constraint.maximum is not None
+    )
+    bounds = []
+    for signature in signatures:
+        if len(signature.split_compatibility) != 1:
+            raise ValueError("per-archetype saturation requires one split-locked signature")
+        (split,) = signature.split_compatibility
+        limits = [("FINAL_COUNT", final_n)]
+        split_maximum = split_maxima.get(split)
+        if split_maximum is not None:
+            limits.append((f"SPLIT_COUNT:{split.value}", split_maximum))
+        origin_maximum = origin_maxima.get(signature.origin)
+        if origin_maximum is not None:
+            limits.append((f"ORIGIN_MAXIMUM:{signature.origin.value}", origin_maximum))
+        if signature.lane_capacity is not None:
+            limits.append((f"LANE_CAPACITY:{signature.lane_id}", signature.lane_capacity))
+        for constraint in feature_maxima:
+            if constraint.split is split and constraint.feature in signature.guaranteed_features:
+                assert constraint.maximum is not None
+                limits.append((f"FEATURE_MAXIMUM:{constraint.constraint_id}", constraint.maximum))
+        upper_bound = min(limit for _name, limit in limits)
+        if upper_bound < 0:
+            raise ValueError("archetype saturation bound cannot be negative")
+        bounds.append(
+            ArchetypeSaturationBound(
+                signature_id=signature.signature_id,
+                lane_id=signature.lane_id or "",
+                cell=signature.cell,
+                origin=signature.origin,
+                split=split,
+                upper_bound=upper_bound,
+                limits=tuple(sorted(limits, key=lambda item: item[0].encode())),
+            )
+        )
+    return tuple(sorted(bounds, key=lambda item: item.signature_id))
+
+
+@register_serializable_type
+@dataclass(frozen=True, slots=True)
 class RepairMasterDiagnostics:
     model_variable_count: int
     boolean_variable_count: int
@@ -765,6 +838,7 @@ def _signature(
     splits: tuple[SplitName, ...],
     *,
     relation_behavior: str = "INDEPENDENT_FROM_BASE_AND_OTHER_ADDITIONS",
+    isolation_identity_behavior: str = "FRESH_UNIQUE",
     lane_id: str | None = None,
     lane_capacity: int | None = None,
     capacity_status: AdditionalCapacityStatus | None = None,
@@ -775,7 +849,7 @@ def _signature(
         guaranteed_features=features,
         split_compatibility=splits,
         relation_behavior=relation_behavior,
-        isolation_identity_behavior="FRESH_UNIQUE",
+        isolation_identity_behavior=isolation_identity_behavior,
         lineage_behavior=(
             "UNIQUE_PER_ADDITION_WITH_SAME_CELL_PARENT"
             if origin is CaseOrigin.ADVERSARIAL_MUTATION
@@ -927,6 +1001,8 @@ class _StructuralRepairModel:
 def _structural_repair_model(
     geometry: RepairGeometry,
     signatures: tuple[RepairSignature, ...],
+    *,
+    signature_upper_bounds: dict[str, int] | None = None,
 ) -> _StructuralRepairModel:
     signatures = tuple(sorted(set(signatures), key=lambda item: item.signature_id))
     problem = geometry.problem
@@ -936,6 +1012,11 @@ def _structural_repair_model(
         if constraint.kind is ConstraintKind.FINAL_COUNT
     )
     assert final_n is not None
+    signature_upper_bounds = signature_upper_bounds or {}
+    if set(signature_upper_bounds) - {item.signature_id for item in signatures} or any(
+        bound < 0 or bound > final_n for bound in signature_upper_bounds.values()
+    ):
+        raise ValueError("signature saturation bounds do not match this structural model")
     source_relations = geometry.constraints(ConstraintKind.CONDITIONAL_COLOCATION)
     relation_classes: dict[tuple[str, ...], list[str]] = defaultdict(list)
     for relation in source_relations:
@@ -983,7 +1064,11 @@ def _structural_repair_model(
             prior = lane_capacities.setdefault(signature.lane_id, cap)
             if prior != cap:
                 raise ValueError("archetypes in one lane disagree on remaining lane capacity")
-        upper = min(final_n, final_n if cap is None else cap)
+        upper = min(
+            final_n,
+            final_n if cap is None else cap,
+            signature_upper_bounds.get(signature.signature_id, final_n),
+        )
         addition = model.new_int_var(0, upper, f"y[{signature.signature_id[:12]}]")
         additions[signature.signature_id] = addition
         split_counts = []
@@ -1500,7 +1585,10 @@ def build_optimistic_c08_signatures(
                 archetype.cell,
                 tuple(features),
                 (archetype.locked_split,),
-                relation_behavior="OPTIMISTICALLY_INDEPENDENT_RELAXATION",
+                relation_behavior=(
+                    "SHARED_SPLIT_LOCKED_CLUSTER; UNKNOWN_SHINGLE_RELATIONS_RELAXED"
+                ),
+                isolation_identity_behavior="SHARED_SPLIT_AND_GENERATOR_FAMILY",
                 lane_id=archetype.lane_id,
                 lane_capacity=archetype.remaining_finite_capacity,
                 capacity_status=archetype.capacity_status,

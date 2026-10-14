@@ -23,6 +23,7 @@ from dynamislm.benchmark.repair_geometry import (
     RES407_STRUCTURAL_REPAIR_MASTER_PROFILE_V1,
     RES407_STRUCTURAL_REPAIR_MASTER_PROFILE_VERSION,
     ContractCertainty,
+    RepairArchetype,
     RepairCardinalityTrial,
     RepairClassification,
     RepairGeometry,
@@ -37,6 +38,7 @@ from dynamislm.benchmark.repair_geometry import (
     classify_archetype_repair,
     classify_repair_master_unknown,
     compute_split_capacity_envelope,
+    derive_archetype_saturation_bounds,
     derive_governed_archetypes,
     remaining_lane_capacity,
     solve_ideal_repair_minimum,
@@ -293,6 +295,71 @@ def _repair_signature(
         lane_capacity=lane_capacity,
         capacity_status=capacity_status,
     )
+
+
+def _c08_geometry(
+    *,
+    final_n: int = 2,
+    feature_minimum: int = 1,
+    origin_maximum: int | None = None,
+    prior_cluster_member: bool = False,
+    family: str = "F05",
+) -> RepairGeometry:
+    feature = SelectionFeature(FeatureKind.CELL, ("C08", family))
+    constraints = [
+        SelectionConstraint(
+            "TEST:C08:FEATURE",
+            "synthetic C08 structural fixture",
+            ConstraintKind.FEATURE_MINIMUM,
+            split=PUBLIC,
+            feature=feature,
+            minimum=feature_minimum,
+        )
+    ]
+    if origin_maximum is not None:
+        constraints.append(
+            SelectionConstraint(
+                "TEST:C08:ORIGIN_MAXIMUM",
+                "synthetic C08 structural fixture",
+                ConstraintKind.ORIGIN_BOUNDS,
+                origin_class=CaseOrigin.DETERMINISTIC_SYNTHETIC,
+                minimum=0,
+                maximum=origin_maximum,
+            )
+        )
+    base = _candidate(
+        "base",
+        origin=(
+            CaseOrigin.DETERMINISTIC_SYNTHETIC
+            if prior_cluster_member
+            else CaseOrigin.EXPERT_AUTHORED_SEMANTIC
+        ),
+        locked_split=(PUBLIC if prior_cluster_member else None),
+        cluster=(f"PSE-V1-SYNTHETIC-CLUSTER:{PUBLIC.value}" if prior_cluster_member else None),
+    )
+    return RepairGeometry(_toy_problem((base,), ((PUBLIC, final_n),), extra=tuple(constraints)))
+
+
+def _rule_governed_c08_archetype(
+    family: str = "F05",
+) -> tuple[ReserveCandidateLaneV1, tuple[RepairArchetype, ...]]:
+    generator = next(
+        item
+        for item in PRODUCTION_SYNTHETIC_GENERATORS
+        if item.generator_family.endswith("public_development")
+    )
+    lane = replace(
+        _lane(),
+        lane_id=f"synthetic:{generator.generator_family}",
+        authority_digest=canonical_hash(generator),
+        lane_digest="",
+        available_capacity=None,
+        capacity_status=LaneCapacityStatus.RULE_GOVERNED,
+        capacity_rule="registered generator and split-family seed-block namespace",
+        supported_cells=(("C08", family),),
+    )
+    archetypes = derive_governed_archetypes(_inventory((lane,)), ((lane.lane_id, 0),))
+    return lane, archetypes
 
 
 def test_ideal_master_proves_minimum_structural_cardinality() -> None:
@@ -743,8 +810,168 @@ def test_optimistic_c08_model_only_relaxes_guaranteed_behavior() -> None:
     assert signature.split_compatibility == (PUBLIC,)
     assert signature.lane_id == lane.lane_id
     assert signature.capacity_status is AdditionalCapacityStatus.RULE_GOVERNED
-    assert signature.relation_behavior == "OPTIMISTICALLY_INDEPENDENT_RELAXATION"
+    assert signature.relation_behavior == (
+        "SHARED_SPLIT_LOCKED_CLUSTER; UNKNOWN_SHINGLE_RELATIONS_RELAXED"
+    )
+    assert signature.isolation_identity_behavior == "SHARED_SPLIT_AND_GENERATOR_FAMILY"
     assert set(archetypes[0].guaranteed_features).issubset(signature.guaranteed_features)
+
+
+def test_ideal_vector_decoding_binds_signature_split_counts_and_minimum() -> None:
+    from scripts.res407_repair_geometry import _decode_ideal_vector
+
+    geometry = _c08_geometry()
+    signatures = build_compact_ideal_repair_signatures(geometry)
+    signature = next(
+        item
+        for item in signatures
+        if item.cell == ("C08", "F05")
+        and item.origin is CaseOrigin.DETERMINISTIC_SYNTHETIC
+        and PUBLIC in item.split_compatibility
+    )
+    raw = (
+        {
+            "signature_digest": signature.signature_id,
+            "count": 1,
+            "split_counts": {PUBLIC.value: 1},
+        },
+    )
+    (decoded,) = _decode_ideal_vector(signatures, raw, 1)
+    assert decoded.signature == signature
+    assert decoded.split_counts == ((PUBLIC, 1),)
+    with pytest.raises(ValueError, match="unknown or duplicate"):
+        _decode_ideal_vector(signatures, (*raw, *raw), 2)
+
+
+def test_ideal_relaxation_dominates_current_governed_behavior_classes() -> None:
+    from scripts.res407_repair_geometry import _ideal_relaxation_proof
+
+    geometry = _c08_geometry(prior_cluster_member=True)
+    _lane, archetypes = _rule_governed_c08_archetype()
+    proof = _ideal_relaxation_proof(
+        geometry,
+        build_compact_ideal_repair_signatures(geometry),
+        archetypes,
+    )
+    assert proof["status"] == "PASS"
+    assert len(proof["mappings"]) == 1
+    assert proof["mappings"][0]["locked_split"] == PUBLIC.value
+    assert proof["mappings"][0]["ideal_answerable_feature"] is True
+    assert "Future authorities are outside this proof scope." in proof["hard_constraint_dominance"]
+
+
+def test_governed_contract_inventory_keeps_unknowns_unknown() -> None:
+    from scripts.res407_repair_geometry import _governed_archetype_contract_inventory
+
+    geometry = _c08_geometry(prior_cluster_member=True)
+    _lane, archetypes = _rule_governed_c08_archetype()
+    (contract,) = _governed_archetype_contract_inventory(geometry, archetypes)
+    properties = {
+        item["property"]: item["classification"] for item in contract["structural_property_claims"]
+    }
+    assert contract["answerability_refusal_semantics"]["certainty"] == "GUARANTEED"
+    assert contract["answerability_refusal_semantics"]["value"].startswith(
+        "NON_NUMERIC_REFUSAL_CONTEXT"
+    )
+    assert properties["exact_feature_vector"] == "UNKNOWN"
+    assert properties["contamination_and_shingles"] == "UNKNOWN"
+    assert properties["interchangeability"] == "UNKNOWN"
+    assert contract["repeated_instance_independence_interchangeability"]["certainty"] == ("UNKNOWN")
+    assert contract["implemented_recipe_path_multiplicity"]["options_per_lane_cell"] == 1
+    assert (
+        contract["implemented_recipe_path_multiplicity"]["repeat_ordinal_in_candidate_id"] is False
+    )
+
+
+def test_optimistic_c08_relaxation_preserves_forbidden_behavior_boundaries() -> None:
+    from scripts.res407_repair_geometry import _optimistic_c08_relaxation_proof
+
+    geometry = _c08_geometry(prior_cluster_member=True)
+    _lane, archetypes = _rule_governed_c08_archetype()
+    signatures = build_optimistic_c08_signatures(geometry, archetypes)
+    proof = _optimistic_c08_relaxation_proof(geometry, archetypes, signatures)
+    assert proof["status"] == "PASS"
+    assert proof["claim"] == ("REAL_C08_FEASIBLE_SET_SUBSET_OPTIMISTIC_C08_FEASIBLE_SET")
+    assert proof["rows"][0]["numeric_answerability_not_granted"] is True
+    assert proof["rows"][0]["prior_matching_cluster_locks_match"] is True
+
+    widened = replace(
+        signatures[0],
+        isolation_identity_behavior="FRESH_UNIQUE",
+        signature_id="",
+    )
+    invalid = _optimistic_c08_relaxation_proof(geometry, archetypes, (widened,))
+    assert invalid["status"] == "PARTIAL"
+
+
+def test_saturation_bound_comes_from_selection_limits() -> None:
+    geometry = _c08_geometry(origin_maximum=1)
+    _lane, archetypes = _rule_governed_c08_archetype()
+    signatures = build_optimistic_c08_signatures(geometry, archetypes)
+    (bound,) = derive_archetype_saturation_bounds(geometry, signatures)
+    assert bound.upper_bound == 1
+    assert dict(bound.limits)["FINAL_COUNT"] == 2
+    assert dict(bound.limits)[f"SPLIT_COUNT:{PUBLIC.value}"] == 2
+    assert dict(bound.limits)["ORIGIN_MAXIMUM:DETERMINISTIC_SYNTHETIC"] == 1
+
+
+def test_governed_cardinality_search_starts_at_ideal_lower_bound_and_is_deterministic() -> None:
+    from scripts.res407_repair_geometry import (
+        _canonicalize_governed_vector,
+        _current_c08_capability,
+        _search_optimistic_cardinality,
+    )
+
+    geometry = _c08_geometry(final_n=13, feature_minimum=13)
+    _lane, archetypes = _rule_governed_c08_archetype()
+    (signature,) = build_optimistic_c08_signatures(geometry, archetypes)
+    alternate = replace(
+        signature,
+        lane_id=f"{signature.lane_id}:alternate",
+        signature_id="",
+    )
+    signatures = tuple(sorted((signature, alternate), key=lambda item: item.signature_id))
+    bounds = derive_archetype_saturation_bounds(geometry, signatures)
+    structural = _structural_repair_model(
+        geometry,
+        signatures,
+        signature_upper_bounds={item.signature_id: item.upper_bound for item in bounds},
+    )
+    names = tuple(variable.name for variable in structural.model.proto.variables)
+    assert sum(name.startswith("y[") for name in names) == len(signatures)
+    assert sum(name.startswith("z[") for name in names) == len(signatures) * 3
+    assert not any("repair_candidate" in name for name in names)
+
+    config = replace(RES407_STRUCTURAL_REPAIR_MASTER_PROFILE_V1, workers=1, timeout_s=5.0)
+    first = _search_optimistic_cardinality(
+        structural,
+        lower_bound=12,
+        saturation_bound=13,
+        solver_config=config,
+    )
+    assert [trial.maximum_additions for trial in first["trials"]] == [12, 13]
+    assert [trial.status for trial in first["trials"]] == ["INFEASIBLE", "FEASIBLE"]
+    assert first["minimum_additions"] == 13
+    assert _current_c08_capability(first) == "UNRESOLVED"
+    vector = _canonicalize_governed_vector(
+        structural,
+        13,
+        config,
+        first["lower_bound_trial"],
+    )
+    replay = _canonicalize_governed_vector(
+        structural,
+        13,
+        config,
+        first["lower_bound_trial"],
+    )
+    assert vector == replay
+    assert len(vector) == 1
+    assert sum(item.total_count for item in vector) == 13
+    assert (
+        _current_c08_capability({"status": "UNKNOWN", "infeasible_at_saturation": True})
+        == "UNRESOLVED"
+    )
 
 
 def test_legacy_qualification_cli_is_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -788,14 +1015,38 @@ def test_exact_external_res407_regression(monkeypatch: pytest.MonkeyPatch) -> No
     assert result["repair_archetype_count"] == 12
     assert result["old_brute_force_path_reachable"] is False
     assert result["CAPACITY_CERTIFICATE_SEMANTICS"] == "PASS"
+    assert result["IDEAL_REPAIR_STATUS"] == "OPTIMAL"
+    assert result["IDEAL_MIN_ADDITIONS"] == 12
+    assert result["IDEAL_SIGNATURE_COUNT"] == 369
+    assert result["IDEAL_CARDINALITY_OPTIMALITY"] == "PROVEN"
+    assert result["IDEAL_RELAXATION_PROOF_STATUS"] == "PASS"
+    assert result["GOVERNED_ARCHETYPE_COUNT"] == result["repair_archetype_count"]
+    assert result["OPTIMISTIC_C08_RELAXATION_PROOF_STATUS"] == "PASS"
+    assert result["OPTIMISTIC_C08_STATUS"] == "FEASIBLE"
+    assert result["OPTIMISTIC_C08_MIN_ADDITIONS"] == 48
+    assert sum(item["count"] for item in result["OPTIMISTIC_C08_VECTOR"]) == 48
+    assert all(trial["maximum_additions"] >= 12 for trial in result["CARDINALITY_TRIALS"])
+    assert any(
+        trial["maximum_additions"] == 47 and trial["status"] == "INFEASIBLE"
+        for trial in result["CARDINALITY_TRIALS"]
+    )
+    assert any(
+        trial["maximum_additions"] == 48 and trial["status"] == "FEASIBLE"
+        for trial in result["CARDINALITY_TRIALS"]
+    )
+    assert result["CONCRETE_CANDIDATES_GENERATED"] == 0
+    assert result["SEEDS_GENERATED"] == 0
     assert result["concrete_candidates_materialized"] is False
     assert result["removal_sweep_run"] is False
     assert result["GOVERNED_MASTER_STATUS"] == "UNRESOLVED"
-    if result["IDEAL_REPAIR_STATUS"] != "OPTIMAL":
-        assert result["IDEAL_MIN_ADDITIONS"] is None
-        assert result["MISSING_GOVERNED_CAPABILITIES_STATUS"] == (
-            "UNRESOLVED_NO_OPTIMAL_IDEAL_VECTOR"
-        )
+    assert result["CURRENT_C08_REPAIR_CAPABILITY"] == "UNRESOLVED"
+    assert result["CONCRETE_VECTOR_INSTANTIABILITY"]["status"] == "NOT_ESTABLISHED"
+    assert (
+        result["CONCRETE_VECTOR_INSTANTIABILITY"]["existing_option_builder_can_emit_vector"]
+        is False
+    )
+    assert result["READY_FOR_MATERIALIZATION"] is False
+    assert result["READY_FOR_AUTHORITY_EXPANSION"] is False
     master = res407_governed_backfill._read_record(
         f"{result['external_namespace']}/structural-augmentation-master.json",
         DEFAULT_PRODUCTION_ROOT,
