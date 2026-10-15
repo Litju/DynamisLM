@@ -1,0 +1,413 @@
+{
+  "authority_bindings": {
+    "authority_digest": "sha256:f639eb09961f9a429334c5c19ef89f46990d187b9cb9324f49803e908d911afa",
+    "authority_ref": "registered split-family synthetic generator",
+    "generator_contract": "non-numeric C08 context bound to a live RES-71 no-operation refusal reference",
+    "generator_family": "pse-v1-synthetic-refusal-public_development",
+    "generator_id": "pse-v1-unregistered-operation-context",
+    "generator_version": "1.0.0",
+    "identity_requirement_digests": [
+      "sha256:a066a7812a06c572151aa55ac47fc30d23af87afb9958fc034995c4395ff54bf",
+      "sha256:afac99423ea479adb2afbe36915cd3be5560e21bb0dbc5f10376fdbcb0a88e40",
+      "sha256:c33425cedc3c2c82f6ea644932d8d14f19066f775159f5f51d9e31e569aa097b"
+    ],
+    "lane_digest": "sha256:4971f5b1a442362915340c43957e6be90085b0d49b0f850947743f39b2f2545d",
+    "lane_id": "synthetic:pse-v1-synthetic-refusal-public_development",
+    "live_supply_inventory_digest": "sha256:4b7ee2d0f9b3f1b56a638b0b27aa01a5ba153e226f34c37bb995dd113292c616",
+    "locked_split": "PUBLIC_DEVELOPMENT"
+  },
+  "c08_48_materialization_plan_digest": null,
+  "c08_48_realizability": "PROVABLY_NOT_REALIZABLE",
+  "candidate_materialization_invoked": false,
+  "concrete_candidates_generated": 0,
+  "coverage_matrix_digest": "sha256:1ddd3a8710a7c00a90a52a7d7c32f798cb1c1bde6e9bcd8dabfd4bf6b14b656c",
+  "current_c08_repair_capability": "UNRESOLVED",
+  "current_c08_repair_capability_reason": "The repeat maximum is unknown. The exact F05 optimistic vector is unrealizable, but that does not prove every mixed-cell C08 vector infeasible. No new search ran.",
+  "digest_verification": {
+    "archetype_inventory_receipt_digest": "sha256:0b6f20ccf5f4f94d76949ae11e7962fc0a86a6b4887f07c5b8c5a58af7e2f6f9",
+    "external_checkpoint_receipt_digest": "sha256:01a673af56ae43de9dfc722179ed101315127f05ae5518f51f51d79ee33eb9aa",
+    "geometry_record_receipt_digest": "sha256:d003f6777857aaad2a66a10de1b03f186143685d3bab6894739073317b678c70",
+    "geometry_record_sha256": "sha256:57fffcf8e0ca09cde8f51fb8757d475bc7adf261f497013963ef47693d7d52fd",
+    "governed_archetype_contract_digest": "sha256:fcec9490f3dee9483d9106f0ddb228a8dca2d4d3dc7dee8c10cb73a5fb761e01",
+    "status": "PASS",
+    "verified_archetype_digest_count": 12,
+    "verified_digest_fields": [
+      "governed_archetype_contract_digest",
+      "geometry_digest",
+      "problem_digest",
+      "live_supply_inventory_digest",
+      "capability_gap_digest",
+      "ideal_signature_inventory_digest",
+      "ideal_winning_vector_digest",
+      "ideal_result_digest",
+      "ideal_relaxation_proof_digest",
+      "optimistic_c08_relaxation_proof_digest",
+      "saturation_proof_digest",
+      "optimistic_c08_vector_digest",
+      "optimistic_c08_vector_report_digest",
+      "public_report_receipt_digest"
+    ]
+  },
+  "existing_449_relation_summary": {
+    "candidate_count": 449,
+    "existing_cluster_distinct_identity_counts": {
+      "benchmark-artifact": 4,
+      "general-artifact": 4,
+      "generator-family": 1,
+      "seed-block": 4,
+      "seed-namespace": 4,
+      "source-family": 4,
+      "training-exclusion": 4
+    },
+    "existing_cluster_identity_counts": {
+      "benchmark-artifact": 4,
+      "general-artifact": 4,
+      "generator-family": 4,
+      "seed-block": 4,
+      "seed-namespace": 4,
+      "source-family": 4,
+      "training-exclusion": 4
+    },
+    "finding": "The existing 449-candidate pool has four PUBLIC_DEVELOPMENT synthetic C08 members sharing this generator family and split cluster; none has the new helper's candidate-ID-derived family.",
+    "incident_conditional_colocation_group_counts": {
+      "ISOLATION_CLUSTER": 1,
+      "ISOLATION_IDENTITY": 1
+    },
+    "incident_exact_shingle_group_count": 0,
+    "matching_author_batch_count": 0,
+    "matching_f05_cell_count": 1,
+    "matching_generator_family_count": 4,
+    "matching_public_cluster_count": 4,
+    "new_to_existing_relation_semantics": {
+      "GENERATOR_FAMILY": "GUARANTEED_COUPLED_TO_4_EXISTING_CANDIDATES",
+      "GENERATOR_SEED_BLOCK": "CONDITIONAL_ON_UNIQUE_AUTHORIZED_SEED_BLOCKS",
+      "GENERATOR_SEED_NAMESPACE": "CONDITIONAL_ON_UNIQUE_AUTHORIZED_SEED_BLOCKS",
+      "SOURCE_FAMILY": "INDEPENDENT_IF_A_UNIQUE_REPEAT_ID_IS_AUTHORIZED",
+      "contamination_author_batch_identity": "NO_MATCH_IN_EXISTING_449",
+      "contamination_candidate_identities": "INDEPENDENT_IF_REPEAT_IDS_ARE_UNIQUE",
+      "exact_13_token_shingles": "UNKNOWN_UNTIL_MATERIALIZATION",
+      "isolation_cluster_id": "GUARANTEED_COUPLED_TO_4_EXISTING_CANDIDATES"
+    },
+    "problem_digest": "sha256:29b85a7b7518c09a40093326a4e4832c6cee7b564d4384806dc9fceeb0abc5c0",
+    "seed_independence_conclusion": "Fresh seed blocks distinguish seed identities only; shared split-cluster and generator-family identities still couple instances, and text independence is unknown."
+  },
+  "governed_archetype_contract_digest": "sha256:fcec9490f3dee9483d9106f0ddb228a8dca2d4d3dc7dee8c10cb73a5fb761e01",
+  "instance_identity_formulas": {
+    "candidate_id": "PSE-V1-CANDIDATE:RES407:SYNTH:{capability}:{family}:{split}; no repeat ordinal",
+    "contamination_identities": {
+      "benchmark_artifact": "candidate:{candidate_id}",
+      "expert_author_batch": "agent-process:codex:RES-115-CASE-AUTHORING-001B",
+      "general_artifact": "candidate:{candidate_id}",
+      "generator_seed_block": "{seed_block}",
+      "generator_seed_namespace": "PSE-V1/PUBLIC_DEVELOPMENT/pse-v1-unregistered-operation-context:1.0.0@{seed_block}",
+      "source_documents_artifacts_constructs_and_provider_ids": [],
+      "source_family": "PSE-V1-SYNTHETIC-FAMILY:{candidate_id}",
+      "training_exclusion": "qualification-exclusion:{candidate_id}"
+    },
+    "generator_family": "pse-v1-synthetic-refusal-public_development",
+    "isolation_cluster_id": "PSE-V1-SYNTHETIC-CLUSTER:PUBLIC_DEVELOPMENT",
+    "seed_block": "{seed_block}",
+    "seed_namespace": "PSE-V1/PUBLIC_DEVELOPMENT/pse-v1-unregistered-operation-context:1.0.0@{seed_block}",
+    "shared_repeated_instance_groups": [
+      "isolation cluster",
+      "generator family",
+      "contamination expert-author-batch"
+    ],
+    "source_family_id": "PSE-V1-SYNTHETIC-FAMILY:{candidate_id}"
+  },
+  "mission": "RES-407 C08 generator contract qualification",
+  "next_step": "Expand the C08 feature contract and define explicit repeat/seed-block allocation authority, then requalify before considering a 48-instance materialization.",
+  "optimistic_feature_classification": [
+    {
+      "classification": "GUARANTEED",
+      "key": [
+        "C08",
+        "F05"
+      ],
+      "kind": "CELL"
+    },
+    {
+      "classification": "GUARANTEED",
+      "key": [
+        "FALSE_SCIENTIFIC_ACCEPTANCE"
+      ],
+      "kind": "CRITICAL_ERROR"
+    },
+    {
+      "classification": "GUARANTEED",
+      "key": [
+        "INVENTED_NUMERICAL_SCIENCE"
+      ],
+      "kind": "CRITICAL_ERROR"
+    },
+    {
+      "classification": "GUARANTEED",
+      "key": [
+        "C08",
+        "FALSE_SCIENTIFIC_ACCEPTANCE"
+      ],
+      "kind": "ROW_ERROR"
+    },
+    {
+      "classification": "GUARANTEED",
+      "key": [
+        "C08",
+        "INVENTED_NUMERICAL_SCIENCE"
+      ],
+      "kind": "ROW_ERROR"
+    },
+    {
+      "classification": "NOT_GUARANTEED",
+      "key": [
+        "C08",
+        "LM_ARITHMETIC"
+      ],
+      "kind": "ROW_TAG"
+    },
+    {
+      "classification": "GUARANTEED",
+      "key": [
+        "C08",
+        "NONFINITE_INPUT"
+      ],
+      "kind": "ROW_TAG"
+    },
+    {
+      "classification": "NOT_GUARANTEED",
+      "key": [
+        "C08",
+        "UNREGISTERED_OPERATION"
+      ],
+      "kind": "ROW_TAG"
+    },
+    {
+      "classification": "NOT_GUARANTEED",
+      "key": [
+        "C08",
+        "WRONG_GRAVITY"
+      ],
+      "kind": "ROW_TAG"
+    }
+  ],
+  "optimistic_feature_dominance_status": "NO_REAL_VECTOR_MISSES_OPTIMISTIC_FEATURES",
+  "optimistic_feature_vector": [
+    {
+      "key": [
+        "C08",
+        "F05"
+      ],
+      "kind": "CELL"
+    },
+    {
+      "key": [
+        "FALSE_SCIENTIFIC_ACCEPTANCE"
+      ],
+      "kind": "CRITICAL_ERROR"
+    },
+    {
+      "key": [
+        "INVENTED_NUMERICAL_SCIENCE"
+      ],
+      "kind": "CRITICAL_ERROR"
+    },
+    {
+      "key": [
+        "C08",
+        "FALSE_SCIENTIFIC_ACCEPTANCE"
+      ],
+      "kind": "ROW_ERROR"
+    },
+    {
+      "key": [
+        "C08",
+        "INVENTED_NUMERICAL_SCIENCE"
+      ],
+      "kind": "ROW_ERROR"
+    },
+    {
+      "key": [
+        "C08",
+        "LM_ARITHMETIC"
+      ],
+      "kind": "ROW_TAG"
+    },
+    {
+      "key": [
+        "C08",
+        "NONFINITE_INPUT"
+      ],
+      "kind": "ROW_TAG"
+    },
+    {
+      "key": [
+        "C08",
+        "UNREGISTERED_OPERATION"
+      ],
+      "kind": "ROW_TAG"
+    },
+    {
+      "key": [
+        "C08",
+        "WRONG_GRAVITY"
+      ],
+      "kind": "ROW_TAG"
+    }
+  ],
+  "optimization_or_candidate_subset_search_rerun": false,
+  "qualification_digest": "sha256:b8656213636aef2ab3fc179b03eb6079b6073e9b67b1345687068db7254dec3b",
+  "ready_for_48_materialization": false,
+  "ready_for_authority_expansion": true,
+  "real_feature_contract_basis": "The registry output_contract only promises non-numeric C08 refusal context. The additional fixed tag and error features are derived from the current F05 authoring path and scorer/selection adapters; the registry does not enumerate them as a complete feature vector.",
+  "real_feature_contract_status": "PROVEN_FIXED_BY_CURRENT_AUTHORING_AND_SELECTION_LOGIC",
+  "real_feature_vector": [
+    {
+      "key": [
+        "C08",
+        "F05"
+      ],
+      "kind": "CELL"
+    },
+    {
+      "key": [
+        "FALSE_SCIENTIFIC_ACCEPTANCE"
+      ],
+      "kind": "CRITICAL_ERROR"
+    },
+    {
+      "key": [
+        "INVENTED_NUMERICAL_SCIENCE"
+      ],
+      "kind": "CRITICAL_ERROR"
+    },
+    {
+      "key": [
+        "C08",
+        "FALSE_SCIENTIFIC_ACCEPTANCE"
+      ],
+      "kind": "ROW_ERROR"
+    },
+    {
+      "key": [
+        "C08",
+        "INVENTED_NUMERICAL_SCIENCE"
+      ],
+      "kind": "ROW_ERROR"
+    },
+    {
+      "key": [
+        "C08",
+        "NONFINITE_INPUT"
+      ],
+      "kind": "ROW_TAG"
+    }
+  ],
+  "real_feature_vector_complete_in_persisted_archetype": false,
+  "relation_semantics": {
+    "CONDITIONAL_COLOCATION": {
+      "basis": "Shared split cluster, generator-family, and author-batch identities create co-location groups; exact-shingle groups remain unknown.",
+      "status": "GUARANTEED_COUPLED"
+    },
+    "GENERATOR_FAMILY": {
+      "basis": "All F05 instances use pse-v1-synthetic-refusal-public_development.",
+      "status": "GUARANTEED_COUPLED"
+    },
+    "GENERATOR_SEED_BLOCK": {
+      "basis": "Reuse is rejected, but authority does not specify a repeat count or 48-block allocation.",
+      "status": "CONDITIONAL"
+    },
+    "GENERATOR_SEED_NAMESPACE": {
+      "basis": "Distinct seed blocks produce distinct split-qualified namespaces; no 48-block allocation rule exists.",
+      "status": "CONDITIONAL"
+    },
+    "SOURCE_FAMILY": {
+      "basis": "PSE-V1-SYNTHETIC-FAMILY derives from candidate ID; unique repeat IDs are required, and the current helper has no repeat ordinal.",
+      "status": "CONDITIONAL"
+    },
+    "contamination_author_batch_identity": {
+      "basis": "The production refusal authoring path binds each instance to the same authoring-process identity.",
+      "status": "GUARANTEED_COUPLED"
+    },
+    "contamination_candidate_identities": {
+      "basis": "Candidate artifacts, source-family IDs, and training-exclusion IDs derive from unique candidate IDs; 48 IDs are not allocated by the current helper.",
+      "status": "CONDITIONAL"
+    },
+    "exact_13_token_shingles": {
+      "basis": "Seed changes do not prove distinct question shingles; text-dependent overlap is unqualified until materialization.",
+      "status": "UNKNOWN"
+    },
+    "isolation_cluster_id": {
+      "basis": "All PUBLIC_DEVELOPMENT instances use PSE-V1-SYNTHETIC-CLUSTER:PUBLIC_DEVELOPMENT.",
+      "status": "GUARANTEED_COUPLED"
+    }
+  },
+  "repeat_authority": {
+    "authorized_repeat_count_max": "UNKNOWN",
+    "authorized_repeat_count_min": 1,
+    "candidate_id_allocation_rule": "PSE-V1-CANDIDATE:RES407:SYNTH:{capability}:{family}:{split}; the current ID has no repeat ordinal.",
+    "capacity_accounting": "RULE_GOVERNED counts distinct authorized split-locked seed-block units. A null finite capacity supplies no numeric maximum and does not mean unlimited.",
+    "capacity_rule": "registered generator and split-family seed-block namespace",
+    "capacity_status": "RULE_GOVERNED",
+    "capacity_unit": "unique split-locked synthetic seed block",
+    "current_recipe_options_per_lane_cell": 1,
+    "minimum_basis": "One currently materializable recipe option exists for this lane/cell.",
+    "multiple_seed_authority": "REPEAT_COUNT_UNSPECIFIED",
+    "repeat_ordinal_in_candidate_id": false,
+    "repeat_ordinal_in_seed_block_rule": false,
+    "repeated_seed_distinctness_validation": "_governed_recipe_check requires unique synthetic seed blocks; validate_case_set rejects reused generator namespace/block identities.",
+    "seed_block_allocation_rule": "Current helper: 'res407-' + canonical_hash((conflict_set_digest, lane_id, cell)) without the sha256: prefix, truncated to 48 hex characters; no repeat ordinal.",
+    "seed_namespace_template": "PSE-V1/{split}/pse-v1-unregistered-operation-context:1.0.0@{seed_block}",
+    "seed_reuse_forbidden": true,
+    "status": "UNKNOWN"
+  },
+  "repeated_instance_independence_status": "GUARANTEED_COUPLED",
+  "schema_version": "RES407-C08-GENERATOR-QUALIFICATION@1.0.0",
+  "seeds_generated": 0,
+  "shingle_independence": "CHECKABLE_AFTER_MATERIALIZATION",
+  "shingle_materialization_gate": "Before any production-store write, compute exact 13-token shingle hashes for all 48 staged questions and the existing 449. Reject the full staged batch on any new-to-new or new-to-existing collision; do not infer independence from distinct seeds.",
+  "source_code_evidence": [
+    {
+      "path": "scripts/res407_governed_backfill.py",
+      "sha256": "sha256:efc01a861cac5dd3e1a68ca1477114e5d057b326200db5236139a8ad7a1c5fc3"
+    },
+    {
+      "path": "src/dynamislm/benchmark/authoring.py",
+      "sha256": "sha256:ecf7a560562ca158b9750e405ba83b3d637352a9f31f5991834c9e911a934ae9"
+    },
+    {
+      "path": "src/dynamislm/benchmark/coverage.py",
+      "sha256": "sha256:c5d846ea05cb69bc7ef206d454c9ac5c4fb72e7cde9758913badc37db7b9813d"
+    },
+    {
+      "path": "src/dynamislm/benchmark/production_authoring.py",
+      "sha256": "sha256:d7a1c98c60bd0947f3dc10004c339de545958f6271ff63b7dc53135db86f455b"
+    },
+    {
+      "path": "src/dynamislm/benchmark/repair_geometry.py",
+      "sha256": "sha256:2ec356b01d9ac4e57821b63a796bad77fdd200432628017c6f3ad3a008898be9"
+    },
+    {
+      "path": "src/dynamislm/benchmark/scoring_paths.py",
+      "sha256": "sha256:e19fbc0830d66305888f70187a1df7ca5f4235b5b92463a707d0e1285ed29c26"
+    },
+    {
+      "path": "src/dynamislm/benchmark/selection_constraints.py",
+      "sha256": "sha256:6ee71bd97d27f21e9558cd0a30687a6d081b7e93a57c9df78446141b540020de"
+    },
+    {
+      "path": "src/dynamislm/benchmark/validation.py",
+      "sha256": "sha256:de7d9266bcb2757694598b401413b8419d167fae334026bc0dfb0979fa84ebab"
+    },
+    {
+      "path": "src/dynamislm/benchmark/variable_pool.py",
+      "sha256": "sha256:3d956fe6072133390032e6017fb2c04e3240d2205e6039a226f26dda8134c8d9"
+    },
+    {
+      "path": "src/dynamislm/qualification/res115_authoring.py",
+      "sha256": "sha256:615176ea560c8404826ec532d16e44444690fc0bb0e49dac24cb08ae4bd2ca58"
+    }
+  ],
+  "source_code_evidence_digest": "sha256:4c200b7c96ac9b71aaf949a10f858a5060f58e5ae67b3e5985bb62c91c140144",
+  "structural_comparison_report": "reports/performance_science_eval/res407_governed_structural_comparison.json",
+  "structural_comparison_report_receipt_digest": "sha256:c3669eb5c1823147b5a45d617b6c9270c1956a7b02cc69bfe5e230c332e9e231",
+  "synthetic_generator_registry_digest": "sha256:1e75e89e95b3705f9adc0d58cf06d92fd1a335b5da68863be4a5a2be98069a64"
+}

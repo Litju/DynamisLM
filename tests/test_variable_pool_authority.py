@@ -38,6 +38,7 @@ from dynamislm.benchmark.variable_pool import (
     ProductionCandidateRecipeV1,
     RecipeAuthorityBasis,
     VariablePoolAuthoringPlanV1,
+    _governed_recipe_check,
     build_initial_variable_pool_authoring_plan,
     historical_recipes_from_authoring_inputs,
     materialize_variable_pool,
@@ -372,10 +373,10 @@ def test_governed_synthetic_seed_blocks_are_unique_and_namespaced() -> None:
         _governed_synthetic(lane, suffix="0002", seed_block=_seed("same")),
     )
     with pytest.raises(ValueError, match="unique split-locked seed blocks"):
-        _materialize(duplicate, inventory=inventory)
+        _governed_recipe_check(duplicate, inventory)
     with pytest.raises(ValueError, match="seed namespace"):
-        _materialize(
-            (_governed_synthetic(lane, seed_block="not a seed block"),), inventory=inventory
+        _governed_recipe_check(
+            (_governed_synthetic(lane, seed_block="not a seed block"),), inventory
         )
 
 
