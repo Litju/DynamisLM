@@ -1,0 +1,365 @@
+{
+  "accepted_structural_witness": {
+    "cardinality_optimality": "PROVEN",
+    "minimum_additions": 48,
+    "optimization_rerun": false,
+    "status": "FEASIBLE",
+    "vector": [
+      {
+        "cell": [
+          "C08",
+          "F05"
+        ],
+        "count": 48,
+        "lane_id": "synthetic:pse-v1-synthetic-refusal-public_development",
+        "origin": "DETERMINISTIC_SYNTHETIC",
+        "selection_features": [
+          {
+            "key": [
+              "C08",
+              "F05"
+            ],
+            "kind": "CELL"
+          },
+          {
+            "key": [
+              "FALSE_SCIENTIFIC_ACCEPTANCE"
+            ],
+            "kind": "CRITICAL_ERROR"
+          },
+          {
+            "key": [
+              "INVENTED_NUMERICAL_SCIENCE"
+            ],
+            "kind": "CRITICAL_ERROR"
+          },
+          {
+            "key": [
+              "C08",
+              "FALSE_SCIENTIFIC_ACCEPTANCE"
+            ],
+            "kind": "ROW_ERROR"
+          },
+          {
+            "key": [
+              "C08",
+              "INVENTED_NUMERICAL_SCIENCE"
+            ],
+            "kind": "ROW_ERROR"
+          },
+          {
+            "key": [
+              "C08",
+              "NONFINITE_INPUT"
+            ],
+            "kind": "ROW_TAG"
+          }
+        ],
+        "split_counts": [
+          [
+            "PUBLIC_DEVELOPMENT",
+            48
+          ]
+        ],
+        "split_lock": "PUBLIC_DEVELOPMENT"
+      }
+    ],
+    "vector_digest": "sha256:f312934b6455e1ebd379471fd07e93fad8b6d53caf304c63f50bac58099c1923"
+  },
+  "authoring_authority_trace": {
+    "current_candidate_id_rule": "PSE-V1-CANDIDATE:RES407:SYNTH:{capability}:{family}:{split}; the current ID has no repeat ordinal.",
+    "current_seed_block_rule": "Current helper: 'res407-' + canonical_hash((conflict_set_digest, lane_id, cell)) without the sha256: prefix, truncated to 48 hex characters; no repeat ordinal.",
+    "existing_relation_evidence": {
+      "candidate_count": 449,
+      "finding": "The existing 449-candidate pool has four PUBLIC_DEVELOPMENT synthetic C08 members sharing this generator family and split cluster; none has the new helper's candidate-ID-derived family.",
+      "matching_author_batch_count": 0,
+      "matching_generator_family_count": 4,
+      "matching_public_cluster_count": 4,
+      "new_to_existing_relation_semantics": {
+        "GENERATOR_FAMILY": "GUARANTEED_COUPLED_TO_4_EXISTING_CANDIDATES",
+        "GENERATOR_SEED_BLOCK": "CONDITIONAL_ON_UNIQUE_AUTHORIZED_SEED_BLOCKS",
+        "GENERATOR_SEED_NAMESPACE": "CONDITIONAL_ON_UNIQUE_AUTHORIZED_SEED_BLOCKS",
+        "SOURCE_FAMILY": "INDEPENDENT_IF_A_UNIQUE_REPEAT_ID_IS_AUTHORIZED",
+        "contamination_author_batch_identity": "NO_MATCH_IN_EXISTING_449",
+        "contamination_candidate_identities": "INDEPENDENT_IF_REPEAT_IDS_ARE_UNIQUE",
+        "exact_13_token_shingles": "UNKNOWN_UNTIL_MATERIALIZATION",
+        "isolation_cluster_id": "GUARANTEED_COUPLED_TO_4_EXISTING_CANDIDATES"
+      }
+    },
+    "generator": {
+      "authority_digest": "sha256:f639eb09961f9a429334c5c19ef89f46990d187b9cb9324f49803e908d911afa",
+      "generator_family": "pse-v1-synthetic-refusal-public_development",
+      "generator_id": "pse-v1-unregistered-operation-context",
+      "generator_version": "1.0.0",
+      "output_contract": "non-numeric C08 context bound to a live RES-71 no-operation refusal reference"
+    },
+    "governance_evidence": {
+      "current_generator_report_digest": "sha256:b8656213636aef2ab3fc179b03eb6079b6073e9b67b1345687068db7254dec3b",
+      "historical_acceptance_receipt": "docs/qualification/RES-407-ACCEPTANCE-RECEIPT.md",
+      "structural_geometry": "docs/qualification/RES-407-STRUCTURAL-GEOMETRY.md"
+    },
+    "isolation_guarantees": {
+      "certainty": "GUARANTEED",
+      "fresh_independent_identity": false,
+      "identity_requirement_digests": [
+        "sha256:a066a7812a06c572151aa55ac47fc30d23af87afb9958fc034995c4395ff54bf",
+        "sha256:afac99423ea479adb2afbe36915cd3be5560e21bb0dbc5f10376fdbcb0a88e40",
+        "sha256:c33425cedc3c2c82f6ea644932d8d14f19066f775159f5f51d9e31e569aa097b"
+      ]
+    },
+    "lane": {
+      "capacity_certainty": "BOUNDED",
+      "capacity_rule": "registered generator and split-family seed-block namespace",
+      "capacity_status": "RULE_GOVERNED",
+      "capacity_unit": "unique split-locked synthetic seed block",
+      "implemented_recipe_path_multiplicity": {
+        "certainty": "BOUNDED",
+        "evidence": "The existing RES-407 option helper _synthetic_option_recipes emits one recipe per supported lane cell and binds its ID and seed block to lane/cell, with no repeated-instance ordinal.",
+        "options_per_lane_cell": 1,
+        "repeat_ordinal_in_candidate_id": false,
+        "repeat_ordinal_in_seed_block_rule": false
+      },
+      "lane_digest": "sha256:4971f5b1a442362915340c43957e6be90085b0d49b0f850947743f39b2f2545d",
+      "lane_id": "synthetic:pse-v1-synthetic-refusal-public_development",
+      "remaining_finite_capacity": null,
+      "seed_namespace_behavior": {
+        "certainty": "BOUNDED",
+        "rule": "registered generator and split-family seed-block namespace",
+        "value": "UNIQUE SEED BLOCK PER AUTHORIZED LANE UNIT; REPEAT COUNT UNSPECIFIED"
+      }
+    },
+    "protocol_template": {
+      "adversarial_tags": [
+        "NONFINITE_INPUT"
+      ],
+      "f05_question_focus": "is this unsupported rather than zero?",
+      "family": "F05 generic-refusal path",
+      "numeric_gold_generated": false,
+      "question_classes": [
+        "METHOD_AND_ANALYSIS_REASONING",
+        "ANSWERABILITY_AND_REFUSAL"
+      ],
+      "question_template": "_production_synthetic_question with the registered C08:F05 focus and adversarial tag",
+      "reference": "live RES-71 no-operation refusal reference",
+      "reference_case_id": "res71-bpt-generic-power-refusal",
+      "reference_status": "REFUSAL",
+      "seed_to_context": "_scenario_ids(seed_block) and _production_synthetic_context"
+    },
+    "relation_behavior": {
+      "certainty": "GUARANTEED",
+      "other_relation_behavior": "UNKNOWN",
+      "prior_cluster_member_count": 4,
+      "prior_cluster_member_locks": [
+        [
+          "PUBLIC_DEVELOPMENT",
+          4
+        ]
+      ],
+      "value": "shared production synthetic split cluster; other relations unknown"
+    },
+    "repeat_semantics": {
+      "authorized_repeat_count": "UNSPECIFIED",
+      "candidate_id_has_repeat_ordinal": false,
+      "implemented_options_per_lane_cell": 1,
+      "seed_block_rule_has_repeat_ordinal": false,
+      "seed_reuse_forbidden": true
+    },
+    "seed_namespace": "PSE-V1/{split}/{generator_id}:{version}@{seed_block}"
+  },
+  "authorized_repeat_count_max": "UNKNOWN",
+  "authorized_repeat_count_min": 1,
+  "candidate_materialization_invoked": false,
+  "collision_policy": {
+    "allowed_shared_batch_identity": "expert_author_batch",
+    "exact_13_token_shingles": "reject staged-to-staged and staged-to-existing collisions",
+    "failure_action": "STOP_AND_INVALIDATE_THE_WHOLE_MATERIALIZATION_ATTEMPT; never substitute a seed",
+    "reject_duplicate_fields": [
+      "candidate_id",
+      "payload_digest",
+      "seed_block",
+      "seed_namespace"
+    ],
+    "reject_unexpected_contamination_identity_collisions": true,
+    "required_exact_relation_identities": [
+      "isolation_cluster_id",
+      "generator_family",
+      "expert_author_batch"
+    ],
+    "structural_contract": "require exact lane, cell, split, generator, authority, and relation match",
+    "version": "RES407-C08-REPEAT-COLLISION-POLICY@1.0.0"
+  },
+  "collision_policy_digest": "sha256:953a23cbb2aac06c3162e6134e61946ac83072ae7e87d666ff95573755774386",
+  "concrete_candidates_generated": 0,
+  "current_c08_repair_capability": "UNRESOLVED",
+  "current_c08_repair_capability_reason": "The accepted structural minimum is 48. Current repeat authority has no numeric maximum; the rule-governed lane and implementation capacity do not establish permission for 48.",
+  "distinctness_contract": {
+    "author_batch": "shared agent-process:codex:RES-115-CASE-AUTHORING-001B",
+    "candidate_id_derivation": "candidate ID binds RES-407, C08:F05, PUBLIC_DEVELOPMENT, and repeat ordinal",
+    "exact_shingles": "must be collision-free within the staged batch and against the existing 449",
+    "expected_shared_identity_kinds": [
+      "isolation_cluster_id",
+      "generator_family",
+      "expert_author_batch"
+    ],
+    "generator_identity": {
+      "generator_family": "pse-v1-synthetic-refusal-public_development",
+      "generator_id": "pse-v1-unregistered-operation-context",
+      "generator_version": "1.0.0"
+    },
+    "isolation_cluster": "shared PSE-V1-SYNTHETIC-CLUSTER:PUBLIC_DEVELOPMENT",
+    "required_unique": [
+      "candidate_id",
+      "payload_digest",
+      "seed_block",
+      "seed_namespace",
+      "source_family",
+      "candidate_artifact_ids",
+      "training_exclusion_ids"
+    ],
+    "seed_identity": "unique seed block and split-qualified namespace; candidate ID uniqueness alone is insufficient",
+    "source_family_derivation": "PSE-V1-SYNTHETIC-FAMILY:{candidate_id}",
+    "structural_binding": {
+      "cell": [
+        "C08",
+        "F05"
+      ],
+      "lane_id": "synthetic:pse-v1-synthetic-refusal-public_development",
+      "locked_split": "PUBLIC_DEVELOPMENT",
+      "structural_contract_digest": "sha256:f312934b6455e1ebd379471fd07e93fad8b6d53caf304c63f50bac58099c1923"
+    }
+  },
+  "distinctness_contract_digest": "sha256:3f57fac2adf0cea57af50655b5c621693d80ffdda8f8b06ace53d5d68c2203ab",
+  "entry_head": "856db4adff14531b568397d07c8d17f46824a93a",
+  "mission": "RES-407 C08 48-repeat authority qualification",
+  "next_step": "EXPAND_REPEAT_AND_SEED_BLOCK_AUTHORITY_THEN_REQUALIFY",
+  "planned_repeat_count": 0,
+  "ready_for_authority_expansion": true,
+  "ready_for_materialization": false,
+  "repeat_authority_evidence": {
+    "entry_head": "856db4adff14531b568397d07c8d17f46824a93a",
+    "external_digest_verification": {
+      "archetype_inventory_receipt_digest": "sha256:0b6f20ccf5f4f94d76949ae11e7962fc0a86a6b4887f07c5b8c5a58af7e2f6f9",
+      "external_checkpoint_receipt_digest": "sha256:01a673af56ae43de9dfc722179ed101315127f05ae5518f51f51d79ee33eb9aa",
+      "geometry_record_receipt_digest": "sha256:d003f6777857aaad2a66a10de1b03f186143685d3bab6894739073317b678c70",
+      "geometry_record_sha256": "sha256:57fffcf8e0ca09cde8f51fb8757d475bc7adf261f497013963ef47693d7d52fd",
+      "governed_archetype_contract_digest": "sha256:fcec9490f3dee9483d9106f0ddb228a8dca2d4d3dc7dee8c10cb73a5fb761e01",
+      "status": "PASS",
+      "verified_archetype_digest_count": 12,
+      "verified_digest_fields": [
+        "governed_archetype_contract_digest",
+        "geometry_digest",
+        "problem_digest",
+        "live_supply_inventory_digest",
+        "capability_gap_digest",
+        "ideal_signature_inventory_digest",
+        "ideal_winning_vector_digest",
+        "ideal_result_digest",
+        "ideal_relaxation_proof_digest",
+        "optimistic_c08_relaxation_proof_digest",
+        "saturation_proof_digest",
+        "optimistic_c08_vector_digest",
+        "optimistic_c08_vector_report_digest",
+        "public_report_receipt_digest"
+      ]
+    },
+    "generator_qualification_digest": "sha256:b8656213636aef2ab3fc179b03eb6079b6073e9b67b1345687068db7254dec3b",
+    "governed_archetype_contract_digest": "sha256:fcec9490f3dee9483d9106f0ddb228a8dca2d4d3dc7dee8c10cb73a5fb761e01",
+    "live_supply_inventory_digest": "sha256:4b7ee2d0f9b3f1b56a638b0b27aa01a5ba153e226f34c37bb995dd113292c616",
+    "real_c08_sufficiency_report_digest": "sha256:8906032d404a81d56f576ef0d91523c5752d5cc78f266581f2555f6fe8178560",
+    "repeat_authority_source": {
+      "authorized_repeat_count_max": "UNKNOWN",
+      "authorized_repeat_count_min": 1,
+      "candidate_id_allocation_rule": "PSE-V1-CANDIDATE:RES407:SYNTH:{capability}:{family}:{split}; the current ID has no repeat ordinal.",
+      "capacity_accounting": "RULE_GOVERNED counts distinct authorized split-locked seed-block units. A null finite capacity supplies no numeric maximum and does not mean unlimited.",
+      "capacity_rule": "registered generator and split-family seed-block namespace",
+      "capacity_status": "RULE_GOVERNED",
+      "capacity_unit": "unique split-locked synthetic seed block",
+      "current_recipe_options_per_lane_cell": 1,
+      "minimum_basis": "One currently materializable recipe option exists for this lane/cell.",
+      "multiple_seed_authority": "REPEAT_COUNT_UNSPECIFIED",
+      "repeat_ordinal_in_candidate_id": false,
+      "repeat_ordinal_in_seed_block_rule": false,
+      "repeated_seed_distinctness_validation": "_governed_recipe_check requires unique synthetic seed blocks; validate_case_set rejects reused generator namespace/block identities.",
+      "seed_block_allocation_rule": "Current helper: 'res407-' + canonical_hash((conflict_set_digest, lane_id, cell)) without the sha256: prefix, truncated to 48 hex characters; no repeat ordinal.",
+      "seed_namespace_template": "PSE-V1/{split}/pse-v1-unregistered-operation-context:1.0.0@{seed_block}",
+      "seed_reuse_forbidden": true,
+      "status": "UNKNOWN"
+    },
+    "source_code_evidence": [
+      {
+        "path": "scripts/res407_c08_repeat_authority.py",
+        "sha256": "sha256:58f072d1ebcd86493993434300767a8ed8a6df712a5cbccb30a6bf64c647e405"
+      },
+      {
+        "path": "scripts/res407_governed_backfill.py",
+        "sha256": "sha256:efc01a861cac5dd3e1a68ca1477114e5d057b326200db5236139a8ad7a1c5fc3"
+      },
+      {
+        "path": "scripts/res407_repair_geometry.py",
+        "sha256": "sha256:49950bbdc193024b03cc2b9cfee9b2588fcde5f73c7240087a8fed288301c020"
+      },
+      {
+        "path": "scripts/res407_c08_generator_qualification.py",
+        "sha256": "sha256:3076710482358c0aa36dab8cdebcf2c082d93f02628249313d5f47feeed1e992"
+      },
+      {
+        "path": "scripts/res407_real_c08_sufficiency.py",
+        "sha256": "sha256:6be7e735c9ade30a145371de453d78cda2876511316f3eb2652c39b362056778"
+      },
+      {
+        "path": "src/dynamislm/benchmark/authoring.py",
+        "sha256": "sha256:ecf7a560562ca158b9750e405ba83b3d637352a9f31f5991834c9e911a934ae9"
+      },
+      {
+        "path": "src/dynamislm/benchmark/authority_supply.py",
+        "sha256": "sha256:fa06c7ab8524490fe9e6113fec57720a1316baf6e0ee31337d999e0bb5ec1915"
+      },
+      {
+        "path": "src/dynamislm/benchmark/contamination.py",
+        "sha256": "sha256:95e9825d8432884c82e5f3ff849e3ec2f0bca26f2bddde2fee807d1fc1a597ad"
+      },
+      {
+        "path": "src/dynamislm/benchmark/production.py",
+        "sha256": "sha256:a163882d695b5a783f542827bc71f125554b3facb962b8c7dd7ed4665d8225a9"
+      },
+      {
+        "path": "src/dynamislm/benchmark/production_authoring.py",
+        "sha256": "sha256:d7a1c98c60bd0947f3dc10004c339de545958f6271ff63b7dc53135db86f455b"
+      },
+      {
+        "path": "src/dynamislm/benchmark/coverage.py",
+        "sha256": "sha256:c5d846ea05cb69bc7ef206d454c9ac5c4fb72e7cde9758913badc37db7b9813d"
+      },
+      {
+        "path": "src/dynamislm/qualification/res115_authoring.py",
+        "sha256": "sha256:615176ea560c8404826ec532d16e44444690fc0bb0e49dac24cb08ae4bd2ca58"
+      },
+      {
+        "path": "docs/architecture/PERFORMANCE_SCIENCE_EVAL_PRE_REVIEW_V1.md",
+        "sha256": "sha256:366d5f922e30dfb39d33e79caba64c6075aa13ea4a6a1ef8dc1987f54707e423"
+      },
+      {
+        "path": "docs/decisions/RES21-DR-001-performance-science-eval-v1.md",
+        "sha256": "sha256:857ed5f1833f3404d3dd6df1a0340c6daac916ebe4f283dccd2409710ddf148e"
+      },
+      {
+        "path": "docs/qualification/RES-407-ACCEPTANCE-RECEIPT.md",
+        "sha256": "sha256:0c281dbf8690125393c51ed0156653950474b2ef112f5d77940fbddbd40e4e8b"
+      },
+      {
+        "path": "docs/qualification/RES-407-STRUCTURAL-GEOMETRY.md",
+        "sha256": "sha256:61d2573139b4d8efd84ee54d71c2e9032810a281d2c47ed1797c4eb3a10eec0a"
+      }
+    ],
+    "source_code_evidence_digest": "sha256:81dc9135373afdd750365486c934d3d6ced49e6637ff1e955bc66680fd2f591b",
+    "structural_report_receipt_digest": "sha256:c3669eb5c1823147b5a45d617b6c9270c1956a7b02cc69bfe5e230c332e9e231"
+  },
+  "repeat_authority_evidence_digest": "sha256:4ee01df7c97eafe1d52ee7f9031394dcfc35658daf359cef2e9068c06e435e56",
+  "repeat_authority_status": "UNKNOWN",
+  "repeat_plan": null,
+  "repeat_plan_digest": null,
+  "repeat_plan_status": "NOT_CREATED_REPEAT_AUTHORITY_UNKNOWN",
+  "report_digest": "sha256:493554bd3739ae1bb443318d74ec510b708ce514ba30d72c6aa889a588550999",
+  "schema_version": "RES407-C08-REPEAT-AUTHORITY@1.0.0",
+  "seeds_materialized": 0
+}
