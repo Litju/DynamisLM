@@ -1,0 +1,2736 @@
+{
+  "candidate_materialization_invoked": false,
+  "cardinality_optimality": "PROVEN",
+  "cardinality_proof": {
+    "global_ideal_lower_bound": 12,
+    "inherited_optimistic_lower_bound": 48,
+    "k_minus_1_status": "INFEASIBLE",
+    "k_minus_1_trial_digest": "sha256:3f6c267fdcce404d6f6b205ed5eeeff7b31311895be41697cab3fdfa92b3bea5",
+    "k_status": "FEASIBLE",
+    "k_trial_digest": "sha256:86eecd7c42b4eb15d79cb1781c36cac3b497f5052caf4481c4bf8310a3227398",
+    "minimum_additions": 48,
+    "status": "PROVEN"
+  },
+  "cardinality_trials": [
+    {
+      "best_objective_bound": null,
+      "branches": 34385,
+      "conflicts": 161,
+      "decision_model_digest": "sha256:7882112ab900e4f4902df4b56ccdf98c4bbfc30c09bc484d72f5f0c23214a350",
+      "deterministic_time": 2.192605102582863,
+      "geometry_digest": "sha256:7f7734aafa3bfac11af5714d6873df260a0dac7854c4c2805e7c5a9f19bc5e68",
+      "incumbent_addition_count": 94,
+      "lower_bound_source_trial_digest": null,
+      "maximum_additions": 434,
+      "minimum_additions": 0,
+      "model_constraints": 2520,
+      "model_variables": 1807,
+      "signature_inventory_digest": "sha256:e0918f3145655ee091cd1a17622eaed31f97c503b17678a60a4b0c68ec959df8",
+      "solver_config": {
+        "canonical_chunk_size": 30,
+        "cp_model_presolve": true,
+        "random_seed": 369,
+        "randomize_search": false,
+        "timeout_s": 300.0,
+        "workers": 8
+      },
+      "solver_profile_version": "RES407-STRUCTURAL-REPAIR-MASTER@1.0.0",
+      "solver_status": "OPTIMAL",
+      "solver_version": "9.15.6755",
+      "status": "FEASIBLE",
+      "trial_digest": "sha256:a9fd275639e085f404ef490a029534724fef74dc7feec1548e394b9288533ba9",
+      "wall_time_seconds": 0.754555732
+    },
+    {
+      "best_objective_bound": null,
+      "branches": 28471,
+      "conflicts": 103,
+      "decision_model_digest": "sha256:08704f196e65bdeae119a7ab2f304daa9824f5f311bd7db65e46f16291e99871",
+      "deterministic_time": 2.072063937089143,
+      "geometry_digest": "sha256:7f7734aafa3bfac11af5714d6873df260a0dac7854c4c2805e7c5a9f19bc5e68",
+      "incumbent_addition_count": 70,
+      "lower_bound_source_trial_digest": null,
+      "maximum_additions": 70,
+      "minimum_additions": 0,
+      "model_constraints": 2520,
+      "model_variables": 1807,
+      "signature_inventory_digest": "sha256:e0918f3145655ee091cd1a17622eaed31f97c503b17678a60a4b0c68ec959df8",
+      "solver_config": {
+        "canonical_chunk_size": 30,
+        "cp_model_presolve": true,
+        "random_seed": 369,
+        "randomize_search": false,
+        "timeout_s": 300.0,
+        "workers": 8
+      },
+      "solver_profile_version": "RES407-STRUCTURAL-REPAIR-MASTER@1.0.0",
+      "solver_status": "OPTIMAL",
+      "solver_version": "9.15.6755",
+      "status": "FEASIBLE",
+      "trial_digest": "sha256:5a6de835009b93f91731063c67ca0c8cc8d921c1e89efea3e1232793be2c0d11",
+      "wall_time_seconds": 0.698644573
+    },
+    {
+      "best_objective_bound": null,
+      "branches": 24689,
+      "conflicts": 1746,
+      "decision_model_digest": "sha256:24ce14cd2d73ec9e332810d68dde89f610d71806d27aa5a5ff3bff8901696a43",
+      "deterministic_time": 1.1762626340921558,
+      "geometry_digest": "sha256:7f7734aafa3bfac11af5714d6873df260a0dac7854c4c2805e7c5a9f19bc5e68",
+      "incumbent_addition_count": 58,
+      "lower_bound_source_trial_digest": null,
+      "maximum_additions": 58,
+      "minimum_additions": 0,
+      "model_constraints": 2520,
+      "model_variables": 1807,
+      "signature_inventory_digest": "sha256:e0918f3145655ee091cd1a17622eaed31f97c503b17678a60a4b0c68ec959df8",
+      "solver_config": {
+        "canonical_chunk_size": 30,
+        "cp_model_presolve": true,
+        "random_seed": 369,
+        "randomize_search": false,
+        "timeout_s": 300.0,
+        "workers": 8
+      },
+      "solver_profile_version": "RES407-STRUCTURAL-REPAIR-MASTER@1.0.0",
+      "solver_status": "OPTIMAL",
+      "solver_version": "9.15.6755",
+      "status": "FEASIBLE",
+      "trial_digest": "sha256:3173e1bf27f7604deed0fa8c8bfb5d22afa63bea7b2d833602f39ec65af09108",
+      "wall_time_seconds": 0.439089455
+    },
+    {
+      "best_objective_bound": null,
+      "branches": 43145,
+      "conflicts": 268,
+      "decision_model_digest": "sha256:6e443c8bb5ca56c9f5235fbed644035237430b636401dfbe1a5bd2359404e39e",
+      "deterministic_time": 2.142533335097566,
+      "geometry_digest": "sha256:7f7734aafa3bfac11af5714d6873df260a0dac7854c4c2805e7c5a9f19bc5e68",
+      "incumbent_addition_count": 52,
+      "lower_bound_source_trial_digest": null,
+      "maximum_additions": 52,
+      "minimum_additions": 0,
+      "model_constraints": 2520,
+      "model_variables": 1807,
+      "signature_inventory_digest": "sha256:e0918f3145655ee091cd1a17622eaed31f97c503b17678a60a4b0c68ec959df8",
+      "solver_config": {
+        "canonical_chunk_size": 30,
+        "cp_model_presolve": true,
+        "random_seed": 369,
+        "randomize_search": false,
+        "timeout_s": 300.0,
+        "workers": 8
+      },
+      "solver_profile_version": "RES407-STRUCTURAL-REPAIR-MASTER@1.0.0",
+      "solver_status": "OPTIMAL",
+      "solver_version": "9.15.6755",
+      "status": "FEASIBLE",
+      "trial_digest": "sha256:f58426b2913b8fb09f2cbe5fcbf3272c8d121b48376075fd8abb9cf0af3655f6",
+      "wall_time_seconds": 0.661764042
+    },
+    {
+      "best_objective_bound": null,
+      "branches": 19998,
+      "conflicts": 63,
+      "decision_model_digest": "sha256:d76b168a2c62687bc1802f92868e55c2c721149a6bb74af11503f33235131f25",
+      "deterministic_time": 0.5980655516157347,
+      "geometry_digest": "sha256:7f7734aafa3bfac11af5714d6873df260a0dac7854c4c2805e7c5a9f19bc5e68",
+      "incumbent_addition_count": 49,
+      "lower_bound_source_trial_digest": null,
+      "maximum_additions": 49,
+      "minimum_additions": 0,
+      "model_constraints": 2520,
+      "model_variables": 1807,
+      "signature_inventory_digest": "sha256:e0918f3145655ee091cd1a17622eaed31f97c503b17678a60a4b0c68ec959df8",
+      "solver_config": {
+        "canonical_chunk_size": 30,
+        "cp_model_presolve": true,
+        "random_seed": 369,
+        "randomize_search": false,
+        "timeout_s": 300.0,
+        "workers": 8
+      },
+      "solver_profile_version": "RES407-STRUCTURAL-REPAIR-MASTER@1.0.0",
+      "solver_status": "OPTIMAL",
+      "solver_version": "9.15.6755",
+      "status": "FEASIBLE",
+      "trial_digest": "sha256:ff313c65a7f0eaf2a945bc7da05d96359ac2c28da5628d4b48855dbca806ee1e",
+      "wall_time_seconds": 0.328064998
+    },
+    {
+      "best_objective_bound": null,
+      "branches": 27389,
+      "conflicts": 48,
+      "decision_model_digest": "sha256:85a17fee87899545b539deafa08cf7fb4f7d20ecec18b9a95a792dad2c1d72be",
+      "deterministic_time": 1.6795489495523992,
+      "geometry_digest": "sha256:7f7734aafa3bfac11af5714d6873df260a0dac7854c4c2805e7c5a9f19bc5e68",
+      "incumbent_addition_count": 48,
+      "lower_bound_source_trial_digest": null,
+      "maximum_additions": 48,
+      "minimum_additions": 0,
+      "model_constraints": 2520,
+      "model_variables": 1807,
+      "signature_inventory_digest": "sha256:e0918f3145655ee091cd1a17622eaed31f97c503b17678a60a4b0c68ec959df8",
+      "solver_config": {
+        "canonical_chunk_size": 30,
+        "cp_model_presolve": true,
+        "random_seed": 369,
+        "randomize_search": false,
+        "timeout_s": 300.0,
+        "workers": 8
+      },
+      "solver_profile_version": "RES407-STRUCTURAL-REPAIR-MASTER@1.0.0",
+      "solver_status": "OPTIMAL",
+      "solver_version": "9.15.6755",
+      "status": "FEASIBLE",
+      "trial_digest": "sha256:f9e82e3c587db5312b818cfc9d576ef152f603d21253039186cea84cd06f4e58",
+      "wall_time_seconds": 0.583823714
+    },
+    {
+      "best_objective_bound": null,
+      "branches": 56082,
+      "conflicts": 1195,
+      "decision_model_digest": "sha256:160718b276aac436cbca008d3de073f38e466006a9cc2a8f633c87e9fb5bcfd0",
+      "deterministic_time": 8.311401893613315,
+      "geometry_digest": "sha256:7f7734aafa3bfac11af5714d6873df260a0dac7854c4c2805e7c5a9f19bc5e68",
+      "incumbent_addition_count": null,
+      "lower_bound_source_trial_digest": null,
+      "maximum_additions": 47,
+      "minimum_additions": 0,
+      "model_constraints": 2520,
+      "model_variables": 1807,
+      "signature_inventory_digest": "sha256:e0918f3145655ee091cd1a17622eaed31f97c503b17678a60a4b0c68ec959df8",
+      "solver_config": {
+        "canonical_chunk_size": 30,
+        "cp_model_presolve": true,
+        "random_seed": 369,
+        "randomize_search": false,
+        "timeout_s": 300.0,
+        "workers": 8
+      },
+      "solver_profile_version": "RES407-STRUCTURAL-REPAIR-MASTER@1.0.0",
+      "solver_status": "INFEASIBLE",
+      "solver_version": "9.15.6755",
+      "status": "INFEASIBLE",
+      "trial_digest": "sha256:3f6c267fdcce404d6f6b205ed5eeeff7b31311895be41697cab3fdfa92b3bea5",
+      "wall_time_seconds": 2.400515341
+    },
+    {
+      "best_objective_bound": null,
+      "branches": 54473,
+      "conflicts": 2530,
+      "decision_model_digest": "sha256:85a17fee87899545b539deafa08cf7fb4f7d20ecec18b9a95a792dad2c1d72be",
+      "deterministic_time": 4.500623409449203,
+      "geometry_digest": "sha256:7f7734aafa3bfac11af5714d6873df260a0dac7854c4c2805e7c5a9f19bc5e68",
+      "incumbent_addition_count": 48,
+      "lower_bound_source_trial_digest": null,
+      "maximum_additions": 48,
+      "minimum_additions": 0,
+      "model_constraints": 2520,
+      "model_variables": 1807,
+      "signature_inventory_digest": "sha256:e0918f3145655ee091cd1a17622eaed31f97c503b17678a60a4b0c68ec959df8",
+      "solver_config": {
+        "canonical_chunk_size": 30,
+        "cp_model_presolve": true,
+        "random_seed": 369,
+        "randomize_search": false,
+        "timeout_s": 300.0,
+        "workers": 8
+      },
+      "solver_profile_version": "RES407-STRUCTURAL-REPAIR-MASTER@1.0.0",
+      "solver_status": "OPTIMAL",
+      "solver_version": "9.15.6755",
+      "status": "FEASIBLE",
+      "trial_digest": "sha256:86eecd7c42b4eb15d79cb1781c36cac3b497f5052caf4481c4bf8310a3227398",
+      "wall_time_seconds": 1.3773726270000002
+    }
+  ],
+  "concrete_candidates_generated": 0,
+  "current_c08_repair_capability": "UNRESOLVED",
+  "current_c08_repair_capability_reason": "The repeat-optimistic model determines structural feasibility only. The authorized repeat maximum remains UNKNOWN, so feasible structural counts are not current authority.",
+  "digest_verification": {
+    "status": "PASS",
+    "verified_previous_archetype_count": 12,
+    "verified_previous_digest_fields": [
+      "governed_archetype_contract_digest",
+      "geometry_digest",
+      "problem_digest",
+      "live_supply_inventory_digest",
+      "capability_gap_digest",
+      "ideal_signature_inventory_digest",
+      "ideal_winning_vector_digest",
+      "ideal_result_digest",
+      "ideal_relaxation_proof_digest",
+      "optimistic_c08_relaxation_proof_digest",
+      "saturation_proof_digest",
+      "optimistic_c08_vector_digest",
+      "optimistic_c08_vector_report_digest",
+      "public_report_receipt_digest"
+    ]
+  },
+  "entry_head": "c227b1f8184112fff3c10e5d00d3815baa4cfa96",
+  "feature_contract_derivation": "Derived for all four families from current authoring references, fixed required-refusal builder, scorer attribution, reachable error paths, production adversarial-tag mapping, and the selection feature adapter; no candidate or seed was generated.",
+  "final_allocation_performed": false,
+  "geometry_digest": "sha256:7f7734aafa3bfac11af5714d6873df260a0dac7854c4c2805e7c5a9f19bc5e68",
+  "global_ideal_lower_bound": {
+    "lower_trial_digest": "sha256:b532557bbcb63d848f7c9807f0ebc51a09d8f4a7af49c24de9e21fff2181570b",
+    "minimum_additions": 12,
+    "proof_digest": "sha256:af6ee9a7124421722640e4b89cb9fa2eff76fb57322c11d2693839b29a048d23",
+    "status": "PROVEN",
+    "upper_trial_digest": "sha256:ae6c42616f0aaec9fada0c3d902abcc70f97a73f32f86f877190b1ca9d437a2a"
+  },
+  "governed_archetype_inventory_digest": "sha256:a964fcf19d7751f9bb058a5e5b2d15c6b57af46ca059d5a14fcb7e67f30557e0",
+  "human_review_invoked": false,
+  "instance_identity_formulas": {
+    "candidate_artifact_ids": "candidate:{candidate_id}",
+    "candidate_id": "PSE-V1-CANDIDATE:RES407:SYNTH:{capability}:{family}:{split}; no repeat ordinal",
+    "expert_author_batch_id": "agent-process:codex:RES-115-CASE-AUTHORING-001B",
+    "generator_family": "pse-v1-synthetic-refusal-{split_lowercase}",
+    "isolation_cluster_id": "PSE-V1-SYNTHETIC-CLUSTER:{split}",
+    "seed_block": "res407-{canonical_hash(conflict_set_digest, lane_id, cell)[:48]}; no ordinal",
+    "seed_namespace": "PSE-V1/{split}/pse-v1-unregistered-operation-context:1.0.0@{seed_block}",
+    "source_family_id": "PSE-V1-SYNTHETIC-FAMILY:{candidate_id}",
+    "training_exclusion_id": "qualification-exclusion:{candidate_id}"
+  },
+  "mandatory_aggregate_colocation_group_digest": "sha256:faaefbf64bf44553f5fc039acfa6d4a4ca079c507f5d5cbea72cb0437b072888",
+  "mandatory_aggregate_colocation_groups": [
+    {
+      "existing_candidate_ids": [],
+      "group_digest": "sha256:89f14c071aa953bb1c04fb2f3be06ee1687c0cbebdb53db162575c3465d97966",
+      "relation_identities": [
+        [
+          "expert-author-batch",
+          "agent-process:codex:RES-115-CASE-AUTHORING-001B"
+        ]
+      ],
+      "signature_ids": [
+        "sha256:06c2f487604911f9661f7d9109732f8b2db1665dfab1526d6469661c2503c22f",
+        "sha256:0e189979d81986e9abc6a606e84edf20029a01077ee0dfac7c7f2eb0ac9a4db4",
+        "sha256:2c3196ce804fc6abf7928e6908413c87f011030a63e42856bf310d0d3286b492",
+        "sha256:2ebc6d7e341329fc3c1140ee97aedfca924a4b1a239939f0cd2b4134d2614a63",
+        "sha256:7503c2ecba34e0b6ba828eb9bed22deaac5aa4a1ea3b980a068287c93b745bcc",
+        "sha256:78063913c361eaf2284edcc1fc973545a65544912765fc8be16a37f9e2e6ab27",
+        "sha256:78e57085a4b6fcfd73967785c5354094e75cf38626beaace9e9b763419fb905c",
+        "sha256:81b3ec4d416cd8c4ee7724592fe410b6069159db6f9660ef1a9464f343dd7827",
+        "sha256:89189f580abfcbb0c8cd0d8d5830c62078df8085da316d46ad44734b7d50909b",
+        "sha256:8e55a8e02a2a4480b9022c6e99185298d306e3d96586d77bd6985742c87b8c09",
+        "sha256:ab1b7db87ba4aa4438f08095a241f57b3508cb4cf1b52c9145f6fb7a53a9a742",
+        "sha256:b5e01a77e9cb5db71c8281e13b06178900a73a2afce7ac605a877091513f3b91"
+      ]
+    },
+    {
+      "existing_candidate_ids": [
+        "PSE-V1-CANDIDATE:SYNTH:C08:F05:FROZEN_VALIDATION",
+        "PSE-V1-CANDIDATE:SYNTH:C08:F06:FROZEN_VALIDATION",
+        "PSE-V1-CANDIDATE:SYNTH:C08:F13:FROZEN_VALIDATION",
+        "PSE-V1-CANDIDATE:SYNTH:C08:F14:FROZEN_VALIDATION"
+      ],
+      "group_digest": "sha256:a0e68adee7fd035b31c007011ab4f488bd0194161c56dddaf1fe899d28760993",
+      "relation_identities": [
+        [
+          "ISOLATION_CLUSTER",
+          "PSE-V1-SYNTHETIC-CLUSTER:FROZEN_VALIDATION"
+        ],
+        [
+          "generator-family",
+          "pse-v1-synthetic-refusal-frozen_validation"
+        ]
+      ],
+      "signature_ids": [
+        "sha256:06c2f487604911f9661f7d9109732f8b2db1665dfab1526d6469661c2503c22f",
+        "sha256:81b3ec4d416cd8c4ee7724592fe410b6069159db6f9660ef1a9464f343dd7827",
+        "sha256:89189f580abfcbb0c8cd0d8d5830c62078df8085da316d46ad44734b7d50909b",
+        "sha256:ab1b7db87ba4aa4438f08095a241f57b3508cb4cf1b52c9145f6fb7a53a9a742"
+      ]
+    },
+    {
+      "existing_candidate_ids": [
+        "PSE-V1-CANDIDATE:SYNTH:C08:F05:HIDDEN_FINAL",
+        "PSE-V1-CANDIDATE:SYNTH:C08:F06:HIDDEN_FINAL",
+        "PSE-V1-CANDIDATE:SYNTH:C08:F13:HIDDEN_FINAL",
+        "PSE-V1-CANDIDATE:SYNTH:C08:F14:HIDDEN_FINAL"
+      ],
+      "group_digest": "sha256:1c6bf97e523d829f545ac18fe302ed0ec25b2ce03e10f65804e3ffa56e47e7fc",
+      "relation_identities": [
+        [
+          "ISOLATION_CLUSTER",
+          "PSE-V1-SYNTHETIC-CLUSTER:HIDDEN_FINAL"
+        ],
+        [
+          "generator-family",
+          "pse-v1-synthetic-refusal-hidden_final"
+        ]
+      ],
+      "signature_ids": [
+        "sha256:0e189979d81986e9abc6a606e84edf20029a01077ee0dfac7c7f2eb0ac9a4db4",
+        "sha256:2c3196ce804fc6abf7928e6908413c87f011030a63e42856bf310d0d3286b492",
+        "sha256:78063913c361eaf2284edcc1fc973545a65544912765fc8be16a37f9e2e6ab27",
+        "sha256:8e55a8e02a2a4480b9022c6e99185298d306e3d96586d77bd6985742c87b8c09"
+      ]
+    },
+    {
+      "existing_candidate_ids": [
+        "PSE-V1-CANDIDATE:SYNTH:C08:F05:PUBLIC_DEVELOPMENT",
+        "PSE-V1-CANDIDATE:SYNTH:C08:F06:PUBLIC_DEVELOPMENT",
+        "PSE-V1-CANDIDATE:SYNTH:C08:F13:PUBLIC_DEVELOPMENT",
+        "PSE-V1-CANDIDATE:SYNTH:C08:F14:PUBLIC_DEVELOPMENT"
+      ],
+      "group_digest": "sha256:e2877791759f35fee5692c7aa59297c2daae5d19431763cb8cdeae75d6a4f3ac",
+      "relation_identities": [
+        [
+          "ISOLATION_CLUSTER",
+          "PSE-V1-SYNTHETIC-CLUSTER:PUBLIC_DEVELOPMENT"
+        ],
+        [
+          "generator-family",
+          "pse-v1-synthetic-refusal-public_development"
+        ]
+      ],
+      "signature_ids": [
+        "sha256:2ebc6d7e341329fc3c1140ee97aedfca924a4b1a239939f0cd2b4134d2614a63",
+        "sha256:7503c2ecba34e0b6ba828eb9bed22deaac5aa4a1ea3b980a068287c93b745bcc",
+        "sha256:78e57085a4b6fcfd73967785c5354094e75cf38626beaace9e9b763419fb905c",
+        "sha256:b5e01a77e9cb5db71c8281e13b06178900a73a2afce7ac605a877091513f3b91"
+      ]
+    }
+  ],
+  "missing_governed_capabilities": [],
+  "mission": "RES-407 REAL-C08 structural sufficiency test",
+  "next_step": "QUALIFY_REPEAT_AUTHORITY_FOR_WINNING_VECTOR",
+  "outcome": "REPEAT_AUTHORITY_QUALIFICATION_REQUIRED",
+  "previous_optimistic_c08_lower_bound": {
+    "lower_trial_digest": "sha256:709a236e80f5c33432eae3ed92dd794130d566ff825282193f3a303f1a0a78eb",
+    "minimum_additions": 48,
+    "optimistic_relaxation_proof_digest": "sha256:d727234e8a9df6294157332b0c002d7e720e74bf55eed75c464826541c1020cf",
+    "optimistic_signature_inventory_digest": "sha256:9c243c1e34be2c1779f897a9342a986fae609888189f79a6933bafe411724f4b",
+    "optimistic_witness_digest": "sha256:785b0c0c2c5f1ee7356ba757e2fd0e389f48dd27b927b0037a1b0a5f64f51040",
+    "status": "PROVEN",
+    "structural_report_receipt_digest": "sha256:c3669eb5c1823147b5a45d617b6c9270c1956a7b02cc69bfe5e230c332e9e231",
+    "upper_trial_digest": "sha256:5d25da3b2f2e3ec68153a65b3a6407d7d1f212428f097ec80eda6ce06b808b3d"
+  },
+  "previous_optimistic_c08_min_additions": 48,
+  "previous_optimistic_f05_witness_comparison": {
+    "missing_optimistic_features": [
+      {
+        "key": [
+          "C08",
+          "LM_ARITHMETIC"
+        ],
+        "kind": "ROW_TAG"
+      },
+      {
+        "key": [
+          "C08",
+          "UNREGISTERED_OPERATION"
+        ],
+        "kind": "ROW_TAG"
+      },
+      {
+        "key": [
+          "C08",
+          "WRONG_GRAVITY"
+        ],
+        "kind": "ROW_TAG"
+      }
+    ],
+    "real_f05_feature_contract_digest": "sha256:ee83bf4ea54d93ce1221033534f0e1438cc547824cd1427c13414165c3e37712",
+    "scope": "PREVIOUS 48xC08:F05/PUBLIC OPTIMISTIC FEATURE WITNESS",
+    "status": "NOT_REALIZABLE",
+    "structural_comparison_receipt_digest": "sha256:c3669eb5c1823147b5a45d617b6c9270c1956a7b02cc69bfe5e230c332e9e231"
+  },
+  "problem_digest": "sha256:29b85a7b7518c09a40093326a4e4832c6cee7b564d4384806dc9fceeb0abc5c0",
+  "ready_for_authority_expansion": false,
+  "ready_for_materialization": false,
+  "real_c08_archetype_count": 12,
+  "real_c08_archetype_inventory": [
+    {
+      "answer_kind": "REFUSAL",
+      "answerable": false,
+      "authoring_process_id": "agent-process:codex:RES-115-CASE-AUTHORING-001C",
+      "cell": [
+        "C08",
+        "F05"
+      ],
+      "critical_errors": [
+        "FALSE_SCIENTIFIC_ACCEPTANCE",
+        "INVENTED_NUMERICAL_SCIENCE"
+      ],
+      "current_recipe_options_per_lane_cell": 1,
+      "feature_contract_digest": "sha256:ee83bf4ea54d93ce1221033534f0e1438cc547824cd1427c13414165c3e37712",
+      "generator_family": "pse-v1-synthetic-refusal-frozen_validation",
+      "generator_id": "pse-v1-unregistered-operation-context",
+      "generator_output_contract": "non-numeric C08 context bound to a live RES-71 no-operation refusal reference",
+      "generator_version": "1.0.0",
+      "lane_id": "synthetic:pse-v1-synthetic-refusal-frozen_validation",
+      "mandatory_colocation": {
+        "exact_13_token_shingles": "UNKNOWN; NO_NEW_COLLISION_ASSUMED_IN_TEST_MODEL",
+        "expert_author_batch": "ALL_12_REAL_C08_ARCHETYPES_SHARE_ONE_SPLIT",
+        "generator_family": "ALL_SELECTED_MEMBERS_SHARE_ONE_SPLIT",
+        "repeat_seed_blocks": "UNIQUE_PER_REPEAT; REUSE_REJECTED",
+        "split_cluster": "ALL_SELECTED_MEMBERS_SHARE_ONE_SPLIT"
+      },
+      "mandatory_relation_evidence": [
+        {
+          "existing_449_member_count": 4,
+          "existing_449_member_splits": [
+            "FROZEN_VALIDATION"
+          ],
+          "identity": "PSE-V1-SYNTHETIC-CLUSTER:FROZEN_VALIDATION",
+          "relation_kind": "ISOLATION_CLUSTER"
+        },
+        {
+          "existing_449_member_count": 4,
+          "existing_449_member_splits": [
+            "FROZEN_VALIDATION"
+          ],
+          "identity": "pse-v1-synthetic-refusal-frozen_validation",
+          "relation_kind": "generator-family"
+        },
+        {
+          "existing_449_member_count": 0,
+          "existing_449_member_splits": [],
+          "identity": "agent-process:codex:RES-115-CASE-AUTHORING-001B",
+          "relation_kind": "expert-author-batch"
+        }
+      ],
+      "mandatory_relation_identities": [
+        [
+          "ISOLATION_CLUSTER",
+          "PSE-V1-SYNTHETIC-CLUSTER:FROZEN_VALIDATION"
+        ],
+        [
+          "generator-family",
+          "pse-v1-synthetic-refusal-frozen_validation"
+        ],
+        [
+          "expert-author-batch",
+          "agent-process:codex:RES-115-CASE-AUTHORING-001B"
+        ]
+      ],
+      "origin": "DETERMINISTIC_SYNTHETIC",
+      "reference_case_id": "res71-bpt-generic-power-refusal",
+      "refusal_decision": "REQUIRED",
+      "repeat_authority_maximum": "UNKNOWN",
+      "repeat_ordinal_in_candidate_id": false,
+      "repeat_ordinal_in_seed_block_rule": false,
+      "row_errors": [
+        "FALSE_SCIENTIFIC_ACCEPTANCE",
+        "INVENTED_NUMERICAL_SCIENCE"
+      ],
+      "row_tags": [
+        "NONFINITE_INPUT"
+      ],
+      "seed_block_rule": "Unique authorized seed blocks are required; current helper has no repeat ordinal or finite repeat maximum. Diagnostic repeats are granted distinct candidate-derived IDs and blocks while retaining shared identities above.",
+      "seed_namespace_template": "PSE-V1/FROZEN_VALIDATION/pse-v1-unregistered-operation-context:1.0.0@{seed_block}",
+      "selection_contract_basis": "_production_adversarial_tags; _required_reference_refusal_fields; _scoring_contract; reachable_error_classes; production commitment feature adapter",
+      "selection_features": [
+        {
+          "key": [
+            "C08",
+            "F05"
+          ],
+          "kind": "CELL"
+        },
+        {
+          "key": [
+            "FALSE_SCIENTIFIC_ACCEPTANCE"
+          ],
+          "kind": "CRITICAL_ERROR"
+        },
+        {
+          "key": [
+            "INVENTED_NUMERICAL_SCIENCE"
+          ],
+          "kind": "CRITICAL_ERROR"
+        },
+        {
+          "key": [
+            "C08",
+            "FALSE_SCIENTIFIC_ACCEPTANCE"
+          ],
+          "kind": "ROW_ERROR"
+        },
+        {
+          "key": [
+            "C08",
+            "INVENTED_NUMERICAL_SCIENCE"
+          ],
+          "kind": "ROW_ERROR"
+        },
+        {
+          "key": [
+            "C08",
+            "NONFINITE_INPUT"
+          ],
+          "kind": "ROW_TAG"
+        }
+      ],
+      "split_lock": "FROZEN_VALIDATION"
+    },
+    {
+      "answer_kind": "REFUSAL",
+      "answerable": false,
+      "authoring_process_id": "agent-process:codex:RES-115-CASE-AUTHORING-001C",
+      "cell": [
+        "C08",
+        "F06"
+      ],
+      "critical_errors": [
+        "FALSE_SCIENTIFIC_ACCEPTANCE",
+        "INVENTED_NUMERICAL_SCIENCE"
+      ],
+      "current_recipe_options_per_lane_cell": 1,
+      "feature_contract_digest": "sha256:e870b181822d60eec71c1ea00ae94e7c03d9c3864f221c6c78937e270f011bf4",
+      "generator_family": "pse-v1-synthetic-refusal-frozen_validation",
+      "generator_id": "pse-v1-unregistered-operation-context",
+      "generator_output_contract": "non-numeric C08 context bound to a live RES-71 no-operation refusal reference",
+      "generator_version": "1.0.0",
+      "lane_id": "synthetic:pse-v1-synthetic-refusal-frozen_validation",
+      "mandatory_colocation": {
+        "exact_13_token_shingles": "UNKNOWN; NO_NEW_COLLISION_ASSUMED_IN_TEST_MODEL",
+        "expert_author_batch": "ALL_12_REAL_C08_ARCHETYPES_SHARE_ONE_SPLIT",
+        "generator_family": "ALL_SELECTED_MEMBERS_SHARE_ONE_SPLIT",
+        "repeat_seed_blocks": "UNIQUE_PER_REPEAT; REUSE_REJECTED",
+        "split_cluster": "ALL_SELECTED_MEMBERS_SHARE_ONE_SPLIT"
+      },
+      "mandatory_relation_evidence": [
+        {
+          "existing_449_member_count": 4,
+          "existing_449_member_splits": [
+            "FROZEN_VALIDATION"
+          ],
+          "identity": "PSE-V1-SYNTHETIC-CLUSTER:FROZEN_VALIDATION",
+          "relation_kind": "ISOLATION_CLUSTER"
+        },
+        {
+          "existing_449_member_count": 4,
+          "existing_449_member_splits": [
+            "FROZEN_VALIDATION"
+          ],
+          "identity": "pse-v1-synthetic-refusal-frozen_validation",
+          "relation_kind": "generator-family"
+        },
+        {
+          "existing_449_member_count": 0,
+          "existing_449_member_splits": [],
+          "identity": "agent-process:codex:RES-115-CASE-AUTHORING-001B",
+          "relation_kind": "expert-author-batch"
+        }
+      ],
+      "mandatory_relation_identities": [
+        [
+          "ISOLATION_CLUSTER",
+          "PSE-V1-SYNTHETIC-CLUSTER:FROZEN_VALIDATION"
+        ],
+        [
+          "generator-family",
+          "pse-v1-synthetic-refusal-frozen_validation"
+        ],
+        [
+          "expert-author-batch",
+          "agent-process:codex:RES-115-CASE-AUTHORING-001B"
+        ]
+      ],
+      "origin": "DETERMINISTIC_SYNTHETIC",
+      "reference_case_id": "res71-cmj-rfd-refusal",
+      "refusal_decision": "REQUIRED",
+      "repeat_authority_maximum": "UNKNOWN",
+      "repeat_ordinal_in_candidate_id": false,
+      "repeat_ordinal_in_seed_block_rule": false,
+      "row_errors": [
+        "FALSE_SCIENTIFIC_ACCEPTANCE",
+        "INVENTED_NUMERICAL_SCIENCE"
+      ],
+      "row_tags": [
+        "UNREGISTERED_OPERATION"
+      ],
+      "seed_block_rule": "Unique authorized seed blocks are required; current helper has no repeat ordinal or finite repeat maximum. Diagnostic repeats are granted distinct candidate-derived IDs and blocks while retaining shared identities above.",
+      "seed_namespace_template": "PSE-V1/FROZEN_VALIDATION/pse-v1-unregistered-operation-context:1.0.0@{seed_block}",
+      "selection_contract_basis": "_production_adversarial_tags; _required_reference_refusal_fields; _scoring_contract; reachable_error_classes; production commitment feature adapter",
+      "selection_features": [
+        {
+          "key": [
+            "C08",
+            "F06"
+          ],
+          "kind": "CELL"
+        },
+        {
+          "key": [
+            "FALSE_SCIENTIFIC_ACCEPTANCE"
+          ],
+          "kind": "CRITICAL_ERROR"
+        },
+        {
+          "key": [
+            "INVENTED_NUMERICAL_SCIENCE"
+          ],
+          "kind": "CRITICAL_ERROR"
+        },
+        {
+          "key": [
+            "C08",
+            "FALSE_SCIENTIFIC_ACCEPTANCE"
+          ],
+          "kind": "ROW_ERROR"
+        },
+        {
+          "key": [
+            "C08",
+            "INVENTED_NUMERICAL_SCIENCE"
+          ],
+          "kind": "ROW_ERROR"
+        },
+        {
+          "key": [
+            "C08",
+            "UNREGISTERED_OPERATION"
+          ],
+          "kind": "ROW_TAG"
+        }
+      ],
+      "split_lock": "FROZEN_VALIDATION"
+    },
+    {
+      "answer_kind": "REFUSAL",
+      "answerable": false,
+      "authoring_process_id": "agent-process:codex:RES-115-CASE-AUTHORING-001C",
+      "cell": [
+        "C08",
+        "F13"
+      ],
+      "critical_errors": [
+        "FALSE_SCIENTIFIC_ACCEPTANCE",
+        "INVENTED_NUMERICAL_SCIENCE"
+      ],
+      "current_recipe_options_per_lane_cell": 1,
+      "feature_contract_digest": "sha256:0e9bffd4164c10885b3d8c92aa5fb214e3ca2317a73d107fae04effa444ffbc8",
+      "generator_family": "pse-v1-synthetic-refusal-frozen_validation",
+      "generator_id": "pse-v1-unregistered-operation-context",
+      "generator_output_contract": "non-numeric C08 context bound to a live RES-71 no-operation refusal reference",
+      "generator_version": "1.0.0",
+      "lane_id": "synthetic:pse-v1-synthetic-refusal-frozen_validation",
+      "mandatory_colocation": {
+        "exact_13_token_shingles": "UNKNOWN; NO_NEW_COLLISION_ASSUMED_IN_TEST_MODEL",
+        "expert_author_batch": "ALL_12_REAL_C08_ARCHETYPES_SHARE_ONE_SPLIT",
+        "generator_family": "ALL_SELECTED_MEMBERS_SHARE_ONE_SPLIT",
+        "repeat_seed_blocks": "UNIQUE_PER_REPEAT; REUSE_REJECTED",
+        "split_cluster": "ALL_SELECTED_MEMBERS_SHARE_ONE_SPLIT"
+      },
+      "mandatory_relation_evidence": [
+        {
+          "existing_449_member_count": 4,
+          "existing_449_member_splits": [
+            "FROZEN_VALIDATION"
+          ],
+          "identity": "PSE-V1-SYNTHETIC-CLUSTER:FROZEN_VALIDATION",
+          "relation_kind": "ISOLATION_CLUSTER"
+        },
+        {
+          "existing_449_member_count": 4,
+          "existing_449_member_splits": [
+            "FROZEN_VALIDATION"
+          ],
+          "identity": "pse-v1-synthetic-refusal-frozen_validation",
+          "relation_kind": "generator-family"
+        },
+        {
+          "existing_449_member_count": 0,
+          "existing_449_member_splits": [],
+          "identity": "agent-process:codex:RES-115-CASE-AUTHORING-001B",
+          "relation_kind": "expert-author-batch"
+        }
+      ],
+      "mandatory_relation_identities": [
+        [
+          "ISOLATION_CLUSTER",
+          "PSE-V1-SYNTHETIC-CLUSTER:FROZEN_VALIDATION"
+        ],
+        [
+          "generator-family",
+          "pse-v1-synthetic-refusal-frozen_validation"
+        ],
+        [
+          "expert-author-batch",
+          "agent-process:codex:RES-115-CASE-AUTHORING-001B"
+        ]
+      ],
+      "origin": "DETERMINISTIC_SYNTHETIC",
+      "reference_case_id": "res71-cmj-rfd-refusal",
+      "refusal_decision": "REQUIRED",
+      "repeat_authority_maximum": "UNKNOWN",
+      "repeat_ordinal_in_candidate_id": false,
+      "repeat_ordinal_in_seed_block_rule": false,
+      "row_errors": [
+        "FALSE_SCIENTIFIC_ACCEPTANCE",
+        "INVENTED_NUMERICAL_SCIENCE"
+      ],
+      "row_tags": [
+        "WRONG_GRAVITY"
+      ],
+      "seed_block_rule": "Unique authorized seed blocks are required; current helper has no repeat ordinal or finite repeat maximum. Diagnostic repeats are granted distinct candidate-derived IDs and blocks while retaining shared identities above.",
+      "seed_namespace_template": "PSE-V1/FROZEN_VALIDATION/pse-v1-unregistered-operation-context:1.0.0@{seed_block}",
+      "selection_contract_basis": "_production_adversarial_tags; _required_reference_refusal_fields; _scoring_contract; reachable_error_classes; production commitment feature adapter",
+      "selection_features": [
+        {
+          "key": [
+            "C08",
+            "F13"
+          ],
+          "kind": "CELL"
+        },
+        {
+          "key": [
+            "FALSE_SCIENTIFIC_ACCEPTANCE"
+          ],
+          "kind": "CRITICAL_ERROR"
+        },
+        {
+          "key": [
+            "INVENTED_NUMERICAL_SCIENCE"
+          ],
+          "kind": "CRITICAL_ERROR"
+        },
+        {
+          "key": [
+            "C08",
+            "FALSE_SCIENTIFIC_ACCEPTANCE"
+          ],
+          "kind": "ROW_ERROR"
+        },
+        {
+          "key": [
+            "C08",
+            "INVENTED_NUMERICAL_SCIENCE"
+          ],
+          "kind": "ROW_ERROR"
+        },
+        {
+          "key": [
+            "C08",
+            "WRONG_GRAVITY"
+          ],
+          "kind": "ROW_TAG"
+        }
+      ],
+      "split_lock": "FROZEN_VALIDATION"
+    },
+    {
+      "answer_kind": "REFUSAL",
+      "answerable": false,
+      "authoring_process_id": "agent-process:codex:RES-115-CASE-AUTHORING-001C",
+      "cell": [
+        "C08",
+        "F14"
+      ],
+      "critical_errors": [
+        "FALSE_SCIENTIFIC_ACCEPTANCE",
+        "INVENTED_NUMERICAL_SCIENCE"
+      ],
+      "current_recipe_options_per_lane_cell": 1,
+      "feature_contract_digest": "sha256:85b9f339ca302363bdaa98cb8451fc4f3eb6952c1e67005cd25cb97021a820aa",
+      "generator_family": "pse-v1-synthetic-refusal-frozen_validation",
+      "generator_id": "pse-v1-unregistered-operation-context",
+      "generator_output_contract": "non-numeric C08 context bound to a live RES-71 no-operation refusal reference",
+      "generator_version": "1.0.0",
+      "lane_id": "synthetic:pse-v1-synthetic-refusal-frozen_validation",
+      "mandatory_colocation": {
+        "exact_13_token_shingles": "UNKNOWN; NO_NEW_COLLISION_ASSUMED_IN_TEST_MODEL",
+        "expert_author_batch": "ALL_12_REAL_C08_ARCHETYPES_SHARE_ONE_SPLIT",
+        "generator_family": "ALL_SELECTED_MEMBERS_SHARE_ONE_SPLIT",
+        "repeat_seed_blocks": "UNIQUE_PER_REPEAT; REUSE_REJECTED",
+        "split_cluster": "ALL_SELECTED_MEMBERS_SHARE_ONE_SPLIT"
+      },
+      "mandatory_relation_evidence": [
+        {
+          "existing_449_member_count": 4,
+          "existing_449_member_splits": [
+            "FROZEN_VALIDATION"
+          ],
+          "identity": "PSE-V1-SYNTHETIC-CLUSTER:FROZEN_VALIDATION",
+          "relation_kind": "ISOLATION_CLUSTER"
+        },
+        {
+          "existing_449_member_count": 4,
+          "existing_449_member_splits": [
+            "FROZEN_VALIDATION"
+          ],
+          "identity": "pse-v1-synthetic-refusal-frozen_validation",
+          "relation_kind": "generator-family"
+        },
+        {
+          "existing_449_member_count": 0,
+          "existing_449_member_splits": [],
+          "identity": "agent-process:codex:RES-115-CASE-AUTHORING-001B",
+          "relation_kind": "expert-author-batch"
+        }
+      ],
+      "mandatory_relation_identities": [
+        [
+          "ISOLATION_CLUSTER",
+          "PSE-V1-SYNTHETIC-CLUSTER:FROZEN_VALIDATION"
+        ],
+        [
+          "generator-family",
+          "pse-v1-synthetic-refusal-frozen_validation"
+        ],
+        [
+          "expert-author-batch",
+          "agent-process:codex:RES-115-CASE-AUTHORING-001B"
+        ]
+      ],
+      "origin": "DETERMINISTIC_SYNTHETIC",
+      "reference_case_id": "res71-bpt-generic-power-refusal",
+      "refusal_decision": "REQUIRED",
+      "repeat_authority_maximum": "UNKNOWN",
+      "repeat_ordinal_in_candidate_id": false,
+      "repeat_ordinal_in_seed_block_rule": false,
+      "row_errors": [
+        "FALSE_SCIENTIFIC_ACCEPTANCE",
+        "INVENTED_NUMERICAL_SCIENCE"
+      ],
+      "row_tags": [
+        "LM_ARITHMETIC"
+      ],
+      "seed_block_rule": "Unique authorized seed blocks are required; current helper has no repeat ordinal or finite repeat maximum. Diagnostic repeats are granted distinct candidate-derived IDs and blocks while retaining shared identities above.",
+      "seed_namespace_template": "PSE-V1/FROZEN_VALIDATION/pse-v1-unregistered-operation-context:1.0.0@{seed_block}",
+      "selection_contract_basis": "_production_adversarial_tags; _required_reference_refusal_fields; _scoring_contract; reachable_error_classes; production commitment feature adapter",
+      "selection_features": [
+        {
+          "key": [
+            "C08",
+            "F14"
+          ],
+          "kind": "CELL"
+        },
+        {
+          "key": [
+            "FALSE_SCIENTIFIC_ACCEPTANCE"
+          ],
+          "kind": "CRITICAL_ERROR"
+        },
+        {
+          "key": [
+            "INVENTED_NUMERICAL_SCIENCE"
+          ],
+          "kind": "CRITICAL_ERROR"
+        },
+        {
+          "key": [
+            "C08",
+            "FALSE_SCIENTIFIC_ACCEPTANCE"
+          ],
+          "kind": "ROW_ERROR"
+        },
+        {
+          "key": [
+            "C08",
+            "INVENTED_NUMERICAL_SCIENCE"
+          ],
+          "kind": "ROW_ERROR"
+        },
+        {
+          "key": [
+            "C08",
+            "LM_ARITHMETIC"
+          ],
+          "kind": "ROW_TAG"
+        }
+      ],
+      "split_lock": "FROZEN_VALIDATION"
+    },
+    {
+      "answer_kind": "REFUSAL",
+      "answerable": false,
+      "authoring_process_id": "agent-process:codex:RES-115-CASE-AUTHORING-001C",
+      "cell": [
+        "C08",
+        "F05"
+      ],
+      "critical_errors": [
+        "FALSE_SCIENTIFIC_ACCEPTANCE",
+        "INVENTED_NUMERICAL_SCIENCE"
+      ],
+      "current_recipe_options_per_lane_cell": 1,
+      "feature_contract_digest": "sha256:ee83bf4ea54d93ce1221033534f0e1438cc547824cd1427c13414165c3e37712",
+      "generator_family": "pse-v1-synthetic-refusal-hidden_final",
+      "generator_id": "pse-v1-unregistered-operation-context",
+      "generator_output_contract": "non-numeric C08 context bound to a live RES-71 no-operation refusal reference",
+      "generator_version": "1.0.0",
+      "lane_id": "synthetic:pse-v1-synthetic-refusal-hidden_final",
+      "mandatory_colocation": {
+        "exact_13_token_shingles": "UNKNOWN; NO_NEW_COLLISION_ASSUMED_IN_TEST_MODEL",
+        "expert_author_batch": "ALL_12_REAL_C08_ARCHETYPES_SHARE_ONE_SPLIT",
+        "generator_family": "ALL_SELECTED_MEMBERS_SHARE_ONE_SPLIT",
+        "repeat_seed_blocks": "UNIQUE_PER_REPEAT; REUSE_REJECTED",
+        "split_cluster": "ALL_SELECTED_MEMBERS_SHARE_ONE_SPLIT"
+      },
+      "mandatory_relation_evidence": [
+        {
+          "existing_449_member_count": 4,
+          "existing_449_member_splits": [
+            "HIDDEN_FINAL"
+          ],
+          "identity": "PSE-V1-SYNTHETIC-CLUSTER:HIDDEN_FINAL",
+          "relation_kind": "ISOLATION_CLUSTER"
+        },
+        {
+          "existing_449_member_count": 4,
+          "existing_449_member_splits": [
+            "HIDDEN_FINAL"
+          ],
+          "identity": "pse-v1-synthetic-refusal-hidden_final",
+          "relation_kind": "generator-family"
+        },
+        {
+          "existing_449_member_count": 0,
+          "existing_449_member_splits": [],
+          "identity": "agent-process:codex:RES-115-CASE-AUTHORING-001B",
+          "relation_kind": "expert-author-batch"
+        }
+      ],
+      "mandatory_relation_identities": [
+        [
+          "ISOLATION_CLUSTER",
+          "PSE-V1-SYNTHETIC-CLUSTER:HIDDEN_FINAL"
+        ],
+        [
+          "generator-family",
+          "pse-v1-synthetic-refusal-hidden_final"
+        ],
+        [
+          "expert-author-batch",
+          "agent-process:codex:RES-115-CASE-AUTHORING-001B"
+        ]
+      ],
+      "origin": "DETERMINISTIC_SYNTHETIC",
+      "reference_case_id": "res71-bpt-generic-power-refusal",
+      "refusal_decision": "REQUIRED",
+      "repeat_authority_maximum": "UNKNOWN",
+      "repeat_ordinal_in_candidate_id": false,
+      "repeat_ordinal_in_seed_block_rule": false,
+      "row_errors": [
+        "FALSE_SCIENTIFIC_ACCEPTANCE",
+        "INVENTED_NUMERICAL_SCIENCE"
+      ],
+      "row_tags": [
+        "NONFINITE_INPUT"
+      ],
+      "seed_block_rule": "Unique authorized seed blocks are required; current helper has no repeat ordinal or finite repeat maximum. Diagnostic repeats are granted distinct candidate-derived IDs and blocks while retaining shared identities above.",
+      "seed_namespace_template": "PSE-V1/HIDDEN_FINAL/pse-v1-unregistered-operation-context:1.0.0@{seed_block}",
+      "selection_contract_basis": "_production_adversarial_tags; _required_reference_refusal_fields; _scoring_contract; reachable_error_classes; production commitment feature adapter",
+      "selection_features": [
+        {
+          "key": [
+            "C08",
+            "F05"
+          ],
+          "kind": "CELL"
+        },
+        {
+          "key": [
+            "FALSE_SCIENTIFIC_ACCEPTANCE"
+          ],
+          "kind": "CRITICAL_ERROR"
+        },
+        {
+          "key": [
+            "INVENTED_NUMERICAL_SCIENCE"
+          ],
+          "kind": "CRITICAL_ERROR"
+        },
+        {
+          "key": [
+            "C08",
+            "FALSE_SCIENTIFIC_ACCEPTANCE"
+          ],
+          "kind": "ROW_ERROR"
+        },
+        {
+          "key": [
+            "C08",
+            "INVENTED_NUMERICAL_SCIENCE"
+          ],
+          "kind": "ROW_ERROR"
+        },
+        {
+          "key": [
+            "C08",
+            "NONFINITE_INPUT"
+          ],
+          "kind": "ROW_TAG"
+        }
+      ],
+      "split_lock": "HIDDEN_FINAL"
+    },
+    {
+      "answer_kind": "REFUSAL",
+      "answerable": false,
+      "authoring_process_id": "agent-process:codex:RES-115-CASE-AUTHORING-001C",
+      "cell": [
+        "C08",
+        "F06"
+      ],
+      "critical_errors": [
+        "FALSE_SCIENTIFIC_ACCEPTANCE",
+        "INVENTED_NUMERICAL_SCIENCE"
+      ],
+      "current_recipe_options_per_lane_cell": 1,
+      "feature_contract_digest": "sha256:e870b181822d60eec71c1ea00ae94e7c03d9c3864f221c6c78937e270f011bf4",
+      "generator_family": "pse-v1-synthetic-refusal-hidden_final",
+      "generator_id": "pse-v1-unregistered-operation-context",
+      "generator_output_contract": "non-numeric C08 context bound to a live RES-71 no-operation refusal reference",
+      "generator_version": "1.0.0",
+      "lane_id": "synthetic:pse-v1-synthetic-refusal-hidden_final",
+      "mandatory_colocation": {
+        "exact_13_token_shingles": "UNKNOWN; NO_NEW_COLLISION_ASSUMED_IN_TEST_MODEL",
+        "expert_author_batch": "ALL_12_REAL_C08_ARCHETYPES_SHARE_ONE_SPLIT",
+        "generator_family": "ALL_SELECTED_MEMBERS_SHARE_ONE_SPLIT",
+        "repeat_seed_blocks": "UNIQUE_PER_REPEAT; REUSE_REJECTED",
+        "split_cluster": "ALL_SELECTED_MEMBERS_SHARE_ONE_SPLIT"
+      },
+      "mandatory_relation_evidence": [
+        {
+          "existing_449_member_count": 4,
+          "existing_449_member_splits": [
+            "HIDDEN_FINAL"
+          ],
+          "identity": "PSE-V1-SYNTHETIC-CLUSTER:HIDDEN_FINAL",
+          "relation_kind": "ISOLATION_CLUSTER"
+        },
+        {
+          "existing_449_member_count": 4,
+          "existing_449_member_splits": [
+            "HIDDEN_FINAL"
+          ],
+          "identity": "pse-v1-synthetic-refusal-hidden_final",
+          "relation_kind": "generator-family"
+        },
+        {
+          "existing_449_member_count": 0,
+          "existing_449_member_splits": [],
+          "identity": "agent-process:codex:RES-115-CASE-AUTHORING-001B",
+          "relation_kind": "expert-author-batch"
+        }
+      ],
+      "mandatory_relation_identities": [
+        [
+          "ISOLATION_CLUSTER",
+          "PSE-V1-SYNTHETIC-CLUSTER:HIDDEN_FINAL"
+        ],
+        [
+          "generator-family",
+          "pse-v1-synthetic-refusal-hidden_final"
+        ],
+        [
+          "expert-author-batch",
+          "agent-process:codex:RES-115-CASE-AUTHORING-001B"
+        ]
+      ],
+      "origin": "DETERMINISTIC_SYNTHETIC",
+      "reference_case_id": "res71-cmj-rfd-refusal",
+      "refusal_decision": "REQUIRED",
+      "repeat_authority_maximum": "UNKNOWN",
+      "repeat_ordinal_in_candidate_id": false,
+      "repeat_ordinal_in_seed_block_rule": false,
+      "row_errors": [
+        "FALSE_SCIENTIFIC_ACCEPTANCE",
+        "INVENTED_NUMERICAL_SCIENCE"
+      ],
+      "row_tags": [
+        "UNREGISTERED_OPERATION"
+      ],
+      "seed_block_rule": "Unique authorized seed blocks are required; current helper has no repeat ordinal or finite repeat maximum. Diagnostic repeats are granted distinct candidate-derived IDs and blocks while retaining shared identities above.",
+      "seed_namespace_template": "PSE-V1/HIDDEN_FINAL/pse-v1-unregistered-operation-context:1.0.0@{seed_block}",
+      "selection_contract_basis": "_production_adversarial_tags; _required_reference_refusal_fields; _scoring_contract; reachable_error_classes; production commitment feature adapter",
+      "selection_features": [
+        {
+          "key": [
+            "C08",
+            "F06"
+          ],
+          "kind": "CELL"
+        },
+        {
+          "key": [
+            "FALSE_SCIENTIFIC_ACCEPTANCE"
+          ],
+          "kind": "CRITICAL_ERROR"
+        },
+        {
+          "key": [
+            "INVENTED_NUMERICAL_SCIENCE"
+          ],
+          "kind": "CRITICAL_ERROR"
+        },
+        {
+          "key": [
+            "C08",
+            "FALSE_SCIENTIFIC_ACCEPTANCE"
+          ],
+          "kind": "ROW_ERROR"
+        },
+        {
+          "key": [
+            "C08",
+            "INVENTED_NUMERICAL_SCIENCE"
+          ],
+          "kind": "ROW_ERROR"
+        },
+        {
+          "key": [
+            "C08",
+            "UNREGISTERED_OPERATION"
+          ],
+          "kind": "ROW_TAG"
+        }
+      ],
+      "split_lock": "HIDDEN_FINAL"
+    },
+    {
+      "answer_kind": "REFUSAL",
+      "answerable": false,
+      "authoring_process_id": "agent-process:codex:RES-115-CASE-AUTHORING-001C",
+      "cell": [
+        "C08",
+        "F13"
+      ],
+      "critical_errors": [
+        "FALSE_SCIENTIFIC_ACCEPTANCE",
+        "INVENTED_NUMERICAL_SCIENCE"
+      ],
+      "current_recipe_options_per_lane_cell": 1,
+      "feature_contract_digest": "sha256:0e9bffd4164c10885b3d8c92aa5fb214e3ca2317a73d107fae04effa444ffbc8",
+      "generator_family": "pse-v1-synthetic-refusal-hidden_final",
+      "generator_id": "pse-v1-unregistered-operation-context",
+      "generator_output_contract": "non-numeric C08 context bound to a live RES-71 no-operation refusal reference",
+      "generator_version": "1.0.0",
+      "lane_id": "synthetic:pse-v1-synthetic-refusal-hidden_final",
+      "mandatory_colocation": {
+        "exact_13_token_shingles": "UNKNOWN; NO_NEW_COLLISION_ASSUMED_IN_TEST_MODEL",
+        "expert_author_batch": "ALL_12_REAL_C08_ARCHETYPES_SHARE_ONE_SPLIT",
+        "generator_family": "ALL_SELECTED_MEMBERS_SHARE_ONE_SPLIT",
+        "repeat_seed_blocks": "UNIQUE_PER_REPEAT; REUSE_REJECTED",
+        "split_cluster": "ALL_SELECTED_MEMBERS_SHARE_ONE_SPLIT"
+      },
+      "mandatory_relation_evidence": [
+        {
+          "existing_449_member_count": 4,
+          "existing_449_member_splits": [
+            "HIDDEN_FINAL"
+          ],
+          "identity": "PSE-V1-SYNTHETIC-CLUSTER:HIDDEN_FINAL",
+          "relation_kind": "ISOLATION_CLUSTER"
+        },
+        {
+          "existing_449_member_count": 4,
+          "existing_449_member_splits": [
+            "HIDDEN_FINAL"
+          ],
+          "identity": "pse-v1-synthetic-refusal-hidden_final",
+          "relation_kind": "generator-family"
+        },
+        {
+          "existing_449_member_count": 0,
+          "existing_449_member_splits": [],
+          "identity": "agent-process:codex:RES-115-CASE-AUTHORING-001B",
+          "relation_kind": "expert-author-batch"
+        }
+      ],
+      "mandatory_relation_identities": [
+        [
+          "ISOLATION_CLUSTER",
+          "PSE-V1-SYNTHETIC-CLUSTER:HIDDEN_FINAL"
+        ],
+        [
+          "generator-family",
+          "pse-v1-synthetic-refusal-hidden_final"
+        ],
+        [
+          "expert-author-batch",
+          "agent-process:codex:RES-115-CASE-AUTHORING-001B"
+        ]
+      ],
+      "origin": "DETERMINISTIC_SYNTHETIC",
+      "reference_case_id": "res71-cmj-rfd-refusal",
+      "refusal_decision": "REQUIRED",
+      "repeat_authority_maximum": "UNKNOWN",
+      "repeat_ordinal_in_candidate_id": false,
+      "repeat_ordinal_in_seed_block_rule": false,
+      "row_errors": [
+        "FALSE_SCIENTIFIC_ACCEPTANCE",
+        "INVENTED_NUMERICAL_SCIENCE"
+      ],
+      "row_tags": [
+        "WRONG_GRAVITY"
+      ],
+      "seed_block_rule": "Unique authorized seed blocks are required; current helper has no repeat ordinal or finite repeat maximum. Diagnostic repeats are granted distinct candidate-derived IDs and blocks while retaining shared identities above.",
+      "seed_namespace_template": "PSE-V1/HIDDEN_FINAL/pse-v1-unregistered-operation-context:1.0.0@{seed_block}",
+      "selection_contract_basis": "_production_adversarial_tags; _required_reference_refusal_fields; _scoring_contract; reachable_error_classes; production commitment feature adapter",
+      "selection_features": [
+        {
+          "key": [
+            "C08",
+            "F13"
+          ],
+          "kind": "CELL"
+        },
+        {
+          "key": [
+            "FALSE_SCIENTIFIC_ACCEPTANCE"
+          ],
+          "kind": "CRITICAL_ERROR"
+        },
+        {
+          "key": [
+            "INVENTED_NUMERICAL_SCIENCE"
+          ],
+          "kind": "CRITICAL_ERROR"
+        },
+        {
+          "key": [
+            "C08",
+            "FALSE_SCIENTIFIC_ACCEPTANCE"
+          ],
+          "kind": "ROW_ERROR"
+        },
+        {
+          "key": [
+            "C08",
+            "INVENTED_NUMERICAL_SCIENCE"
+          ],
+          "kind": "ROW_ERROR"
+        },
+        {
+          "key": [
+            "C08",
+            "WRONG_GRAVITY"
+          ],
+          "kind": "ROW_TAG"
+        }
+      ],
+      "split_lock": "HIDDEN_FINAL"
+    },
+    {
+      "answer_kind": "REFUSAL",
+      "answerable": false,
+      "authoring_process_id": "agent-process:codex:RES-115-CASE-AUTHORING-001C",
+      "cell": [
+        "C08",
+        "F14"
+      ],
+      "critical_errors": [
+        "FALSE_SCIENTIFIC_ACCEPTANCE",
+        "INVENTED_NUMERICAL_SCIENCE"
+      ],
+      "current_recipe_options_per_lane_cell": 1,
+      "feature_contract_digest": "sha256:85b9f339ca302363bdaa98cb8451fc4f3eb6952c1e67005cd25cb97021a820aa",
+      "generator_family": "pse-v1-synthetic-refusal-hidden_final",
+      "generator_id": "pse-v1-unregistered-operation-context",
+      "generator_output_contract": "non-numeric C08 context bound to a live RES-71 no-operation refusal reference",
+      "generator_version": "1.0.0",
+      "lane_id": "synthetic:pse-v1-synthetic-refusal-hidden_final",
+      "mandatory_colocation": {
+        "exact_13_token_shingles": "UNKNOWN; NO_NEW_COLLISION_ASSUMED_IN_TEST_MODEL",
+        "expert_author_batch": "ALL_12_REAL_C08_ARCHETYPES_SHARE_ONE_SPLIT",
+        "generator_family": "ALL_SELECTED_MEMBERS_SHARE_ONE_SPLIT",
+        "repeat_seed_blocks": "UNIQUE_PER_REPEAT; REUSE_REJECTED",
+        "split_cluster": "ALL_SELECTED_MEMBERS_SHARE_ONE_SPLIT"
+      },
+      "mandatory_relation_evidence": [
+        {
+          "existing_449_member_count": 4,
+          "existing_449_member_splits": [
+            "HIDDEN_FINAL"
+          ],
+          "identity": "PSE-V1-SYNTHETIC-CLUSTER:HIDDEN_FINAL",
+          "relation_kind": "ISOLATION_CLUSTER"
+        },
+        {
+          "existing_449_member_count": 4,
+          "existing_449_member_splits": [
+            "HIDDEN_FINAL"
+          ],
+          "identity": "pse-v1-synthetic-refusal-hidden_final",
+          "relation_kind": "generator-family"
+        },
+        {
+          "existing_449_member_count": 0,
+          "existing_449_member_splits": [],
+          "identity": "agent-process:codex:RES-115-CASE-AUTHORING-001B",
+          "relation_kind": "expert-author-batch"
+        }
+      ],
+      "mandatory_relation_identities": [
+        [
+          "ISOLATION_CLUSTER",
+          "PSE-V1-SYNTHETIC-CLUSTER:HIDDEN_FINAL"
+        ],
+        [
+          "generator-family",
+          "pse-v1-synthetic-refusal-hidden_final"
+        ],
+        [
+          "expert-author-batch",
+          "agent-process:codex:RES-115-CASE-AUTHORING-001B"
+        ]
+      ],
+      "origin": "DETERMINISTIC_SYNTHETIC",
+      "reference_case_id": "res71-bpt-generic-power-refusal",
+      "refusal_decision": "REQUIRED",
+      "repeat_authority_maximum": "UNKNOWN",
+      "repeat_ordinal_in_candidate_id": false,
+      "repeat_ordinal_in_seed_block_rule": false,
+      "row_errors": [
+        "FALSE_SCIENTIFIC_ACCEPTANCE",
+        "INVENTED_NUMERICAL_SCIENCE"
+      ],
+      "row_tags": [
+        "LM_ARITHMETIC"
+      ],
+      "seed_block_rule": "Unique authorized seed blocks are required; current helper has no repeat ordinal or finite repeat maximum. Diagnostic repeats are granted distinct candidate-derived IDs and blocks while retaining shared identities above.",
+      "seed_namespace_template": "PSE-V1/HIDDEN_FINAL/pse-v1-unregistered-operation-context:1.0.0@{seed_block}",
+      "selection_contract_basis": "_production_adversarial_tags; _required_reference_refusal_fields; _scoring_contract; reachable_error_classes; production commitment feature adapter",
+      "selection_features": [
+        {
+          "key": [
+            "C08",
+            "F14"
+          ],
+          "kind": "CELL"
+        },
+        {
+          "key": [
+            "FALSE_SCIENTIFIC_ACCEPTANCE"
+          ],
+          "kind": "CRITICAL_ERROR"
+        },
+        {
+          "key": [
+            "INVENTED_NUMERICAL_SCIENCE"
+          ],
+          "kind": "CRITICAL_ERROR"
+        },
+        {
+          "key": [
+            "C08",
+            "FALSE_SCIENTIFIC_ACCEPTANCE"
+          ],
+          "kind": "ROW_ERROR"
+        },
+        {
+          "key": [
+            "C08",
+            "INVENTED_NUMERICAL_SCIENCE"
+          ],
+          "kind": "ROW_ERROR"
+        },
+        {
+          "key": [
+            "C08",
+            "LM_ARITHMETIC"
+          ],
+          "kind": "ROW_TAG"
+        }
+      ],
+      "split_lock": "HIDDEN_FINAL"
+    },
+    {
+      "answer_kind": "REFUSAL",
+      "answerable": false,
+      "authoring_process_id": "agent-process:codex:RES-115-CASE-AUTHORING-001C",
+      "cell": [
+        "C08",
+        "F05"
+      ],
+      "critical_errors": [
+        "FALSE_SCIENTIFIC_ACCEPTANCE",
+        "INVENTED_NUMERICAL_SCIENCE"
+      ],
+      "current_recipe_options_per_lane_cell": 1,
+      "feature_contract_digest": "sha256:ee83bf4ea54d93ce1221033534f0e1438cc547824cd1427c13414165c3e37712",
+      "generator_family": "pse-v1-synthetic-refusal-public_development",
+      "generator_id": "pse-v1-unregistered-operation-context",
+      "generator_output_contract": "non-numeric C08 context bound to a live RES-71 no-operation refusal reference",
+      "generator_version": "1.0.0",
+      "lane_id": "synthetic:pse-v1-synthetic-refusal-public_development",
+      "mandatory_colocation": {
+        "exact_13_token_shingles": "UNKNOWN; NO_NEW_COLLISION_ASSUMED_IN_TEST_MODEL",
+        "expert_author_batch": "ALL_12_REAL_C08_ARCHETYPES_SHARE_ONE_SPLIT",
+        "generator_family": "ALL_SELECTED_MEMBERS_SHARE_ONE_SPLIT",
+        "repeat_seed_blocks": "UNIQUE_PER_REPEAT; REUSE_REJECTED",
+        "split_cluster": "ALL_SELECTED_MEMBERS_SHARE_ONE_SPLIT"
+      },
+      "mandatory_relation_evidence": [
+        {
+          "existing_449_member_count": 4,
+          "existing_449_member_splits": [
+            "PUBLIC_DEVELOPMENT"
+          ],
+          "identity": "PSE-V1-SYNTHETIC-CLUSTER:PUBLIC_DEVELOPMENT",
+          "relation_kind": "ISOLATION_CLUSTER"
+        },
+        {
+          "existing_449_member_count": 4,
+          "existing_449_member_splits": [
+            "PUBLIC_DEVELOPMENT"
+          ],
+          "identity": "pse-v1-synthetic-refusal-public_development",
+          "relation_kind": "generator-family"
+        },
+        {
+          "existing_449_member_count": 0,
+          "existing_449_member_splits": [],
+          "identity": "agent-process:codex:RES-115-CASE-AUTHORING-001B",
+          "relation_kind": "expert-author-batch"
+        }
+      ],
+      "mandatory_relation_identities": [
+        [
+          "ISOLATION_CLUSTER",
+          "PSE-V1-SYNTHETIC-CLUSTER:PUBLIC_DEVELOPMENT"
+        ],
+        [
+          "generator-family",
+          "pse-v1-synthetic-refusal-public_development"
+        ],
+        [
+          "expert-author-batch",
+          "agent-process:codex:RES-115-CASE-AUTHORING-001B"
+        ]
+      ],
+      "origin": "DETERMINISTIC_SYNTHETIC",
+      "reference_case_id": "res71-bpt-generic-power-refusal",
+      "refusal_decision": "REQUIRED",
+      "repeat_authority_maximum": "UNKNOWN",
+      "repeat_ordinal_in_candidate_id": false,
+      "repeat_ordinal_in_seed_block_rule": false,
+      "row_errors": [
+        "FALSE_SCIENTIFIC_ACCEPTANCE",
+        "INVENTED_NUMERICAL_SCIENCE"
+      ],
+      "row_tags": [
+        "NONFINITE_INPUT"
+      ],
+      "seed_block_rule": "Unique authorized seed blocks are required; current helper has no repeat ordinal or finite repeat maximum. Diagnostic repeats are granted distinct candidate-derived IDs and blocks while retaining shared identities above.",
+      "seed_namespace_template": "PSE-V1/PUBLIC_DEVELOPMENT/pse-v1-unregistered-operation-context:1.0.0@{seed_block}",
+      "selection_contract_basis": "_production_adversarial_tags; _required_reference_refusal_fields; _scoring_contract; reachable_error_classes; production commitment feature adapter",
+      "selection_features": [
+        {
+          "key": [
+            "C08",
+            "F05"
+          ],
+          "kind": "CELL"
+        },
+        {
+          "key": [
+            "FALSE_SCIENTIFIC_ACCEPTANCE"
+          ],
+          "kind": "CRITICAL_ERROR"
+        },
+        {
+          "key": [
+            "INVENTED_NUMERICAL_SCIENCE"
+          ],
+          "kind": "CRITICAL_ERROR"
+        },
+        {
+          "key": [
+            "C08",
+            "FALSE_SCIENTIFIC_ACCEPTANCE"
+          ],
+          "kind": "ROW_ERROR"
+        },
+        {
+          "key": [
+            "C08",
+            "INVENTED_NUMERICAL_SCIENCE"
+          ],
+          "kind": "ROW_ERROR"
+        },
+        {
+          "key": [
+            "C08",
+            "NONFINITE_INPUT"
+          ],
+          "kind": "ROW_TAG"
+        }
+      ],
+      "split_lock": "PUBLIC_DEVELOPMENT"
+    },
+    {
+      "answer_kind": "REFUSAL",
+      "answerable": false,
+      "authoring_process_id": "agent-process:codex:RES-115-CASE-AUTHORING-001C",
+      "cell": [
+        "C08",
+        "F06"
+      ],
+      "critical_errors": [
+        "FALSE_SCIENTIFIC_ACCEPTANCE",
+        "INVENTED_NUMERICAL_SCIENCE"
+      ],
+      "current_recipe_options_per_lane_cell": 1,
+      "feature_contract_digest": "sha256:e870b181822d60eec71c1ea00ae94e7c03d9c3864f221c6c78937e270f011bf4",
+      "generator_family": "pse-v1-synthetic-refusal-public_development",
+      "generator_id": "pse-v1-unregistered-operation-context",
+      "generator_output_contract": "non-numeric C08 context bound to a live RES-71 no-operation refusal reference",
+      "generator_version": "1.0.0",
+      "lane_id": "synthetic:pse-v1-synthetic-refusal-public_development",
+      "mandatory_colocation": {
+        "exact_13_token_shingles": "UNKNOWN; NO_NEW_COLLISION_ASSUMED_IN_TEST_MODEL",
+        "expert_author_batch": "ALL_12_REAL_C08_ARCHETYPES_SHARE_ONE_SPLIT",
+        "generator_family": "ALL_SELECTED_MEMBERS_SHARE_ONE_SPLIT",
+        "repeat_seed_blocks": "UNIQUE_PER_REPEAT; REUSE_REJECTED",
+        "split_cluster": "ALL_SELECTED_MEMBERS_SHARE_ONE_SPLIT"
+      },
+      "mandatory_relation_evidence": [
+        {
+          "existing_449_member_count": 4,
+          "existing_449_member_splits": [
+            "PUBLIC_DEVELOPMENT"
+          ],
+          "identity": "PSE-V1-SYNTHETIC-CLUSTER:PUBLIC_DEVELOPMENT",
+          "relation_kind": "ISOLATION_CLUSTER"
+        },
+        {
+          "existing_449_member_count": 4,
+          "existing_449_member_splits": [
+            "PUBLIC_DEVELOPMENT"
+          ],
+          "identity": "pse-v1-synthetic-refusal-public_development",
+          "relation_kind": "generator-family"
+        },
+        {
+          "existing_449_member_count": 0,
+          "existing_449_member_splits": [],
+          "identity": "agent-process:codex:RES-115-CASE-AUTHORING-001B",
+          "relation_kind": "expert-author-batch"
+        }
+      ],
+      "mandatory_relation_identities": [
+        [
+          "ISOLATION_CLUSTER",
+          "PSE-V1-SYNTHETIC-CLUSTER:PUBLIC_DEVELOPMENT"
+        ],
+        [
+          "generator-family",
+          "pse-v1-synthetic-refusal-public_development"
+        ],
+        [
+          "expert-author-batch",
+          "agent-process:codex:RES-115-CASE-AUTHORING-001B"
+        ]
+      ],
+      "origin": "DETERMINISTIC_SYNTHETIC",
+      "reference_case_id": "res71-cmj-rfd-refusal",
+      "refusal_decision": "REQUIRED",
+      "repeat_authority_maximum": "UNKNOWN",
+      "repeat_ordinal_in_candidate_id": false,
+      "repeat_ordinal_in_seed_block_rule": false,
+      "row_errors": [
+        "FALSE_SCIENTIFIC_ACCEPTANCE",
+        "INVENTED_NUMERICAL_SCIENCE"
+      ],
+      "row_tags": [
+        "UNREGISTERED_OPERATION"
+      ],
+      "seed_block_rule": "Unique authorized seed blocks are required; current helper has no repeat ordinal or finite repeat maximum. Diagnostic repeats are granted distinct candidate-derived IDs and blocks while retaining shared identities above.",
+      "seed_namespace_template": "PSE-V1/PUBLIC_DEVELOPMENT/pse-v1-unregistered-operation-context:1.0.0@{seed_block}",
+      "selection_contract_basis": "_production_adversarial_tags; _required_reference_refusal_fields; _scoring_contract; reachable_error_classes; production commitment feature adapter",
+      "selection_features": [
+        {
+          "key": [
+            "C08",
+            "F06"
+          ],
+          "kind": "CELL"
+        },
+        {
+          "key": [
+            "FALSE_SCIENTIFIC_ACCEPTANCE"
+          ],
+          "kind": "CRITICAL_ERROR"
+        },
+        {
+          "key": [
+            "INVENTED_NUMERICAL_SCIENCE"
+          ],
+          "kind": "CRITICAL_ERROR"
+        },
+        {
+          "key": [
+            "C08",
+            "FALSE_SCIENTIFIC_ACCEPTANCE"
+          ],
+          "kind": "ROW_ERROR"
+        },
+        {
+          "key": [
+            "C08",
+            "INVENTED_NUMERICAL_SCIENCE"
+          ],
+          "kind": "ROW_ERROR"
+        },
+        {
+          "key": [
+            "C08",
+            "UNREGISTERED_OPERATION"
+          ],
+          "kind": "ROW_TAG"
+        }
+      ],
+      "split_lock": "PUBLIC_DEVELOPMENT"
+    },
+    {
+      "answer_kind": "REFUSAL",
+      "answerable": false,
+      "authoring_process_id": "agent-process:codex:RES-115-CASE-AUTHORING-001C",
+      "cell": [
+        "C08",
+        "F13"
+      ],
+      "critical_errors": [
+        "FALSE_SCIENTIFIC_ACCEPTANCE",
+        "INVENTED_NUMERICAL_SCIENCE"
+      ],
+      "current_recipe_options_per_lane_cell": 1,
+      "feature_contract_digest": "sha256:0e9bffd4164c10885b3d8c92aa5fb214e3ca2317a73d107fae04effa444ffbc8",
+      "generator_family": "pse-v1-synthetic-refusal-public_development",
+      "generator_id": "pse-v1-unregistered-operation-context",
+      "generator_output_contract": "non-numeric C08 context bound to a live RES-71 no-operation refusal reference",
+      "generator_version": "1.0.0",
+      "lane_id": "synthetic:pse-v1-synthetic-refusal-public_development",
+      "mandatory_colocation": {
+        "exact_13_token_shingles": "UNKNOWN; NO_NEW_COLLISION_ASSUMED_IN_TEST_MODEL",
+        "expert_author_batch": "ALL_12_REAL_C08_ARCHETYPES_SHARE_ONE_SPLIT",
+        "generator_family": "ALL_SELECTED_MEMBERS_SHARE_ONE_SPLIT",
+        "repeat_seed_blocks": "UNIQUE_PER_REPEAT; REUSE_REJECTED",
+        "split_cluster": "ALL_SELECTED_MEMBERS_SHARE_ONE_SPLIT"
+      },
+      "mandatory_relation_evidence": [
+        {
+          "existing_449_member_count": 4,
+          "existing_449_member_splits": [
+            "PUBLIC_DEVELOPMENT"
+          ],
+          "identity": "PSE-V1-SYNTHETIC-CLUSTER:PUBLIC_DEVELOPMENT",
+          "relation_kind": "ISOLATION_CLUSTER"
+        },
+        {
+          "existing_449_member_count": 4,
+          "existing_449_member_splits": [
+            "PUBLIC_DEVELOPMENT"
+          ],
+          "identity": "pse-v1-synthetic-refusal-public_development",
+          "relation_kind": "generator-family"
+        },
+        {
+          "existing_449_member_count": 0,
+          "existing_449_member_splits": [],
+          "identity": "agent-process:codex:RES-115-CASE-AUTHORING-001B",
+          "relation_kind": "expert-author-batch"
+        }
+      ],
+      "mandatory_relation_identities": [
+        [
+          "ISOLATION_CLUSTER",
+          "PSE-V1-SYNTHETIC-CLUSTER:PUBLIC_DEVELOPMENT"
+        ],
+        [
+          "generator-family",
+          "pse-v1-synthetic-refusal-public_development"
+        ],
+        [
+          "expert-author-batch",
+          "agent-process:codex:RES-115-CASE-AUTHORING-001B"
+        ]
+      ],
+      "origin": "DETERMINISTIC_SYNTHETIC",
+      "reference_case_id": "res71-cmj-rfd-refusal",
+      "refusal_decision": "REQUIRED",
+      "repeat_authority_maximum": "UNKNOWN",
+      "repeat_ordinal_in_candidate_id": false,
+      "repeat_ordinal_in_seed_block_rule": false,
+      "row_errors": [
+        "FALSE_SCIENTIFIC_ACCEPTANCE",
+        "INVENTED_NUMERICAL_SCIENCE"
+      ],
+      "row_tags": [
+        "WRONG_GRAVITY"
+      ],
+      "seed_block_rule": "Unique authorized seed blocks are required; current helper has no repeat ordinal or finite repeat maximum. Diagnostic repeats are granted distinct candidate-derived IDs and blocks while retaining shared identities above.",
+      "seed_namespace_template": "PSE-V1/PUBLIC_DEVELOPMENT/pse-v1-unregistered-operation-context:1.0.0@{seed_block}",
+      "selection_contract_basis": "_production_adversarial_tags; _required_reference_refusal_fields; _scoring_contract; reachable_error_classes; production commitment feature adapter",
+      "selection_features": [
+        {
+          "key": [
+            "C08",
+            "F13"
+          ],
+          "kind": "CELL"
+        },
+        {
+          "key": [
+            "FALSE_SCIENTIFIC_ACCEPTANCE"
+          ],
+          "kind": "CRITICAL_ERROR"
+        },
+        {
+          "key": [
+            "INVENTED_NUMERICAL_SCIENCE"
+          ],
+          "kind": "CRITICAL_ERROR"
+        },
+        {
+          "key": [
+            "C08",
+            "FALSE_SCIENTIFIC_ACCEPTANCE"
+          ],
+          "kind": "ROW_ERROR"
+        },
+        {
+          "key": [
+            "C08",
+            "INVENTED_NUMERICAL_SCIENCE"
+          ],
+          "kind": "ROW_ERROR"
+        },
+        {
+          "key": [
+            "C08",
+            "WRONG_GRAVITY"
+          ],
+          "kind": "ROW_TAG"
+        }
+      ],
+      "split_lock": "PUBLIC_DEVELOPMENT"
+    },
+    {
+      "answer_kind": "REFUSAL",
+      "answerable": false,
+      "authoring_process_id": "agent-process:codex:RES-115-CASE-AUTHORING-001C",
+      "cell": [
+        "C08",
+        "F14"
+      ],
+      "critical_errors": [
+        "FALSE_SCIENTIFIC_ACCEPTANCE",
+        "INVENTED_NUMERICAL_SCIENCE"
+      ],
+      "current_recipe_options_per_lane_cell": 1,
+      "feature_contract_digest": "sha256:85b9f339ca302363bdaa98cb8451fc4f3eb6952c1e67005cd25cb97021a820aa",
+      "generator_family": "pse-v1-synthetic-refusal-public_development",
+      "generator_id": "pse-v1-unregistered-operation-context",
+      "generator_output_contract": "non-numeric C08 context bound to a live RES-71 no-operation refusal reference",
+      "generator_version": "1.0.0",
+      "lane_id": "synthetic:pse-v1-synthetic-refusal-public_development",
+      "mandatory_colocation": {
+        "exact_13_token_shingles": "UNKNOWN; NO_NEW_COLLISION_ASSUMED_IN_TEST_MODEL",
+        "expert_author_batch": "ALL_12_REAL_C08_ARCHETYPES_SHARE_ONE_SPLIT",
+        "generator_family": "ALL_SELECTED_MEMBERS_SHARE_ONE_SPLIT",
+        "repeat_seed_blocks": "UNIQUE_PER_REPEAT; REUSE_REJECTED",
+        "split_cluster": "ALL_SELECTED_MEMBERS_SHARE_ONE_SPLIT"
+      },
+      "mandatory_relation_evidence": [
+        {
+          "existing_449_member_count": 4,
+          "existing_449_member_splits": [
+            "PUBLIC_DEVELOPMENT"
+          ],
+          "identity": "PSE-V1-SYNTHETIC-CLUSTER:PUBLIC_DEVELOPMENT",
+          "relation_kind": "ISOLATION_CLUSTER"
+        },
+        {
+          "existing_449_member_count": 4,
+          "existing_449_member_splits": [
+            "PUBLIC_DEVELOPMENT"
+          ],
+          "identity": "pse-v1-synthetic-refusal-public_development",
+          "relation_kind": "generator-family"
+        },
+        {
+          "existing_449_member_count": 0,
+          "existing_449_member_splits": [],
+          "identity": "agent-process:codex:RES-115-CASE-AUTHORING-001B",
+          "relation_kind": "expert-author-batch"
+        }
+      ],
+      "mandatory_relation_identities": [
+        [
+          "ISOLATION_CLUSTER",
+          "PSE-V1-SYNTHETIC-CLUSTER:PUBLIC_DEVELOPMENT"
+        ],
+        [
+          "generator-family",
+          "pse-v1-synthetic-refusal-public_development"
+        ],
+        [
+          "expert-author-batch",
+          "agent-process:codex:RES-115-CASE-AUTHORING-001B"
+        ]
+      ],
+      "origin": "DETERMINISTIC_SYNTHETIC",
+      "reference_case_id": "res71-bpt-generic-power-refusal",
+      "refusal_decision": "REQUIRED",
+      "repeat_authority_maximum": "UNKNOWN",
+      "repeat_ordinal_in_candidate_id": false,
+      "repeat_ordinal_in_seed_block_rule": false,
+      "row_errors": [
+        "FALSE_SCIENTIFIC_ACCEPTANCE",
+        "INVENTED_NUMERICAL_SCIENCE"
+      ],
+      "row_tags": [
+        "LM_ARITHMETIC"
+      ],
+      "seed_block_rule": "Unique authorized seed blocks are required; current helper has no repeat ordinal or finite repeat maximum. Diagnostic repeats are granted distinct candidate-derived IDs and blocks while retaining shared identities above.",
+      "seed_namespace_template": "PSE-V1/PUBLIC_DEVELOPMENT/pse-v1-unregistered-operation-context:1.0.0@{seed_block}",
+      "selection_contract_basis": "_production_adversarial_tags; _required_reference_refusal_fields; _scoring_contract; reachable_error_classes; production commitment feature adapter",
+      "selection_features": [
+        {
+          "key": [
+            "C08",
+            "F14"
+          ],
+          "kind": "CELL"
+        },
+        {
+          "key": [
+            "FALSE_SCIENTIFIC_ACCEPTANCE"
+          ],
+          "kind": "CRITICAL_ERROR"
+        },
+        {
+          "key": [
+            "INVENTED_NUMERICAL_SCIENCE"
+          ],
+          "kind": "CRITICAL_ERROR"
+        },
+        {
+          "key": [
+            "C08",
+            "FALSE_SCIENTIFIC_ACCEPTANCE"
+          ],
+          "kind": "ROW_ERROR"
+        },
+        {
+          "key": [
+            "C08",
+            "INVENTED_NUMERICAL_SCIENCE"
+          ],
+          "kind": "ROW_ERROR"
+        },
+        {
+          "key": [
+            "C08",
+            "LM_ARITHMETIC"
+          ],
+          "kind": "ROW_TAG"
+        }
+      ],
+      "split_lock": "PUBLIC_DEVELOPMENT"
+    }
+  ],
+  "real_c08_archetype_inventory_digest": "sha256:bcf7b2923575c7502bdc4a90e73182ccb2ab8430be891e018d249d7ed5d13698",
+  "real_c08_min_additions": 48,
+  "real_c08_repair_vector": [
+    {
+      "cell": [
+        "C08",
+        "F05"
+      ],
+      "count": 48,
+      "lane_id": "synthetic:pse-v1-synthetic-refusal-public_development",
+      "origin": "DETERMINISTIC_SYNTHETIC",
+      "selection_features": [
+        {
+          "key": [
+            "C08",
+            "F05"
+          ],
+          "kind": "CELL"
+        },
+        {
+          "key": [
+            "FALSE_SCIENTIFIC_ACCEPTANCE"
+          ],
+          "kind": "CRITICAL_ERROR"
+        },
+        {
+          "key": [
+            "INVENTED_NUMERICAL_SCIENCE"
+          ],
+          "kind": "CRITICAL_ERROR"
+        },
+        {
+          "key": [
+            "C08",
+            "FALSE_SCIENTIFIC_ACCEPTANCE"
+          ],
+          "kind": "ROW_ERROR"
+        },
+        {
+          "key": [
+            "C08",
+            "INVENTED_NUMERICAL_SCIENCE"
+          ],
+          "kind": "ROW_ERROR"
+        },
+        {
+          "key": [
+            "C08",
+            "NONFINITE_INPUT"
+          ],
+          "kind": "ROW_TAG"
+        }
+      ],
+      "split_counts": [
+        [
+          "PUBLIC_DEVELOPMENT",
+          48
+        ]
+      ],
+      "split_lock": "PUBLIC_DEVELOPMENT"
+    }
+  ],
+  "real_c08_repair_vector_digest": "sha256:f312934b6455e1ebd379471fd07e93fad8b6d53caf304c63f50bac58099c1923",
+  "real_c08_structural_status": "FEASIBLE",
+  "repeat_optimistic_relaxation_proof": {
+    "aggregate_colocation_group_count": 4,
+    "aggregate_colocation_group_digest": "sha256:faaefbf64bf44553f5fc039acfa6d4a4ca079c507f5d5cbea72cb0437b072888",
+    "all_12_shared_author_batch_coupling_retained": true,
+    "claim": "REAL_C08_FEASIBLE_SET_SUBSET_REPEAT_OPTIMISTIC_C08_MODEL",
+    "favorable_relaxations": [
+      "Repeat availability is granted up to each previously proven structural saturation bound; this is diagnostic, not repeat-count authority.",
+      "Distinct candidate-derived IDs and seed blocks are granted per hypothetical repeat; shared generator-family, split-cluster, and expert-author-batch identities remain coupled.",
+      "No new exact 13-token shingle collision is assumed.",
+      "Unknown review/approval and other non-selection qualification gates are assumed available."
+    ],
+    "previous_optimistic_c08_lower_bound": {
+      "lower_trial_digest": "sha256:709a236e80f5c33432eae3ed92dd794130d566ff825282193f3a303f1a0a78eb",
+      "minimum_additions": 48,
+      "optimistic_relaxation_proof_digest": "sha256:d727234e8a9df6294157332b0c002d7e720e74bf55eed75c464826541c1020cf",
+      "optimistic_signature_inventory_digest": "sha256:9c243c1e34be2c1779f897a9342a986fae609888189f79a6933bafe411724f4b",
+      "optimistic_witness_digest": "sha256:785b0c0c2c5f1ee7356ba757e2fd0e389f48dd27b927b0037a1b0a5f64f51040",
+      "status": "PROVEN",
+      "structural_report_receipt_digest": "sha256:c3669eb5c1823147b5a45d617b6c9270c1956a7b02cc69bfe5e230c332e9e231",
+      "upper_trial_digest": "sha256:5d25da3b2f2e3ec68153a65b3a6407d7d1f212428f097ec80eda6ce06b808b3d"
+    },
+    "previous_saturation_proof_digest": "sha256:ea09866ba64945b3fa9f30764b2d1eae533adb8ea8fcb595999355f42942907c",
+    "proof_digest": "sha256:65377202a59b317d8d30a5403cfdea6ab4a56c05bcce82a17b270f2502f704da",
+    "real_archetype_inventory_digest": "sha256:bcf7b2923575c7502bdc4a90e73182ccb2ab8430be891e018d249d7ed5d13698",
+    "real_feasible_set_subset_diagnostic_model": true,
+    "repeat_optimistic_model_subset_previous_optimistic_c08_model": true,
+    "retained_authority": "ALL FIXED ROW_TAG, ROW_ERROR, CRITICAL_ERROR, ANSWERABLE/REFUSAL, CELL, ORIGIN, SPLIT LOCK, GENERATOR-FAMILY, SPLIT-CLUSTER, AND AUTHOR-BATCH SEMANTICS",
+    "rows": [
+      {
+        "cell": [
+          "C08",
+          "F05"
+        ],
+        "exact_feature_contract_retained": true,
+        "feature_contract_digest": "sha256:ee83bf4ea54d93ce1221033534f0e1438cc547824cd1427c13414165c3e37712",
+        "features_subset_previous_maximal_c08_profile": true,
+        "lane_id": "synthetic:pse-v1-synthetic-refusal-frozen_validation",
+        "mandatory_relation_identity_count": 3,
+        "no_new_shingle_collision_assumed": true,
+        "origin_retained": "DETERMINISTIC_SYNTHETIC",
+        "prior_split_cluster_and_generator_family_contract_retained": true,
+        "saturation_upper_bound": 87,
+        "shared_author_batch_identity_retained": true,
+        "split_lock_retained": "FROZEN_VALIDATION",
+        "valid_subset_row": true
+      },
+      {
+        "cell": [
+          "C08",
+          "F06"
+        ],
+        "exact_feature_contract_retained": true,
+        "feature_contract_digest": "sha256:e870b181822d60eec71c1ea00ae94e7c03d9c3864f221c6c78937e270f011bf4",
+        "features_subset_previous_maximal_c08_profile": true,
+        "lane_id": "synthetic:pse-v1-synthetic-refusal-frozen_validation",
+        "mandatory_relation_identity_count": 3,
+        "no_new_shingle_collision_assumed": true,
+        "origin_retained": "DETERMINISTIC_SYNTHETIC",
+        "prior_split_cluster_and_generator_family_contract_retained": true,
+        "saturation_upper_bound": 87,
+        "shared_author_batch_identity_retained": true,
+        "split_lock_retained": "FROZEN_VALIDATION",
+        "valid_subset_row": true
+      },
+      {
+        "cell": [
+          "C08",
+          "F13"
+        ],
+        "exact_feature_contract_retained": true,
+        "feature_contract_digest": "sha256:0e9bffd4164c10885b3d8c92aa5fb214e3ca2317a73d107fae04effa444ffbc8",
+        "features_subset_previous_maximal_c08_profile": true,
+        "lane_id": "synthetic:pse-v1-synthetic-refusal-frozen_validation",
+        "mandatory_relation_identity_count": 3,
+        "no_new_shingle_collision_assumed": true,
+        "origin_retained": "DETERMINISTIC_SYNTHETIC",
+        "prior_split_cluster_and_generator_family_contract_retained": true,
+        "saturation_upper_bound": 87,
+        "shared_author_batch_identity_retained": true,
+        "split_lock_retained": "FROZEN_VALIDATION",
+        "valid_subset_row": true
+      },
+      {
+        "cell": [
+          "C08",
+          "F14"
+        ],
+        "exact_feature_contract_retained": true,
+        "feature_contract_digest": "sha256:85b9f339ca302363bdaa98cb8451fc4f3eb6952c1e67005cd25cb97021a820aa",
+        "features_subset_previous_maximal_c08_profile": true,
+        "lane_id": "synthetic:pse-v1-synthetic-refusal-frozen_validation",
+        "mandatory_relation_identity_count": 3,
+        "no_new_shingle_collision_assumed": true,
+        "origin_retained": "DETERMINISTIC_SYNTHETIC",
+        "prior_split_cluster_and_generator_family_contract_retained": true,
+        "saturation_upper_bound": 87,
+        "shared_author_batch_identity_retained": true,
+        "split_lock_retained": "FROZEN_VALIDATION",
+        "valid_subset_row": true
+      },
+      {
+        "cell": [
+          "C08",
+          "F05"
+        ],
+        "exact_feature_contract_retained": true,
+        "feature_contract_digest": "sha256:ee83bf4ea54d93ce1221033534f0e1438cc547824cd1427c13414165c3e37712",
+        "features_subset_previous_maximal_c08_profile": true,
+        "lane_id": "synthetic:pse-v1-synthetic-refusal-hidden_final",
+        "mandatory_relation_identity_count": 3,
+        "no_new_shingle_collision_assumed": true,
+        "origin_retained": "DETERMINISTIC_SYNTHETIC",
+        "prior_split_cluster_and_generator_family_contract_retained": true,
+        "saturation_upper_bound": 87,
+        "shared_author_batch_identity_retained": true,
+        "split_lock_retained": "HIDDEN_FINAL",
+        "valid_subset_row": true
+      },
+      {
+        "cell": [
+          "C08",
+          "F06"
+        ],
+        "exact_feature_contract_retained": true,
+        "feature_contract_digest": "sha256:e870b181822d60eec71c1ea00ae94e7c03d9c3864f221c6c78937e270f011bf4",
+        "features_subset_previous_maximal_c08_profile": true,
+        "lane_id": "synthetic:pse-v1-synthetic-refusal-hidden_final",
+        "mandatory_relation_identity_count": 3,
+        "no_new_shingle_collision_assumed": true,
+        "origin_retained": "DETERMINISTIC_SYNTHETIC",
+        "prior_split_cluster_and_generator_family_contract_retained": true,
+        "saturation_upper_bound": 87,
+        "shared_author_batch_identity_retained": true,
+        "split_lock_retained": "HIDDEN_FINAL",
+        "valid_subset_row": true
+      },
+      {
+        "cell": [
+          "C08",
+          "F13"
+        ],
+        "exact_feature_contract_retained": true,
+        "feature_contract_digest": "sha256:0e9bffd4164c10885b3d8c92aa5fb214e3ca2317a73d107fae04effa444ffbc8",
+        "features_subset_previous_maximal_c08_profile": true,
+        "lane_id": "synthetic:pse-v1-synthetic-refusal-hidden_final",
+        "mandatory_relation_identity_count": 3,
+        "no_new_shingle_collision_assumed": true,
+        "origin_retained": "DETERMINISTIC_SYNTHETIC",
+        "prior_split_cluster_and_generator_family_contract_retained": true,
+        "saturation_upper_bound": 87,
+        "shared_author_batch_identity_retained": true,
+        "split_lock_retained": "HIDDEN_FINAL",
+        "valid_subset_row": true
+      },
+      {
+        "cell": [
+          "C08",
+          "F14"
+        ],
+        "exact_feature_contract_retained": true,
+        "feature_contract_digest": "sha256:85b9f339ca302363bdaa98cb8451fc4f3eb6952c1e67005cd25cb97021a820aa",
+        "features_subset_previous_maximal_c08_profile": true,
+        "lane_id": "synthetic:pse-v1-synthetic-refusal-hidden_final",
+        "mandatory_relation_identity_count": 3,
+        "no_new_shingle_collision_assumed": true,
+        "origin_retained": "DETERMINISTIC_SYNTHETIC",
+        "prior_split_cluster_and_generator_family_contract_retained": true,
+        "saturation_upper_bound": 87,
+        "shared_author_batch_identity_retained": true,
+        "split_lock_retained": "HIDDEN_FINAL",
+        "valid_subset_row": true
+      },
+      {
+        "cell": [
+          "C08",
+          "F05"
+        ],
+        "exact_feature_contract_retained": true,
+        "feature_contract_digest": "sha256:ee83bf4ea54d93ce1221033534f0e1438cc547824cd1427c13414165c3e37712",
+        "features_subset_previous_maximal_c08_profile": true,
+        "lane_id": "synthetic:pse-v1-synthetic-refusal-public_development",
+        "mandatory_relation_identity_count": 3,
+        "no_new_shingle_collision_assumed": true,
+        "origin_retained": "DETERMINISTIC_SYNTHETIC",
+        "prior_split_cluster_and_generator_family_contract_retained": true,
+        "saturation_upper_bound": 260,
+        "shared_author_batch_identity_retained": true,
+        "split_lock_retained": "PUBLIC_DEVELOPMENT",
+        "valid_subset_row": true
+      },
+      {
+        "cell": [
+          "C08",
+          "F06"
+        ],
+        "exact_feature_contract_retained": true,
+        "feature_contract_digest": "sha256:e870b181822d60eec71c1ea00ae94e7c03d9c3864f221c6c78937e270f011bf4",
+        "features_subset_previous_maximal_c08_profile": true,
+        "lane_id": "synthetic:pse-v1-synthetic-refusal-public_development",
+        "mandatory_relation_identity_count": 3,
+        "no_new_shingle_collision_assumed": true,
+        "origin_retained": "DETERMINISTIC_SYNTHETIC",
+        "prior_split_cluster_and_generator_family_contract_retained": true,
+        "saturation_upper_bound": 260,
+        "shared_author_batch_identity_retained": true,
+        "split_lock_retained": "PUBLIC_DEVELOPMENT",
+        "valid_subset_row": true
+      },
+      {
+        "cell": [
+          "C08",
+          "F13"
+        ],
+        "exact_feature_contract_retained": true,
+        "feature_contract_digest": "sha256:0e9bffd4164c10885b3d8c92aa5fb214e3ca2317a73d107fae04effa444ffbc8",
+        "features_subset_previous_maximal_c08_profile": true,
+        "lane_id": "synthetic:pse-v1-synthetic-refusal-public_development",
+        "mandatory_relation_identity_count": 3,
+        "no_new_shingle_collision_assumed": true,
+        "origin_retained": "DETERMINISTIC_SYNTHETIC",
+        "prior_split_cluster_and_generator_family_contract_retained": true,
+        "saturation_upper_bound": 260,
+        "shared_author_batch_identity_retained": true,
+        "split_lock_retained": "PUBLIC_DEVELOPMENT",
+        "valid_subset_row": true
+      },
+      {
+        "cell": [
+          "C08",
+          "F14"
+        ],
+        "exact_feature_contract_retained": true,
+        "feature_contract_digest": "sha256:85b9f339ca302363bdaa98cb8451fc4f3eb6952c1e67005cd25cb97021a820aa",
+        "features_subset_previous_maximal_c08_profile": true,
+        "lane_id": "synthetic:pse-v1-synthetic-refusal-public_development",
+        "mandatory_relation_identity_count": 3,
+        "no_new_shingle_collision_assumed": true,
+        "origin_retained": "DETERMINISTIC_SYNTHETIC",
+        "prior_split_cluster_and_generator_family_contract_retained": true,
+        "saturation_upper_bound": 260,
+        "shared_author_batch_identity_retained": true,
+        "split_lock_retained": "PUBLIC_DEVELOPMENT",
+        "valid_subset_row": true
+      }
+    ],
+    "scope": "12 CURRENT REAL C08 ARCHETYPES; AGGREGATE COUNTS THROUGH STRUCTURAL SATURATION",
+    "seed_identity_behavior": "Seed blocks and split-qualified namespaces remain unique per repeat; they do not erase shared family, author-batch, or cluster identities.",
+    "status": "PASS"
+  },
+  "repeat_optimistic_relaxation_proof_digest": "sha256:65377202a59b317d8d30a5403cfdea6ab4a56c05bcce82a17b270f2502f704da",
+  "repeat_optimistic_relaxation_proof_status": "PASS",
+  "report_digest": "sha256:8906032d404a81d56f576ef0d91523c5752d5cc78f266581f2555f6fe8178560",
+  "required_repeat_counts_per_lane_cell": [
+    {
+      "cell": [
+        "C08",
+        "F05"
+      ],
+      "lane_id": "synthetic:pse-v1-synthetic-refusal-frozen_validation",
+      "required_repeat_count": 0
+    },
+    {
+      "cell": [
+        "C08",
+        "F06"
+      ],
+      "lane_id": "synthetic:pse-v1-synthetic-refusal-frozen_validation",
+      "required_repeat_count": 0
+    },
+    {
+      "cell": [
+        "C08",
+        "F13"
+      ],
+      "lane_id": "synthetic:pse-v1-synthetic-refusal-frozen_validation",
+      "required_repeat_count": 0
+    },
+    {
+      "cell": [
+        "C08",
+        "F14"
+      ],
+      "lane_id": "synthetic:pse-v1-synthetic-refusal-frozen_validation",
+      "required_repeat_count": 0
+    },
+    {
+      "cell": [
+        "C08",
+        "F05"
+      ],
+      "lane_id": "synthetic:pse-v1-synthetic-refusal-hidden_final",
+      "required_repeat_count": 0
+    },
+    {
+      "cell": [
+        "C08",
+        "F06"
+      ],
+      "lane_id": "synthetic:pse-v1-synthetic-refusal-hidden_final",
+      "required_repeat_count": 0
+    },
+    {
+      "cell": [
+        "C08",
+        "F13"
+      ],
+      "lane_id": "synthetic:pse-v1-synthetic-refusal-hidden_final",
+      "required_repeat_count": 0
+    },
+    {
+      "cell": [
+        "C08",
+        "F14"
+      ],
+      "lane_id": "synthetic:pse-v1-synthetic-refusal-hidden_final",
+      "required_repeat_count": 0
+    },
+    {
+      "cell": [
+        "C08",
+        "F05"
+      ],
+      "lane_id": "synthetic:pse-v1-synthetic-refusal-public_development",
+      "required_repeat_count": 48
+    },
+    {
+      "cell": [
+        "C08",
+        "F06"
+      ],
+      "lane_id": "synthetic:pse-v1-synthetic-refusal-public_development",
+      "required_repeat_count": 0
+    },
+    {
+      "cell": [
+        "C08",
+        "F13"
+      ],
+      "lane_id": "synthetic:pse-v1-synthetic-refusal-public_development",
+      "required_repeat_count": 0
+    },
+    {
+      "cell": [
+        "C08",
+        "F14"
+      ],
+      "lane_id": "synthetic:pse-v1-synthetic-refusal-public_development",
+      "required_repeat_count": 0
+    }
+  ],
+  "saturation": {
+    "authority_repeat_maximum": "UNKNOWN",
+    "basis_digest": "sha256:ea09866ba64945b3fa9f30764b2d1eae533adb8ea8fcb595999355f42942907c",
+    "joint_upper_bound": 434,
+    "per_archetype_bounds": [
+      {
+        "cell": [
+          "C08",
+          "F13"
+        ],
+        "lane_id": "synthetic:pse-v1-synthetic-refusal-frozen_validation",
+        "limits": [
+          [
+            "FINAL_COUNT",
+            434
+          ],
+          [
+            "ORIGIN_MAXIMUM:DETERMINISTIC_SYNTHETIC",
+            434
+          ],
+          [
+            "SPLIT_COUNT:FROZEN_VALIDATION",
+            87
+          ]
+        ],
+        "split": "FROZEN_VALIDATION",
+        "upper_bound": 87
+      },
+      {
+        "cell": [
+          "C08",
+          "F06"
+        ],
+        "lane_id": "synthetic:pse-v1-synthetic-refusal-hidden_final",
+        "limits": [
+          [
+            "FINAL_COUNT",
+            434
+          ],
+          [
+            "ORIGIN_MAXIMUM:DETERMINISTIC_SYNTHETIC",
+            434
+          ],
+          [
+            "SPLIT_COUNT:HIDDEN_FINAL",
+            87
+          ]
+        ],
+        "split": "HIDDEN_FINAL",
+        "upper_bound": 87
+      },
+      {
+        "cell": [
+          "C08",
+          "F14"
+        ],
+        "lane_id": "synthetic:pse-v1-synthetic-refusal-hidden_final",
+        "limits": [
+          [
+            "FINAL_COUNT",
+            434
+          ],
+          [
+            "ORIGIN_MAXIMUM:DETERMINISTIC_SYNTHETIC",
+            434
+          ],
+          [
+            "SPLIT_COUNT:HIDDEN_FINAL",
+            87
+          ]
+        ],
+        "split": "HIDDEN_FINAL",
+        "upper_bound": 87
+      },
+      {
+        "cell": [
+          "C08",
+          "F14"
+        ],
+        "lane_id": "synthetic:pse-v1-synthetic-refusal-public_development",
+        "limits": [
+          [
+            "FINAL_COUNT",
+            434
+          ],
+          [
+            "ORIGIN_MAXIMUM:DETERMINISTIC_SYNTHETIC",
+            434
+          ],
+          [
+            "SPLIT_COUNT:PUBLIC_DEVELOPMENT",
+            260
+          ]
+        ],
+        "split": "PUBLIC_DEVELOPMENT",
+        "upper_bound": 260
+      },
+      {
+        "cell": [
+          "C08",
+          "F05"
+        ],
+        "lane_id": "synthetic:pse-v1-synthetic-refusal-public_development",
+        "limits": [
+          [
+            "FINAL_COUNT",
+            434
+          ],
+          [
+            "ORIGIN_MAXIMUM:DETERMINISTIC_SYNTHETIC",
+            434
+          ],
+          [
+            "SPLIT_COUNT:PUBLIC_DEVELOPMENT",
+            260
+          ]
+        ],
+        "split": "PUBLIC_DEVELOPMENT",
+        "upper_bound": 260
+      },
+      {
+        "cell": [
+          "C08",
+          "F13"
+        ],
+        "lane_id": "synthetic:pse-v1-synthetic-refusal-hidden_final",
+        "limits": [
+          [
+            "FINAL_COUNT",
+            434
+          ],
+          [
+            "ORIGIN_MAXIMUM:DETERMINISTIC_SYNTHETIC",
+            434
+          ],
+          [
+            "SPLIT_COUNT:HIDDEN_FINAL",
+            87
+          ]
+        ],
+        "split": "HIDDEN_FINAL",
+        "upper_bound": 87
+      },
+      {
+        "cell": [
+          "C08",
+          "F06"
+        ],
+        "lane_id": "synthetic:pse-v1-synthetic-refusal-public_development",
+        "limits": [
+          [
+            "FINAL_COUNT",
+            434
+          ],
+          [
+            "ORIGIN_MAXIMUM:DETERMINISTIC_SYNTHETIC",
+            434
+          ],
+          [
+            "SPLIT_COUNT:PUBLIC_DEVELOPMENT",
+            260
+          ]
+        ],
+        "split": "PUBLIC_DEVELOPMENT",
+        "upper_bound": 260
+      },
+      {
+        "cell": [
+          "C08",
+          "F06"
+        ],
+        "lane_id": "synthetic:pse-v1-synthetic-refusal-frozen_validation",
+        "limits": [
+          [
+            "FINAL_COUNT",
+            434
+          ],
+          [
+            "ORIGIN_MAXIMUM:DETERMINISTIC_SYNTHETIC",
+            434
+          ],
+          [
+            "SPLIT_COUNT:FROZEN_VALIDATION",
+            87
+          ]
+        ],
+        "split": "FROZEN_VALIDATION",
+        "upper_bound": 87
+      },
+      {
+        "cell": [
+          "C08",
+          "F05"
+        ],
+        "lane_id": "synthetic:pse-v1-synthetic-refusal-frozen_validation",
+        "limits": [
+          [
+            "FINAL_COUNT",
+            434
+          ],
+          [
+            "ORIGIN_MAXIMUM:DETERMINISTIC_SYNTHETIC",
+            434
+          ],
+          [
+            "SPLIT_COUNT:FROZEN_VALIDATION",
+            87
+          ]
+        ],
+        "split": "FROZEN_VALIDATION",
+        "upper_bound": 87
+      },
+      {
+        "cell": [
+          "C08",
+          "F05"
+        ],
+        "lane_id": "synthetic:pse-v1-synthetic-refusal-hidden_final",
+        "limits": [
+          [
+            "FINAL_COUNT",
+            434
+          ],
+          [
+            "ORIGIN_MAXIMUM:DETERMINISTIC_SYNTHETIC",
+            434
+          ],
+          [
+            "SPLIT_COUNT:HIDDEN_FINAL",
+            87
+          ]
+        ],
+        "split": "HIDDEN_FINAL",
+        "upper_bound": 87
+      },
+      {
+        "cell": [
+          "C08",
+          "F14"
+        ],
+        "lane_id": "synthetic:pse-v1-synthetic-refusal-frozen_validation",
+        "limits": [
+          [
+            "FINAL_COUNT",
+            434
+          ],
+          [
+            "ORIGIN_MAXIMUM:DETERMINISTIC_SYNTHETIC",
+            434
+          ],
+          [
+            "SPLIT_COUNT:FROZEN_VALIDATION",
+            87
+          ]
+        ],
+        "split": "FROZEN_VALIDATION",
+        "upper_bound": 87
+      },
+      {
+        "cell": [
+          "C08",
+          "F13"
+        ],
+        "lane_id": "synthetic:pse-v1-synthetic-refusal-public_development",
+        "limits": [
+          [
+            "FINAL_COUNT",
+            434
+          ],
+          [
+            "ORIGIN_MAXIMUM:DETERMINISTIC_SYNTHETIC",
+            434
+          ],
+          [
+            "SPLIT_COUNT:PUBLIC_DEVELOPMENT",
+            260
+          ]
+        ],
+        "split": "PUBLIC_DEVELOPMENT",
+        "upper_bound": 260
+      }
+    ]
+  },
+  "schema_version": "RES407-REAL-C08-STRUCTURAL-SUFFICIENCY@1.0.0",
+  "seeds_generated": 0,
+  "solver_config": {
+    "canonical_chunk_size": 30,
+    "cp_model_presolve": true,
+    "random_seed": 369,
+    "randomize_search": false,
+    "timeout_s": 300.0,
+    "workers": 8
+  },
+  "solver_version": "9.15.6755",
+  "source_code_evidence": [
+    {
+      "path": "scripts/res407_c08_generator_qualification.py",
+      "sha256": "sha256:3076710482358c0aa36dab8cdebcf2c082d93f02628249313d5f47feeed1e992"
+    },
+    {
+      "path": "scripts/res407_governed_backfill.py",
+      "sha256": "sha256:efc01a861cac5dd3e1a68ca1477114e5d057b326200db5236139a8ad7a1c5fc3"
+    },
+    {
+      "path": "scripts/res407_real_c08_sufficiency.py",
+      "sha256": "sha256:6be7e735c9ade30a145371de453d78cda2876511316f3eb2652c39b362056778"
+    },
+    {
+      "path": "src/dynamislm/benchmark/authoring.py",
+      "sha256": "sha256:ecf7a560562ca158b9750e405ba83b3d637352a9f31f5991834c9e911a934ae9"
+    },
+    {
+      "path": "src/dynamislm/benchmark/coverage.py",
+      "sha256": "sha256:c5d846ea05cb69bc7ef206d454c9ac5c4fb72e7cde9758913badc37db7b9813d"
+    },
+    {
+      "path": "src/dynamislm/benchmark/production.py",
+      "sha256": "sha256:a163882d695b5a783f542827bc71f125554b3facb962b8c7dd7ed4665d8225a9"
+    },
+    {
+      "path": "src/dynamislm/benchmark/production_authoring.py",
+      "sha256": "sha256:d7a1c98c60bd0947f3dc10004c339de545958f6271ff63b7dc53135db86f455b"
+    },
+    {
+      "path": "src/dynamislm/benchmark/repair_geometry.py",
+      "sha256": "sha256:2ec356b01d9ac4e57821b63a796bad77fdd200432628017c6f3ad3a008898be9"
+    },
+    {
+      "path": "src/dynamislm/benchmark/scoring_paths.py",
+      "sha256": "sha256:e19fbc0830d66305888f70187a1df7ca5f4235b5b92463a707d0e1285ed29c26"
+    },
+    {
+      "path": "src/dynamislm/benchmark/selection_constraints.py",
+      "sha256": "sha256:6ee71bd97d27f21e9558cd0a30687a6d081b7e93a57c9df78446141b540020de"
+    },
+    {
+      "path": "src/dynamislm/benchmark/selection_solver.py",
+      "sha256": "sha256:4b6cffa8c5ad8ec9e08410bf12cbef71e2ce0a70b04948940b8719bd7b6040aa"
+    },
+    {
+      "path": "src/dynamislm/qualification/res115_authoring.py",
+      "sha256": "sha256:615176ea560c8404826ec532d16e44444690fc0bb0e49dac24cb08ae4bd2ca58"
+    }
+  ],
+  "source_code_evidence_digest": "sha256:d4e2e79a6e8e09e11923a209a6bb2fe0710b27929bb5f85f3565d098d1182b7c",
+  "structural_comparison_receipt_digest": "sha256:c3669eb5c1823147b5a45d617b6c9270c1956a7b02cc69bfe5e230c332e9e231",
+  "sufficiency_model": {
+    "aggregate_split_recourse_variables": 36,
+    "archetype_count_variables": 12,
+    "candidate_replica_variables": 0,
+    "constraint_count": 2520,
+    "decision_only_no_cardinality_objective": true,
+    "model_digest": "sha256:7882112ab900e4f4902df4b56ccdf98c4bbfc30c09bc484d72f5f0c23214a350",
+    "question": "ANY feasible augmentation within repeat-optimistic saturation?",
+    "recourse": "EXACT_EXISTING_449_ASSIGNMENT_PLUS_AGGREGATE_SPLIT_COUNTS",
+    "solver": {
+      "best_objective_bound": null,
+      "branches": 34385,
+      "conflicts": 161,
+      "decision_model_digest": "sha256:7882112ab900e4f4902df4b56ccdf98c4bbfc30c09bc484d72f5f0c23214a350",
+      "deterministic_time": 2.192605102582863,
+      "geometry_digest": "sha256:7f7734aafa3bfac11af5714d6873df260a0dac7854c4c2805e7c5a9f19bc5e68",
+      "incumbent_addition_count": 94,
+      "lower_bound_source_trial_digest": null,
+      "maximum_additions": 434,
+      "minimum_additions": 0,
+      "model_constraints": 2520,
+      "model_variables": 1807,
+      "signature_inventory_digest": "sha256:e0918f3145655ee091cd1a17622eaed31f97c503b17678a60a4b0c68ec959df8",
+      "solver_config": {
+        "canonical_chunk_size": 30,
+        "cp_model_presolve": true,
+        "random_seed": 369,
+        "randomize_search": false,
+        "timeout_s": 300.0,
+        "workers": 8
+      },
+      "solver_profile_version": "RES407-STRUCTURAL-REPAIR-MASTER@1.0.0",
+      "solver_status": "OPTIMAL",
+      "solver_version": "9.15.6755",
+      "status": "FEASIBLE",
+      "trial_digest": "sha256:a9fd275639e085f404ef490a029534724fef74dc7feec1548e394b9288533ba9",
+      "wall_time_seconds": 0.754555732
+    },
+    "status": "FEASIBLE",
+    "variable_count": 1807
+  }
+}
