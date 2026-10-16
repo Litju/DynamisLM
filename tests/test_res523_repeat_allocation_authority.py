@@ -1,0 +1,233 @@
+from __future__ import annotations
+
+import json
+import re
+import subprocess
+import sys
+from dataclasses import FrozenInstanceError, fields, replace
+from pathlib import Path
+from typing import Any, cast
+
+import pytest
+from scripts import res523_repeat_allocation_authority as authority
+
+from dynamislm.qualification.repeat_allocation import (
+    RepeatAllocationPlan,
+    RepeatAllocationProtocol,
+    RepeatApprovalStatus,
+    RepeatOrdinalFailureError,
+    derive_planned_seed_block_identity,
+    derive_repeat_candidate_id,
+    fail_closed_on_ordinal,
+    repeat_collision_policy,
+)
+from dynamislm.serialization import canonical_hash
+
+
+def _report() -> dict[str, Any]:
+    return cast(dict[str, Any], json.loads(authority.REPORT_PATH.read_text(encoding="utf-8")))
+
+
+def _typed_protocol(report: dict[str, Any]) -> RepeatAllocationProtocol:
+    record = dict(report["repeat_protocol"])
+    record["approval_status"] = RepeatApprovalStatus(record["approval_status"])
+    return RepeatAllocationProtocol(**record)
+
+
+def _typed_plan(report: dict[str, Any]) -> RepeatAllocationPlan:
+    record = dict(report["allocation_plan"])
+    record["authorized_ordinals"] = tuple(record["authorized_ordinals"])
+    record["owner_approval_status"] = RepeatApprovalStatus(record["owner_approval_status"])
+    return RepeatAllocationPlan(**record)
+
+
+def test_protocol_is_generic_and_defaults_to_pending_approval() -> None:
+    report = _report()
+    source = dict(report["repeat_protocol"])
+    expected_digest = source.pop("authority_digest")
+    source.pop("approval_required")
+    source.pop("approval_status")
+
+    protocol = RepeatAllocationProtocol(**source)
+
+    assert protocol.approval_required is True
+    assert protocol.approval_status is RepeatApprovalStatus.PENDING
+    assert protocol.authority_digest == expected_digest
+    assert "requested_count" not in {item.name for item in fields(RepeatAllocationProtocol)}
+    assert "authorized_ordinals" not in {item.name for item in fields(RepeatAllocationProtocol)}
+    with pytest.raises(ValueError, match="authority digest does not match"):
+        replace(protocol, generator_version="2.0.0")
+
+
+def test_plan_binds_exact_res407_structural_proof_and_ordinal_inventory() -> None:
+    report = _report()
+    plan = _typed_plan(report)
+
+    assert plan.status == "PROPOSED"
+    assert plan.lane_id == authority.LANE_ID
+    assert (plan.capability, plan.family, plan.locked_split) == ("C08", "F05", "PUBLIC_DEVELOPMENT")
+    assert plan.requested_count == 48
+    assert plan.authorized_ordinals == tuple(range(48))
+    assert plan.structural_status == "FEASIBLE"
+    assert plan.structural_min_additions == 48
+    assert plan.cardinality_optimality == "PROVEN"
+    assert (plan.k_minus_1, plan.k_minus_1_status) == (47, "INFEASIBLE")
+    assert (plan.k, plan.k_status) == (48, "FEASIBLE")
+    assert report["allocation_plan_digest"] == plan.allocation_plan_digest
+    assert canonical_hash(plan.plan_payload()) == plan.allocation_plan_digest
+    with pytest.raises(FrozenInstanceError):
+        plan.status = "FROZEN"  # type: ignore[misc]
+    with pytest.raises(ValueError, match="digest does not match"):
+        replace(plan, family="F06")
+
+
+def test_ordinal_derivations_are_unique_order_independent_and_repeatable_across_processes() -> None:
+    report = authority.build_report()
+    protocol = _typed_protocol(report)
+    plan = _typed_plan(report)
+
+    def derive(ordinals: tuple[int, ...]) -> tuple[dict[int, str], dict[int, str]]:
+        seeds: dict[int, str] = {}
+        candidates: dict[int, str] = {}
+        for ordinal in ordinals:
+            seeds[ordinal] = derive_planned_seed_block_identity(
+                protocol,
+                plan.allocation_authority_digest,
+                lane_id=plan.lane_id,
+                capability=plan.capability,
+                family=plan.family,
+                locked_split=plan.locked_split,
+                ordinal=ordinal,
+            )
+            candidates[ordinal] = derive_repeat_candidate_id(
+                protocol,
+                plan,
+                seed_block_identity=seeds[ordinal],
+                ordinal=ordinal,
+            )
+        return seeds, candidates
+
+    forward = derive(plan.authorized_ordinals)
+    reverse = derive(tuple(reversed(plan.authorized_ordinals)))
+    assert forward == reverse
+    assert len(set(forward[0].values())) == 48
+    assert len(set(forward[1].values())) == 48
+    assert (
+        canonical_hash(tuple(forward[0][i] for i in range(48)))
+        == report["seed_block_identity_inventory_digest"]
+    )
+    assert (
+        canonical_hash(tuple(forward[1][i] for i in range(48)))
+        == report["candidate_id_inventory_digest"]
+    )
+    with pytest.raises(ValueError, match="scope differs"):
+        derive_planned_seed_block_identity(
+            protocol,
+            plan.allocation_authority_digest,
+            lane_id="wrong-lane",
+            capability=plan.capability,
+            family=plan.family,
+            locked_split=plan.locked_split,
+            ordinal=0,
+        )
+    with pytest.raises(ValueError, match="scope differs"):
+        derive_repeat_candidate_id(
+            protocol,
+            plan,
+            seed_block_identity=forward[0][0],
+            ordinal=48,
+        )
+
+    process = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "from scripts.res523_repeat_allocation_authority import build_report; "
+            "print(build_report()['report_digest'])",
+        ],
+        cwd=Path(__file__).resolve().parents[1],
+        capture_output=True,
+        check=True,
+        text=True,
+    )
+    assert process.stdout.strip() == report["report_digest"]
+
+
+def test_candidate_namespace_does_not_collide_with_historical_ids() -> None:
+    report = authority.build_report()
+    protocol = _typed_protocol(report)
+    plan = _typed_plan(report)
+    candidate_ids = tuple(
+        derive_repeat_candidate_id(
+            protocol,
+            plan,
+            seed_block_identity=derive_planned_seed_block_identity(
+                protocol,
+                plan.allocation_authority_digest,
+                lane_id=plan.lane_id,
+                capability=plan.capability,
+                family=plan.family,
+                locked_split=plan.locked_split,
+                ordinal=ordinal,
+            ),
+            ordinal=ordinal,
+        )
+        for ordinal in plan.authorized_ordinals
+    )
+    historical = set(authority._historical_candidate_ids())
+    historical.add(f"{authority.HISTORICAL_CANDIDATE_ID_PREFIX}C08:F05:PUBLIC_DEVELOPMENT")
+
+    assert all(item.startswith(authority.NEW_CANDIDATE_ID_PREFIX) for item in candidate_ids)
+    assert all(
+        not item.startswith(authority.HISTORICAL_CANDIDATE_ID_PREFIX) for item in candidate_ids
+    )
+    assert not set(candidate_ids).intersection(historical)
+    assert report["historical_namespace_collisions"] == 0
+    assert report["historical_namespace_check"]["namespace_prefixes_disjoint"] is True
+
+
+def test_failed_ordinal_stops_without_substitution() -> None:
+    plan = _typed_plan(_report())
+    with pytest.raises(RepeatOrdinalFailureError, match="ordinal 17 failed") as error:
+        fail_closed_on_ordinal(17, "exact-shingle conflict")
+
+    assert "do not substitute an ordinal" in str(error.value)
+    assert "new versioned allocation decision" in str(error.value)
+    assert plan.authorized_ordinals == tuple(range(48))
+    assert 48 not in plan.authorized_ordinals
+
+
+def test_collision_policy_fails_closed_for_every_materialization_conflict() -> None:
+    policy = repeat_collision_policy()
+    checks = cast(dict[str, str], policy["checks"])
+
+    assert set(checks.values()) == {"STOP"}
+    assert policy["failure_action"] == "STOP_AND_INVALIDATE_THE_WHOLE_MATERIALIZATION_ATTEMPT"
+    assert cast(str, policy["ordinal_replacement"]).startswith("FORBIDDEN;")
+    assert canonical_hash(policy) == _report()["collision_policy_digest"]
+
+
+def test_approval_stays_pending_and_no_candidate_or_seed_is_materialized() -> None:
+    report = _report()
+
+    assert report["repeat_protocol"]["approval_status"] == "PENDING"
+    assert report["allocation_plan"]["owner_approval_status"] == "PENDING"
+    assert report["owner_approval_required"] is True
+    assert report["owner_approval_status"] == "PENDING"
+    assert report["candidate_materialization_invoked"] is False
+    assert report["concrete_candidates_generated"] == 0
+    assert report["seeds_materialized"] == 0
+    assert report["ready_for_materialization"] is False
+    assert "candidate_ids" not in report and "seed_blocks" not in report
+    serialized = json.dumps(report, sort_keys=True)
+    assert "pse-repeat-block-" not in serialized
+    assert not re.search(r"PSE-V1-REPEAT-CANDIDATE:[0-9a-f]{64}", serialized)
+
+
+def test_persisted_report_is_digest_bound_and_matches_the_deterministic_builder() -> None:
+    report = _report()
+
+    assert report == authority.build_report()
+    assert report["report_digest"] == canonical_hash(
+        {key: value for key, value in report.items() if key != "report_digest"}
+    )

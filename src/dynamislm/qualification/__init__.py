@@ -36,6 +36,11 @@ from dynamislm.qualification.references import (
     reference_case_manifest,
     validate_reference_cases,
 )
+from dynamislm.qualification.repeat_allocation import (
+    RepeatAllocationPlan,
+    RepeatAllocationProtocol,
+    RepeatApprovalStatus,
+)
 
 __all__ = [
     "RES71_GATE_RECEIPT_PATH",
@@ -51,6 +56,9 @@ __all__ = [
     "ReferenceCaseStatus",
     "ReferenceValue",
     "RegisteredOperationInventoryEntry",
+    "RepeatAllocationPlan",
+    "RepeatAllocationProtocol",
+    "RepeatApprovalStatus",
     "UnresolvedComputation",
     "build_coverage_matrix",
     "build_gate_runtime_evidence",
