@@ -12,20 +12,29 @@ _REPOSITORY = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(_REPOSITORY), str(_REPOSITORY / "src")]
 
 from dynamislm.qualification.repeat_allocation import (  # noqa: E402
+    RepeatAllocationApprovalReceipt,
     RepeatAllocationPlan,
     RepeatAllocationProtocol,
     RepeatApprovalStatus,
     derive_planned_seed_block_identity,
     derive_repeat_candidate_id,
     repeat_collision_policy,
+    validate_repeat_allocation_approval,
 )
 from dynamislm.serialization import canonical_hash  # noqa: E402
 
 ENTRY_HEAD = "8b868aa3d2a6c2f661b2a41c0bc3b8be616e422e"
+APPROVED_PLAN_DIGEST = "sha256:240edcc8afe8f44c9d7fbd82b6c46b4e40408e329cf943d949beeabaa90f4398"
+APPROVED_PROTOCOL_DIGEST = "sha256:21230fb9bca4e70224973fe6d8d862cac31c0d9d1e1d621a5883efe75b32a140"
+APPROVED_COLLISION_POLICY_DIGEST = (
+    "sha256:e2cdbdd0788e497cb7bde3187192cbd93b5592ed10d0cd10f990a2fa12b7647c"
+)
+PROPOSED_REPORT_DIGEST = "sha256:5e86635316946cc476312af6fd2772ceff28db4a5563f04e0b353fbe8b84df50"
 REPORT_PATH = Path("reports/performance_science_eval/res523_repeat_allocation_authority.json")
 PROTOCOL_SCHEMA = "PSE-REPEAT-ALLOCATION-PROTOCOL@1.0.0"
 PLAN_SCHEMA = "RES523-REPEAT-ALLOCATION-PLAN@1.0.0"
 REPORT_SCHEMA = "RES523-REPEAT-ALLOCATION-AUTHORITY@1.0.0"
+APPROVAL_RECEIPT_SCHEMA = "RES523-ALLOCATION-APPROVAL-RECEIPT@1.0.0"
 LANE_ID = "synthetic:pse-v1-synthetic-refusal-public_development"
 CAPABILITY = "C08"
 FAMILY = "F05"
@@ -311,7 +320,52 @@ def build_report() -> dict[str, Any]:
         "ready_for_owner_approval": True,
         "ready_for_materialization": False,
     }
-    return {**record, "report_digest": canonical_hash(record)}
+    proposal = {**record, "report_digest": canonical_hash(record)}
+    if (
+        protocol.protocol_version != "1.0.0"
+        or protocol.authority_digest != APPROVED_PROTOCOL_DIGEST
+        or plan.allocation_plan_digest != APPROVED_PLAN_DIGEST
+        or plan.requested_count != REQUESTED_COUNT
+        or plan.authorized_ordinals != tuple(range(REQUESTED_COUNT))
+        or len(seed_block_ids) != REQUESTED_COUNT
+        or len(set(seed_block_ids)) != REQUESTED_COUNT
+        or len(candidate_ids) != REQUESTED_COUNT
+        or len(set(candidate_ids)) != REQUESTED_COUNT
+        or len(collisions) != 0
+        or policy_digest != APPROVED_COLLISION_POLICY_DIGEST
+        or proposal["report_digest"] != PROPOSED_REPORT_DIGEST
+    ):
+        raise ValueError("approved RES-523 proposal differs from its exact owner-authorized scope")
+
+    approval = RepeatAllocationApprovalReceipt(
+        schema_version=APPROVAL_RECEIPT_SCHEMA,
+        reviewed_allocation_plan_digest=plan.allocation_plan_digest,
+        reviewed_repeat_protocol_digest=protocol.authority_digest,
+        allocation_plan_status="FROZEN",
+        owner_approval_required=True,
+        owner_approval_status=RepeatApprovalStatus.APPROVED,
+        approval_basis=(
+            "User-provided statement that the project owner approved this exact allocation plan."
+        ),
+    )
+    validate_repeat_allocation_approval(
+        approval,
+        allocation_plan_digest=APPROVED_PLAN_DIGEST,
+        repeat_protocol_digest=APPROVED_PROTOCOL_DIGEST,
+    )
+    frozen = {
+        **proposal,
+        "allocation_plan_status": approval.allocation_plan_status,
+        "owner_approval_status": approval.owner_approval_status.value,
+        "ready_for_owner_approval": False,
+        "ready_for_materialization": True,
+        "repeat_protocol_version": protocol.protocol_version,
+        "approved_proposal_report_digest": proposal["report_digest"],
+        "approval_receipt": approval.to_record(),
+        "approval_receipt_digest": approval.approval_receipt_digest,
+    }
+    frozen.pop("report_digest")
+    return {**frozen, "report_digest": canonical_hash(frozen)}
 
 
 def main() -> int:
@@ -320,9 +374,10 @@ def main() -> int:
     path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     print(f"REPEAT_PROTOCOL_DIGEST={report['repeat_protocol_digest']}")
     print(f"ALLOCATION_PLAN_DIGEST={report['allocation_plan_digest']}")
+    print(f"APPROVAL_RECEIPT_DIGEST={report['approval_receipt_digest']}")
     print(f"COLLISION_POLICY_DIGEST={report['collision_policy_digest']}")
-    print("ALLOCATION_PLAN_STATUS=PROPOSED")
-    print("OWNER_APPROVAL_STATUS=PENDING")
+    print("ALLOCATION_PLAN_STATUS=FROZEN")
+    print("OWNER_APPROVAL_STATUS=APPROVED")
     print("CONCRETE_CANDIDATES_GENERATED=0")
     print("SEEDS_MATERIALIZED=0")
     return 0

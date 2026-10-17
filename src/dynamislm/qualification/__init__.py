@@ -37,9 +37,11 @@ from dynamislm.qualification.references import (
     validate_reference_cases,
 )
 from dynamislm.qualification.repeat_allocation import (
+    RepeatAllocationApprovalReceipt,
     RepeatAllocationPlan,
     RepeatAllocationProtocol,
     RepeatApprovalStatus,
+    validate_repeat_allocation_approval,
 )
 
 __all__ = [
@@ -56,6 +58,7 @@ __all__ = [
     "ReferenceCaseStatus",
     "ReferenceValue",
     "RegisteredOperationInventoryEntry",
+    "RepeatAllocationApprovalReceipt",
     "RepeatAllocationPlan",
     "RepeatAllocationProtocol",
     "RepeatApprovalStatus",
@@ -73,5 +76,6 @@ __all__ = [
     "validate_gate_receipt",
     "validate_reference_cases",
     "validate_registered_operation_inventory",
+    "validate_repeat_allocation_approval",
     "validate_unresolved_computation_inventory",
 ]

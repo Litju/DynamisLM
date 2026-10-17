@@ -258,6 +258,80 @@ class RepeatAllocationPlan:
             raise ValueError("allocation plan digest does not match its payload")
 
 
+@register_serializable_type
+@dataclass(frozen=True, slots=True)
+class RepeatAllocationApprovalReceipt:
+    """Owner decision bound to one exact plan and protocol digest."""
+
+    schema_version: str
+    reviewed_allocation_plan_digest: str
+    reviewed_repeat_protocol_digest: str
+    allocation_plan_status: str
+    owner_approval_required: bool
+    owner_approval_status: RepeatApprovalStatus
+    approval_basis: str
+    owner_identity: None = None
+    approval_timestamp: None = None
+    cryptographic_signature: None = None
+    approval_receipt_digest: str = ""
+
+    def receipt_payload(self) -> dict[str, object]:
+        return {
+            key: value for key, value in asdict(self).items() if key != "approval_receipt_digest"
+        }
+
+    def to_record(self) -> dict[str, object]:
+        return asdict(self)
+
+    def __post_init__(self) -> None:
+        if not self.approval_receipt_digest:
+            object.__setattr__(
+                self, "approval_receipt_digest", canonical_hash(self.receipt_payload())
+            )
+        for name in ("schema_version", "allocation_plan_status", "approval_basis"):
+            _require_text(name, getattr(self, name))
+        for name in (
+            "reviewed_allocation_plan_digest",
+            "reviewed_repeat_protocol_digest",
+            "approval_receipt_digest",
+        ):
+            _require_digest(name, getattr(self, name))
+        if self.allocation_plan_status != "FROZEN":
+            raise ValueError("approved repeat allocation status must be FROZEN")
+        if type(self.owner_approval_required) is not bool or not self.owner_approval_required:
+            raise ValueError("repeat allocation requires owner approval")
+        if self.owner_approval_status is not RepeatApprovalStatus.APPROVED:
+            raise ValueError("freeze receipt requires explicit APPROVED status")
+        if (
+            self.owner_identity is not None
+            or self.approval_timestamp is not None
+            or self.cryptographic_signature is not None
+        ):
+            raise ValueError("approval receipt must not invent identity, timestamp, or signature")
+        if canonical_hash(self.receipt_payload()) != self.approval_receipt_digest:
+            raise ValueError("approval receipt digest does not match its payload")
+
+
+def validate_repeat_allocation_approval(
+    receipt: RepeatAllocationApprovalReceipt,
+    *,
+    allocation_plan_digest: str,
+    repeat_protocol_digest: str,
+) -> None:
+    """Require the approval receipt to cover the exact plan and protocol digests."""
+
+    if not isinstance(receipt, RepeatAllocationApprovalReceipt):
+        raise TypeError("receipt must be RepeatAllocationApprovalReceipt")
+    _require_digest("allocation_plan_digest", allocation_plan_digest)
+    _require_digest("repeat_protocol_digest", repeat_protocol_digest)
+    if receipt.reviewed_allocation_plan_digest != allocation_plan_digest:
+        raise ValueError("approval receipt does not bind this allocation plan digest")
+    if receipt.reviewed_repeat_protocol_digest != repeat_protocol_digest:
+        raise ValueError("approval receipt does not bind this repeat protocol digest")
+    if canonical_hash(receipt.receipt_payload()) != receipt.approval_receipt_digest:
+        raise ValueError("approval receipt digest does not match its payload")
+
+
 class RepeatOrdinalFailureError(ValueError):
     """A planned ordinal failed a frozen materialization check."""
 

@@ -12,6 +12,7 @@ import pytest
 from scripts import res523_repeat_allocation_authority as authority
 
 from dynamislm.qualification.repeat_allocation import (
+    RepeatAllocationApprovalReceipt,
     RepeatAllocationPlan,
     RepeatAllocationProtocol,
     RepeatApprovalStatus,
@@ -20,6 +21,7 @@ from dynamislm.qualification.repeat_allocation import (
     derive_repeat_candidate_id,
     fail_closed_on_ordinal,
     repeat_collision_policy,
+    validate_repeat_allocation_approval,
 )
 from dynamislm.serialization import canonical_hash
 
@@ -39,6 +41,12 @@ def _typed_plan(report: dict[str, Any]) -> RepeatAllocationPlan:
     record["authorized_ordinals"] = tuple(record["authorized_ordinals"])
     record["owner_approval_status"] = RepeatApprovalStatus(record["owner_approval_status"])
     return RepeatAllocationPlan(**record)
+
+
+def _typed_receipt(report: dict[str, Any]) -> RepeatAllocationApprovalReceipt:
+    record = dict(report["approval_receipt"])
+    record["owner_approval_status"] = RepeatApprovalStatus(record["owner_approval_status"])
+    return RepeatAllocationApprovalReceipt(**record)
 
 
 def test_protocol_is_generic_and_defaults_to_pending_approval() -> None:
@@ -197,6 +205,56 @@ def test_failed_ordinal_stops_without_substitution() -> None:
     assert 48 not in plan.authorized_ordinals
 
 
+def test_owner_approval_freezes_and_binds_only_the_exact_approved_plan() -> None:
+    report = _report()
+    plan = report["allocation_plan"]
+    receipt = report["approval_receipt"]
+    typed_receipt = _typed_receipt(report)
+
+    assert report["allocation_plan_status"] == "FROZEN"
+    assert report["owner_approval_required"] is True
+    assert report["owner_approval_status"] == "APPROVED"
+    assert report["allocation_plan_digest"] == authority.APPROVED_PLAN_DIGEST
+    assert report["repeat_protocol_digest"] == authority.APPROVED_PROTOCOL_DIGEST
+    assert report["collision_policy_digest"] == authority.APPROVED_COLLISION_POLICY_DIGEST
+    assert report["allocation_plan_count"] == 48
+    assert report["allocation_ordinal_range"] == "0..47"
+    assert plan["authorized_ordinals"] == list(range(48))
+    assert plan["status"] == "PROPOSED"
+    assert plan["owner_approval_status"] == "PENDING"
+    assert canonical_hash(
+        {key: value for key, value in plan.items() if key != "allocation_plan_digest"}
+    ) == (authority.APPROVED_PLAN_DIGEST)
+    assert receipt["allocation_plan_status"] == "FROZEN"
+    assert receipt["owner_approval_status"] == "APPROVED"
+    assert receipt["reviewed_allocation_plan_digest"] == authority.APPROVED_PLAN_DIGEST
+    assert receipt["reviewed_repeat_protocol_digest"] == authority.APPROVED_PROTOCOL_DIGEST
+    assert receipt["approval_receipt_digest"] == report["approval_receipt_digest"]
+    assert receipt["approval_receipt_digest"] == canonical_hash(
+        {key: value for key, value in receipt.items() if key != "approval_receipt_digest"}
+    )
+    assert receipt["owner_identity"] is None
+    assert receipt["approval_timestamp"] is None
+    assert receipt["cryptographic_signature"] is None
+    validate_repeat_allocation_approval(
+        typed_receipt,
+        allocation_plan_digest=authority.APPROVED_PLAN_DIGEST,
+        repeat_protocol_digest=authority.APPROVED_PROTOCOL_DIGEST,
+    )
+    with pytest.raises(ValueError, match="does not bind this allocation plan digest"):
+        validate_repeat_allocation_approval(
+            typed_receipt,
+            allocation_plan_digest="sha256:" + "0" * 64,
+            repeat_protocol_digest=authority.APPROVED_PROTOCOL_DIGEST,
+        )
+    with pytest.raises(ValueError, match="does not bind this repeat protocol digest"):
+        validate_repeat_allocation_approval(
+            typed_receipt,
+            allocation_plan_digest=authority.APPROVED_PLAN_DIGEST,
+            repeat_protocol_digest="sha256:" + "0" * 64,
+        )
+
+
 def test_collision_policy_fails_closed_for_every_materialization_conflict() -> None:
     policy = repeat_collision_policy()
     checks = cast(dict[str, str], policy["checks"])
@@ -207,17 +265,18 @@ def test_collision_policy_fails_closed_for_every_materialization_conflict() -> N
     assert canonical_hash(policy) == _report()["collision_policy_digest"]
 
 
-def test_approval_stays_pending_and_no_candidate_or_seed_is_materialized() -> None:
+def test_approval_is_recorded_without_materializing_candidates_or_seeds() -> None:
     report = _report()
 
     assert report["repeat_protocol"]["approval_status"] == "PENDING"
     assert report["allocation_plan"]["owner_approval_status"] == "PENDING"
     assert report["owner_approval_required"] is True
-    assert report["owner_approval_status"] == "PENDING"
+    assert report["owner_approval_status"] == "APPROVED"
+    assert report["ready_for_owner_approval"] is False
     assert report["candidate_materialization_invoked"] is False
     assert report["concrete_candidates_generated"] == 0
     assert report["seeds_materialized"] == 0
-    assert report["ready_for_materialization"] is False
+    assert report["ready_for_materialization"] is True
     assert "candidate_ids" not in report and "seed_blocks" not in report
     serialized = json.dumps(report, sort_keys=True)
     assert "pse-repeat-block-" not in serialized

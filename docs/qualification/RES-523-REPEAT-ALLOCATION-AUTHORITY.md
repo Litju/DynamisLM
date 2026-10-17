@@ -1,8 +1,8 @@
 # RES-523 C08 synthetic repeat allocation authority
 
-**Decision state: PROPOSED. Owner approval is required and pending.** The prior
-RES-407 repeat authority remains `UNKNOWN`; this proposal does not authorize
-materialization.
+**Decision state: FROZEN. Owner approval is recorded as APPROVED for the exact
+allocation plan digest below.** The prior RES-407 repeat authority remains
+`UNKNOWN`; the approval receipt authorizes only this finite campaign plan.
 
 ## Authority basis
 
@@ -64,7 +64,19 @@ Collision policy digest: `sha256:e2cdbdd0788e497cb7bde3187192cbd93b5592ed10d0cd1
 
 ## Approval and execution state
 
-`OWNER_APPROVAL_REQUIRED=YES` and `OWNER_APPROVAL_STATUS=PENDING`. No approval
-identity, signature, or timestamp is asserted, and the plan is not frozen.
-`CONCRETE_CANDIDATES_GENERATED=0`, `SEEDS_MATERIALIZED=0`, and
-`READY_FOR_MATERIALIZATION=NO`.
+The separate approval receipt binds the user-provided owner-approval statement
+to the exact allocation plan and repeat protocol digests. Its digest records
+receipt integrity; it is not a cryptographic signature. The original
+digest-bound plan payload remains unchanged with its original `PROPOSED` and
+`PENDING` fields. The receipt carries the effective `FROZEN` / `APPROVED` state.
+No owner identity, approval timestamp, or cryptographic signature is asserted.
+
+Approval receipt digest: `sha256:edc66e1bb7421c67e97da7c888c24c09e3160b66528934747c683f9de94ba984`
+
+Frozen wrapper/report digest: `sha256:b7f6e1d97762f425651c0840317d315fd74c9f9cf13063798c6a3cffae377648`
+
+`OWNER_APPROVAL_REQUIRED=YES`, `OWNER_APPROVAL_STATUS=APPROVED`, and
+`READY_FOR_RES407_MATERIALIZATION=YES`. This mission stops before generation:
+`CONCRETE_CANDIDATES_GENERATED=0` and `SEEDS_MATERIALIZED=0`. Payload,
+shingle, contamination, feature-vector, and relation checks remain required
+during materialization.
