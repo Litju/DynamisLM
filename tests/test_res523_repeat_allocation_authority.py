@@ -11,6 +11,7 @@ from typing import Any, cast
 import pytest
 from scripts import res523_repeat_allocation_authority as authority
 
+from dynamislm.benchmark.production import _candidate_id
 from dynamislm.qualification.repeat_allocation import (
     RepeatAllocationApprovalReceipt,
     RepeatAllocationPlan,
@@ -28,6 +29,13 @@ from dynamislm.serialization import canonical_hash
 
 def _report() -> dict[str, Any]:
     return cast(dict[str, Any], json.loads(authority.REPORT_PATH.read_text(encoding="utf-8")))
+
+
+def _replacement_report() -> dict[str, Any]:
+    return cast(
+        dict[str, Any],
+        json.loads(authority.REPLACEMENT_REPORT_PATH.read_text(encoding="utf-8")),
+    )
 
 
 def _typed_protocol(report: dict[str, Any]) -> RepeatAllocationProtocol:
@@ -281,6 +289,44 @@ def test_approval_is_recorded_without_materializing_candidates_or_seeds() -> Non
     serialized = json.dumps(report, sort_keys=True)
     assert "pse-repeat-block-" not in serialized
     assert not re.search(r"PSE-V1-REPEAT-CANDIDATE:[0-9a-f]{64}", serialized)
+
+
+def test_replacement_uses_production_valid_ids_and_remains_pending() -> None:
+    report = authority.build_replacement_report()
+    persisted = _replacement_report()
+    identities = report["planned_identities"]
+    candidate_ids = tuple(item["candidate_id"] for item in identities)
+    plan = _typed_plan(report)
+
+    assert report == persisted
+    assert report["report_digest"] == canonical_hash(
+        {key: value for key, value in report.items() if key != "report_digest"}
+    )
+    assert report["allocation_plan_digest"] == plan.allocation_plan_digest
+    assert report["candidate_id_derivation_version"] == "PSE-REPEAT-CANDIDATE-ID@2.0.0"
+    assert all(item.startswith(authority.REPLACEMENT_CANDIDATE_ID_PREFIX) for item in candidate_ids)
+    assert all(
+        len(item) <= report["production_validation"]["maximum_id_length"] for item in candidate_ids
+    )
+    for candidate_id in candidate_ids:
+        _candidate_id(candidate_id)
+    assert report["production_validation"]["identity_valid_count"] == 48
+    assert report["production_validation"]["recipe_valid_count"] == 48
+    assert report["historical_collision_check"]["historical_id_collisions"] == 0
+    assert report["supersession"]["original_ids_rejected_by_production_identity_validator"] == 48
+    assert report["supersession"]["replacement_supersedes_original_for_execution"] is True
+    assert report["supersession"]["approval_transfer"].startswith("NONE;")
+    assert (plan.status, plan.owner_approval_status) == ("PROPOSED", RepeatApprovalStatus.PENDING)
+    assert report["owner_approval_status"] == "PENDING"
+    assert report["ready_for_owner_approval"] is True
+    assert report["ready_for_materialization"] is False
+    assert report["concrete_candidates_generated"] == 0
+    assert report["seeds_materialized"] == 0
+    assert report["structural_compatibility"]["selection_features_preserved"] is True
+    assert report["structural_compatibility"]["structural_proof_assumptions_preserved"] is True
+    assert report["digest_dependency_check"]["circular_dependency"] is False
+    assert _report()["allocation_plan_digest"] == authority.APPROVED_PLAN_DIGEST
+    assert _report()["report_digest"] == authority.ORIGINAL_REPORT_DIGEST
 
 
 def test_persisted_report_is_digest_bound_and_matches_the_deterministic_builder() -> None:

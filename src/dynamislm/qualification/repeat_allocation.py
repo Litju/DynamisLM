@@ -10,6 +10,8 @@ from typing import NoReturn
 from dynamislm.serialization import canonical_hash, register_serializable_type
 
 _SHA256 = re.compile(r"sha256:[0-9a-f]{64}\Z")
+_LEGACY_CANDIDATE_ID_DERIVATION_VERSION = "PSE-REPEAT-CANDIDATE-ID@1.0.0"
+_PRODUCTION_CANDIDATE_ID_DERIVATION_VERSION = "PSE-REPEAT-CANDIDATE-ID@2.0.0"
 
 
 class RepeatApprovalStatus(StrEnum):
@@ -443,4 +445,9 @@ def derive_repeat_candidate_id(
         "generator_family": plan.generator_family,
         "generator_version": plan.generator_version,
     }
-    return f"PSE-V1-REPEAT-CANDIDATE:{canonical_hash(basis).removeprefix('sha256:')}"
+    digest = canonical_hash(basis).removeprefix("sha256:")
+    if plan.candidate_id_derivation_version == _LEGACY_CANDIDATE_ID_DERIVATION_VERSION:
+        return f"PSE-V1-REPEAT-CANDIDATE:{digest}"
+    if plan.candidate_id_derivation_version == _PRODUCTION_CANDIDATE_ID_DERIVATION_VERSION:
+        return f"PSE-V1-CANDIDATE:RES523:REPEAT:{digest}"
+    raise ValueError("unsupported repeat candidate-ID derivation version")
