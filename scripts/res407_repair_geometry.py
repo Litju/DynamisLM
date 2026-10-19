@@ -1358,8 +1358,7 @@ def _structural_master_record(
     )
 
 
-def run(production_root: Path, *, replay: bool = False) -> dict[str, Any]:
-    legacy._require_execution_tree(clean=False)
+def _run_geometry(production_root: Path, *, replay: bool = False) -> dict[str, Any]:
     inputs = res451._load_inputs(_REPOSITORY, production_root)
     if inputs.problem.problem_digest != legacy.ORIGINAL_PROBLEM_DIGEST:
         raise ValueError("original problem authority drift")
@@ -1648,6 +1647,11 @@ def run(production_root: Path, *, replay: bool = False) -> dict[str, Any]:
         "removal_sweep_run": False,
     }
     return summary
+
+
+def run(production_root: Path, *, replay: bool = False) -> dict[str, Any]:
+    legacy._require_execution_tree(clean=False)
+    return _run_geometry(production_root, replay=replay)
 
 
 def main() -> int:

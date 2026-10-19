@@ -983,7 +983,7 @@ def test_legacy_qualification_cli_is_disabled(monkeypatch: pytest.MonkeyPatch) -
 
 
 def test_exact_external_res407_regression(monkeypatch: pytest.MonkeyPatch) -> None:
-    from scripts.res407_repair_geometry import run
+    from scripts.res407_repair_geometry import _run_geometry
 
     from dynamislm.benchmark.production_store import DEFAULT_PRODUCTION_ROOT
 
@@ -1004,7 +1004,7 @@ def test_exact_external_res407_regression(monkeypatch: pytest.MonkeyPatch) -> No
         "materialize_variable_pool",
     ):
         monkeypatch.setattr(res407_governed_backfill, name, forbidden)
-    result = run(DEFAULT_PRODUCTION_ROOT, replay=False)
+    result = _run_geometry(DEFAULT_PRODUCTION_ROOT, replay=False)
     capacities = result["split_capacities"]
     assert capacities[PUBLIC.value]["required"] == 260
     assert capacities[PUBLIC.value]["maximum"] == 212
@@ -1072,3 +1072,21 @@ def test_exact_external_res407_regression(monkeypatch: pytest.MonkeyPatch) -> No
             constraint_id.startswith("RES258:SPLIT_COUNT:")
             for constraint_id in binding["retained_constraint_ids"]
         )
+
+
+def test_res407_production_runner_rejects_wrong_branch(monkeypatch: pytest.MonkeyPatch) -> None:
+    from scripts import res407_governed_backfill
+    from scripts.res407_repair_geometry import run
+
+    from dynamislm.benchmark.production_store import DEFAULT_PRODUCTION_ROOT
+
+    def wrong_branch_git(*args: str) -> str:
+        if args == ("rev-parse", "HEAD"):
+            return "0" * 40
+        if args == ("branch", "--show-current"):
+            return "unauthorized-branch"
+        pytest.fail(f"unexpected git query in branch guard: {args}")
+
+    monkeypatch.setattr(res407_governed_backfill, "_git", wrong_branch_git)
+    with pytest.raises(ValueError, match="RES-407 runner is on the wrong branch"):
+        run(DEFAULT_PRODUCTION_ROOT)

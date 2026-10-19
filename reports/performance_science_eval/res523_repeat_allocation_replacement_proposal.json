@@ -1,0 +1,706 @@
+{
+  "allocation_ordinal_range": "0..47",
+  "allocation_plan": {
+    "allocation_authority_digest": "sha256:4f70434d5e1552019104c07eb9d93d7e48606b7daa89d3d08c133490840f0332",
+    "allocation_plan_digest": "sha256:b0c3bc4a07c167a8bb266c082d65854cd50a2f82dbae5f5f18d1e57bb7f53b82",
+    "authorized_ordinals": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15,
+      16,
+      17,
+      18,
+      19,
+      20,
+      21,
+      22,
+      23,
+      24,
+      25,
+      26,
+      27,
+      28,
+      29,
+      30,
+      31,
+      32,
+      33,
+      34,
+      35,
+      36,
+      37,
+      38,
+      39,
+      40,
+      41,
+      42,
+      43,
+      44,
+      45,
+      46,
+      47
+    ],
+    "candidate_id_derivation_version": "PSE-REPEAT-CANDIDATE-ID@2.0.0",
+    "capability": "C08",
+    "cardinality_optimality": "PROVEN",
+    "collision_policy_digest": "sha256:e2cdbdd0788e497cb7bde3187192cbd93b5592ed10d0cd10f990a2fa12b7647c",
+    "collision_policy_version": "PSE-REPEAT-COLLISION-POLICY@1.0.0",
+    "family": "F05",
+    "generator_family": "pse-v1-synthetic-refusal-public_development",
+    "generator_id": "pse-v1-unregistered-operation-context",
+    "generator_qualification_ref": "reports/performance_science_eval/res407_c08_generator_qualification.json",
+    "generator_qualification_report_digest": "sha256:b8656213636aef2ab3fc179b03eb6079b6073e9b67b1345687068db7254dec3b",
+    "generator_version": "1.0.0",
+    "historical_candidate_id_count": 156,
+    "historical_candidate_id_inventory_digest": "sha256:d3575adb9e222c4778b9079ce88d3de3bc00fd686658f975310268f71d0c8550",
+    "historical_namespace_collision_count": 0,
+    "k": 48,
+    "k_minus_1": 47,
+    "k_minus_1_status": "INFEASIBLE",
+    "k_minus_1_trial_digest": "sha256:3f6c267fdcce404d6f6b205ed5eeeff7b31311895be41697cab3fdfa92b3bea5",
+    "k_status": "FEASIBLE",
+    "k_trial_digest": "sha256:86eecd7c42b4eb15d79cb1781c36cac3b497f5052caf4481c4bf8310a3227398",
+    "lane_id": "synthetic:pse-v1-synthetic-refusal-public_development",
+    "locked_split": "PUBLIC_DEVELOPMENT",
+    "ordinal_semantics_version": "PSE-REPEAT-ORDINAL-ZERO-BASED@1.0.0",
+    "owner_approval_required": true,
+    "owner_approval_status": "PENDING",
+    "parent_archetype_digest": "sha256:03447c947fc8d1086b8e24870cfffdc8a22ed50d5eec54f125fc958c85d982ab",
+    "parent_lane_authority_digest": "sha256:f639eb09961f9a429334c5c19ef89f46990d187b9cb9324f49803e908d911afa",
+    "parent_lane_authority_ref": "registered split-family synthetic generator",
+    "parent_lane_digest": "sha256:4971f5b1a442362915340c43957e6be90085b0d49b0f850947743f39b2f2545d",
+    "prior_repeat_authority_ref": "reports/performance_science_eval/res407_c08_repeat_authority.json",
+    "prior_repeat_authority_report_digest": "sha256:493554bd3739ae1bb443318d74ec510b708ce514ba30d72c6aa889a588550999",
+    "prior_repeat_authority_status": "UNKNOWN",
+    "repeat_protocol_digest": "sha256:a836d62a1aa47aa2c738182282278c9e818a122bac3224ba51b3de922b17ceb4",
+    "requested_count": 48,
+    "schema_version": "RES523-REPEAT-ALLOCATION-PLAN@2.0.0",
+    "seed_block_derivation_version": "PSE-REPEAT-SEED-BLOCK@1.0.0",
+    "seed_block_identity_inventory_digest": "sha256:76a93e187f008f01337c15fb5bd7b1620e6999763180302599feb38c9cd1cd63",
+    "status": "PROPOSED",
+    "structural_comparison_ref": "reports/performance_science_eval/res407_governed_structural_comparison.json",
+    "structural_comparison_report_digest": "sha256:c3669eb5c1823147b5a45d617b6c9270c1956a7b02cc69bfe5e230c332e9e231",
+    "structural_min_additions": 48,
+    "structural_report_digest": "sha256:8906032d404a81d56f576ef0d91523c5752d5cc78f266581f2555f6fe8178560",
+    "structural_result_ref": "reports/performance_science_eval/res407_real_c08_sufficiency.json",
+    "structural_status": "FEASIBLE"
+  },
+  "allocation_plan_count": 48,
+  "allocation_plan_digest": "sha256:b0c3bc4a07c167a8bb266c082d65854cd50a2f82dbae5f5f18d1e57bb7f53b82",
+  "allocation_plan_status": "PROPOSED",
+  "candidate_id_derivation_version": "PSE-REPEAT-CANDIDATE-ID@2.0.0",
+  "candidate_id_inventory_digest": "sha256:16b305b4494ac8b32582430b8e4c9ae8c252bbbc763b1376cc46e78f13a30c78",
+  "candidate_id_prefix": "PSE-V1-CANDIDATE:RES523:REPEAT:",
+  "candidate_materialization_invoked": false,
+  "collision_policy": {
+    "checks": {
+      "candidate_id_collision": "STOP",
+      "contamination_conflict": "STOP",
+      "duplicate_payload_where_prohibited": "STOP",
+      "exact_shingle_conflict": "STOP",
+      "invalid_generator_result": "STOP",
+      "seed_block_collision": "STOP",
+      "unexpected_colocation_or_relation_behavior": "STOP",
+      "wrong_feature_vector": "STOP"
+    },
+    "failure_action": "STOP_AND_INVALIDATE_THE_WHOLE_MATERIALIZATION_ATTEMPT",
+    "ordinal_replacement": "FORBIDDEN; requires a new versioned allocation decision",
+    "schema_version": "PSE-REPEAT-COLLISION-POLICY@1.0.0"
+  },
+  "collision_policy_digest": "sha256:e2cdbdd0788e497cb7bde3187192cbd93b5592ed10d0cd10f990a2fa12b7647c",
+  "concrete_candidates_generated": 0,
+  "digest_dependency_check": {
+    "allocation_authority_digest_inputs_exclude_seed_and_candidate_ids": true,
+    "allocation_plan_digest_commits_seed_identity_inventory_not_candidate_ids": true,
+    "candidate_ids_derive_from_final_plan_digest_and_seed_block_identities": true,
+    "candidate_ids_excluded_from_plan_payload": true,
+    "circular_dependency": false,
+    "report_digest_commits_plan_and_candidate_id_inventory_after_derivation": true,
+    "seed_block_identities_derive_from_allocation_authority_digest": true
+  },
+  "historical_collision_check": {
+    "historical_id_collisions": 0,
+    "historical_id_count_including_legacy": 156,
+    "historical_inventory_digest": "sha256:d3575adb9e222c4778b9079ce88d3de3bc00fd686658f975310268f71d0c8550",
+    "historical_namespace_prefix": "PSE-V1-CANDIDATE:RES407:SYNTH:",
+    "legacy_one_per_cell_id": "PSE-V1-CANDIDATE:RES407:SYNTH:C08:F05:PUBLIC_DEVELOPMENT",
+    "namespace_prefixes_disjoint": true,
+    "replacement_namespace_prefix": "PSE-V1-CANDIDATE:RES523:REPEAT:",
+    "tracked_candidate_id_count": 155,
+    "tracked_candidate_id_source": "registries/performance_science_eval/candidates.jsonl"
+  },
+  "mission": "RES-523 production-compatible C08 repeat allocation replacement proposal",
+  "ordinal_inventory": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    12,
+    13,
+    14,
+    15,
+    16,
+    17,
+    18,
+    19,
+    20,
+    21,
+    22,
+    23,
+    24,
+    25,
+    26,
+    27,
+    28,
+    29,
+    30,
+    31,
+    32,
+    33,
+    34,
+    35,
+    36,
+    37,
+    38,
+    39,
+    40,
+    41,
+    42,
+    43,
+    44,
+    45,
+    46,
+    47
+  ],
+  "owner_approval_required": true,
+  "owner_approval_status": "PENDING",
+  "planned_candidate_id_count": 48,
+  "planned_identities": [
+    {
+      "candidate_id": "PSE-V1-CANDIDATE:RES523:REPEAT:ca9f6346f15649b6576d7c591cd6791d8465b805d246c486fbb469f95f17d717",
+      "ordinal": 0,
+      "seed_block_identity": "pse-repeat-block-86261a7718e3cd6467e80f62803b87f894d56ed5bfcd2a05fde6368c085859b6"
+    },
+    {
+      "candidate_id": "PSE-V1-CANDIDATE:RES523:REPEAT:fd43cca67ebf967f72d5a59fc16b08574d9377493065d4aef2563b5c8097fe2b",
+      "ordinal": 1,
+      "seed_block_identity": "pse-repeat-block-331f827155abb0d1529df5ad525236ca2956bfddba9f9aab9aed3cbd48cf5be4"
+    },
+    {
+      "candidate_id": "PSE-V1-CANDIDATE:RES523:REPEAT:23a688358549a6b9dd55a42a2b9ecf3b841b0f6d7cf8681fffedc4465d705b41",
+      "ordinal": 2,
+      "seed_block_identity": "pse-repeat-block-360c493326707d6136cf7be235a0523cec424b3b2305101d9da4ad1071e8a906"
+    },
+    {
+      "candidate_id": "PSE-V1-CANDIDATE:RES523:REPEAT:4c65f132784d1d44641c4cadde29867893117f8ea0619894ab09bcf1241572be",
+      "ordinal": 3,
+      "seed_block_identity": "pse-repeat-block-36a9b0788c036cfbac6ebb452e56ed433216314c847947b2d4338921907f0bcd"
+    },
+    {
+      "candidate_id": "PSE-V1-CANDIDATE:RES523:REPEAT:925e5fba21350139461868a7ed37e00cae56988cf47a34c8804976bfdd524b4f",
+      "ordinal": 4,
+      "seed_block_identity": "pse-repeat-block-4d70f956b617cebbcb2bcb874cd7c66963e6362758a421735d0e2d51fa2e6fa2"
+    },
+    {
+      "candidate_id": "PSE-V1-CANDIDATE:RES523:REPEAT:15ccdd3a12ad1cad5c54bc8c8d3b60c4007c4db53c050a35026f322f8b175f95",
+      "ordinal": 5,
+      "seed_block_identity": "pse-repeat-block-145bc34d4c21d31ebc5ef902cb8d9ad1932d25e5d560165cb6d92b7dd6bc50b7"
+    },
+    {
+      "candidate_id": "PSE-V1-CANDIDATE:RES523:REPEAT:ffeb5df188e8743620915dbb3151718935516b5514dec40f251927ce00bc40f7",
+      "ordinal": 6,
+      "seed_block_identity": "pse-repeat-block-a901629e33fe482289c4b9c4fd688a24a91a423ecd4ce652401181a7b815e6de"
+    },
+    {
+      "candidate_id": "PSE-V1-CANDIDATE:RES523:REPEAT:697f12adfa40da3739342061560553900ff24bec1458d533d8adf675e288dce2",
+      "ordinal": 7,
+      "seed_block_identity": "pse-repeat-block-63a5780f58c2b578a3a23a13bcb20f4bd3367a9166932812f2da2bed828465d9"
+    },
+    {
+      "candidate_id": "PSE-V1-CANDIDATE:RES523:REPEAT:7406903681eac77d1014e6f95c6d574af0472bfd5aec66cc7d54bf4ce74398c8",
+      "ordinal": 8,
+      "seed_block_identity": "pse-repeat-block-33cae7eed0d978a15514e328a2b78685da63e36c55173805f115ff40b977a762"
+    },
+    {
+      "candidate_id": "PSE-V1-CANDIDATE:RES523:REPEAT:3a1f0326b0b58a860b157a15c67adf57af6891e732c886a6cc551802768836a7",
+      "ordinal": 9,
+      "seed_block_identity": "pse-repeat-block-b4076fc6cc7e24b70d2742c33f8f65faddca0e058d22d8fe8460c1b90ee12612"
+    },
+    {
+      "candidate_id": "PSE-V1-CANDIDATE:RES523:REPEAT:4052d77ad276975c2b92d9e13d8c6a9f0bf911d4f4cf38b52724947fb616556d",
+      "ordinal": 10,
+      "seed_block_identity": "pse-repeat-block-e1dd2e3599f584ddb526ce9227eac209d94cfe1307c9fb085a008ac641466a44"
+    },
+    {
+      "candidate_id": "PSE-V1-CANDIDATE:RES523:REPEAT:e85908e9f5181d44493763e47bcefe66da38c1079afd3b4f44db3d3bb61fbbab",
+      "ordinal": 11,
+      "seed_block_identity": "pse-repeat-block-8d6749279438e7111cb7d78eec629c4ce273b2b0fe7f90a93fb7df5ec7521ef8"
+    },
+    {
+      "candidate_id": "PSE-V1-CANDIDATE:RES523:REPEAT:3a7c0c0cb90c8c37260c8c6893e3d48b503dacc6fcc661b45b45ad0ff97b5df4",
+      "ordinal": 12,
+      "seed_block_identity": "pse-repeat-block-e188739b0cf442816f9b06573987dbc0583103e64edaad00db7b37183e06bd96"
+    },
+    {
+      "candidate_id": "PSE-V1-CANDIDATE:RES523:REPEAT:c0f38843d215fd4a9e075d4498777eb40b69c191ecf7cdd3105111d46670ba71",
+      "ordinal": 13,
+      "seed_block_identity": "pse-repeat-block-876a1d0b44aa2232a829e77b1eacf31557694926ef0081ceb1bc70c5cd879f01"
+    },
+    {
+      "candidate_id": "PSE-V1-CANDIDATE:RES523:REPEAT:5c4c84232821efd526b1ced56728b107ff90faaa48bc051ddbb81f998121abf1",
+      "ordinal": 14,
+      "seed_block_identity": "pse-repeat-block-2aa33cc31a11e52023692056b039d6db8b6e2d05c2217b5a1f6cfb9e63a5936c"
+    },
+    {
+      "candidate_id": "PSE-V1-CANDIDATE:RES523:REPEAT:e7ded099c3800791887eb681478488ee10aa3f8bed69683cf29e7a3e063fa851",
+      "ordinal": 15,
+      "seed_block_identity": "pse-repeat-block-421b37e846b274e6276da775e25e77f6eebed7bff08447e72aa0973302c9d80d"
+    },
+    {
+      "candidate_id": "PSE-V1-CANDIDATE:RES523:REPEAT:49da9d346facf8d2b8861000ff951b6177d36836c12cc5e84ccf9d57a19e5889",
+      "ordinal": 16,
+      "seed_block_identity": "pse-repeat-block-4f55d663d0ae37a1a21b560b8df9032c86604f82119b03255150679d19816e6f"
+    },
+    {
+      "candidate_id": "PSE-V1-CANDIDATE:RES523:REPEAT:d877481fb4d8fe9e3d6357a6de6ec491774c24ced81ca9b0e62df070ef0674e3",
+      "ordinal": 17,
+      "seed_block_identity": "pse-repeat-block-9042f9d9073ac3cf3e26e8adcc92781cab0ea47109cb42a8f1a13eb63af6e179"
+    },
+    {
+      "candidate_id": "PSE-V1-CANDIDATE:RES523:REPEAT:b83aebf7af290da483b8ac5e1179be35907b2dfd708d9466174a878f760c3823",
+      "ordinal": 18,
+      "seed_block_identity": "pse-repeat-block-632871b56e62caf1e1b222d0bcb2484b4c41deb7f2749034a4e02aa844b979f2"
+    },
+    {
+      "candidate_id": "PSE-V1-CANDIDATE:RES523:REPEAT:58d34ff3168b92467953418e422e1f7cfeedd76ce3a5ec7e3fa2565a06876f1c",
+      "ordinal": 19,
+      "seed_block_identity": "pse-repeat-block-25c02809cf9670227896b4fc67745310e9f257ea8992bf4fd3888b487e85114b"
+    },
+    {
+      "candidate_id": "PSE-V1-CANDIDATE:RES523:REPEAT:727046c1cb314e8015ee859cf5dcebf0d337f25c21d11936bb36aad13890d0f9",
+      "ordinal": 20,
+      "seed_block_identity": "pse-repeat-block-a43b9a568721f44aab4901f670951c9e7b3b24f1ff4b74621d19a62ad9a35d22"
+    },
+    {
+      "candidate_id": "PSE-V1-CANDIDATE:RES523:REPEAT:07ccc7962d64dd00b7264ea18cdef844e33de7fff5ef6a2ed0673bc6292dfe2e",
+      "ordinal": 21,
+      "seed_block_identity": "pse-repeat-block-71658a3839120df265593701c15696e1a5e26851baf36f64c2c32f0bebab5ea7"
+    },
+    {
+      "candidate_id": "PSE-V1-CANDIDATE:RES523:REPEAT:43439b43732250d0b09e56317dd4a0175385197bebd2201b993233625f5ddfe5",
+      "ordinal": 22,
+      "seed_block_identity": "pse-repeat-block-1cde0073c2d86ed87bbaa67d62a6a52c18c282cf09f5a12673e46770545259ca"
+    },
+    {
+      "candidate_id": "PSE-V1-CANDIDATE:RES523:REPEAT:888eb238eb1668742b1b8d7a601fa576975c24d41002cc4b51cf23830be2744c",
+      "ordinal": 23,
+      "seed_block_identity": "pse-repeat-block-594ffbf486241987fb3e3fe41d886e43c94217bc59dfc9e4939e8110dce97e55"
+    },
+    {
+      "candidate_id": "PSE-V1-CANDIDATE:RES523:REPEAT:9645dd84bed05feab941e0d35357a993f84cda82a109ca1c3cda487ed997f148",
+      "ordinal": 24,
+      "seed_block_identity": "pse-repeat-block-4f48de7e50b806b53cd77a6670f03e84d22b6fdfdfa41090af46490d981a4a49"
+    },
+    {
+      "candidate_id": "PSE-V1-CANDIDATE:RES523:REPEAT:2d8c3d5353ef94c3c0059b1e1a63cb177ed860b819bab54889e0ee555b72f151",
+      "ordinal": 25,
+      "seed_block_identity": "pse-repeat-block-9f8448b43be030a0ca7ea3508e05374846550cdfcaeba43be48e6552272d26e3"
+    },
+    {
+      "candidate_id": "PSE-V1-CANDIDATE:RES523:REPEAT:aea6e489e3d85af1dbd3ceff53dda33c01a41c79e30b4c8a85857131f2643eed",
+      "ordinal": 26,
+      "seed_block_identity": "pse-repeat-block-5f638aab074dd07b89d75bf2354656b07f337aa434aa13097300f40e9b6b6033"
+    },
+    {
+      "candidate_id": "PSE-V1-CANDIDATE:RES523:REPEAT:1934ed1d14af415eabb1f8c06b18b1ff15b086bc4afb6d3a910148058d2f8bfc",
+      "ordinal": 27,
+      "seed_block_identity": "pse-repeat-block-aedd079dea5a7da1706c61b605995383e799678fb7ce669f5b525e55ae04d761"
+    },
+    {
+      "candidate_id": "PSE-V1-CANDIDATE:RES523:REPEAT:275db5f51e5006275408c1515bdc83606103d2df7adb6d3bf03aa337162a6547",
+      "ordinal": 28,
+      "seed_block_identity": "pse-repeat-block-aae8c4c763ff569156f5e1bd0a0dc1a056a398560dd5649ee014fdacd6c052d4"
+    },
+    {
+      "candidate_id": "PSE-V1-CANDIDATE:RES523:REPEAT:70d8223cdc88645af1afed2c9d9993c5740b913dad3bf8c1fc1fbc3a88612e65",
+      "ordinal": 29,
+      "seed_block_identity": "pse-repeat-block-7a548c2673c0490b8bd3eedbc4fc251311343bfe79a3f1449894fbc76efed2b7"
+    },
+    {
+      "candidate_id": "PSE-V1-CANDIDATE:RES523:REPEAT:6bf4511718c13bc230291b48eacd0955a49e98eb60af1aff165d24cbf135bedc",
+      "ordinal": 30,
+      "seed_block_identity": "pse-repeat-block-4f95d269f7ac69bcf309b1db1c8fa26ac9c6358a07545a2dbcc437a39db98bd6"
+    },
+    {
+      "candidate_id": "PSE-V1-CANDIDATE:RES523:REPEAT:adafabd372e9b819ce75e718de9f81be3c1aab40b584fc9ec41ce129b6e12d4c",
+      "ordinal": 31,
+      "seed_block_identity": "pse-repeat-block-dcde0884500e2e4f44ef026641c12b7acce9ad4888c9bc6fc49a1d5b283a33c1"
+    },
+    {
+      "candidate_id": "PSE-V1-CANDIDATE:RES523:REPEAT:84b40c630a14ad8b052340afe1d7d749296a838c03dca07f77ca6c73d3b2f8b1",
+      "ordinal": 32,
+      "seed_block_identity": "pse-repeat-block-7a47f8b8e84cb2ef91cba9ba5dc34d15f119546631d4fbda4f99361c4eaf2cc6"
+    },
+    {
+      "candidate_id": "PSE-V1-CANDIDATE:RES523:REPEAT:eecef89fcadef509e59648acba00b84c453211fffd73e96968fa49aa880e01cd",
+      "ordinal": 33,
+      "seed_block_identity": "pse-repeat-block-65459dff3570861a56b0277df737046074c1b4ca984bcd9051dd1448f8a3cf40"
+    },
+    {
+      "candidate_id": "PSE-V1-CANDIDATE:RES523:REPEAT:56af7649caae011344528ea1150a7d36b9f0994ed9d6871353a7f5c008cef36e",
+      "ordinal": 34,
+      "seed_block_identity": "pse-repeat-block-6425951d5b0d388027771d50a7323110e066065ae7c3a896fef04e5cfda598da"
+    },
+    {
+      "candidate_id": "PSE-V1-CANDIDATE:RES523:REPEAT:589ff1962ba6ee7d877951af4a67ad55196eb1b093c480eeb119f482ec0c31e8",
+      "ordinal": 35,
+      "seed_block_identity": "pse-repeat-block-631efefe63c6e3379e3bcaf461dac281c593a49062d181d4b04601230e1576b0"
+    },
+    {
+      "candidate_id": "PSE-V1-CANDIDATE:RES523:REPEAT:204b5bfdf450b8a88b6f5643c5a0f4591ce93e166969bdfdd51171dde415a256",
+      "ordinal": 36,
+      "seed_block_identity": "pse-repeat-block-79a5cb958b03350ea3768632504d01f9d71403081dafd7006a4924b37d851dd4"
+    },
+    {
+      "candidate_id": "PSE-V1-CANDIDATE:RES523:REPEAT:62114c19c62e1ee6544bf6f352525d7a9c1f898414ddaf87a0eeba9abc0f9d62",
+      "ordinal": 37,
+      "seed_block_identity": "pse-repeat-block-d0780e7225d8bb81c565f1365809e549b953cc6d4ac0b5f3553c5eec67a7e52b"
+    },
+    {
+      "candidate_id": "PSE-V1-CANDIDATE:RES523:REPEAT:46fa0cac796490585dabf86c2dffac82fea673129a103250d090d948afb02a9f",
+      "ordinal": 38,
+      "seed_block_identity": "pse-repeat-block-cd240eb53f9dde1cbf5db789d9819c71fe8f4a7f6a52a2c91889b0e3773b0977"
+    },
+    {
+      "candidate_id": "PSE-V1-CANDIDATE:RES523:REPEAT:1bc56370685c4ac278979473b18d233ca3497a816b4d979f4b1ffb2669b9a450",
+      "ordinal": 39,
+      "seed_block_identity": "pse-repeat-block-9f41ad28ecd2a448489b8e02d078e453d59c2c5fbeb0e53edddad145e788d48e"
+    },
+    {
+      "candidate_id": "PSE-V1-CANDIDATE:RES523:REPEAT:e8fe15b751827702ff29fc87b046f52cc9dddbb3126eea42320e2e174872542f",
+      "ordinal": 40,
+      "seed_block_identity": "pse-repeat-block-72d6ea152cff16d6f02b0889ec7bf3073ea69a98f97dc512f7f78d1224557414"
+    },
+    {
+      "candidate_id": "PSE-V1-CANDIDATE:RES523:REPEAT:3c12c06af86910da123941f1f4c57470321a1031a2dcae9fd27709b919d091ad",
+      "ordinal": 41,
+      "seed_block_identity": "pse-repeat-block-d886f3eb6644f27c57fa7a2663236d0ce331350e73390e5c66f4e9359cc70113"
+    },
+    {
+      "candidate_id": "PSE-V1-CANDIDATE:RES523:REPEAT:9ff5855e5ebdee669d81c34750f5bcd2a99b67140e9567b96d293629fa880192",
+      "ordinal": 42,
+      "seed_block_identity": "pse-repeat-block-d2d41c301252f0abd71ef3045270373edebd96fe927d97498ca113ecad80ace1"
+    },
+    {
+      "candidate_id": "PSE-V1-CANDIDATE:RES523:REPEAT:9d0d9e81e07f47fb25204baf729270da00a24d2e83ac8541f48fbb53be001054",
+      "ordinal": 43,
+      "seed_block_identity": "pse-repeat-block-0e5459d0e83482bcf5f1aa5c1fee681de511c6a6e344fa90fbab34fa051d6112"
+    },
+    {
+      "candidate_id": "PSE-V1-CANDIDATE:RES523:REPEAT:96cab7535b7dba99791e3372ab95a74c54556ad267d386ed81899920d130b5bc",
+      "ordinal": 44,
+      "seed_block_identity": "pse-repeat-block-75aaa955681460a90b02a300880fbcba1a5833103707c7f8f7800d947aa3342e"
+    },
+    {
+      "candidate_id": "PSE-V1-CANDIDATE:RES523:REPEAT:d6a2f038a45a2caa15b9b9ba3c3c592e179ccd3fbf6306881a006a9c9ed8a1f4",
+      "ordinal": 45,
+      "seed_block_identity": "pse-repeat-block-d7e2a0d53a2a73a10706d53cf3dfc4cc864e89ca223351432bd3e602d2e372df"
+    },
+    {
+      "candidate_id": "PSE-V1-CANDIDATE:RES523:REPEAT:651d3da8578735338fb4b59de16637b4de76a399ff102deaeef37356f3faa70e",
+      "ordinal": 46,
+      "seed_block_identity": "pse-repeat-block-ba3f47217db2f1b7381c1979ea90de992b37aee7a646cf35b7acc576085990f8"
+    },
+    {
+      "candidate_id": "PSE-V1-CANDIDATE:RES523:REPEAT:7d822bc7509f23fc0fe8d20e73dd7f9b09da2507474e10d8d34214a195304f3f",
+      "ordinal": 47,
+      "seed_block_identity": "pse-repeat-block-3adb8fba2c53fe0a5bfd7fa4a2e2c3cdf9e0c767fadd7bdac5dd8c20377e30fb"
+    }
+  ],
+  "planned_seed_block_count": 48,
+  "production_validation": {
+    "candidate_payloads_generated": 0,
+    "identity_regex": "PSE-V1-CANDIDATE:[A-Za-z0-9][A-Za-z0-9._:-]{0,127}\\Z",
+    "identity_valid_count": 48,
+    "identity_validator": "dynamislm.benchmark.production._candidate_id",
+    "maximum_id_length": 145,
+    "recipe_digest_inventory_digest": "sha256:c159977f11188b2273c591cad205e38dd2c942119f7a62db7080ead84fa8180e",
+    "recipe_valid_count": 48,
+    "recipe_validator": "ProductionCandidateRecipeV1.__post_init__",
+    "seed_namespace_valid_count": 48
+  },
+  "ready_for_materialization": false,
+  "ready_for_owner_approval": true,
+  "repeat_protocol": {
+    "allowed_capability": "C08",
+    "allowed_family": "F05",
+    "allowed_locked_split": "PUBLIC_DEVELOPMENT",
+    "approval_required": true,
+    "approval_status": "PENDING",
+    "authority_digest": "sha256:a836d62a1aa47aa2c738182282278c9e818a122bac3224ba51b3de922b17ceb4",
+    "candidate_id_derivation_version": "PSE-REPEAT-CANDIDATE-ID@2.0.0",
+    "collision_policy_version": "PSE-REPEAT-COLLISION-POLICY@1.0.0",
+    "generator_family": "pse-v1-synthetic-refusal-public_development",
+    "generator_id": "pse-v1-unregistered-operation-context",
+    "generator_version": "1.0.0",
+    "ordinal_semantics_version": "PSE-REPEAT-ORDINAL-ZERO-BASED@1.0.0",
+    "parent_archetype_digest": "sha256:03447c947fc8d1086b8e24870cfffdc8a22ed50d5eec54f125fc958c85d982ab",
+    "parent_lane_authority_digest": "sha256:f639eb09961f9a429334c5c19ef89f46990d187b9cb9324f49803e908d911afa",
+    "parent_lane_authority_ref": "registered split-family synthetic generator",
+    "parent_lane_digest": "sha256:4971f5b1a442362915340c43957e6be90085b0d49b0f850947743f39b2f2545d",
+    "parent_lane_id": "synthetic:pse-v1-synthetic-refusal-public_development",
+    "protocol_version": "1.0.0",
+    "schema_version": "PSE-REPEAT-ALLOCATION-PROTOCOL@1.0.0",
+    "seed_block_derivation_version": "PSE-REPEAT-SEED-BLOCK@1.0.0"
+  },
+  "repeat_protocol_digest": "sha256:a836d62a1aa47aa2c738182282278c9e818a122bac3224ba51b3de922b17ceb4",
+  "report_digest": "sha256:3d4ea36bfca35aa1ffc8d4676ae486f08daf2cb18554ffa43085a221e12b1950",
+  "schema_version": "RES523-REPEAT-ALLOCATION-REPLACEMENT-PROPOSAL@1.0.0",
+  "seed_block_derivation_version": "PSE-REPEAT-SEED-BLOCK@1.0.0",
+  "seed_block_identity_inventory_digest": "sha256:76a93e187f008f01337c15fb5bd7b1620e6999763180302599feb38c9cd1cd63",
+  "seeds_materialized": 0,
+  "source_authority_compatibility": {
+    "generator": {
+      "generator_family": "pse-v1-synthetic-refusal-public_development",
+      "generator_id": "pse-v1-unregistered-operation-context",
+      "generator_version": "1.0.0"
+    },
+    "original_plan_digest_preserved": "sha256:240edcc8afe8f44c9d7fbd82b6c46b4e40408e329cf943d949beeabaa90f4398",
+    "parent_archetype_digest": "sha256:03447c947fc8d1086b8e24870cfffdc8a22ed50d5eec54f125fc958c85d982ab",
+    "parent_lane_authority_digest": "sha256:f639eb09961f9a429334c5c19ef89f46990d187b9cb9324f49803e908d911afa",
+    "parent_lane_digest": "sha256:4971f5b1a442362915340c43957e6be90085b0d49b0f850947743f39b2f2545d",
+    "preserved_plan_fields": [
+      "lane_id",
+      "capability",
+      "family",
+      "locked_split",
+      "requested_count",
+      "authorized_ordinals",
+      "structural_comparison_ref",
+      "structural_comparison_report_digest",
+      "structural_result_ref",
+      "structural_report_digest",
+      "generator_qualification_ref",
+      "generator_qualification_report_digest",
+      "prior_repeat_authority_ref",
+      "prior_repeat_authority_report_digest",
+      "prior_repeat_authority_status",
+      "structural_status",
+      "structural_min_additions",
+      "cardinality_optimality",
+      "k_minus_1",
+      "k_minus_1_status",
+      "k_minus_1_trial_digest",
+      "k",
+      "k_status",
+      "k_trial_digest",
+      "parent_lane_authority_ref",
+      "parent_lane_authority_digest",
+      "parent_lane_digest",
+      "parent_archetype_digest",
+      "generator_id",
+      "generator_family",
+      "generator_version",
+      "ordinal_semantics_version",
+      "seed_block_derivation_version",
+      "collision_policy_version",
+      "collision_policy_digest",
+      "historical_candidate_id_inventory_digest",
+      "historical_candidate_id_count",
+      "historical_namespace_collision_count",
+      "owner_approval_required",
+      "owner_approval_status"
+    ],
+    "source_reports": [
+      {
+        "digest": "sha256:c3669eb5c1823147b5a45d617b6c9270c1956a7b02cc69bfe5e230c332e9e231",
+        "ref": "reports/performance_science_eval/res407_governed_structural_comparison.json",
+        "role": "structural comparison"
+      },
+      {
+        "digest": "sha256:8906032d404a81d56f576ef0d91523c5752d5cc78f266581f2555f6fe8178560",
+        "ref": "reports/performance_science_eval/res407_real_c08_sufficiency.json",
+        "role": "RES-407 C08 sufficiency and cardinality proof"
+      },
+      {
+        "digest": "sha256:b8656213636aef2ab3fc179b03eb6079b6073e9b67b1345687068db7254dec3b",
+        "ref": "reports/performance_science_eval/res407_c08_generator_qualification.json",
+        "role": "production generator qualification"
+      },
+      {
+        "digest": "sha256:493554bd3739ae1bb443318d74ec510b708ce514ba30d72c6aa889a588550999",
+        "ref": "reports/performance_science_eval/res407_c08_repeat_authority.json",
+        "role": "prior repeat authority",
+        "status": "UNKNOWN"
+      }
+    ],
+    "structural_vector_digest": "sha256:f312934b6455e1ebd379471fd07e93fad8b6d53caf304c63f50bac58099c1923"
+  },
+  "structural_compatibility": {
+    "cell": [
+      "C08",
+      "F05"
+    ],
+    "count": 48,
+    "exact_13_token_shingle_relationships": "UNKNOWN_UNTIL_MATERIALIZATION",
+    "existing_449_relation_compatibility": {
+      "candidate_count": 449,
+      "matching_author_batch_count": 0,
+      "matching_generator_family_count": 4,
+      "matching_public_cluster_count": 4,
+      "new_to_existing_relation_semantics": {
+        "GENERATOR_FAMILY": "GUARANTEED_COUPLED_TO_4_EXISTING_CANDIDATES",
+        "GENERATOR_SEED_BLOCK": "CONDITIONAL_ON_UNIQUE_AUTHORIZED_SEED_BLOCKS",
+        "GENERATOR_SEED_NAMESPACE": "CONDITIONAL_ON_UNIQUE_AUTHORIZED_SEED_BLOCKS",
+        "SOURCE_FAMILY": "INDEPENDENT_IF_A_UNIQUE_REPEAT_ID_IS_AUTHORIZED",
+        "contamination_author_batch_identity": "NO_MATCH_IN_EXISTING_449",
+        "contamination_candidate_identities": "INDEPENDENT_IF_REPEAT_IDS_ARE_UNIQUE",
+        "exact_13_token_shingles": "UNKNOWN_UNTIL_MATERIALIZATION",
+        "isolation_cluster_id": "GUARANTEED_COUPLED_TO_4_EXISTING_CANDIDATES"
+      }
+    },
+    "identity_derived_contamination_keys": {
+      "all_three_unique_for_48_ids": true,
+      "general_and_benchmark_artifact": "candidate:{candidate_id}",
+      "source_family": "PSE-V1-SYNTHETIC-FAMILY:{candidate_id}",
+      "training_exclusion": "qualification-exclusion:{candidate_id}"
+    },
+    "lane_id": "synthetic:pse-v1-synthetic-refusal-public_development",
+    "ordinals": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15,
+      16,
+      17,
+      18,
+      19,
+      20,
+      21,
+      22,
+      23,
+      24,
+      25,
+      26,
+      27,
+      28,
+      29,
+      30,
+      31,
+      32,
+      33,
+      34,
+      35,
+      36,
+      37,
+      38,
+      39,
+      40,
+      41,
+      42,
+      43,
+      44,
+      45,
+      46,
+      47
+    ],
+    "seed_block_and_seed_namespace_unique_for_48_ids": true,
+    "selection_features": [
+      {
+        "key": [
+          "C08",
+          "F05"
+        ],
+        "kind": "CELL"
+      },
+      {
+        "key": [
+          "FALSE_SCIENTIFIC_ACCEPTANCE"
+        ],
+        "kind": "CRITICAL_ERROR"
+      },
+      {
+        "key": [
+          "INVENTED_NUMERICAL_SCIENCE"
+        ],
+        "kind": "CRITICAL_ERROR"
+      },
+      {
+        "key": [
+          "C08",
+          "FALSE_SCIENTIFIC_ACCEPTANCE"
+        ],
+        "kind": "ROW_ERROR"
+      },
+      {
+        "key": [
+          "C08",
+          "INVENTED_NUMERICAL_SCIENCE"
+        ],
+        "kind": "ROW_ERROR"
+      },
+      {
+        "key": [
+          "C08",
+          "NONFINITE_INPUT"
+        ],
+        "kind": "ROW_TAG"
+      }
+    ],
+    "selection_features_digest": "sha256:ee83bf4ea54d93ce1221033534f0e1438cc547824cd1427c13414165c3e37712",
+    "selection_features_preserved": true,
+    "shared_colocation_identities_unchanged": {
+      "expert_author_batch": "agent-process:codex:RES-115-CASE-AUTHORING-001B",
+      "generator_family": "pse-v1-synthetic-refusal-public_development",
+      "isolation_cluster_id": "PSE-V1-SYNTHETIC-CLUSTER:PUBLIC_DEVELOPMENT"
+    },
+    "split": "PUBLIC_DEVELOPMENT",
+    "structural_proof_assumptions_preserved": true
+  },
+  "supersession": {
+    "approval_transfer": "NONE; replacement owner approval remains PENDING",
+    "original_allocation_plan_digest": "sha256:240edcc8afe8f44c9d7fbd82b6c46b4e40408e329cf943d949beeabaa90f4398",
+    "original_allocation_plan_status": "FROZEN",
+    "original_ids_rejected_by_production_identity_validator": 48,
+    "original_owner_approval_status": "APPROVED",
+    "original_plan_production_identity_compatible": false,
+    "original_plan_ref": "reports/performance_science_eval/res523_repeat_allocation_authority.json",
+    "original_report_digest": "sha256:b7f6e1d97762f425651c0840317d315fd74c9f9cf13063798c6a3cffae377648",
+    "replacement_supersedes_original_for_execution": true
+  },
+  "unique_candidate_ids": 48,
+  "unique_seed_block_identities": 48
+}
