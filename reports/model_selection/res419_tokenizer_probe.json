@@ -12,15 +12,35 @@
           "token_count": 46,
           "token_ids_sha256": "9c0e6435fda4fa7f94b56a06713646010b3487c62a95481aa530ca1b6cee45ef"
         },
+        "football_microcycle_context": {
+          "input_sha256": "5987112d27bb25dcc1be063cc84dad659f49d4f52bf2eb951688e7f771f1a176",
+          "token_count": 52,
+          "token_ids_sha256": "e7ee4d06c13c40903e9148337227c71a8c3d17f66c35af209cf7167bd08aa7cc"
+        },
         "football_performance_terminology": {
           "input_sha256": "39ce40a96392671deecfbd94f1670b17f4be3016840c341f5e5747d126a54be2",
           "token_count": 50,
           "token_ids_sha256": "5ef6cd664660492e2b04404a7bebed866223a51e416a669da69c68b0ddd4bd26"
         },
+        "measurement_uncertainty": {
+          "input_sha256": "026de7c15b4b0d5a21616d958b632a16ecc64afe0e61611e691d4ac0bc64b99a",
+          "token_count": 56,
+          "token_ids_sha256": "6a1647b8caa022818d0068e15d46dffb2459a1279366f1ae72d68fbd0aee0759"
+        },
+        "refusal_output_schema": {
+          "input_sha256": "cb3771663ce214dd8492010201912f5f980a6ddbddd52217b76532d3c330438d",
+          "token_count": 103,
+          "token_ids_sha256": "fc0c7a3abe79793eac9c3ec9cbdc6f317504029fb1003ef753d2588c6e2e4b52"
+        },
         "scientific_notation": {
           "input_sha256": "41c0a1278383469ad42cd222e3ff8c1df2a28a97263df2d3995a67e503ef7fb6",
           "token_count": 56,
           "token_ids_sha256": "148116a3202936316564023b49fcfffe6a2f7eb0e58b8014dfc2738645eb00c9"
+        },
+        "scientific_refusal": {
+          "input_sha256": "054ba7ff8a6275e1c2db28af74c71f88499909445f9d19caeb78b5938ba91874",
+          "token_count": 50,
+          "token_ids_sha256": "8cc967f78f1dcc52748644831e07b3bbbd11e5889f47b0e7df2dd46bb3171628"
         },
         "si_units": {
           "input_sha256": "d85c3eea735dd74d0d2b4ec8fddd769c454711684e48b6164cf0e7cffc3d31e9",
@@ -33,7 +53,7 @@
       "tokenizer_bytes": 11422654,
       "tokenizer_file": "tokenizer.json",
       "tokenizer_sha256": "aeb13307a71acd8fe81861d94ad54ab689df773318809eed3cbe794b4492dae4",
-      "total_token_count": 302,
+      "total_token_count": 563,
       "vocabulary_size": 151669
     },
     {
@@ -48,15 +68,35 @@
           "token_count": 46,
           "token_ids_sha256": "02911082621d3efea0431536f60f485527b0a8cbbcf7cc309aac7a5c50d95d26"
         },
+        "football_microcycle_context": {
+          "input_sha256": "5987112d27bb25dcc1be063cc84dad659f49d4f52bf2eb951688e7f771f1a176",
+          "token_count": 52,
+          "token_ids_sha256": "86b29289c90d1f0c282716e876530cdc8e38d1e6358715d76b05faa42228c4af"
+        },
         "football_performance_terminology": {
           "input_sha256": "39ce40a96392671deecfbd94f1670b17f4be3016840c341f5e5747d126a54be2",
           "token_count": 46,
           "token_ids_sha256": "234a9a9e10457b767bc9347bde42c8dfdeb7a8d6d27414a32e03d35f885e2056"
         },
+        "measurement_uncertainty": {
+          "input_sha256": "026de7c15b4b0d5a21616d958b632a16ecc64afe0e61611e691d4ac0bc64b99a",
+          "token_count": 55,
+          "token_ids_sha256": "d0e8afe1908b8e0a15c2d1086fc52805031011169dbe57a9c5dfffeb24950897"
+        },
+        "refusal_output_schema": {
+          "input_sha256": "cb3771663ce214dd8492010201912f5f980a6ddbddd52217b76532d3c330438d",
+          "token_count": 103,
+          "token_ids_sha256": "cdf02bc1c72d612d0c4eefe7e90457e47913e0eaef1a95c7dd7622a580dcda37"
+        },
         "scientific_notation": {
           "input_sha256": "41c0a1278383469ad42cd222e3ff8c1df2a28a97263df2d3995a67e503ef7fb6",
           "token_count": 51,
           "token_ids_sha256": "1f303b3b5f810021f4bd82b6e28679cebfa7fba454927d683d8bc0f968bc8f9e"
+        },
+        "scientific_refusal": {
+          "input_sha256": "054ba7ff8a6275e1c2db28af74c71f88499909445f9d19caeb78b5938ba91874",
+          "token_count": 50,
+          "token_ids_sha256": "3aa3d8152713eee7908495d42a12b7ddd0e5d573685a2927dd5e0793bff982ea"
         },
         "si_units": {
           "input_sha256": "d85c3eea735dd74d0d2b4ec8fddd769c454711684e48b6164cf0e7cffc3d31e9",
@@ -69,7 +109,7 @@
       "tokenizer_bytes": 17208819,
       "tokenizer_file": "tokenizer.json",
       "tokenizer_sha256": "7b6a500b662a34eb3f0374db856ba4ad7de4c81040571d78dc0d357238930005",
-      "total_token_count": 299,
+      "total_token_count": 559,
       "vocabulary_size": 128256
     },
     {
@@ -84,15 +124,35 @@
           "token_count": 46,
           "token_ids_sha256": "11c24da0e700864ec5225eddcc2c483c57ea0ab22adff24fe229b65fa9e9031b"
         },
+        "football_microcycle_context": {
+          "input_sha256": "5987112d27bb25dcc1be063cc84dad659f49d4f52bf2eb951688e7f771f1a176",
+          "token_count": 52,
+          "token_ids_sha256": "dacd2da7adfde5071e6e1f4d63e28159d0fa0bca74dee385f830b9f92f6e3801"
+        },
         "football_performance_terminology": {
           "input_sha256": "39ce40a96392671deecfbd94f1670b17f4be3016840c341f5e5747d126a54be2",
           "token_count": 50,
           "token_ids_sha256": "bca4d03f8f6203d1acd472780da41e306754355b2d09fe740f41bd73c92093f6"
         },
+        "measurement_uncertainty": {
+          "input_sha256": "026de7c15b4b0d5a21616d958b632a16ecc64afe0e61611e691d4ac0bc64b99a",
+          "token_count": 56,
+          "token_ids_sha256": "4346e2bd84be8c620d76e88439d2d68480be8baa2410293017fe71b3b06ee798"
+        },
+        "refusal_output_schema": {
+          "input_sha256": "cb3771663ce214dd8492010201912f5f980a6ddbddd52217b76532d3c330438d",
+          "token_count": 103,
+          "token_ids_sha256": "d3c63e65ecf2e10924fa2fd184ef7ac593ad18dd2f2c91fc1dd0ceb37fd0f7a2"
+        },
         "scientific_notation": {
           "input_sha256": "41c0a1278383469ad42cd222e3ff8c1df2a28a97263df2d3995a67e503ef7fb6",
           "token_count": 58,
           "token_ids_sha256": "dd42c6517b0a0ca926cdd3ccf993552b40ec0a32c32e62b125d7a17315f57e9a"
+        },
+        "scientific_refusal": {
+          "input_sha256": "054ba7ff8a6275e1c2db28af74c71f88499909445f9d19caeb78b5938ba91874",
+          "token_count": 50,
+          "token_ids_sha256": "55ef797dc11d6fb98cd8055932ca7aa8082822f93fd05b7d9d49be239818c1e9"
         },
         "si_units": {
           "input_sha256": "d85c3eea735dd74d0d2b4ec8fddd769c454711684e48b6164cf0e7cffc3d31e9",
@@ -105,7 +165,7 @@
       "tokenizer_bytes": 12807982,
       "tokenizer_file": "tokenizer.json",
       "tokenizer_sha256": "5f9e4d4901a92b997e463c1f46055088b6cca5ca61a6522d1b9f64c4bb81cb42",
-      "total_token_count": 310,
+      "total_token_count": 571,
       "vocabulary_size": 248070
     },
     {
@@ -120,15 +180,35 @@
           "token_count": 46,
           "token_ids_sha256": "02911082621d3efea0431536f60f485527b0a8cbbcf7cc309aac7a5c50d95d26"
         },
+        "football_microcycle_context": {
+          "input_sha256": "5987112d27bb25dcc1be063cc84dad659f49d4f52bf2eb951688e7f771f1a176",
+          "token_count": 52,
+          "token_ids_sha256": "86b29289c90d1f0c282716e876530cdc8e38d1e6358715d76b05faa42228c4af"
+        },
         "football_performance_terminology": {
           "input_sha256": "39ce40a96392671deecfbd94f1670b17f4be3016840c341f5e5747d126a54be2",
           "token_count": 46,
           "token_ids_sha256": "234a9a9e10457b767bc9347bde42c8dfdeb7a8d6d27414a32e03d35f885e2056"
         },
+        "measurement_uncertainty": {
+          "input_sha256": "026de7c15b4b0d5a21616d958b632a16ecc64afe0e61611e691d4ac0bc64b99a",
+          "token_count": 55,
+          "token_ids_sha256": "d0e8afe1908b8e0a15c2d1086fc52805031011169dbe57a9c5dfffeb24950897"
+        },
+        "refusal_output_schema": {
+          "input_sha256": "cb3771663ce214dd8492010201912f5f980a6ddbddd52217b76532d3c330438d",
+          "token_count": 103,
+          "token_ids_sha256": "cdf02bc1c72d612d0c4eefe7e90457e47913e0eaef1a95c7dd7622a580dcda37"
+        },
         "scientific_notation": {
           "input_sha256": "41c0a1278383469ad42cd222e3ff8c1df2a28a97263df2d3995a67e503ef7fb6",
           "token_count": 51,
           "token_ids_sha256": "1f303b3b5f810021f4bd82b6e28679cebfa7fba454927d683d8bc0f968bc8f9e"
+        },
+        "scientific_refusal": {
+          "input_sha256": "054ba7ff8a6275e1c2db28af74c71f88499909445f9d19caeb78b5938ba91874",
+          "token_count": 50,
+          "token_ids_sha256": "3aa3d8152713eee7908495d42a12b7ddd0e5d573685a2927dd5e0793bff982ea"
         },
         "si_units": {
           "input_sha256": "d85c3eea735dd74d0d2b4ec8fddd769c454711684e48b6164cf0e7cffc3d31e9",
@@ -141,7 +221,7 @@
       "tokenizer_bytes": 7153421,
       "tokenizer_file": "tokenizer.json",
       "tokenizer_sha256": "e2bad66439538cb4d5a7580680932432ed9ece9d3b8577e675512bdf11599253",
-      "total_token_count": 299,
+      "total_token_count": 559,
       "vocabulary_size": 100352
     }
   ],
