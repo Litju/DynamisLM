@@ -2,7 +2,8 @@
 
 **Date:** 2026-10-20<br>
 **Linear:** [RES-419](https://linear.app/alignerr-cmj/issue/RES-419/p7-r1-base-model-and-tokenizer-selection-decision-record)<br>
-**Repository baseline:** `5b493be3cc72c3c688c0815e3c97e156fb4ad230`<br>
+**Review integration base:** `main` at `74c9e3d05f2da41facc25b7aa0e880d5668cc055` (RES-71 scientific engine gate)<br>
+**Historical PSE execution authority baseline:** `5b493be3cc72c3c688c0815e3c97e156fb4ad230` (separate, NOT included in this branch)<br>
 **Probe artifact:** [`res419_tokenizer_probe.json`](../../reports/model_selection/res419_tokenizer_probe.json)
 
 ## Decision
