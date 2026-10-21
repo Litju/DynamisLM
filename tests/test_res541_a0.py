@@ -123,6 +123,8 @@ def test_colab_quota_gate_requires_positive_balance_and_no_active_assignment() -
         a0_colab._parse_usage_output("Current balance: 0.00 compute units\nActive assignments: 0")
     with pytest.raises(a0_colab.RunError, match="active assignment"):
         a0_colab._parse_usage_output("Current balance: 262.07 compute units\nActive assignments: 1")
+    assert a0_colab._is_mission_branch("res-541-a0", f"origin/{a0_colab.BRANCH}")
+    assert not a0_colab._is_mission_branch("other-work", "origin/main")
 
 
 def test_colab_model_prompt_preparation_stays_within_the_approved_case_bound(

@@ -91,9 +91,14 @@ def _confirmation_phrase(balance: str) -> str:
     return f"RUN RES-541 A0 | quota={balance} CU | max=900s | cases=16 | tokens=64 | gpu=T4"
 
 
+def _is_mission_branch(branch: str, upstream: str) -> bool:
+    return branch == BRANCH or upstream == f"origin/{BRANCH}"
+
+
 def _check_clean_pushed_revision() -> str:
     branch = _git("branch", "--show-current")
-    if branch != BRANCH:
+    upstream = _git("rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}")
+    if not _is_mission_branch(branch, upstream):
         raise RunError("the WSL checkout is not on the RES-541 mission branch")
     if _git("status", "--porcelain"):
         raise RunError("commit the complete A0 source before requesting remote execution")
