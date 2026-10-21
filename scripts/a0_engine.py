@@ -456,55 +456,37 @@ def parse_model_intent(raw_text: str) -> ModelIntent:
     if len(raw_text) > MAX_MODEL_OUTPUT_CHARS:
         raise ValueError("model output exceeds the character bound")
     value = _object(json.loads(raw_text), "model intent")
-    fields = {
-        "schema",
-        "decision",
-        "analysis_class",
-        "baseline_role",
-        "followup_role",
-        "measurement_claim_level",
-        "relationship_claim_level",
-        "refusal_reason",
-    }
-    if set(value) != fields or value.get("schema") != INTENT_SCHEMA:
-        raise ValueError("model intent has an unexpected schema or field set")
     try:
-        decision = ModelDecision(_text(value.get("decision"), "decision"))
-        analysis_class = _optional_enum(
-            AnalysisClass, value.get("analysis_class"), "analysis_class"
-        )
-        baseline_role = _optional_enum(ObservationRole, value.get("baseline_role"), "baseline_role")
-        followup_role = _optional_enum(ObservationRole, value.get("followup_role"), "followup_role")
-        measurement = _optional_enum(
-            MeasurementClaimLevel,
-            value.get("measurement_claim_level"),
-            "measurement_claim_level",
-        )
-        relationship = _optional_enum(
-            RelationshipClaimLevel,
-            value.get("relationship_claim_level"),
-            "relationship_claim_level",
-        )
-        refusal_reason = _optional_enum(
-            ModelRefusalReason,
-            value.get("refusal_reason"),
-            "refusal_reason",
-        )
+        version = value.get("v")
+        if not isinstance(version, int) or isinstance(version, bool) or version != 1:
+            raise ValueError("model intent schema version must be 1")
+        decision = ModelDecision(_text(value.get("d"), "d"))
+        if decision is ModelDecision.EXECUTE:
+            fields = {"v", "d", "a", "b", "f", "m", "r"}
+            if set(value) != fields:
+                raise ValueError("execute intent has an unexpected field set")
+            analysis_class = _optional_enum(AnalysisClass, value.get("a"), "a")
+            baseline_role = _optional_enum(ObservationRole, value.get("b"), "b")
+            followup_role = _optional_enum(ObservationRole, value.get("f"), "f")
+            measurement = _optional_enum(MeasurementClaimLevel, value.get("m"), "m")
+            relationship = _optional_enum(RelationshipClaimLevel, value.get("r"), "r")
+            refusal_reason = None
+        else:
+            if set(value) != {"v", "d", "x"}:
+                raise ValueError("refusal intent has an unexpected field set")
+            analysis_class = None
+            baseline_role = None
+            followup_role = None
+            measurement = None
+            relationship = None
+            refusal_reason = _optional_enum(ModelRefusalReason, value.get("x"), "x")
     except ValueError as exc:
         raise ValueError("model intent contains an invalid typed value") from exc
     if decision is ModelDecision.EXECUTE:
         if analysis_class is None or (measurement is None and relationship is None):
             raise ValueError("execute intents require an analysis class and claim axis")
-        if refusal_reason is not None:
-            raise ValueError("execute intents cannot contain a refusal reason")
-    elif (
-        any(
-            item is not None
-            for item in (analysis_class, baseline_role, followup_role, measurement, relationship)
-        )
-        or refusal_reason is None
-    ):
-        raise ValueError("refusal intents require only a registered refusal reason")
+    elif refusal_reason is None:
+        raise ValueError("refusal intents require a registered refusal reason")
     return ModelIntent(
         decision,
         analysis_class,
@@ -530,6 +512,24 @@ def _intent_wire(intent: ModelIntent) -> dict[str, str | None]:
             intent.relationship_claim_level.value if intent.relationship_claim_level else None
         ),
         "refusal_reason": intent.refusal_reason.value if intent.refusal_reason else None,
+    }
+
+
+def _model_intent_wire(intent: ModelIntent) -> dict[str, str | int | None]:
+    if intent.decision is ModelDecision.REFUSE:
+        return {
+            "v": 1,
+            "d": intent.decision.value,
+            "x": intent.refusal_reason.value if intent.refusal_reason else None,
+        }
+    return {
+        "v": 1,
+        "d": intent.decision.value,
+        "a": intent.analysis_class.value if intent.analysis_class else None,
+        "b": intent.baseline_role.value if intent.baseline_role else None,
+        "f": intent.followup_role.value if intent.followup_role else None,
+        "m": intent.measurement_claim_level.value if intent.measurement_claim_level else None,
+        "r": intent.relationship_claim_level.value if intent.relationship_claim_level else None,
     }
 
 
@@ -863,8 +863,9 @@ def score_outputs(
     if (
         model_outputs.get("model_id") != "HuggingFaceTB/SmolLM3-3B"
         or model_outputs.get("model_revision") != "a07cc9a04f16550a088caea529712d1d335b0ac1"
+        or model_outputs.get("intent_schema") != INTENT_SCHEMA
     ):
-        raise ValueError("model outputs do not match the pinned RES-419 checkpoint")
+        raise ValueError("model outputs do not match the pinned model and intent schema")
     raw_outputs = model_outputs.get("cases")
     if not isinstance(raw_outputs, list):
         raise ValueError("model outputs must contain a case list")
@@ -1029,6 +1030,7 @@ def score_outputs(
         "scope": "SYNTHETIC_DEVELOPMENT_ONLY",
         "source_revision": source_revision,
         "case_manifest_sha256": hashlib.sha256(CASES_PATH.read_bytes()).hexdigest(),
+        "intent_schema": INTENT_SCHEMA,
         "model": {
             "id": "HuggingFaceTB/SmolLM3-3B",
             "revision": "a07cc9a04f16550a088caea529712d1d335b0ac1",

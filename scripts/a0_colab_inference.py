@@ -24,23 +24,29 @@ MAX_PROMPT_TOKENS = 1024
 MAX_NEW_TOKENS = 64
 MAX_MODEL_WEIGHT_BYTES = 8 * 1024**3
 SEED = 541
-INTENT_SCHEMA_EXAMPLE = json.dumps(
+EXECUTE_SHAPE = json.dumps(
     {
-        "schema": INTENT_SCHEMA,
-        "decision": "EXECUTE|REFUSE",
-        "analysis_class": "AnalysisClass value or null",
-        "baseline_role": "BASELINE|FOLLOWUP|null",
-        "followup_role": "BASELINE|FOLLOWUP|null",
-        "measurement_claim_level": "MeasurementClaimLevel value or null",
-        "relationship_claim_level": "RelationshipClaimLevel value or null",
-        "refusal_reason": "MISSING_EVIDENCE|UNSUPPORTED_ANALYSIS|CLAIM_EXCEEDS_EVIDENCE|null",
+        "v": 1,
+        "d": "EXECUTE",
+        "a": "AnalysisClass enum value",
+        "b": "BASELINE|FOLLOWUP|null",
+        "f": "BASELINE|FOLLOWUP|null",
+        "m": "MeasurementClaimLevel enum value|null",
+        "r": "RelationshipClaimLevel enum value|null",
     },
+    separators=(",", ":"),
+)
+REFUSE_SHAPE = json.dumps(
+    {"v": 1, "d": "REFUSE", "x": "MISSING_EVIDENCE|UNSUPPORTED_ANALYSIS|CLAIM_EXCEEDS_EVIDENCE"},
     separators=(",", ":"),
 )
 SYSTEM_PROMPT = (
     "You are a typed scientific request parser. Do not calculate or answer the request.\n"
-    "Return exactly one JSON object, with no Markdown or extra fields, using this schema:\n"
-    f"{INTENT_SCHEMA_EXAMPLE}\n"
+    "Return compact JSON only; do not add Markdown, spaces, or extra fields.\n"
+    f"Version 1 execute shape: {EXECUTE_SHAPE}\n"
+    f"Version 1 refuse shape: {REFUSE_SHAPE}\n"
+    "Keys: a=analysis class, b=baseline role, f=follow-up role, m=measurement claim, "
+    "r=relationship claim, x=refusal reason.\n"
     "For a computation, select the BASELINE and FOLLOWUP roles from the evidence. "
     "Use SCALAR_ABSOLUTE_CHANGE and NUMERICAL_CHANGE only for follow-up minus baseline. "
     "Use SCALAR_RELATIVE_CHANGE for percentages, WITHIN_ATHLETE_ASSOCIATION for association, "
@@ -332,6 +338,7 @@ def run_inference(prepared_path: Path, output_path: Path) -> dict[str, object]:
     document: dict[str, object] = {
         "schema": OUTPUT_SCHEMA,
         "status": "COMPLETE",
+        "intent_schema": "RES541_A0_INTENT_V1",
         "model_id": MODEL_ID,
         "model_revision": MODEL_REVISION,
         "packages": packages,
@@ -397,6 +404,7 @@ def main() -> int:
                 {
                     "schema": OUTPUT_SCHEMA,
                     "status": "NO_GO",
+                    "intent_schema": "RES541_A0_INTENT_V1",
                     "model_id": MODEL_ID,
                     "model_revision": MODEL_REVISION,
                     "failure_category": category,

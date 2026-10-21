@@ -15,7 +15,10 @@ def _oracle_outputs() -> dict[str, object]:
         model_cases.append(
             {
                 "case_id": case.case_id,
-                "raw_text": json.dumps(a0_engine._intent_wire(a0_engine.oracle_intent(context))),
+                "raw_text": json.dumps(
+                    a0_engine._model_intent_wire(a0_engine.oracle_intent(context)),
+                    separators=(",", ":"),
+                ),
                 "prompt_sha256": "0" * 64,
                 "prompt_tokens": 32,
                 "generated_tokens": 18,
@@ -27,6 +30,7 @@ def _oracle_outputs() -> dict[str, object]:
     return {
         "schema": a0_engine.OUTPUT_SCHEMA,
         "status": "COMPLETE",
+        "intent_schema": a0_engine.INTENT_SCHEMA,
         "model_id": "HuggingFaceTB/SmolLM3-3B",
         "model_revision": "a07cc9a04f16550a088caea529712d1d335b0ac1",
         "cases": model_cases,
@@ -87,9 +91,9 @@ def test_swapped_entry_references_fail_closed_after_authorization() -> None:
     model_cases = outputs["cases"]
     assert isinstance(model_cases, list)
     intent = json.loads(str(model_cases[0]["raw_text"]))
-    intent["baseline_role"], intent["followup_role"] = (
-        intent["followup_role"],
-        intent["baseline_role"],
+    intent["b"], intent["f"] = (
+        intent["f"],
+        intent["b"],
     )
     model_cases[0]["raw_text"] = json.dumps(intent)
 
@@ -106,8 +110,18 @@ def test_swapped_entry_references_fail_closed_after_authorization() -> None:
 def test_unknown_analysis_class_is_rejected_by_typed_boundary() -> None:
     case = a0_engine.load_cases()[0]
     context = a0_engine._build_context(case)
-    intent = a0_engine._intent_wire(a0_engine.oracle_intent(context))
-    intent["analysis_class"] = "MODEL_WRITTEN_PYTHON"
+    intent = a0_engine._model_intent_wire(a0_engine.oracle_intent(context))
+    intent["a"] = "MODEL_WRITTEN_PYTHON"
+
+    with pytest.raises(ValueError, match="typed value"):
+        a0_engine.parse_model_intent(json.dumps(intent))
+
+
+@pytest.mark.parametrize("version", [True, 1.0, "1", 2])
+def test_intent_schema_version_must_be_the_integer_one(version: object) -> None:
+    case = a0_engine.load_cases()[0]
+    intent = a0_engine._model_intent_wire(a0_engine.oracle_intent(a0_engine._build_context(case)))
+    intent["v"] = version  # type: ignore[assignment]
 
     with pytest.raises(ValueError, match="typed value"):
         a0_engine.parse_model_intent(json.dumps(intent))
