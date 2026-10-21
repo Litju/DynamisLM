@@ -14,7 +14,7 @@ SMOLLM3_FP16_WEIGHT_FLOOR_BYTES = 6_150_197_248
 
 def main() -> int:
     try:
-        import torch
+        import torch  # type: ignore[import-not-found]
     except ImportError:
         print(
             json.dumps(
