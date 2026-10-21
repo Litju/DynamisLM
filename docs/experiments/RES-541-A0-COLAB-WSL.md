@@ -31,17 +31,31 @@ colab --auth=oauth2 sessions
 
 If T4 is unavailable, out of quota, or incurs unexpected compute fees, **stop and ask the owner**; don't silently provision A100/L4/H100, retry endlessly, or change runtime tiers.
 
-## Model execution (future Codex work on this branch; NOT implemented by preflight)
-- Pinned post-trained `HuggingFaceTB/SmolLM3-3B@a07cc9a04f16550a088caea529712d1d335b0ac1` as *inference-only* candidate.
-- Explicitly pin model/runtime dependencies and revision, and verify usable dtype for actual device (T4 FP16, not blindly BF16).
-- Stage a source package from the same repository Git SHA onto the VM; don't assume `colab exec -f local.py` transfers Python imports or the whole repository.
-- Run fixed, **newly authored synthetic development** cases only; call the existing registered within-athlete scalar absolute change analysis through validated canonical Python contracts, never eval/exec raw LM code.
-- Add fail-closed refusal cases and typed result validation; avoid PSE candidate material, hidden splits, restricted data and existing test-case leakage.
-- Bound cases, prompt/output tokens, memory, runtime, and remote artifact sizes. Download sanitized run receipts and logs; do not commit secrets, checkpoints, model cache or large generated datasets.
-- Human account approval for GPU/session/weights is required. No inference, training or fine-tuning is authorized outside RES-541's exact development-only scope.
-- Finish with ordinary hosted CI, independent scientific review and **one** mission PR against `main`. No merge without review.
+## Reproducible A0 execution
+
+The implementation is `scripts/a0_colab.py`, `scripts/a0_colab_entry.py`, `scripts/a0_colab_inference.py`, and `scripts/a0_engine.py`; fixed cases and inference pins live under `experiments/a0/`. `colab run` transfers only the entry script. The entry script therefore clones and verifies the full repository at the exact pushed Git SHA before it imports or executes scientific code.
+
+From WSL, after CPU QA and pushing the clean RES-541 branch revision:
+
+```bash
+uv run --frozen --python 3.12 scripts/a0_colab.py run --output-dir reports/a0
+```
+
+The local wrapper checks that the checkout is clean, on the issue's mission branch, and pushed at the exact `HEAD`. It runs `colab --auth=oauth2 usage`, refuses active assignments, displays the available quota, and requires the owner to enter an exact confirmation string before provisioning. It requests one T4 runtime with a 900-second CLI timeout. There is no retry or tier fallback. OAuth prompts remain interactive and must be completed by the owner; no authentication state or tokens are copied to the repository.
+
+The remote entry point fails closed unless it sees Python `3.13.15`, PyTorch `2.11.0+cu130`, one T4, compute capability 7.5, at least 12 GiB total and 8 GiB free VRAM, and 12 GiB free disk. It clones the full public repository, checks out the exact SHA in a clean detached worktree, and provisions Python `3.12.13` with `uv==0.12.2` and `uv sync --frozen`. That isolated Python 3.12 environment runs the RES-62/69/70 builders and authorities. The Python 3.13 inference venv uses `--system-site-packages` to inherit Colab's existing PyTorch and installs only the exact inference requirements with `--no-deps`; it verifies the imported PyTorch version and file path still match the base Colab runtime.
+
+Before fetching weights, inference reads pinned Hugging Face Safetensors metadata and refuses a checkpoint larger than 8 GiB or inadequate free disk. It loads `HuggingFaceTB/SmolLM3-3B@a07cc9a04f16550a088caea529712d1d335b0ac1` with `trust_remote_code=False`, Safetensors, and FP16 on the T4. Generation is greedy (`do_sample=False`, one beam), seeded with `541`, and bounded to 1,024 prompt tokens and 64 new tokens for each of the 16 fixed cases. The source cases contain only newly authored synthetic development values and independent expected outcomes; there is no PSE, RES-407, hidden split, or real athlete data.
+
+The model emits only a typed intent. Python resolves its baseline/follow-up roles to exact canonical entry IDs, authorizes the RES-70 `SCALAR_ABSOLUTE_CHANGE` capability, calls the registered RES-69 `follow-up - baseline` operation, validates the exact result, and asks RES-70 claim authority to permit the numerical-change claim. Model output cannot contain a numeric result or executable code. Missing support, unequal units/metrics, cross-athlete support, unregistered operations, causal claims, and practical-meaning claims are refusal cases.
+
+The small JSON report includes the source SHA, model and dependency revisions, GPU/precision/config, prompt and generation token counts, first-token and total latency, peak VRAM/RAM, disk/weight bytes, per-case intents/results/refusals, denominators, and failure categories. It reports `PASS`, `PASS_WITH_LIMITATIONS`, or `NO_GO`; the 16-case development suite has no confidence limits or generalization claim. The remote experiment deadline is 840 seconds, leaving margin inside the Colab 900-second timeout. `--keep` allows the local wrapper to download the report, stop the session, and verify it is absent from active sessions. Reports are written to `reports/a0/`; no weights, caches, credentials, or large data are retrieved.
+
+Run inference only after the owner confirms the current quota and this bounded execution budget. No training, fine-tuning, HF upload, formal M0/PSE qualification, or merge is authorized. Keep this work on draft PR #46 for independent scientific review.
 
 Official docs:
 - [Google Colab CLI](https://github.com/googlecolab/google-colab-cli)
 - [Google Colab VS Code extension](https://marketplace.visualstudio.com/items?itemName=Google.colab)
 - [VS Code WSL guide](https://code.visualstudio.com/docs/remote/wsl)
+- [SmolLM3-3B pinned model card](https://huggingface.co/HuggingFaceTB/SmolLM3-3B/tree/a07cc9a04f16550a088caea529712d1d335b0ac1)
+- [Transformers 4.53.0 SmolLM3 documentation](https://huggingface.co/docs/transformers/v4.53.0/en/model_doc/smollm3)
