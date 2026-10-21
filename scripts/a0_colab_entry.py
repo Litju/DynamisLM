@@ -34,6 +34,11 @@ class A0Error(RuntimeError):
         self.category = category
 
 
+def _uv_version_matches(output: str, expected: str) -> bool:
+    fields = output.split()
+    return len(fields) >= 2 and fields[0] == "uv" and fields[1] == expected
+
+
 def _run(
     command: list[str],
     *,
@@ -105,6 +110,7 @@ def _write_failure(
     category: str,
     elapsed_seconds: float,
     preflight: dict[str, object] | None,
+    model_download_stage_entered: bool,
 ) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     document: dict[str, object] = {
@@ -116,6 +122,9 @@ def _write_failure(
         "failure_category": category,
         "remote_elapsed_seconds": round(elapsed_seconds, 3),
         "runtime_preflight": preflight or {},
+        "model_download_stage_entered": model_download_stage_entered,
+        "model_weights_downloaded": False if not model_download_stage_entered else None,
+        "inference_run": False,
         "cases": [],
     }
     path.write_text(json.dumps(document, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -130,6 +139,7 @@ def run(revision: str, run_id: str, report_path: Path) -> int:
     deadline = started + MAX_RUNTIME_SECONDS
     stage = "GPU_PREFLIGHT"
     preflight: dict[str, object] | None = None
+    model_download_stage_entered = False
     report_path.parent.mkdir(parents=True, exist_ok=True)
     try:
         _torch, preflight = _preflight()
@@ -227,7 +237,7 @@ def run(revision: str, run_id: str, report_path: Path) -> int:
                 timeout=15,
                 stage=stage,
             ).strip()
-            if uv_version != f"uv {UV_VERSION}":
+            if not _uv_version_matches(uv_version, UV_VERSION):
                 raise A0Error(stage, "UV_VERSION_MISMATCH")
             _run(
                 [*uv_prefix, "python", "install", SOURCE_PYTHON],
@@ -323,6 +333,7 @@ def run(revision: str, run_id: str, report_path: Path) -> int:
 
             model_outputs = work / "model-outputs.json"
             stage = "PINNED_MODEL_INFERENCE"
+            model_download_stage_entered = True
             inference_env = os.environ.copy()
             inference_env["HF_HOME"] = str(work / "model-cache")
             inference_env["HF_HUB_DISABLE_TELEMETRY"] = "1"
@@ -436,6 +447,7 @@ def run(revision: str, run_id: str, report_path: Path) -> int:
             category=exc.category,
             elapsed_seconds=time.monotonic() - started,
             preflight=preflight,
+            model_download_stage_entered=model_download_stage_entered,
         )
         print(f"RES-541 A0 stopped at {exc.stage}: {exc.category}", file=sys.stderr)
         return 1
@@ -447,6 +459,7 @@ def run(revision: str, run_id: str, report_path: Path) -> int:
             category=type(exc).__name__,
             elapsed_seconds=time.monotonic() - started,
             preflight=preflight,
+            model_download_stage_entered=model_download_stage_entered,
         )
         print(f"RES-541 A0 stopped at {stage}: {type(exc).__name__}", file=sys.stderr)
         return 1

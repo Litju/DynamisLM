@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import cast
 
 import pytest
-from scripts import a0_colab, a0_colab_inference, a0_engine
+from scripts import a0_colab, a0_colab_entry, a0_colab_inference, a0_engine
 
 
 def _oracle_outputs() -> dict[str, object]:
@@ -145,3 +145,8 @@ def test_token_streamer_ignores_prompt_and_times_first_generated_token() -> None
     assert streamer.first_token_at is None
     streamer.put(object())
     assert streamer.first_token_at is not None
+
+
+def test_pinned_uv_check_accepts_build_metadata_but_requires_the_exact_release() -> None:
+    assert a0_colab_entry._uv_version_matches("uv 0.12.2 (x86_64-unknown-linux-gnu)", "0.12.2")
+    assert not a0_colab_entry._uv_version_matches("uv 0.12.20 (x86_64-unknown-linux-gnu)", "0.12.2")
