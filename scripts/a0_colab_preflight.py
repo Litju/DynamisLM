@@ -38,9 +38,7 @@ def main() -> int:
                     "name": properties.name,
                     "compute_capability": list(torch.cuda.get_device_capability(index)),
                     "total_memory_gib": round(properties.total_memory / GIB, 3),
-                    "fp16_weight_floor_gib": round(
-                        SMOLLM3_FP16_WEIGHT_FLOOR_BYTES / GIB, 3
-                    ),
+                    "fp16_weight_floor_gib": round(SMOLLM3_FP16_WEIGHT_FLOOR_BYTES / GIB, 3),
                 }
             )
 
