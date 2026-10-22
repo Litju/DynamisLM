@@ -941,9 +941,6 @@ def score_outputs(
     result_cases = tuple(case for case in cases if case.expectation.outcome == "RESULT")
     refusal_cases = tuple(case for case in cases if case.expectation.outcome == "REFUSED")
     outcomes_by_id = {str(row["case_id"]): row for row in rows}
-    tp = sum(outcomes_by_id[case.case_id]["outcome"] == "REFUSED" for case in refusal_cases)
-    fp = sum(outcomes_by_id[case.case_id]["outcome"] == "REFUSED" for case in result_cases)
-    fn = len(refusal_cases) - tp
     numeric_rows = tuple(row for row in rows if row["result_value"] is not None)
     wrong_values = sum(row["numeric_expectation_matches"] is not True for row in numeric_rows)
     boundary_violations = sum(
@@ -956,9 +953,18 @@ def score_outputs(
     )
     correct_refusals = sum(
         outcomes_by_id[case.case_id]["outcome"] == "REFUSED"
+        and outcomes_by_id[case.case_id]["model_intent_valid"] is True
         and outcomes_by_id[case.case_id]["reason_code_matches_expectation"] is True
         for case in refusal_cases
     )
+    tp = correct_refusals
+    fp = sum(
+        outcomes_by_id[case.case_id]["outcome"] == "REFUSED"
+        and outcomes_by_id[case.case_id]["model_intent_valid"] is True
+        for case in result_cases
+    )
+    fn = len(refusal_cases) - tp
+    parse_invalid = sum(row["model_intent_valid"] is False for row in rows)
     valid_intents = sum(row["model_intent_valid"] is True for row in rows)
     matching_intents = sum(row["intent_matches_expectation"] is True for row in rows)
     system_failures = tuple(
@@ -1048,6 +1054,7 @@ def score_outputs(
         "metrics": {
             "case_count": total,
             "typed_intent_valid": {"numerator": valid_intents, "denominator": total},
+            "model_output_parse_invalid": {"numerator": parse_invalid, "denominator": total},
             "intent_task_match": {"numerator": matching_intents, "denominator": total},
             "registered_tool_dispatch_success": {
                 "numerator": dispatched,

@@ -73,6 +73,17 @@ class TimingStreamer:
         return
 
 
+def _apply_chat_template(tokenizer: Any, messages: list[dict[str, str]]) -> Any:
+    return tokenizer.apply_chat_template(
+        messages,
+        tokenize=True,
+        add_generation_prompt=True,
+        return_dict=True,
+        return_tensors="pt",
+        enable_thinking=False,
+    )
+
+
 def _load_prepared(path: Path) -> list[dict[str, Any]]:
     document: object = json.loads(path.read_text(encoding="utf-8"))
     if (
@@ -264,13 +275,7 @@ def run_inference(prepared_path: Path, output_path: Path) -> dict[str, object]:
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": message},
             ]
-            encoded = tokenizer.apply_chat_template(
-                messages,
-                tokenize=True,
-                add_generation_prompt=True,
-                return_dict=True,
-                return_tensors="pt",
-            )
+            encoded = _apply_chat_template(tokenizer, messages)
             prompt_tokens = int(encoded["input_ids"].shape[-1])
             if prompt_tokens > MAX_PROMPT_TOKENS:
                 raise ValueError("prompt exceeds the fixed token bound")

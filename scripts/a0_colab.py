@@ -211,9 +211,13 @@ def run(output_dir: Path) -> int:
     stop_exit_code: int | None = None
     sessions_exit_code = 127
     sessions_output = ""
+    runner_error: OSError | None = None
     try:
         print(f"Starting one Colab T4 run for source revision {revision}.")
-        run_exit_code = subprocess.run(run_command, cwd=ROOT, check=False).returncode
+        try:
+            run_exit_code = subprocess.run(run_command, cwd=ROOT, check=False).returncode
+        except OSError as exc:
+            runner_error = exc
     finally:
         try:
             download_exit_code = subprocess.run(
@@ -256,8 +260,27 @@ def run(output_dir: Path) -> int:
         control["session_stop_exit_code"] = stop_exit_code
         control["sessions_check_exit_code"] = sessions_exit_code
         control["session_absent_after_stop"] = (
-            sessions_exit_code == 0 and run_id not in sessions_output
+            stop_exit_code == 0 and sessions_exit_code == 0 and run_id not in sessions_output
         )
+
+    if not control["session_absent_after_stop"]:
+        if not local_report.exists():
+            _write_control_failure(
+                local_report,
+                revision=revision,
+                run_id=run_id,
+                category="SESSION_TEARDOWN_FAILED",
+                control=control,
+            )
+        raise RunError(
+            f"Colab session teardown could not be verified for {run_id} "
+            f"(stop exit={stop_exit_code}, sessions check exit={sessions_exit_code}); "
+            f"inspect {local_report} and stop it with colab --auth=oauth2 stop --session {run_id}"
+        )
+    if runner_error is not None:
+        raise RunError(
+            f"Colab runner could not be started; report path: {local_report}"
+        ) from runner_error
 
     if not local_report.exists():
         _write_control_failure(
@@ -281,10 +304,10 @@ def run(output_dir: Path) -> int:
     report["control_plane"] = control
     local_report.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     print(f"Retrieved report: {local_report} ({local_report.stat().st_size} bytes)")
+    if report.get("status") not in ("PASS", "PASS_WITH_LIMITATIONS", "NO_GO"):
+        raise RunError("retrieved A0 report has an unknown status")
     if run_exit_code != 0 or report.get("status") == "NO_GO":
         return 1
-    if not control["session_absent_after_stop"]:
-        raise RunError("Colab session remains active after teardown")
     return 0
 
 

@@ -25,13 +25,65 @@ MIN_TOTAL_VRAM_BYTES = 12 * 1024**3
 MIN_FREE_VRAM_BYTES = 8 * 1024**3
 MIN_FREE_DISK_BYTES = 12 * 1024**3
 GIB = 1024**3
+MAX_SUBPROCESS_DIAGNOSTIC_CHARS = 1024
+
+
+def _bounded_diagnostic(stdout: str | bytes | None, stderr: str | bytes | None) -> str:
+    def decode(value: str | bytes | None) -> str:
+        if isinstance(value, bytes):
+            return value.decode("utf-8", errors="replace")
+        return value or ""
+
+    output = f"{decode(stdout)}\n{decode(stderr)}"
+    output = re.sub(r"\x1b\[[0-9;]*m", "", output)
+    output = re.sub(r"(?i)\bBearer\s+\S+", "Bearer [REDACTED]", output)
+    output = re.sub(r"(?i)(https?://)[^/\s:@]+:[^/\s@]+@", r"\1[REDACTED]@", output)
+    output = re.sub(
+        r"(?i)\b(?:hf_[A-Za-z0-9]{10,}|gh[pousr]_[A-Za-z0-9_]{10,}|"
+        r"github_pat_[A-Za-z0-9_]{10,}|ya29\.[A-Za-z0-9._-]{10,}|1//[A-Za-z0-9._-]{10,})",
+        "[REDACTED_TOKEN]",
+        output,
+    )
+    output = re.sub(
+        r"(?im)(\b[A-Z0-9_-]*(?:TOKEN|SECRET|PASSWORD|API[_-]?KEY|OAUTH[_-]?KEY|"
+        r"AUTHORIZATION)[A-Z0-9_-]*\b\s*[=:]\s*).*$",
+        r"\1[REDACTED]",
+        output,
+    )
+    output = re.sub(
+        r"(?i)([?&][A-Za-z0-9_.-]*(?:token|secret|password|api[_-]?key|oauth[_-]?key)"
+        r"[A-Za-z0-9_.-]*=)[^&\s]+",
+        r"\1[REDACTED]",
+        output,
+    )
+    output = re.sub(
+        r"(?i)[A-Za-z0-9_./-]+\.(?:safetensors|bin|pt|pth|gguf)(?:\?[^\s]*)?",
+        "[MODEL_FILE_REDACTED]",
+        output,
+    )
+    output = re.sub(
+        r"(?im)^.*\b(?:oauth|token|secret|password|credential|authorization|bearer|api[_-]?key)\b.*$",
+        "[CREDENTIAL_DIAGNOSTIC_REDACTED]",
+        output,
+    )
+    lines = [line.strip() for line in output.splitlines() if line.strip()]
+    return "\n".join(lines[-8:])[-MAX_SUBPROCESS_DIAGNOSTIC_CHARS:]
 
 
 class A0Error(RuntimeError):
-    def __init__(self, stage: str, category: str) -> None:
+    def __init__(
+        self,
+        stage: str,
+        category: str,
+        *,
+        subprocess_exit_code: int | None = None,
+        subprocess_diagnostic: str | None = None,
+    ) -> None:
         super().__init__(category)
         self.stage = stage
         self.category = category
+        self.subprocess_exit_code = subprocess_exit_code
+        self.subprocess_diagnostic = subprocess_diagnostic
 
 
 def _uv_version_matches(output: str, expected: str) -> bool:
@@ -62,9 +114,24 @@ def _run(
             timeout=min(timeout, remaining),
         )
     except subprocess.TimeoutExpired as exc:
-        raise A0Error(stage, "SUBPROCESS_TIMEOUT") from exc
+        raise A0Error(
+            stage,
+            "SUBPROCESS_TIMEOUT",
+            subprocess_diagnostic=_bounded_diagnostic(exc.stdout, exc.stderr),
+        ) from exc
+    except OSError as exc:
+        raise A0Error(
+            stage,
+            "SUBPROCESS_LAUNCH_FAILED",
+            subprocess_diagnostic=_bounded_diagnostic(None, str(exc)),
+        ) from exc
     if completed.returncode != 0:
-        raise A0Error(stage, "SUBPROCESS_FAILED")
+        raise A0Error(
+            stage,
+            "SUBPROCESS_FAILED",
+            subprocess_exit_code=completed.returncode,
+            subprocess_diagnostic=_bounded_diagnostic(completed.stdout, completed.stderr),
+        )
     return completed.stdout
 
 
@@ -111,6 +178,8 @@ def _write_failure(
     elapsed_seconds: float,
     preflight: dict[str, object] | None,
     model_download_stage_entered: bool,
+    subprocess_exit_code: int | None = None,
+    subprocess_diagnostic: str | None = None,
 ) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     document: dict[str, object] = {
@@ -127,6 +196,12 @@ def _write_failure(
         "inference_run": False,
         "cases": [],
     }
+    if subprocess_exit_code is not None or subprocess_diagnostic is not None:
+        document["subprocess_failure"] = {
+            "stage": stage,
+            "exit_code": subprocess_exit_code,
+            "diagnostic": subprocess_diagnostic,
+        }
     path.write_text(json.dumps(document, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
@@ -448,6 +523,8 @@ def run(revision: str, run_id: str, report_path: Path) -> int:
             elapsed_seconds=time.monotonic() - started,
             preflight=preflight,
             model_download_stage_entered=model_download_stage_entered,
+            subprocess_exit_code=exc.subprocess_exit_code,
+            subprocess_diagnostic=exc.subprocess_diagnostic,
         )
         print(f"RES-541 A0 stopped at {exc.stage}: {exc.category}", file=sys.stderr)
         return 1
