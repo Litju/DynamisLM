@@ -356,7 +356,14 @@ def run(revision: str, run_id: str, report_path: Path) -> int:
             stage = "INFERENCE_ENVIRONMENT"
             inference_env_path = work / "inference-env"
             _run(
-                [sys.executable, "-m", "venv", "--system-site-packages", str(inference_env_path)],
+                [
+                    sys.executable,
+                    "-m",
+                    "venv",
+                    "--system-site-packages",
+                    "--without-pip",
+                    str(inference_env_path),
+                ],
                 cwd=work,
                 env=None,
                 deadline=deadline,
