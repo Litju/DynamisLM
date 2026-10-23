@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import subprocess
 import time
 from collections.abc import Callable
@@ -57,6 +58,26 @@ def _oracle_outputs() -> dict[str, object]:
         "model_revision": "a07cc9a04f16550a088caea529712d1d335b0ac1",
         "cases": model_cases,
     }
+
+
+def _fake_a0_storage(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    mount = tmp_path / "mnt" / "e"
+    mount.mkdir(parents=True)
+    storage = mount / "DynamisLM-A0"
+    monkeypatch.setattr(a0_colab, "E_MOUNT", mount)
+    monkeypatch.setattr(a0_colab, "A0_STORAGE_ROOT", storage)
+    monkeypatch.setattr(Path, "is_mount", lambda path: path == mount)
+    for variable in (
+        "UV_CACHE_DIR",
+        "PIP_CACHE_DIR",
+        "XDG_CACHE_HOME",
+        "HF_HOME",
+        "TORCH_HOME",
+        "PYTHONPYCACHEPREFIX",
+        "TMPDIR",
+    ):
+        monkeypatch.setenv(variable, f"test-{variable}")
+    return storage / "reports"
 
 
 def test_a0_cpu_oracle_exercises_exact_operation_and_registered_refusals() -> None:
@@ -196,6 +217,45 @@ def test_colab_quota_gate_requires_positive_balance_and_no_active_assignment() -
     assert not a0_colab._is_mission_branch("other-work", "origin/main")
 
 
+def test_colab_storage_requires_mounted_e_and_keeps_all_destinations_under_it(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    report_dir = _fake_a0_storage(tmp_path, monkeypatch)
+    storage = report_dir.parent
+
+    resolved = a0_colab._prepare_host_storage(report_dir)
+
+    assert resolved == report_dir
+    assert a0_colab.DEFAULT_REPORT_DIR == Path("/mnt/e/DynamisLM-A0/reports")
+    assert (storage / "downloads").is_dir()
+    assert os.environ["UV_CACHE_DIR"] == str(storage / "cache" / "uv")
+    assert os.environ["PIP_CACHE_DIR"] == str(storage / "cache" / "pip")
+    assert os.environ["XDG_CACHE_HOME"] == str(storage / "cache" / "xdg")
+    assert os.environ["HF_HOME"] == str(storage / "cache" / "huggingface")
+    assert os.environ["TORCH_HOME"] == str(storage / "cache" / "torch")
+    assert os.environ["PYTHONPYCACHEPREFIX"] == str(storage / "cache" / "pycache")
+    assert os.environ["TMPDIR"] == str(storage / "tmp")
+
+    with pytest.raises(a0_colab.RunError, match="must resolve below"):
+        a0_colab._prepare_host_storage(tmp_path / "outside")
+
+
+def test_colab_storage_fails_closed_when_e_is_not_mounted(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mount = tmp_path / "mnt" / "e"
+    mount.mkdir(parents=True)
+    monkeypatch.setattr(a0_colab, "E_MOUNT", mount)
+    monkeypatch.setattr(a0_colab, "A0_STORAGE_ROOT", mount / "DynamisLM-A0")
+    monkeypatch.setattr(Path, "is_mount", lambda _path: False)
+
+    with pytest.raises(a0_colab.RunError, match="Windows E: must be mounted"):
+        a0_colab._prepare_host_storage(mount / "DynamisLM-A0" / "reports")
+    assert not (mount / "DynamisLM-A0").exists()
+
+
 @pytest.mark.parametrize(
     ("status", "runner_exit", "stop_exit", "session_listed", "error"),
     [
@@ -214,6 +274,8 @@ def test_colab_run_requires_teardown_and_known_report_status(
 ) -> None:
     revision = "e" * 40
     run_id: str | None = None
+    report_dir = _fake_a0_storage(tmp_path, monkeypatch)
+    timeouts: dict[str, int | None] = {}
     monkeypatch.setattr(a0_colab, "_check_clean_pushed_revision", lambda: revision)
     monkeypatch.setattr(a0_colab, "_case_count", lambda: 16)
     monkeypatch.setattr(a0_colab, "_usage", lambda: ("100.0", ""))
@@ -229,6 +291,7 @@ def test_colab_run_requires_teardown_and_known_report_status(
         check: bool,
         capture_output: bool = False,
         text: bool = False,
+        timeout: int | None = None,
     ) -> subprocess.CompletedProcess[str]:
         nonlocal run_id
         if command[1] == "version":
@@ -237,6 +300,7 @@ def test_colab_run_requires_teardown_and_known_report_status(
             run_id = command[6]
             return subprocess.CompletedProcess(command, runner_exit, "", "")
         if command[2] == "download":
+            timeouts["download"] = timeout
             report_path = Path(command[-1])
             report_path.write_text(
                 json.dumps(
@@ -251,8 +315,10 @@ def test_colab_run_requires_teardown_and_known_report_status(
             )
             return subprocess.CompletedProcess(command, 0, "", "")
         if command[2] == "stop":
+            timeouts["stop"] = timeout
             return subprocess.CompletedProcess(command, stop_exit, "", "")
         if command[2] == "sessions":
+            timeouts["sessions"] = timeout
             output = str(run_id) if session_listed and run_id is not None else ""
             return subprocess.CompletedProcess(command, 0, output, "")
         raise AssertionError(f"unexpected Colab command: {command!r}")
@@ -260,7 +326,118 @@ def test_colab_run_requires_teardown_and_known_report_status(
     monkeypatch.setattr(subprocess, "run", fake_run)
 
     with pytest.raises(a0_colab.RunError, match=error):
-        a0_colab.run(tmp_path)
+        a0_colab.run(report_dir)
+
+    assert timeouts == {
+        "download": a0_colab.REPORT_DOWNLOAD_TIMEOUT_SECONDS,
+        "stop": a0_colab.SESSION_STOP_TIMEOUT_SECONDS,
+        "sessions": a0_colab.SESSION_LIST_TIMEOUT_SECONDS,
+    }
+
+
+@pytest.mark.parametrize(
+    ("failure", "expected_error", "expected_category"),
+    [
+        ("download_timeout", "artifact retrieval failed", "REMOTE_ARTIFACT_UNAVAILABLE"),
+        ("download_exception", "artifact retrieval failed", "REMOTE_ARTIFACT_UNAVAILABLE"),
+        ("stop_timeout", "teardown could not be verified", "SESSION_TEARDOWN_FAILED"),
+        ("sessions_timeout", "teardown could not be verified", "SESSION_TEARDOWN_FAILED"),
+    ],
+)
+def test_colab_cleanup_attempts_stop_after_download_failure_and_fails_closed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure: str,
+    expected_error: str,
+    expected_category: str,
+) -> None:
+    revision = "f" * 40
+    run_id: str | None = None
+    report_dir = _fake_a0_storage(tmp_path, monkeypatch)
+    calls: list[str] = []
+    timeouts: dict[str, int | None] = {}
+    monkeypatch.setattr(a0_colab, "_check_clean_pushed_revision", lambda: revision)
+    monkeypatch.setattr(a0_colab, "_case_count", lambda: 16)
+    monkeypatch.setattr(a0_colab, "_usage", lambda: ("100.0", ""))
+    monkeypatch.setattr(
+        "builtins.input",
+        lambda _prompt: a0_colab._confirmation_phrase("100.0"),
+    )
+
+    def fake_run(
+        command: list[str],
+        *,
+        cwd: Path,
+        check: bool,
+        capture_output: bool = False,
+        text: bool = False,
+        timeout: int | None = None,
+    ) -> subprocess.CompletedProcess[str]:
+        nonlocal run_id
+        if command[1] == "version":
+            return subprocess.CompletedProcess(command, 0, "Version: 0.7.5", "")
+        if command[2] == "run":
+            run_id = command[6]
+            return subprocess.CompletedProcess(command, 0, "", "")
+        if command[2] == "download":
+            calls.append("download")
+            timeouts["download"] = timeout
+            if failure == "download_timeout":
+                assert timeout is not None
+                raise subprocess.TimeoutExpired(command, float(timeout))
+            if failure == "download_exception":
+                raise RuntimeError("simulated download failure")
+            report_path = Path(command[-1])
+            report_path.write_text(
+                json.dumps(
+                    {
+                        "schema": a0_colab.REPORT_SCHEMA,
+                        "status": "PASS",
+                        "source_revision": revision,
+                        "cases": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            return subprocess.CompletedProcess(command, 0, "", "")
+        if command[2] == "stop":
+            calls.append("stop")
+            timeouts["stop"] = timeout
+            if failure == "stop_timeout":
+                assert timeout is not None
+                raise subprocess.TimeoutExpired(command, float(timeout))
+            return subprocess.CompletedProcess(command, 0, "", "")
+        if command[2] == "sessions":
+            calls.append("sessions")
+            timeouts["sessions"] = timeout
+            if failure == "sessions_timeout":
+                assert timeout is not None
+                raise subprocess.TimeoutExpired(command, float(timeout))
+            return subprocess.CompletedProcess(command, 0, "", "")
+        raise AssertionError(f"unexpected Colab command: {command!r}")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    with pytest.raises(a0_colab.RunError, match=expected_error) as caught:
+        a0_colab.run(report_dir)
+
+    assert calls == ["download", "stop", "sessions"]
+    assert timeouts == {
+        "download": a0_colab.REPORT_DOWNLOAD_TIMEOUT_SECONDS,
+        "stop": a0_colab.SESSION_STOP_TIMEOUT_SECONDS,
+        "sessions": a0_colab.SESSION_LIST_TIMEOUT_SECONDS,
+    }
+    assert run_id is not None
+    receipt_path = report_dir / f"{run_id}-control-failure.json"
+    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    assert receipt["failure_category"] == expected_category
+    if expected_category == "SESSION_TEARDOWN_FAILED":
+        assert f"colab --auth=oauth2 stop --session {run_id}" in str(caught.value)
+        assert f"colab --auth=oauth2 stop --session {run_id}" in receipt["manual_action"]
+    if failure == "download_timeout":
+        assert receipt["control_plane"]["artifact_download_error"] == "TIMEOUT"
+    if failure == "download_exception":
+        assert receipt["control_plane"]["artifact_download_error"] == "RuntimeError"
 
 
 def test_colab_model_prompt_preparation_stays_within_the_approved_case_bound(

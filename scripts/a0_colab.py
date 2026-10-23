@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import datetime as datetime_module
 import json
+import os
 import re
 import subprocess
 import sys
@@ -12,6 +13,9 @@ from pathlib import Path
 from typing import IO
 
 ROOT = Path(__file__).resolve().parents[1]
+E_MOUNT = Path("/mnt/e")
+A0_STORAGE_ROOT = E_MOUNT / "DynamisLM-A0"
+DEFAULT_REPORT_DIR = A0_STORAGE_ROOT / "reports"
 BRANCH = "julitocrztuga/res-541-a0-wslcolab-gpu-scientific-reasoning-alpha-development-only"
 REPOSITORY = "Litju/DynamisLM"
 REPORT_SCHEMA = "RES541_A0_REPORT_V1"
@@ -20,10 +24,69 @@ MAX_TOTAL_RUNTIME_SECONDS = 900
 MAX_NEW_TOKENS = 64
 MAX_WEIGHT_BYTES = 8 * 1024**3
 REMOTE_TIMEOUT_SECONDS = 900
+REPORT_DOWNLOAD_TIMEOUT_SECONDS = 120
+SESSION_STOP_TIMEOUT_SECONDS = 30
+SESSION_LIST_TIMEOUT_SECONDS = 30
 
 
 class RunError(RuntimeError):
     pass
+
+
+def _within(path: Path, directory: Path) -> bool:
+    try:
+        path.relative_to(directory)
+        return True
+    except ValueError:
+        return False
+
+
+def _prepare_host_storage(output_dir: Path) -> Path:
+    try:
+        if not E_MOUNT.is_mount() or E_MOUNT.resolve(strict=True) != E_MOUNT:
+            raise RunError("Windows E: must be mounted at /mnt/e before A0 can run")
+        if A0_STORAGE_ROOT.parent != E_MOUNT or A0_STORAGE_ROOT.resolve() != A0_STORAGE_ROOT:
+            raise RunError("A0 storage path does not resolve to /mnt/e/DynamisLM-A0")
+
+        report_root = A0_STORAGE_ROOT / "reports"
+        resolved_report_root = report_root.resolve()
+        resolved_output_dir = output_dir.resolve()
+        if not _within(resolved_report_root, A0_STORAGE_ROOT) or not _within(
+            resolved_output_dir, resolved_report_root
+        ):
+            raise RunError(f"A0 reports must resolve below {report_root}")
+
+        environment = {
+            "UV_CACHE_DIR": A0_STORAGE_ROOT / "cache" / "uv",
+            "PIP_CACHE_DIR": A0_STORAGE_ROOT / "cache" / "pip",
+            "XDG_CACHE_HOME": A0_STORAGE_ROOT / "cache" / "xdg",
+            "HF_HOME": A0_STORAGE_ROOT / "cache" / "huggingface",
+            "TORCH_HOME": A0_STORAGE_ROOT / "cache" / "torch",
+            "PYTHONPYCACHEPREFIX": A0_STORAGE_ROOT / "cache" / "pycache",
+            "TMPDIR": A0_STORAGE_ROOT / "tmp",
+        }
+        directories = [
+            resolved_output_dir,
+            *(path for path in environment.values()),
+            A0_STORAGE_ROOT / "downloads",
+        ]
+        for path in directories:
+            resolved_path = path.resolve()
+            if not _within(resolved_path, A0_STORAGE_ROOT):
+                raise RunError(f"A0 storage path resolves outside {A0_STORAGE_ROOT}: {path}")
+
+        for path in directories:
+            path.mkdir(parents=True, exist_ok=True)
+        for path in directories:
+            if not _within(path.resolve(), A0_STORAGE_ROOT):
+                raise RunError(f"A0 storage path changed outside {A0_STORAGE_ROOT}: {path}")
+    except RunError:
+        raise
+    except (OSError, RuntimeError) as exc:
+        raise RunError(f"Windows E: storage is unavailable at {A0_STORAGE_ROOT}: {exc}") from exc
+
+    os.environ.update({name: str(path) for name, path in environment.items()})
+    return resolved_output_dir
 
 
 def _git(*args: str) -> str:
@@ -137,12 +200,19 @@ def _write_control_failure(
         "failure_stage": "LOCAL_COLAB_CONTROL_PLANE",
         "failure_category": category,
         "control_plane": control,
+        "manual_action": (
+            f"Run `colab --auth=oauth2 stop --session {run_id}`, then run "
+            "`colab --auth=oauth2 sessions` and confirm the session is absent."
+            if not control.get("session_absent_after_stop")
+            else "Session absence was verified by the local control plane."
+        ),
         "cases": [],
     }
     target.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
 def run(output_dir: Path) -> int:
+    output_dir = _prepare_host_storage(output_dir)
     revision = _check_clean_pushed_revision()
     count = _case_count()
     if count != APPROVED_CASE_COUNT:
@@ -172,7 +242,7 @@ def run(output_dir: Path) -> int:
     run_id = f"res541-a0-{timestamp.lower()}"
     remote_report = f"/content/{run_id}-report.json"
     local_report = output_dir / f"{run_id}-report.json"
-    local_report.parent.mkdir(parents=True, exist_ok=True)
+    failure_receipt = output_dir / f"{run_id}-control-failure.json"
     run_command = [
         "colab",
         "--auth=oauth2",
@@ -211,101 +281,160 @@ def run(output_dir: Path) -> int:
     stop_exit_code: int | None = None
     sessions_exit_code = 127
     sessions_output = ""
-    runner_error: OSError | None = None
+    runner_error: Exception | None = None
     try:
         print(f"Starting one Colab T4 run for source revision {revision}.")
         try:
             run_exit_code = subprocess.run(run_command, cwd=ROOT, check=False).returncode
-        except OSError as exc:
+        except Exception as exc:
             runner_error = exc
     finally:
         try:
-            download_exit_code = subprocess.run(
-                [
-                    "colab",
-                    "--auth=oauth2",
-                    "download",
-                    "--session",
-                    run_id,
-                    remote_report,
-                    str(local_report),
-                ],
-                cwd=ROOT,
-                check=False,
-            ).returncode
-        except OSError:
-            download_exit_code = 127
-        try:
-            stop_exit_code = subprocess.run(
-                ["colab", "--auth=oauth2", "stop", "--session", run_id],
-                cwd=ROOT,
-                check=False,
-            ).returncode
-        except OSError:
-            stop_exit_code = 127
-        try:
-            completed = subprocess.run(
-                ["colab", "--auth=oauth2", "sessions"],
-                cwd=ROOT,
-                capture_output=True,
-                check=False,
-                text=True,
-            )
-            sessions_output = completed.stdout + completed.stderr
-            sessions_exit_code = completed.returncode
-        except OSError:
-            control["sessions_check_exit_code"] = 127
-        control["runner_exit_code"] = run_exit_code
-        control["artifact_download_exit_code"] = download_exit_code
-        control["session_stop_exit_code"] = stop_exit_code
-        control["sessions_check_exit_code"] = sessions_exit_code
-        control["session_absent_after_stop"] = (
-            stop_exit_code == 0 and sessions_exit_code == 0 and run_id not in sessions_output
-        )
+            try:
+                download_exit_code = subprocess.run(
+                    [
+                        "colab",
+                        "--auth=oauth2",
+                        "download",
+                        "--session",
+                        run_id,
+                        remote_report,
+                        str(local_report),
+                    ],
+                    cwd=ROOT,
+                    check=False,
+                    timeout=REPORT_DOWNLOAD_TIMEOUT_SECONDS,
+                ).returncode
+            except Exception as exc:
+                download_exit_code = 124 if isinstance(exc, subprocess.TimeoutExpired) else 127
+                control["artifact_download_error"] = (
+                    "TIMEOUT" if isinstance(exc, subprocess.TimeoutExpired) else type(exc).__name__
+                )
+        finally:
+            try:
+                stop_exit_code = subprocess.run(
+                    ["colab", "--auth=oauth2", "stop", "--session", run_id],
+                    cwd=ROOT,
+                    check=False,
+                    timeout=SESSION_STOP_TIMEOUT_SECONDS,
+                ).returncode
+            except Exception as exc:
+                stop_exit_code = 124 if isinstance(exc, subprocess.TimeoutExpired) else 127
+                control["session_stop_error"] = (
+                    "TIMEOUT" if isinstance(exc, subprocess.TimeoutExpired) else type(exc).__name__
+                )
+            finally:
+                try:
+                    completed = subprocess.run(
+                        ["colab", "--auth=oauth2", "sessions"],
+                        cwd=ROOT,
+                        capture_output=True,
+                        check=False,
+                        text=True,
+                        timeout=SESSION_LIST_TIMEOUT_SECONDS,
+                    )
+                    sessions_output = completed.stdout + completed.stderr
+                    sessions_exit_code = completed.returncode
+                except Exception as exc:
+                    sessions_exit_code = 124 if isinstance(exc, subprocess.TimeoutExpired) else 127
+                    control["sessions_check_error"] = (
+                        "TIMEOUT"
+                        if isinstance(exc, subprocess.TimeoutExpired)
+                        else type(exc).__name__
+                    )
+                finally:
+                    control["runner_exit_code"] = run_exit_code
+                    control["artifact_download_exit_code"] = download_exit_code
+                    control["session_stop_exit_code"] = stop_exit_code
+                    control["sessions_check_exit_code"] = sessions_exit_code
+                    control["session_absent_after_stop"] = (
+                        stop_exit_code == 0
+                        and sessions_exit_code == 0
+                        and run_id not in sessions_output
+                    )
 
     if not control["session_absent_after_stop"]:
-        if not local_report.exists():
-            _write_control_failure(
-                local_report,
-                revision=revision,
-                run_id=run_id,
-                category="SESSION_TEARDOWN_FAILED",
-                control=control,
-            )
+        _write_control_failure(
+            failure_receipt,
+            revision=revision,
+            run_id=run_id,
+            category="SESSION_TEARDOWN_FAILED",
+            control=control,
+        )
         raise RunError(
             f"Colab session teardown could not be verified for {run_id} "
             f"(stop exit={stop_exit_code}, sessions check exit={sessions_exit_code}); "
-            f"inspect {local_report} and stop it with colab --auth=oauth2 stop --session {run_id}"
+            f"failure receipt: {failure_receipt}; stop it with "
+            f"colab --auth=oauth2 stop --session {run_id}, then verify with "
+            "colab --auth=oauth2 sessions"
         )
     if runner_error is not None:
+        _write_control_failure(
+            failure_receipt,
+            revision=revision,
+            run_id=run_id,
+            category="COLAB_RUNNER_LAUNCH_FAILED",
+            control=control,
+        )
         raise RunError(
-            f"Colab runner could not be started; report path: {local_report}"
+            f"Colab runner failed; control receipt: {failure_receipt}; report path: {local_report}"
         ) from runner_error
 
-    if not local_report.exists():
+    if download_exit_code != 0 or not local_report.exists():
         _write_control_failure(
-            local_report,
+            failure_receipt,
             revision=revision,
             run_id=run_id,
             category="REMOTE_ARTIFACT_UNAVAILABLE",
             control=control,
         )
-        raise RunError(f"Colab artifact retrieval failed; control receipt saved at {local_report}")
+        raise RunError(
+            f"Colab artifact retrieval failed; control receipt saved at {failure_receipt}"
+        )
 
-    report = json.loads(local_report.read_text(encoding="utf-8"))
+    try:
+        if local_report.stat().st_size > 2 * 1024**2:
+            raise RunError("retrieved A0 report exceeds the 2 MiB size bound")
+        report = json.loads(local_report.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, RunError) as exc:
+        _write_control_failure(
+            failure_receipt,
+            revision=revision,
+            run_id=run_id,
+            category="REMOTE_ARTIFACT_INVALID",
+            control=control,
+        )
+        raise RunError(
+            f"retrieved A0 report is invalid; control receipt: {failure_receipt}"
+        ) from exc
     if (
         not isinstance(report, dict)
         or report.get("schema") != REPORT_SCHEMA
         or report.get("source_revision") != revision
-        or local_report.stat().st_size > 2 * 1024**2
     ):
-        raise RunError("retrieved A0 report failed the exact revision, schema, or size check")
+        _write_control_failure(
+            failure_receipt,
+            revision=revision,
+            run_id=run_id,
+            category="REMOTE_ARTIFACT_INVALID",
+            control=control,
+        )
+        raise RunError(f"retrieved A0 report failed validation; control receipt: {failure_receipt}")
     report["run_id"] = run_id
     report["control_plane"] = control
     local_report.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     print(f"Retrieved report: {local_report} ({local_report.stat().st_size} bytes)")
     if report.get("status") not in ("PASS", "PASS_WITH_LIMITATIONS", "NO_GO"):
-        raise RunError("retrieved A0 report has an unknown status")
+        _write_control_failure(
+            failure_receipt,
+            revision=revision,
+            run_id=run_id,
+            category="REMOTE_ARTIFACT_INVALID",
+            control=control,
+        )
+        raise RunError(
+            f"retrieved A0 report has an unknown status; control receipt: {failure_receipt}"
+        )
     if run_exit_code != 0 or report.get("status") == "NO_GO":
         return 1
     return 0
@@ -314,7 +443,7 @@ def run(output_dir: Path) -> int:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("run", choices=("run",))
-    parser.add_argument("--output-dir", type=Path, default=ROOT / "reports" / "a0")
+    parser.add_argument("--output-dir", type=Path, default=DEFAULT_REPORT_DIR)
     args = parser.parse_args()
     try:
         return run(args.output_dir)

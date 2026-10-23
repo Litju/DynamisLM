@@ -38,10 +38,49 @@ The implementation is `scripts/a0_colab.py`, `scripts/a0_colab_entry.py`, `scrip
 From WSL, after CPU QA and pushing the clean RES-541 branch revision:
 
 ```bash
-uv run --frozen --python 3.12 scripts/a0_colab.py run --output-dir reports/a0
+set -euo pipefail
+mountpoint -q /mnt/e || { echo 'Windows E: is not mounted at /mnt/e' >&2; exit 2; }
+e_source="$(findmnt -n -o SOURCE --mountpoint /mnt/e)"
+case "$e_source" in 'E:\'|'E:') ;; *) echo "Expected Windows E: at /mnt/e, found $e_source" >&2; exit 2 ;; esac
+
+a0_storage=/mnt/e/DynamisLM-A0
+for path in \
+  "$a0_storage" \
+  "$a0_storage/reports" \
+  "$a0_storage/cache/uv" \
+  "$a0_storage/cache/pip" \
+  "$a0_storage/cache/xdg" \
+  "$a0_storage/cache/huggingface" \
+  "$a0_storage/cache/torch" \
+  "$a0_storage/cache/pycache" \
+  "$a0_storage/downloads" \
+  "$a0_storage/tmp"; do
+  resolved="$(realpath -m "$path")"
+  case "$resolved" in "$a0_storage"|"$a0_storage/"*) ;; *) echo "Unsafe A0 storage path: $path -> $resolved" >&2; exit 2 ;; esac
+done
+
+mkdir -p \
+  "$a0_storage/reports" \
+  "$a0_storage/cache/uv" \
+  "$a0_storage/cache/pip" \
+  "$a0_storage/cache/xdg" \
+  "$a0_storage/cache/huggingface" \
+  "$a0_storage/cache/torch" \
+  "$a0_storage/cache/pycache" \
+  "$a0_storage/downloads" \
+  "$a0_storage/tmp"
+export UV_CACHE_DIR="$a0_storage/cache/uv"
+export PIP_CACHE_DIR="$a0_storage/cache/pip"
+export XDG_CACHE_HOME="$a0_storage/cache/xdg"
+export HF_HOME="$a0_storage/cache/huggingface"
+export TORCH_HOME="$a0_storage/cache/torch"
+export PYTHONPYCACHEPREFIX="$a0_storage/cache/pycache"
+export TMPDIR="$a0_storage/tmp"
+
+uv run --frozen --python 3.12 scripts/a0_colab.py run --output-dir "$a0_storage/reports"
 ```
 
-The local wrapper checks that the checkout is clean, on the issue's mission branch, and pushed at the exact `HEAD`. It runs `colab --auth=oauth2 usage`, refuses active assignments, displays the available quota, and requires the owner to enter an exact confirmation string before provisioning. It requests one T4 runtime with a 900-second CLI timeout. There is no retry or tier fallback. OAuth prompts remain interactive and must be completed by the owner; no authentication state or tokens are copied to the repository.
+The E: preflight runs before `uv`, so neither its package cache nor its temporary files fall back to the WSL filesystem. The local wrapper repeats the mount and resolved-path checks, sets the same cache and temporary-storage variables for child processes, and refuses report destinations outside `/mnt/e/DynamisLM-A0/reports/`. It checks that the checkout is clean, on the issue's mission branch, and pushed at the exact `HEAD`. It runs `colab --auth=oauth2 usage`, refuses active assignments, displays the available quota, and requires the owner to enter an exact confirmation string before provisioning. It requests one T4 runtime with a 900-second CLI timeout. Report download has a 120-second timeout; stop and session listing each have 30-second timeouts. An unverified teardown writes a control failure receipt and prints manual stop and verification commands. There is no retry or tier fallback. OAuth prompts remain interactive and must be completed by the owner; no authentication state or tokens are copied to the repository.
 
 The remote entry point fails closed unless it sees Python `3.13.15`, PyTorch `2.11.0+cu130`, one T4, compute capability 7.5, at least 12 GiB total and 8 GiB free VRAM, and 12 GiB free disk. It clones the full public repository, checks out the exact SHA in a clean detached worktree, and provisions Python `3.12.13` with `uv==0.12.2` and `uv sync --frozen`. That isolated Python 3.12 environment runs the RES-62/69/70 builders and authorities. The Python 3.13 inference venv uses `--system-site-packages` to inherit Colab's existing PyTorch and installs only the exact inference requirements with `--no-deps`; it verifies the imported PyTorch version and file path still match the base Colab runtime.
 
@@ -49,7 +88,7 @@ Before fetching weights, inference reads pinned Hugging Face Safetensors metadat
 
 The model emits only a typed intent. Python resolves its baseline/follow-up roles to exact canonical entry IDs, authorizes the RES-70 `SCALAR_ABSOLUTE_CHANGE` capability, calls the registered RES-69 `follow-up - baseline` operation, validates the exact result, and asks RES-70 claim authority to permit the numerical-change claim. Model output cannot contain a numeric result or executable code. Missing support, unequal units/metrics, cross-athlete support, unregistered operations, causal claims, and practical-meaning claims are refusal cases.
 
-The small JSON report includes the source SHA, model and dependency revisions, GPU/precision/config, prompt and generation token counts, first-token and total latency, peak VRAM/RAM, disk/weight bytes, per-case intents/results/refusals, denominators, and failure categories. It reports `PASS`, `PASS_WITH_LIMITATIONS`, or `NO_GO`; the 16-case development suite has no confidence limits or generalization claim. The remote experiment deadline is 840 seconds, leaving margin inside the Colab 900-second timeout. `--keep` allows the local wrapper to download the report, stop the session, and verify it is absent from active sessions. Reports are written to `reports/a0/`; no weights, caches, credentials, or large data are retrieved.
+The small JSON report includes the source SHA, model and dependency revisions, GPU/precision/config, prompt and generation token counts, first-token and total latency, peak VRAM/RAM, disk/weight bytes, per-case intents/results/refusals, denominators, and failure categories. It reports `PASS`, `PASS_WITH_LIMITATIONS`, or `NO_GO`; the 16-case development suite has no confidence limits or generalization claim. The remote experiment deadline is 840 seconds, leaving margin inside the Colab 900-second timeout. `--keep` allows the local wrapper to download the report, stop the session, and verify it is absent from active sessions. Report downloads and control failure receipts are stored under `/mnt/e/DynamisLM-A0/reports/`; no model weights are downloaded to the Windows host. The remote inference cache stays on the separate Colab filesystem, under the remote work directory.
 
 Run inference only after the owner confirms the current quota and this bounded execution budget. No training, fine-tuning, HF upload, formal M0/PSE qualification, or merge is authorized. Keep this work on draft PR #46 for independent scientific review.
 
