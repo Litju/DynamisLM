@@ -301,23 +301,25 @@ def run(revision: str, run_id: str, report_path: Path) -> int:
                 timeout=120,
                 stage=stage,
             )
-            uv_env = os.environ.copy()
-            uv_env["PYTHONPATH"] = str(uv_target) + os.pathsep + uv_env.get("PYTHONPATH", "")
-            uv_prefix = [sys.executable, "-m", "uv"]
+            uv_prefix = [str(uv_target / "bin" / "uv")]
             uv_version = _run(
                 [*uv_prefix, "--version"],
                 cwd=repository,
-                env=uv_env,
+                env=None,
                 deadline=deadline,
                 timeout=15,
                 stage=stage,
             ).strip()
             if not _uv_version_matches(uv_version, UV_VERSION):
-                raise A0Error(stage, "UV_VERSION_MISMATCH")
+                raise A0Error(
+                    stage,
+                    "UV_VERSION_MISMATCH",
+                    subprocess_diagnostic=_bounded_diagnostic(uv_version, None),
+                )
             _run(
                 [*uv_prefix, "python", "install", SOURCE_PYTHON],
                 cwd=repository,
-                env=uv_env,
+                env=None,
                 deadline=deadline,
                 timeout=240,
                 stage=stage,
@@ -325,7 +327,7 @@ def run(revision: str, run_id: str, report_path: Path) -> int:
             _run(
                 [*uv_prefix, "sync", "--frozen", "--python", SOURCE_PYTHON],
                 cwd=repository,
-                env=uv_env,
+                env=None,
                 deadline=deadline,
                 timeout=300,
                 stage=stage,
@@ -345,7 +347,7 @@ def run(revision: str, run_id: str, report_path: Path) -> int:
                     str(prepared_path),
                 ],
                 cwd=repository,
-                env=uv_env,
+                env=None,
                 deadline=deadline,
                 timeout=120,
                 stage=stage,
@@ -456,7 +458,7 @@ def run(revision: str, run_id: str, report_path: Path) -> int:
                     str(engine_report),
                 ],
                 cwd=repository,
-                env=uv_env,
+                env=None,
                 deadline=deadline,
                 timeout=120,
                 stage=stage,
