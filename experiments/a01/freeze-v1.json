@@ -1,0 +1,25 @@
+{
+  "active_controls": "experiments/a01/controls-v2.json",
+  "baseline_report_sha256": "d0881e600cc7b729c894122db504f596dab60a270814ff47796a662e87482303",
+  "baseline_revision": "a7216366e46c3a80bd20435a6d894e917d90e5f0",
+  "controls_provenance": "Independently authored from contract boundaries before any A0.1 model generation. No protected sources or original raw outputs used to select requests/values. Same author and synthetic constructors; developer controls, not independently blinded generalization.",
+  "files": {
+    "experiments/a0/cases.json": "619015ea1df55e8507316ff764e422ce95605549893d0748fb65cc5ad6aa7f38",
+    "experiments/a0/requirements-colab.txt": "e6389e1d37abda2cbbbb69b291f7d9ad8d6cb6ea00f16d3e3aaa81e002abd224",
+    "experiments/a01/controls-v1.json": "f00702b5d98c98f1b2616e620a359635b131d20590d3d159c62c805e2cc5a2b9",
+    "experiments/a01/controls-v2.json": "3079856d38db8f83fb2bc0a5da0cee98da2a5922b6ea29162c466ab0040bb9bd",
+    "experiments/a01/system-prompt-v1.txt": "3a427cbddec385a60e2843f921d3b8a3e3d0b80af8167f12a71a4d07a5639362",
+    "scripts/a0_colab_inference.py": "e168998219c0944bcac305855b341637fc728f81880a0f515200188fd46792f5",
+    "scripts/a0_engine.py": "6d6a92b32c3af3a698b88923854da3a8b12d3f1cc18264fc00eee9b0a64b0f33"
+  },
+  "intent_schema": "RES541_A0_INTENT_V1",
+  "model_revision": "a07cc9a04f16550a088caea529712d1d335b0ac1",
+  "prompt_version": "A0.1_PROMPT_V1",
+  "schema": "RES541_A01_FREEZE_V1",
+  "tokenizer_files": {
+    "chat_template.jinja": "3e0e275a527f249670056e0078e474eadbdd007c134b4fdfae5a7b3089702814",
+    "special_tokens_map.json": "12403efb970f069ba62ddf3b66166a27254be4a198166b61ad1ee604bd3a4515",
+    "tokenizer.json": "7b6a500b662a34eb3f0374db856ba4ad7de4c81040571d78dc0d357238930005",
+    "tokenizer_config.json": "59a64b39f05ee0acf7479bbccf99a44d9e481c1a4a494eb03838ae3c35eb29be"
+  }
+}
