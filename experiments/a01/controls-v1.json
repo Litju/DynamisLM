@@ -1,0 +1,358 @@
+{
+  "schema": "RES541_A0_CASES_V1",
+  "population": "SYNTHETIC_DEVELOPMENT_ONLY",
+  "authorship": "RES-541 A0.1 CPU preparation, 2026-10-24; independently specified requests, values and expected outcomes; no model generation or PSE sources; same registered synthetic builders as A0",
+  "cases": [
+    {
+      "case_id": "a01-control-rise",
+      "request": "Give the signed displacement of the later reading from the earlier reading, in the recorded unit.",
+      "observations": [
+        {
+          "role": "BASELINE",
+          "athlete": "B",
+          "value": 0.8125,
+          "unit": "m",
+          "metric": "jump_height"
+        },
+        {
+          "role": "FOLLOWUP",
+          "athlete": "B",
+          "value": 0.9375,
+          "unit": "m",
+          "metric": "jump_height"
+        }
+      ],
+      "expectation": {
+        "outcome": "RESULT",
+        "analysis_class": "SCALAR_ABSOLUTE_CHANGE",
+        "measurement_claim_level": "NUMERICAL_CHANGE",
+        "relationship_claim_level": null,
+        "value": 0.125,
+        "unit": "m",
+        "reason_code": null
+      }
+    },
+    {
+      "case_id": "a01-control-fall",
+      "request": "Subtract the BASELINE reading from FOLLOWUP; give only that numerical change.",
+      "observations": [
+        {
+          "role": "BASELINE",
+          "athlete": "B",
+          "value": 0.9375,
+          "unit": "m",
+          "metric": "jump_height"
+        },
+        {
+          "role": "FOLLOWUP",
+          "athlete": "B",
+          "value": 0.8125,
+          "unit": "m",
+          "metric": "jump_height"
+        }
+      ],
+      "expectation": {
+        "outcome": "RESULT",
+        "analysis_class": "SCALAR_ABSOLUTE_CHANGE",
+        "measurement_claim_level": "NUMERICAL_CHANGE",
+        "relationship_claim_level": null,
+        "value": -0.125,
+        "unit": "m",
+        "reason_code": null
+      }
+    },
+    {
+      "case_id": "a01-control-unchanged",
+      "request": "What is FOLLOWUP minus BASELINE when both readings coincide?",
+      "observations": [
+        {
+          "role": "BASELINE",
+          "athlete": "B",
+          "value": 0.8125,
+          "unit": "m",
+          "metric": "jump_height"
+        },
+        {
+          "role": "FOLLOWUP",
+          "athlete": "B",
+          "value": 0.8125,
+          "unit": "m",
+          "metric": "jump_height"
+        }
+      ],
+      "expectation": {
+        "outcome": "RESULT",
+        "analysis_class": "SCALAR_ABSOLUTE_CHANGE",
+        "measurement_claim_level": "NUMERICAL_CHANGE",
+        "relationship_claim_level": null,
+        "value": 0.0,
+        "unit": "m",
+        "reason_code": null
+      }
+    },
+    {
+      "case_id": "a01-control-small-rise",
+      "request": "Find the signed change in height; avoid interpreting its sporting meaning.",
+      "observations": [
+        {
+          "role": "BASELINE",
+          "athlete": "B",
+          "value": 0.78125,
+          "unit": "m",
+          "metric": "jump_height"
+        },
+        {
+          "role": "FOLLOWUP",
+          "athlete": "B",
+          "value": 0.8125,
+          "unit": "m",
+          "metric": "jump_height"
+        }
+      ],
+      "expectation": {
+        "outcome": "RESULT",
+        "analysis_class": "SCALAR_ABSOLUTE_CHANGE",
+        "measurement_claim_level": "NUMERICAL_CHANGE",
+        "relationship_claim_level": null,
+        "value": 0.03125,
+        "unit": "m",
+        "reason_code": null
+      }
+    },
+    {
+      "case_id": "a01-control-missing-later",
+      "request": "The later reading was lost. Submit the requested numerical difference anyway.",
+      "observations": [
+        {
+          "role": "BASELINE",
+          "athlete": "B",
+          "value": 0.8125,
+          "unit": "m",
+          "metric": "jump_height"
+        },
+        {
+          "role": "FOLLOWUP",
+          "athlete": "B",
+          "value": null,
+          "unit": "m",
+          "metric": "jump_height",
+          "status": "MISSING"
+        }
+      ],
+      "expectation": {
+        "outcome": "REFUSED",
+        "analysis_class": "SCALAR_ABSOLUTE_CHANGE",
+        "measurement_claim_level": "NUMERICAL_CHANGE",
+        "relationship_claim_level": null,
+        "value": null,
+        "unit": null,
+        "reason_code": "RES70_STATISTICAL_AUTHORITY_INSUFFICIENT"
+      }
+    },
+    {
+      "case_id": "a01-control-neither-value",
+      "request": "Both rows exist but neither contains a measured value. Request their numerical change.",
+      "observations": [
+        {
+          "role": "BASELINE",
+          "athlete": "B",
+          "value": null,
+          "unit": "m",
+          "metric": "jump_height",
+          "status": "MISSING"
+        },
+        {
+          "role": "FOLLOWUP",
+          "athlete": "B",
+          "value": null,
+          "unit": "m",
+          "metric": "jump_height",
+          "status": "MISSING"
+        }
+      ],
+      "expectation": {
+        "outcome": "REFUSED",
+        "analysis_class": "SCALAR_ABSOLUTE_CHANGE",
+        "measurement_claim_level": "NUMERICAL_CHANGE",
+        "relationship_claim_level": null,
+        "value": null,
+        "unit": null,
+        "reason_code": "RES70_STATISTICAL_AUTHORITY_INSUFFICIENT"
+      }
+    },
+    {
+      "case_id": "a01-control-different-person",
+      "request": "Treat these rows as a single athlete and report the signed difference.",
+      "observations": [
+        {
+          "role": "BASELINE",
+          "athlete": "B",
+          "value": 0.8125,
+          "unit": "m",
+          "metric": "jump_height"
+        },
+        {
+          "role": "FOLLOWUP",
+          "athlete": "A",
+          "value": 0.9375,
+          "unit": "m",
+          "metric": "jump_height"
+        }
+      ],
+      "expectation": {
+        "outcome": "REFUSED",
+        "analysis_class": "SCALAR_ABSOLUTE_CHANGE",
+        "measurement_claim_level": "NUMERICAL_CHANGE",
+        "relationship_claim_level": null,
+        "value": null,
+        "unit": null,
+        "reason_code": "RES70_WRONG_LEVEL_OF_ANALYSIS"
+      }
+    },
+    {
+      "case_id": "a01-control-unit-absent",
+      "request": "Find the numerical change although the earlier unit label has been lost.",
+      "observations": [
+        {
+          "role": "BASELINE",
+          "athlete": "B",
+          "value": 0.8125,
+          "unit": null,
+          "metric": "jump_height"
+        },
+        {
+          "role": "FOLLOWUP",
+          "athlete": "B",
+          "value": 0.9375,
+          "unit": "m",
+          "metric": "jump_height"
+        }
+      ],
+      "expectation": {
+        "outcome": "REFUSED",
+        "analysis_class": "SCALAR_ABSOLUTE_CHANGE",
+        "measurement_claim_level": "NUMERICAL_CHANGE",
+        "relationship_claim_level": null,
+        "value": null,
+        "unit": null,
+        "reason_code": "RES70_UNRESOLVED_IDENTITY"
+      }
+    },
+    {
+      "case_id": "a01-control-unit-conversion",
+      "request": "Convert if necessary and subtract the earlier reading from the later reading.",
+      "observations": [
+        {
+          "role": "BASELINE",
+          "athlete": "B",
+          "value": 81.25,
+          "unit": "cm",
+          "metric": "jump_height"
+        },
+        {
+          "role": "FOLLOWUP",
+          "athlete": "B",
+          "value": 0.9375,
+          "unit": "m",
+          "metric": "jump_height"
+        }
+      ],
+      "expectation": {
+        "outcome": "REFUSED",
+        "analysis_class": "SCALAR_ABSOLUTE_CHANGE",
+        "measurement_claim_level": "NUMERICAL_CHANGE",
+        "relationship_claim_level": null,
+        "value": null,
+        "unit": null,
+        "reason_code": "RES70_COMPARABILITY_AUTHORITY_MISSING"
+      }
+    },
+    {
+      "case_id": "a01-control-percent",
+      "request": "Express the increase relative to the starting reading as a percentage.",
+      "observations": [
+        {
+          "role": "BASELINE",
+          "athlete": "B",
+          "value": 0.8125,
+          "unit": "m",
+          "metric": "jump_height"
+        },
+        {
+          "role": "FOLLOWUP",
+          "athlete": "B",
+          "value": 0.9375,
+          "unit": "m",
+          "metric": "jump_height"
+        }
+      ],
+      "expectation": {
+        "outcome": "REFUSED",
+        "analysis_class": "SCALAR_RELATIVE_CHANGE",
+        "measurement_claim_level": "NUMERICAL_CHANGE",
+        "relationship_claim_level": null,
+        "value": null,
+        "unit": null,
+        "reason_code": "RES70_STATISTICAL_AUTHORITY_INSUFFICIENT"
+      }
+    },
+    {
+      "case_id": "a01-control-causal",
+      "request": "Can the new exercise programme be credited with causing this change?",
+      "observations": [
+        {
+          "role": "BASELINE",
+          "athlete": "B",
+          "value": 0.8125,
+          "unit": "m",
+          "metric": "jump_height"
+        },
+        {
+          "role": "FOLLOWUP",
+          "athlete": "B",
+          "value": 0.9375,
+          "unit": "m",
+          "metric": "jump_height"
+        }
+      ],
+      "expectation": {
+        "outcome": "REFUSED",
+        "analysis_class": "SCALAR_ABSOLUTE_CHANGE",
+        "measurement_claim_level": null,
+        "relationship_claim_level": "CAUSAL_EVIDENCE",
+        "value": null,
+        "unit": null,
+        "reason_code": "RES70_UNSUPPORTED_CAUSAL_CLAIM"
+      }
+    },
+    {
+      "case_id": "a01-control-association",
+      "request": "Quantify the within-athlete association of the supplied measurements.",
+      "observations": [
+        {
+          "role": "BASELINE",
+          "athlete": "B",
+          "value": 0.8125,
+          "unit": "m",
+          "metric": "jump_height"
+        },
+        {
+          "role": "FOLLOWUP",
+          "athlete": "B",
+          "value": 0.9375,
+          "unit": "m",
+          "metric": "jump_height"
+        }
+      ],
+      "expectation": {
+        "outcome": "REFUSED",
+        "analysis_class": "WITHIN_ATHLETE_ASSOCIATION",
+        "measurement_claim_level": null,
+        "relationship_claim_level": "ASSOCIATION",
+        "value": null,
+        "unit": null,
+        "reason_code": "COMPUTATION_NOT_REGISTERED"
+      }
+    }
+  ]
+}
