@@ -5,7 +5,8 @@ This is `A0.1_PROMPT_V1`, a prompt-only development experiment using the unchang
 **NO_GO**. This directory authorizes no GPU allocation, Colab launch, model weights,
 training, merge, or release. The existing A0 launch command still runs **A0**.
 The rendered A0.1 prompts are review artifacts for a separately owner-approved run;
-this CPU command never loads or executes a language model.
+this CPU command never loads or executes a language model. The separate
+`scripts.a01_execution` adapter below now supplies the A0.1 execution path.
 
 ## Reviewed scope
 
@@ -122,7 +123,7 @@ overlapping classifications are recomputed independently. All postmortem files
 are checked against their existing SHA256SUMS and rehashed after the read-only
 check. Neither original report nor local postmortem is rewritten or published.
 
-## Separate measurements for a future approved run
+## Separate measurements for an approved A0.1 run
 
 `observe()` traces direct calls from the existing engine, recording analysis
 authorization, registered calculation (including its hash even when a subsequent
@@ -153,3 +154,90 @@ latency, GPU memory, scientific accuracy or generalization result exists yet.
 CPU readiness additionally requires successful hosted CI at the exact pushed head.
 The owner must separately approve any subsequent Colab experiment; stop before
 requesting GPU allocation.
+
+## Explicit execution adapter (not launched during implementation)
+
+Execution protocol: `RES541_A01_EXECUTION_V1`. The adapter loads exactly
+`A0.1_PROMPT_V1` / SHA-256
+`3a427cbddec385a60e2843f921d3b8a3e3d0b80af8167f12a71a4d07a5639362`.
+The reviewed freeze manifest itself is also hash pinned. Original A0 source,
+reports, cases, scientific contracts and `tests/fixtures/a0/` remain immutable.
+
+The new remote entry downloads only the SHA-verified original bootstrap source
+from the approved Git revision, then reuses its exact source checkout, Python
+3.12 scientific environment, Python 3.13/Torch environment, T4 preflight and bounded
+subprocesses. It redirects only preparation, inference and scoring to A0.1 modules.
+The inference adapter creates a private instance of the frozen A0 module and
+substitutes the verified A0.1 prompt plus token-capture hooks. Original A0 modules
+and their behavior remain unchanged. The inherited inference loop preserves the
+checkpoint, FP16, greedy decoding, non-thinking mode and 1,024/64 token bounds.
+All four remote tokenizer assets are SHA-verified before model loading.
+
+After separate owner review/authorization, in an interactive WSL terminal with
+the E: environment and tokenizer PYTHONPATH shown above, select **one** command:
+
+```bash
+# Proposal: 16 exposed diagnostics, one T4, run <=900 s plus bounded cleanup.
+python -m scripts.a01_execution run --suite a0_diagnostic --cases 16 \
+  --output-dir /mnt/e/DynamisLM-A0/reports/a01/diagnostic \
+  --tokenizer-dir /mnt/e/DynamisLM-A0/a01/tokenizer
+
+# Alternative: 12 frozen controls, one T4, run <=900 s plus bounded cleanup.
+python -m scripts.a01_execution run --suite a01_controls --cases 12 \
+  --output-dir /mnt/e/DynamisLM-A0/reports/a01/controls \
+  --tokenizer-dir /mnt/e/DynamisLM-A0/a01/tokenizer
+```
+
+Use `.venv/bin/python` for the existing WSL project environment. These are separate
+proposals, not authorization to execute both. There is no combined 28-case option,
+noninteractive approval flag, retry or GPU fallback. Each invocation requires a
+clean pushed mission revision, actual tokenizer fit, positive fresh Colab quota,
+zero active assignments and an exact interactive confirmation containing source,
+prompt, manifest, suite, actual count, available quota, T4, 900 seconds, 8 GiB
+weight-download ceiling, token limits and download/stop/verification timeouts.
+The 900 seconds bounds the run command; retained-session download and teardown
+are additional bounded time and can consume GPU quota until stop succeeds.
+Source and suite are rechecked after
+confirmation. A host watchdog also bounds the Colab run process to 900 seconds.
+
+Remote inference records every actual prompt token ID/hash, UTC template date,
+user-message hash, generated token ID, untrimmed decoded raw output, count and
+per-case binding hash. Each binding includes exact source revision/tree, model
+and tokenizer revision, prompt version/hash, frozen manifest, suite and decoding
+limits. Missing evidence, foreign IDs, altered provenance, incompatible GPU/dtype,
+missing EOS and generations hitting the output cap are rejected. Partial raw
+generations survive inference failures and temporary-directory cleanup.
+
+The remote score is provisional (`HOST_REPLAY_REQUIRED`). After retrieval the
+host leaves the remote artifact untouched, independently re-renders each prompt
+using the pinned official tokenizer and its recorded date, decodes the actual
+generated IDs, validates every binding and invokes the existing layered scorer.
+The downloaded scientific score must exactly equal this CPU replay after JSON
+normalization. Invalid model intent remains a measured parser fallback and causes
+task NO_GO; it is never repaired. The old standalone CPU scorer remains useful
+for exploratory raw-output diagnostics; only the execution adapter performs this
+full production-evidence acceptance gate.
+
+Download (120 s), stop (30 s) and session-list (30 s) calls run in nested cleanup
+even on launch, run, or download errors. Acceptance requires a successful stop
+and an explicit **zero active sessions** response, including absence of other
+sessions. Unknown output fails closed with a control receipt and manual stop
+command. Host downloads, raw artifacts, control receipts and verified reports
+remain under mounted E:. Weights and remote caches remain ephemeral on Colab.
+
+CPU-only adapter validation (including actual tokenizer replay when available):
+
+```bash
+export PYTHONPATH=/mnt/e/DynamisLM-A0/a01/tokenizer-venv/lib/python3.12/site-packages
+export RES541_A01_TOKENIZER_DIR=/mnt/e/DynamisLM-A0/a01/tokenizer
+.venv/bin/python -m pytest --capture=sys \
+  --basetemp=/mnt/e/DynamisLM-A0/tmp/pytest-a01-adapter \
+  -q tests/test_res541_a01_execution.py
+unset PYTHONPATH RES541_A01_TOKENIZER_DIR
+./scripts/ci.sh
+```
+
+Tests use synthetic CPU model doubles, including whitespace/partial generations;
+they do not measure model performance or prove live Colab operation. The exact
+pinned tokenizer is exercised separately on all 16+12 inputs. GPU allocation,
+weights and actual inference remain separately owner gated.

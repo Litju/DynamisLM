@@ -80,6 +80,7 @@ def verify_freeze() -> dict[str, Any]:
             if name.startswith("scripts/a0")
         ],
         "tests/test_res541_a0.py",
+        "tests/fixtures/a0",
         "src",
     ]
     if git("diff", BASELINE_REVISION, "--", *paths):
