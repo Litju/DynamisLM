@@ -22,6 +22,57 @@ from scripts import a01_experiment as experiment
 from scripts import a01_inference as inference
 from scripts import a01_protocol as protocol
 
+# Official CLI captures: https://github.com/googlecolab/google-colab-cli/blob/main/docs/demos.md
+NO_SESSIONS = "[colab] No active sessions found on server.\n"
+PRUNED_SESSION = "[colab] Pruned 1 stale local session(s).\n"
+ACTIVE_SESSION = "[gpu-eval] m-s-kkb-usc1c0-3cickkby8ivx5 | Hardware: CPU | Variant: DEFAULT\n"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        NO_SESSIONS,
+        PRUNED_SESSION + NO_SESSIONS,
+        PRUNED_SESSION.replace("1", "12") + NO_SESSIONS,
+        (PRUNED_SESSION + NO_SESSIONS).replace("\n", "\r\n"),
+        "\x1b[32m" + NO_SESSIONS.rstrip() + "\x1b[0m\n",
+    ],
+)
+def test_zero_sessions_accepts_official_cli_output(text: str) -> None:
+    assert execution.zero_sessions(text)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "",
+        "No active sessions found on server",
+        NO_SESSIONS.removeprefix("[colab] "),
+        NO_SESSIONS.replace("server.", "server"),
+        NO_SESSIONS.replace("server.", "server.."),
+        "[colab] Unknown response.\n",
+        ACTIVE_SESSION,
+        PRUNED_SESSION,
+        PRUNED_SESSION + ACTIVE_SESSION,
+        ACTIVE_SESSION + NO_SESSIONS,
+        NO_SESSIONS + ACTIVE_SESSION,
+        "[colab] Unknown response.\n" + NO_SESSIONS,
+        NO_SESSIONS + "[colab] Unknown response.\n",
+        NO_SESSIONS + PRUNED_SESSION,
+        PRUNED_SESSION * 2 + NO_SESSIONS,
+        NO_SESSIONS * 2,
+        PRUNED_SESSION + "\n" + NO_SESSIONS,
+        PRUNED_SESSION.replace("1", "0") + NO_SESSIONS,
+        PRUNED_SESSION.replace("1", "-1") + NO_SESSIONS,
+        PRUNED_SESSION.replace("1", "01") + NO_SESSIONS,
+        PRUNED_SESSION.replace("1", "\u0661") + NO_SESSIONS,
+        PRUNED_SESSION.replace("1", "many") + NO_SESSIONS,
+        PRUNED_SESSION.replace("local ", "") + NO_SESSIONS,
+    ],
+)
+def test_zero_sessions_rejects_unknown_or_active_output(text: str) -> None:
+    assert not execution.zero_sessions(text)
+
 
 def packet(suite: str = "a01_controls", actual: Any = None) -> dict[str, Any]:
     count = protocol.SUITES[suite][1]
@@ -345,9 +396,24 @@ def test_no_gpu_without_exact_interactive_owner_approval(
         execution.run("a01_controls", 12, tmp_path, tmp_path)
 
 
-@pytest.mark.parametrize("failure", [None, "download", "run", "stop", "sessions", "other_active"])
+@pytest.mark.parametrize("notice", ["", PRUNED_SESSION])
+@pytest.mark.parametrize(
+    "failure",
+    [
+        None,
+        "download",
+        "run",
+        "stop",
+        "sessions",
+        "stop_nonzero",
+        "sessions_nonzero",
+        "other_active",
+        "unknown",
+        "mixed_active",
+    ],
+)
 def test_owner_gated_transport_always_stops_and_verifies_zero_sessions(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: str | None
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: str | None, notice: str
 ) -> None:
     suite, count = "a01_controls", 12
     binding = protocol.plan(suite, count)
@@ -379,14 +445,28 @@ def test_owner_gated_transport_always_stops_and_verifies_zero_sessions(
         if operation == "download":
             report = dict(remote_report, run_id=run_id, approved_case_count=count)
             Path(command[-1]).write_text(json.dumps(report))
-        text = (
-            "another session" if failure == "other_active" else "No active sessions found on server"
-        )
-        return subprocess.CompletedProcess(command, 0, text, "")
+        text = NO_SESSIONS
+        if failure == "other_active":
+            text = ACTIVE_SESSION
+        elif failure == "unknown":
+            text = "[colab] Unknown response.\n"
+        elif failure == "mixed_active":
+            text += ACTIVE_SESSION
+        returncode = 1 if failure == f"{operation}_nonzero" else 0
+        return subprocess.CompletedProcess(command, returncode, notice + text, "")
 
     monkeypatch.setattr(execution, "subprocess", SimpleNamespace(run=transport))
     monkeypatch.setattr(execution, "score", lambda *a, **k: copy.deepcopy(remote_report))
-    if failure in {"download", "stop", "sessions", "other_active"}:
+    teardown_failures = {
+        "stop",
+        "sessions",
+        "stop_nonzero",
+        "sessions_nonzero",
+        "other_active",
+        "unknown",
+        "mixed_active",
+    }
+    if failure == "download" or failure in teardown_failures:
         with pytest.raises(a0_colab.RunError):
             execution.run(suite, count, tmp_path, tmp_path)
     else:
@@ -394,9 +474,7 @@ def test_owner_gated_transport_always_stops_and_verifies_zero_sessions(
     assert calls == [("run", 900), ("download", 120), ("stop", 30), ("sessions", 30)]
     state = json.loads(next(tmp_path.glob("*-control.json")).read_text())
     assert state["binding"] == binding
-    assert state["session_absent_after_stop"] == (
-        failure not in {"stop", "sessions", "other_active"}
-    )
+    assert state["session_absent_after_stop"] == (failure not in teardown_failures)
 
 
 def test_historical_fixture_path_is_protected(monkeypatch: pytest.MonkeyPatch) -> None:

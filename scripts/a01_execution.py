@@ -82,8 +82,15 @@ def confirmation(binding: dict[str, Any], balance: str) -> str:
 
 
 def zero_sessions(text: str) -> bool:
-    plain = re.sub(r"\x1b\[[0-9;]*m", "", text).strip().rstrip(".")
-    return plain == "No active sessions found on server"
+    plain = re.sub(r"\x1b\[[0-9;]*m", "", text).strip()
+    return (
+        re.fullmatch(
+            r"(?:\[colab\] Pruned [1-9][0-9]* stale local session\(s\)\.\r?\n)?"
+            r"\[colab\] No active sessions found on server\.",
+            plain,
+        )
+        is not None
+    )
 
 
 def run(suite: str, count: int, output_dir: Path, tokenizer_dir: Path) -> int:
