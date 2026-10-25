@@ -247,6 +247,23 @@ sessions. Unknown output fails closed with a control receipt and manual stop
 command. Host downloads, raw artifacts, control receipts and verified reports
 remain under mounted E:. Weights and remote caches remain ephemeral on Colab.
 
+The inherited remote preflight requires Python **3.13.15** and PyTorch
+**2.11.0+cu130** exactly. A runtime mismatch stops before source setup or model
+download; these pins are not relaxed by the A0.1 adapter. The adapter preserves
+the observed Python version/executable and, when imported, Torch version even
+when preflight fails. Early failure reports are checked for source/run/suite
+identity and reported as infrastructure failures after verified teardown. They
+are not complete inference evidence and never enter scientific scoring; complete
+reports still require every execution binding and actual tokenizer replay.
+
+The first diagnostic attempt, `res541-a01-a0-diagnostic-20261025-093109735899`,
+stopped at `GPU_PREFLIGHT / PYTHON_VERSION_MISMATCH` before model download or
+inference. Its original report omitted the observed Python version, so that
+version remains unknown. Raw report and control receipt remain unchanged on E:.
+No scientific per-case result was produced. Improving failure diagnostics does
+not establish compatibility with a new Colab VM; do not retry or change runtime
+pins without a separately reviewed decision and fresh owner authorization.
+
 CPU-only adapter validation (including actual tokenizer replay when available):
 
 ```bash

@@ -254,10 +254,28 @@ def run(suite: str, count: int, output_dir: Path, tokenizer_dir: Path) -> int:
         or report.get("suite") != suite
         or type(report.get("approved_case_count")) is not int
         or report.get("approved_case_count") != count
-        or any(
-            protocol.compact(report.get(key)) != protocol.compact(value)
-            for key, value in binding.items()
+        or report.get("execution_version") != protocol.VERSION
+    ):
+        raise control.RunError("retrieved A0.1 report provenance mismatch")
+    if "failure_stage" in report:
+        if (
+            report.get("status") != "NO_GO"
+            or report.get("inference_run") is not False
+            or report.get("cases") != []
+            or not isinstance(report["failure_stage"], str)
+            or not report["failure_stage"]
+            or not isinstance(report.get("failure_category"), str)
+            or not report["failure_category"]
+            or state.get("runner_exit_code") == 0
+        ):
+            raise control.RunError("malformed A0.1 infrastructure failure report")
+        raise control.RunError(
+            f"A0.1 infrastructure failure at {report['failure_stage']}: "
+            f"{report['failure_category']}; teardown verified; raw report: {artifact}"
         )
+    if any(
+        protocol.compact(report.get(key)) != protocol.compact(value)
+        for key, value in binding.items()
     ):
         raise control.RunError("retrieved A0.1 report provenance mismatch")
     replay = score(report["model_outputs"], suite, count, actual_tokenizer)

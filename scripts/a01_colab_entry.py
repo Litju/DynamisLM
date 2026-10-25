@@ -6,7 +6,9 @@ import argparse
 import hashlib
 import json
 import os
+import platform
 import re
+import sys
 import tempfile
 from pathlib import Path
 from types import ModuleType
@@ -17,9 +19,23 @@ A0_ENTRY_SHA256 = "3150cba8d6f75092e928eb207bad12dbb360b36614289609b931b6d77bcbb
 
 
 def adapt(module: ModuleType, suite: str, count: int) -> ModuleType:
-    """Reuse the frozen bootstrap, replacing only its three experiment subprocesses."""
+    """Reuse the frozen bootstrap with A0.1 routing and failure diagnostics."""
     original_run = module._run
+    original_preflight = module._preflight
     retained: dict[str, Any] = {}
+    observed_runtime: dict[str, Any] = {}
+
+    def preflight() -> Any:
+        try:
+            return original_preflight()
+        finally:
+            observed_runtime["python"] = platform.python_version()
+            observed_runtime["python_executable"] = sys.executable
+            torch = sys.modules.get("torch")
+            if torch is not None:
+                observed_runtime["torch"] = str(torch.__version__)
+
+    module.__dict__["_preflight"] = preflight
 
     def dispatch(command: list[str], **kwargs: Any) -> str:
         replacement = list(command)
@@ -74,6 +90,16 @@ def adapt(module: ModuleType, suite: str, count: int) -> ModuleType:
         report["suite"] = suite
         report["approved_case_count"] = count
         report["run_id"] = run_id
+        if "failure_stage" in report:
+            report["runtime_preflight"] = {
+                **observed_runtime,
+                **report.get("runtime_preflight", {}),
+            }
+            print(
+                f"RES-541 A0.1 stopped at {report['failure_stage']}: "
+                f"{report['failure_category']}; observed runtime={observed_runtime}",
+                file=sys.stderr,
+            )
         report_path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
         if report_path.stat().st_size > 2 * 1024**2:
             raise ValueError("A0.1 report exceeds the inherited artifact bound")

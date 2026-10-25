@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import json
 import os
+import platform
 import subprocess
 import sys
 from datetime import UTC, datetime
@@ -373,6 +374,36 @@ def test_remote_bootstrap_routes_only_the_three_a01_steps(tmp_path: Path) -> Non
     assert a0_colab_entry._run is original
 
 
+def test_remote_python_mismatch_retains_observed_runtime_without_relaxing_pin(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = protocol.isolated_a0("a0_colab_entry")
+    original = a0_colab_entry._preflight
+    monkeypatch.setattr(platform, "python_version", lambda: "3.14.0")
+    torch = ModuleType("torch")
+    torch.__dict__["__version__"] = "2.11.0+cu130"
+    monkeypatch.setitem(sys.modules, "torch", torch)
+
+    def forbidden(*args: Any, **kwargs: Any) -> str:
+        raise AssertionError("runtime mismatch must stop before source or model download")
+
+    module.__dict__["_run"] = forbidden
+    report_path = tmp_path / "failure.json"
+    assert entry.adapt(module, "a0_diagnostic", 16).run("a" * 40, "test", report_path) == 1
+    report = json.loads(report_path.read_text())
+    assert report["failure_stage"] == "GPU_PREFLIGHT"
+    assert report["failure_category"] == "PYTHON_VERSION_MISMATCH"
+    assert report["runtime_preflight"] == {
+        "python": "3.14.0",
+        "python_executable": sys.executable,
+        "torch": "2.11.0+cu130",
+    }
+    assert report["model_weights_downloaded"] is False
+    assert report["inference_run"] is False and report["cases"] == []
+    assert report["suite"] == "a0_diagnostic" and report["approved_case_count"] == 16
+    assert a0_colab_entry._preflight is original
+
+
 def test_inference_private_module_cannot_fall_back_to_a0() -> None:
     prepared = execution.prepare("a01_controls", 12)
     module, records, streamers = inference.runtime(prepared)
@@ -446,7 +477,7 @@ def test_remote_failure_retains_generations_after_temporary_directory_disappears
         report.write_text(json.dumps({"status": "NO_GO"}))
         return 1
 
-    module.__dict__.update(_run=fail, run=run)
+    module.__dict__.update(_run=fail, run=run, _preflight=lambda: None)
     assert entry.adapt(module, "a01_controls", 12).run("a" * 40, "test", report) == 1
     assert json.loads(report.read_text())["model_outputs"]["cases"][0]["raw_text"] == " {partial"
 
@@ -516,6 +547,10 @@ def test_no_gpu_without_exact_interactive_owner_approval(
         "other_active",
         "unknown",
         "mixed_active",
+        "remote_preflight",
+        "foreign_failure",
+        "malformed_failure",
+        "unbound_success",
     ],
 )
 def test_owner_gated_transport_always_stops_and_verifies_zero_sessions(
@@ -557,6 +592,24 @@ def test_owner_gated_transport_always_stops_and_verifies_zero_sessions(
             raise subprocess.TimeoutExpired(command, kwargs["timeout"])
         if operation == "download":
             report = dict(remote_report, run_id=run_id, approved_case_count=count)
+            if failure in {"remote_preflight", "foreign_failure", "malformed_failure"}:
+                report = {
+                    "schema": execution.REPORT_SCHEMA,
+                    "execution_version": protocol.VERSION,
+                    "source_revision": binding["source_revision"],
+                    "run_id": run_id,
+                    "suite": suite,
+                    "approved_case_count": count,
+                    "status": "NO_GO",
+                    "failure_stage": "GPU_PREFLIGHT",
+                    "failure_category": "PYTHON_VERSION_MISMATCH",
+                    "cases": [],
+                    "inference_run": failure == "malformed_failure",
+                }
+                if failure == "foreign_failure":
+                    report["source_revision"] = "0" * 40
+            elif failure == "unbound_success":
+                del report["case_manifest_sha256"]
             Path(command[-1]).write_text(json.dumps(report))
         text = NO_SESSIONS
         if failure == "other_active":
@@ -566,6 +619,12 @@ def test_owner_gated_transport_always_stops_and_verifies_zero_sessions(
         elif failure == "mixed_active":
             text += ACTIVE_SESSION
         returncode = 1 if failure == f"{operation}_nonzero" else 0
+        if operation == "run" and failure in {
+            "remote_preflight",
+            "foreign_failure",
+            "malformed_failure",
+        }:
+            returncode = 1
         return subprocess.CompletedProcess(command, returncode, notice + text, "")
 
     def captured(command: list[str], **kwargs: Any) -> Any:
@@ -587,7 +646,13 @@ def test_owner_gated_transport_always_stops_and_verifies_zero_sessions(
         "unknown",
         "mixed_active",
     }
-    if failure == "download" or failure in teardown_failures:
+    if failure == "remote_preflight":
+        with pytest.raises(a0_colab.RunError, match="GPU_PREFLIGHT: PYTHON_VERSION_MISMATCH"):
+            execution.run(suite, count, tmp_path, tmp_path)
+    elif failure in {"foreign_failure", "malformed_failure", "unbound_success"}:
+        with pytest.raises(a0_colab.RunError, match="provenance mismatch|malformed"):
+            execution.run(suite, count, tmp_path, tmp_path)
+    elif failure == "download" or failure in teardown_failures:
         with pytest.raises(a0_colab.RunError):
             execution.run(suite, count, tmp_path, tmp_path)
     else:
