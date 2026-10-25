@@ -76,8 +76,9 @@ export USE_TORCH=0 USE_TF=0 USE_FLAX=0
 export PYTEST_ADDOPTS='--capture=sys -o cache_dir=/mnt/e/DynamisLM-A0/cache/pytest --basetemp=/mnt/e/DynamisLM-A0/tmp/pytest-a01'
 uv venv --python .venv/bin/python /mnt/e/DynamisLM-A0/a01/tokenizer-venv
 uv pip install --python /mnt/e/DynamisLM-A0/a01/tokenizer-venv/bin/python --no-deps -r experiments/a0/requirements-colab.txt
-export PYTHONPATH=/mnt/e/DynamisLM-A0/a01/tokenizer-venv/lib/python3.12/site-packages
-.venv/bin/python - <<'PY'
+unset PYTHONPATH PYTHONHOME
+TOKENIZER_SITE_PACKAGES=/mnt/e/DynamisLM-A0/a01/tokenizer-venv/lib/python3.12/site-packages
+PYTHONPATH="$TOKENIZER_SITE_PACKAGES" .venv/bin/python - <<'PY'
 from huggingface_hub import snapshot_download
 snapshot_download(
     'HuggingFaceTB/SmolLM3-3B',
@@ -87,14 +88,14 @@ snapshot_download(
                     'special_tokens_map.json', 'chat_template.jinja'],
 )
 PY
-export RES541_A01_TOKENIZER_DIR=/mnt/e/DynamisLM-A0/a01/tokenizer
-.venv/bin/python -m pytest -q tests/test_res541_a0.py tests/test_res541_a01.py
-.venv/bin/python -m scripts.a01_experiment \
-  --tokenizer-dir "$RES541_A01_TOKENIZER_DIR" \
+PYTHONPATH="$TOKENIZER_SITE_PACKAGES" \
+RES541_A01_TOKENIZER_DIR=/mnt/e/DynamisLM-A0/a01/tokenizer \
+  .venv/bin/python -m pytest -q tests/test_res541_a0.py tests/test_res541_a01.py
+PYTHONPATH="$TOKENIZER_SITE_PACKAGES" .venv/bin/python -m scripts.a01_experiment \
+  --tokenizer-dir /mnt/e/DynamisLM-A0/a01/tokenizer \
   --baseline-report /mnt/e/DynamisLM-A0/reports/res541-a0-20261023-040456z-report.json \
   --postmortem-dir /mnt/e/DynamisLM-A0/reviews/res541-a0-20261023-040456z-postmortem-v1 \
   --output /mnt/e/DynamisLM-A0/a01/cpu-qualification-HEAD.json
-unset PYTHONPATH RES541_A01_TOKENIZER_DIR
 ./scripts/ci.sh
 ```
 
@@ -108,6 +109,22 @@ as well as the existing WSL checkout.
 Full QA runs in the repository's frozen environment, without the separate tokenizer
 environment on PYTHONPATH. Exposing optional inference libraries to mypy changes
 its dependency discovery and invalidates existing missing-import annotations.
+
+Keep the tokenizer site-packages scoped to individual host Python commands; never
+globally export that `PYTHONPATH` before calling Colab. The pinned tokenizer uses
+filelock 3.18.0, while installed Colab CLI 0.7.5 requires filelock >=3.29.2.
+The A0.1 adapter copies the host environment and removes `PYTHONPATH` and
+`PYTHONHOME` for **every** Colab child: interactive/captured quota checks, run,
+download, stop and sessions. The host tokenizer process retains its pinned
+packages. E: cache/download/temporary-directory settings and OAuth configuration
+remain available to the CLI; neither dependency environment is upgraded.
+
+For direct non-GPU CLI checks, after configuring E: paths above, use:
+
+```bash
+env -u PYTHONPATH -u PYTHONHOME colab --auth=oauth2 sessions
+env -u PYTHONPATH -u PYTHONHOME colab --auth=oauth2 usage
+```
 
 The receipt records package versions, source and file hashes, actual official chat
 template (`enable_thinking=False`), complete lengths and token-ID hashes for all 16
@@ -174,16 +191,21 @@ checkpoint, FP16, greedy decoding, non-thinking mode and 1,024/64 token bounds.
 All four remote tokenizer assets are SHA-verified before model loading.
 
 After separate owner review/authorization, in an interactive WSL terminal with
-the E: environment and tokenizer PYTHONPATH shown above, select **one** command:
+the E: environment shown above, select **one** command. Scope the tokenizer path
+to the host adapter process; its Colab children use the isolated environment:
 
 ```bash
 # Proposal: 16 exposed diagnostics, one T4, run <=900 s plus bounded cleanup.
-python -m scripts.a01_execution run --suite a0_diagnostic --cases 16 \
+env -u PYTHONHOME \
+  PYTHONPATH=/mnt/e/DynamisLM-A0/a01/tokenizer-venv/lib/python3.12/site-packages \
+  .venv/bin/python -m scripts.a01_execution run --suite a0_diagnostic --cases 16 \
   --output-dir /mnt/e/DynamisLM-A0/reports/a01/diagnostic \
   --tokenizer-dir /mnt/e/DynamisLM-A0/a01/tokenizer
 
 # Alternative: 12 frozen controls, one T4, run <=900 s plus bounded cleanup.
-python -m scripts.a01_execution run --suite a01_controls --cases 12 \
+env -u PYTHONHOME \
+  PYTHONPATH=/mnt/e/DynamisLM-A0/a01/tokenizer-venv/lib/python3.12/site-packages \
+  .venv/bin/python -m scripts.a01_execution run --suite a01_controls --cases 12 \
   --output-dir /mnt/e/DynamisLM-A0/reports/a01/controls \
   --tokenizer-dir /mnt/e/DynamisLM-A0/a01/tokenizer
 ```
@@ -228,13 +250,13 @@ remain under mounted E:. Weights and remote caches remain ephemeral on Colab.
 CPU-only adapter validation (including actual tokenizer replay when available):
 
 ```bash
-export PYTHONPATH=/mnt/e/DynamisLM-A0/a01/tokenizer-venv/lib/python3.12/site-packages
-export RES541_A01_TOKENIZER_DIR=/mnt/e/DynamisLM-A0/a01/tokenizer
-.venv/bin/python -m pytest --capture=sys \
+env -u PYTHONHOME \
+  PYTHONPATH=/mnt/e/DynamisLM-A0/a01/tokenizer-venv/lib/python3.12/site-packages \
+  RES541_A01_TOKENIZER_DIR=/mnt/e/DynamisLM-A0/a01/tokenizer \
+  .venv/bin/python -m pytest --capture=sys \
   --basetemp=/mnt/e/DynamisLM-A0/tmp/pytest-a01-adapter \
   -q tests/test_res541_a01_execution.py
-unset PYTHONPATH RES541_A01_TOKENIZER_DIR
-./scripts/ci.sh
+env -u PYTHONPATH -u PYTHONHOME ./scripts/ci.sh
 ```
 
 Tests use synthetic CPU model doubles, including whitespace/partial generations;

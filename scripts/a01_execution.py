@@ -20,6 +20,38 @@ from scripts import a01_protocol as protocol
 REPORT_SCHEMA = "RES541_A01_REPORT_V1"
 
 
+def colab_environment() -> dict[str, str]:
+    return {
+        key: value for key, value in os.environ.items() if key not in {"PYTHONPATH", "PYTHONHOME"}
+    }
+
+
+def usage() -> tuple[str, str]:
+    command = ["colab", "--auth=oauth2", "usage"]
+    if not sys.stdin.isatty() or not sys.stdout.isatty():
+        raise control.RunError("quota and OAuth checks must run in an interactive WSL terminal")
+    print("Interactive OAuth2 quota check:")
+    visible = subprocess.run(command, cwd=protocol.ROOT, check=False, env=colab_environment())
+    if visible.returncode != 0:
+        raise control.RunError("Colab usage could not be read; no session was started")
+    process = subprocess.Popen(
+        command,
+        cwd=protocol.ROOT,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1,
+        env=colab_environment(),
+    )
+    assert process.stdout is not None
+    lines: list[str] = []
+    control._forward_lines(process.stdout, lines)
+    if process.wait() != 0:
+        raise control.RunError("Colab quota verification failed after the interactive check")
+    output = "".join(lines)
+    return control._parse_usage_output(output), output
+
+
 def prepare(suite: str, count: int) -> dict[str, Any]:
     experiment.verify_freeze()
     binding = protocol.plan(suite, count)
@@ -116,7 +148,7 @@ def run(suite: str, count: int, output_dir: Path, tokenizer_dir: Path) -> int:
     revision = control._check_clean_pushed_revision()
     if revision != binding["source_revision"]:
         raise control.RunError("source changed during A0.1 preparation")
-    balance, _ = control._usage()
+    balance, _ = usage()
     expected = confirmation(binding, balance)
     if input(f"Type exactly `{expected}` to authorize this one A0.1 run: ") != expected:
         raise control.RunError("owner A0.1 approval did not match; no session was started")
@@ -161,7 +193,13 @@ def run(suite: str, count: int, output_dir: Path, tokenizer_dir: Path) -> int:
         args: list[str], timeout: int, capture: bool = False
     ) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
-            args, cwd=protocol.ROOT, check=False, timeout=timeout, text=True, capture_output=capture
+            args,
+            cwd=protocol.ROOT,
+            check=False,
+            timeout=timeout,
+            text=True,
+            capture_output=capture,
+            env=colab_environment(),
         )
 
     try:

@@ -8,7 +8,7 @@ import os
 import subprocess
 import sys
 from datetime import UTC, datetime
-from io import BytesIO
+from io import BytesIO, StringIO
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 from typing import Any
@@ -26,6 +26,112 @@ from scripts import a01_protocol as protocol
 NO_SESSIONS = "[colab] No active sessions found on server.\n"
 PRUNED_SESSION = "[colab] Pruned 1 stale local session(s).\n"
 ACTIVE_SESSION = "[gpu-eval] m-s-kkb-usc1c0-3cickkby8ivx5 | Hardware: CPU | Variant: DEFAULT\n"
+USAGE = "Current balance: 257.80 compute units\nActive assignments: 0\n"
+
+
+@pytest.fixture
+def poisoned_colab_parent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    poison = tmp_path / "tokenizer-site-packages"
+    poison.mkdir()
+    (poison / "filelock.py").write_text('__version__ = "3.18.0"\n')
+    (poison / "json.py").write_text('raise AssertionError("tokenizer PYTHONPATH leaked")\n')
+    monkeypatch.setenv("PYTHONPATH", str(poison))
+    monkeypatch.setenv("PYTHONHOME", str(tmp_path / "invalid-python-home"))
+    for name, path in {
+        "TMPDIR": "tmp",
+        "UV_CACHE_DIR": "cache/uv",
+        "PIP_CACHE_DIR": "cache/pip",
+        "XDG_CACHE_HOME": "cache/xdg",
+        "HF_HOME": "cache/huggingface",
+        "TORCH_HOME": "cache/torch",
+        "PYTHONPYCACHEPREFIX": "cache/pycache",
+    }.items():
+        monkeypatch.setenv(name, f"/mnt/e/DynamisLM-A0/{path}")
+
+
+def test_colab_environment_isolates_real_child_without_changing_parent(
+    poisoned_colab_parent: None,
+) -> None:
+    parent = dict(os.environ)
+    env = execution.colab_environment()
+    assert env == {
+        key: value for key, value in parent.items() if key not in {"PYTHONPATH", "PYTHONHOME"}
+    }
+    child = subprocess.run(
+        [sys.executable, "-c", "import json, os; print(json.dumps(dict(os.environ)))"],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert json.loads(child.stdout) == env
+    assert dict(os.environ) == parent
+
+
+@pytest.mark.parametrize("failure", [None, "visible", "captured", "unknown", "zero", "active"])
+def test_isolated_quota_preserves_oauth_and_fail_closed_parsing(
+    monkeypatch: pytest.MonkeyPatch, poisoned_colab_parent: None, failure: str | None
+) -> None:
+    parent = dict(os.environ)
+    monkeypatch.setattr(sys, "stdin", SimpleNamespace(isatty=lambda: True))
+    monkeypatch.setattr(sys.stdout, "isatty", lambda: True)
+    calls = []
+    output = {
+        "unknown": "unknown quota response\n",
+        "zero": USAGE.replace("257.80", "0.00"),
+        "active": USAGE.replace("assignments: 0", "assignments: 1"),
+    }.get(failure or "", USAGE)
+
+    def visible(command: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        assert command == ["colab", "--auth=oauth2", "usage"]
+        assert kwargs == {
+            "cwd": protocol.ROOT,
+            "check": False,
+            "env": execution.colab_environment(),
+        }
+        calls.append("visible")
+        return subprocess.CompletedProcess(command, 1 if failure == "visible" else 0)
+
+    def captured(command: list[str], **kwargs: Any) -> Any:
+        assert command == ["colab", "--auth=oauth2", "usage"]
+        assert kwargs == {
+            "cwd": protocol.ROOT,
+            "stdout": subprocess.PIPE,
+            "stderr": subprocess.STDOUT,
+            "text": True,
+            "bufsize": 1,
+            "env": execution.colab_environment(),
+        }
+        calls.append("captured")
+        return SimpleNamespace(
+            stdout=StringIO(output), wait=lambda: 1 if failure == "captured" else 0
+        )
+
+    monkeypatch.setattr(
+        execution, "subprocess", SimpleNamespace(run=visible, Popen=captured, PIPE=-1, STDOUT=-2)
+    )
+    if failure:
+        with pytest.raises(a0_colab.RunError):
+            execution.usage()
+    else:
+        assert execution.usage() == ("257.80", USAGE)
+    assert calls == (["visible"] if failure == "visible" else ["visible", "captured"])
+    assert dict(os.environ) == parent
+
+
+@pytest.mark.parametrize("non_tty", ["stdin", "stdout"])
+def test_isolated_quota_requires_interactive_terminal(
+    monkeypatch: pytest.MonkeyPatch, non_tty: str
+) -> None:
+    monkeypatch.setattr(sys, "stdin", SimpleNamespace(isatty=lambda: non_tty != "stdin"))
+    monkeypatch.setattr(sys.stdout, "isatty", lambda: non_tty != "stdout")
+
+    def forbidden(*args: Any, **kwargs: Any) -> Any:
+        raise AssertionError("OAuth must remain interactive")
+
+    monkeypatch.setattr(execution, "subprocess", SimpleNamespace(run=forbidden, Popen=forbidden))
+    with pytest.raises(a0_colab.RunError, match="interactive"):
+        execution.usage()
 
 
 @pytest.mark.parametrize(
@@ -384,7 +490,7 @@ def test_no_gpu_without_exact_interactive_owner_approval(
     monkeypatch.setattr(
         a0_colab, "_check_clean_pushed_revision", lambda: protocol.git("rev-parse", "HEAD")
     )
-    monkeypatch.setattr(a0_colab, "_usage", lambda: ("100", ""))
+    monkeypatch.setattr(execution, "usage", lambda: ("100", ""))
     monkeypatch.setattr("builtins.input", lambda _: "RUN RES-541 A0")
 
     def forbidden(*args: Any, **kwargs: Any) -> Any:
@@ -413,8 +519,13 @@ def test_no_gpu_without_exact_interactive_owner_approval(
     ],
 )
 def test_owner_gated_transport_always_stops_and_verifies_zero_sessions(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: str | None, notice: str
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure: str | None,
+    notice: str,
+    poisoned_colab_parent: None,
 ) -> None:
+    parent = dict(os.environ)
     suite, count = "a01_controls", 12
     binding = protocol.plan(suite, count)
     remote_report = execution.score(packet(), suite, count)
@@ -427,15 +538,17 @@ def test_owner_gated_transport_always_stops_and_verifies_zero_sessions(
     monkeypatch.setattr(
         a0_colab, "_check_clean_pushed_revision", lambda: binding["source_revision"]
     )
-    monkeypatch.setattr(a0_colab, "_usage", lambda: ("100", ""))
-    monkeypatch.setattr("builtins.input", lambda _: execution.confirmation(binding, "100"))
-    calls: list[tuple[str, int]] = []
+    monkeypatch.setattr("builtins.input", lambda _: execution.confirmation(binding, "257.80"))
+    calls: list[tuple[str, int | None]] = []
     run_id = ""
 
     def transport(command: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
         nonlocal run_id
         operation = command[2]
-        calls.append((operation, kwargs["timeout"]))
+        assert kwargs["env"] == {
+            key: value for key, value in parent.items() if key not in {"PYTHONPATH", "PYTHONHOME"}
+        }
+        calls.append((operation, kwargs.get("timeout")))
         if operation == "run":
             assert "a01_colab_entry.py" in command[10]
             assert command[-4:] == ["--suite", suite, "--cases", "12"]
@@ -455,7 +568,15 @@ def test_owner_gated_transport_always_stops_and_verifies_zero_sessions(
         returncode = 1 if failure == f"{operation}_nonzero" else 0
         return subprocess.CompletedProcess(command, returncode, notice + text, "")
 
-    monkeypatch.setattr(execution, "subprocess", SimpleNamespace(run=transport))
+    def captured(command: list[str], **kwargs: Any) -> Any:
+        assert command == ["colab", "--auth=oauth2", "usage"]
+        assert kwargs["env"] == execution.colab_environment()
+        calls.append(("captured_usage", None))
+        return SimpleNamespace(stdout=StringIO(USAGE), wait=lambda: 0)
+
+    monkeypatch.setattr(
+        execution, "subprocess", SimpleNamespace(run=transport, Popen=captured, PIPE=-1, STDOUT=-2)
+    )
     monkeypatch.setattr(execution, "score", lambda *a, **k: copy.deepcopy(remote_report))
     teardown_failures = {
         "stop",
@@ -471,10 +592,18 @@ def test_owner_gated_transport_always_stops_and_verifies_zero_sessions(
             execution.run(suite, count, tmp_path, tmp_path)
     else:
         assert execution.run(suite, count, tmp_path, tmp_path) == (1 if failure == "run" else 0)
-    assert calls == [("run", 900), ("download", 120), ("stop", 30), ("sessions", 30)]
+    assert calls == [
+        ("usage", None),
+        ("captured_usage", None),
+        ("run", 900),
+        ("download", 120),
+        ("stop", 30),
+        ("sessions", 30),
+    ]
     state = json.loads(next(tmp_path.glob("*-control.json")).read_text())
     assert state["binding"] == binding
     assert state["session_absent_after_stop"] == (failure not in teardown_failures)
+    assert dict(os.environ) == parent
 
 
 def test_historical_fixture_path_is_protected(monkeypatch: pytest.MonkeyPatch) -> None:
