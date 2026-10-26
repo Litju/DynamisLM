@@ -1,5 +1,9 @@
 # RES-541 A0.1 CPU qualification
 
+Runtime decision:
+[V1 — BLOCKED_RUNTIME_VERSION_UNKNOWN](../../docs/experiments/RES-541-A01-RUNTIME-DECISION-V1.md).
+The CPython patch candidate is inactive; neither execution gate is relaxed.
+
 This is `A0.1_PROMPT_V1`, a prompt-only development experiment using the unchanged
 `RES541_A0_INTENT_V1` parser and registered Python authority. A0 remains scientific
 **NO_GO**. This directory authorizes no GPU allocation, Colab launch, model weights,

@@ -1,0 +1,28 @@
+{
+  "schema": "RES541_A01_RUNTIME_DECISION_V1",
+  "status": "BLOCKED_RUNTIME_VERSION_UNKNOWN",
+  "approved": false,
+  "active": false,
+  "reviewed_source": "f62347234954b0ca994bfbb2046b8972aa251cbd",
+  "failed_attempt_source": "37db8457271ec89691da07daaf2c3b4d73f5b1ac",
+  "failed_attempt_python": null,
+  "failed_attempt_torch": null,
+  "failed_attempt_cuda": null,
+  "approved_python_patches": [],
+  "candidate_screen": {
+    "implementation": "CPython",
+    "python_final_release_pattern": "3\\.13\\.(?:0|[1-9][0-9]*)",
+    "gil_disabled": false,
+    "debug_build": false,
+    "soabi": "cpython-313-x86_64-linux-gnu",
+    "torch": "2.11.0+cu130",
+    "torch_cuda_runtime": "13.0",
+    "gpu_name": "Tesla T4",
+    "compute_capability": [7, 5],
+    "device_count": 1,
+    "weight_dtype": "float16"
+  },
+  "unchanged_execution_contract": "RES541_A01_EXECUTION_V1",
+  "scientific_engine_python": "3.12.13",
+  "candidate_screen_is_launch_authority": false
+}
