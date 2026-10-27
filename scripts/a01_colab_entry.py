@@ -14,7 +14,7 @@ from types import ModuleType
 from typing import Any
 from urllib.request import urlopen
 
-RUNTIME_SHA256 = "9d482e9e74ba931d64ef5a9c85c0883185e69a6ea1d47862af61a1367650012b"
+RUNTIME_SHA256 = "727b19ae028ec62cd7cf6df1622fa56317bffdaf0f294c16ff6f620869c0a74c"
 _RUNTIME: Any = None
 
 

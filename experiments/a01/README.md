@@ -286,3 +286,9 @@ weights and actual inference remain separately owner gated.
 Runtime portability now uses inactive execution binding V2 and an explicitly
 reviewed profile. See [runtime profile V1](../../docs/experiments/RES-541-A01-RUNTIME-PROFILE-V1.md).
 The `run` command currently refuses allocation because the profile is inactive.
+
+The [prospective activation decision V1](../../docs/experiments/RES-541-A01-ACTIVATION-DECISION-V1.md)
+limits candidate screening to Python **3.13.15, 3.13.16, 3.13.17, 3.13.18**.
+These are prospective eligibility candidates. The approved list remains empty,
+both approval records null and the profile inactive: exact eligibility/budget
+owner approval and independent review of the four-patch proposal are still required.

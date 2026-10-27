@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import json
 from pathlib import Path
 from typing import Any
 
@@ -31,7 +32,7 @@ def activate(monkeypatch: pytest.MonkeyPatch) -> None:
     profile = copy.deepcopy(runtime.PROFILE)
     profile.update(
         active=True,
-        approved_python_patches=["3.13.16"],
+        approved_python_patches=list(profile["candidate_python_patches"]),
         independent_review={"identity": "synthetic-reviewer", "evidence": "synthetic-review"},
         owner_approval={"identity": "synthetic-owner", "evidence": "synthetic-approval"},
     )
@@ -67,7 +68,15 @@ def test_shipped_profile_is_inactive() -> None:
         {"python_build": []},
         {"driver_inventory": ""},
         {"inventory_error": "OSError"},
-        {"python": "3.13.15"},
+        {"python": "3.13.14"},
+        {"python": "3.13.19"},
+        {"python": "3.12.13"},
+        {"python": "3.13.18rc1"},
+        {"torch": "2.11.0"},
+        {"torch": "2.11.0+cu128"},
+        {"soabi": "cpython-313t-x86_64-linux-gnu"},
+        {"gil_disabled": None},
+        {"debug_build": None},
         {"total_vram_bytes": True},
     ],
 )
@@ -133,16 +142,17 @@ def test_inactive_profile_stops_before_host_or_transport(monkeypatch: pytest.Mon
 
 
 @pytest.mark.parametrize("name", ["a0_colab_entry", "a0_colab_inference"])
+@pytest.mark.parametrize("python_patch", ["3.13.15", "3.13.16", "3.13.17", "3.13.18"])
 @pytest.mark.parametrize("failure", [None, "python", "torch", "cuda"])
 def test_executed_gates_keep_torch_and_cuda_guards(
-    name: str, failure: str | None, monkeypatch: pytest.MonkeyPatch
+    name: str, python_patch: str, failure: str | None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     import ast
     import sys
     from types import SimpleNamespace
 
     activate(monkeypatch)
-    sample = observed()
+    sample = {**observed(), "python": python_patch}
     if failure == "python":
         sample["python"] = "3.14.0"
     if failure == "cuda":
@@ -231,3 +241,70 @@ def test_inventory_records_partial_failure_without_installing(
     assert actual["inventory_error"] == "RuntimeError"
     with pytest.raises(ValueError):
         runtime.qualify(actual, approved=False)
+
+
+@pytest.mark.parametrize("python_patch", ["3.13.15", "3.13.16", "3.13.17", "3.13.18"])
+def test_finite_candidates_are_not_approval(
+    python_patch: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    assert runtime.PROFILE["candidate_python_patches"] == [
+        "3.13.15",
+        "3.13.16",
+        "3.13.17",
+        "3.13.18",
+    ]
+    assert runtime.PROFILE["approved_python_patches"] == []
+    assert runtime.PROFILE["independent_review"] is None
+    assert runtime.PROFILE["owner_approval"] is None
+    sample = {**observed(), "python": python_patch}
+    runtime.qualify(sample, approved=False)
+    with pytest.raises(ValueError, match="inactive"):
+        runtime.qualify(sample)
+    activate(monkeypatch)
+    serialized = json.loads(json.dumps(sample))
+    runtime.qualify(serialized)
+    runtime.agree(serialized, {**serialized, "python_executable": "/synthetic/venv/python"})
+    runtime.PROFILE["approved_python_patches"].remove(python_patch)
+    with pytest.raises(ValueError, match="INCOMPATIBLE"):
+        runtime.qualify(serialized)
+
+
+@pytest.mark.parametrize("python_patch", ["3.13.14", "3.13.19", "3.14.0"])
+def test_outside_candidate_set_cannot_be_screened_or_approved(
+    python_patch: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with pytest.raises(ValueError, match="INCOMPATIBLE"):
+        runtime.qualify({**observed(), "python": python_patch}, approved=False)
+    activate(monkeypatch)
+    runtime.PROFILE["approved_python_patches"].append(python_patch)
+    with pytest.raises(ValueError, match="approval"):
+        runtime.require_approval()
+
+
+def test_actual_inventory_is_json_native(monkeypatch: pytest.MonkeyPatch) -> None:
+    import subprocess
+    import sys
+    from types import SimpleNamespace
+
+    monkeypatch.setitem(
+        sys.modules,
+        "torch",
+        SimpleNamespace(
+            __version__="2.11.0+cu130",
+            version=SimpleNamespace(cuda="13.0"),
+            cuda=SimpleNamespace(
+                device_count=lambda: 1,
+                get_device_properties=lambda _: SimpleNamespace(
+                    name="Tesla T4", uuid="synthetic-uuid", total_memory=15 * 1024**3
+                ),
+                get_device_capability=lambda _: (7, 5),
+            ),
+        ),
+    )
+    monkeypatch.setattr(subprocess, "check_output", lambda *a, **k: "synthetic-driver\n")
+    actual = runtime.inventory()
+    assert "inventory_error" not in actual
+    assert json.loads(json.dumps(actual)) == actual
+    assert isinstance(actual["python_build"], list)
+    assert actual["compute_capability"] == [7, 5]
+    assert actual["python_full_version"] == sys.version

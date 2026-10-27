@@ -18,6 +18,7 @@ VERSION = "RES541_A01_EXECUTION_V2"
 PROFILE: dict[str, Any] = {
     "id": "RES541_A01_CPYTHON313_T4_V1",
     "active": False,
+    "candidate_python_patches": ["3.13.15", "3.13.16", "3.13.17", "3.13.18"],
     "approved_python_patches": [],
     "independent_review": None,
     "owner_approval": None,
@@ -61,7 +62,9 @@ def require_approval() -> None:
         or not isinstance(PROFILE["approved_python_patches"], list)
         or not PROFILE["approved_python_patches"]
         or any(
-            not isinstance(v, str) or re.fullmatch(r"3\.13\.(?:0|[1-9][0-9]*)", v) is None
+            not isinstance(v, str)
+            or re.fullmatch(r"3\.13\.(?:0|[1-9][0-9]*)", v) is None
+            or v not in PROFILE["candidate_python_patches"]
             for v in PROFILE["approved_python_patches"]
         )
         or not isinstance(review, dict)
@@ -127,6 +130,7 @@ def qualify(observed: dict[str, Any], *, approved: bool = True) -> None:
     if (
         not isinstance(observed.get("python"), str)
         or re.fullmatch(pattern, observed["python"]) is None
+        or observed["python"] not in PROFILE["candidate_python_patches"]
         or any(
             type(observed.get(key)) is not type(value) or observed[key] != value
             for key, value in requirements.items()
