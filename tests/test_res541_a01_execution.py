@@ -5,7 +5,6 @@ from __future__ import annotations
 import copy
 import json
 import os
-import platform
 import subprocess
 import sys
 from datetime import UTC, datetime
@@ -22,12 +21,21 @@ from scripts import a01_execution as execution
 from scripts import a01_experiment as experiment
 from scripts import a01_inference as inference
 from scripts import a01_protocol as protocol
+from scripts import a01_runtime as compatibility
+
+from test_res541_runtime_profile import activate, observed
 
 # Official CLI captures: https://github.com/googlecolab/google-colab-cli/blob/main/docs/demos.md
 NO_SESSIONS = "[colab] No active sessions found on server.\n"
 PRUNED_SESSION = "[colab] Pruned 1 stale local session(s).\n"
 ACTIVE_SESSION = "[gpu-eval] m-s-kkb-usc1c0-3cickkby8ivx5 | Hardware: CPU | Variant: DEFAULT\n"
 USAGE = "Current balance: 257.80 compute units\nActive assignments: 0\n"
+
+
+@pytest.fixture(autouse=True)
+def synthetic_runtime_authority(monkeypatch: pytest.MonkeyPatch) -> None:
+    activate(monkeypatch)
+    monkeypatch.setattr(compatibility, "inventory", observed)
 
 
 @pytest.fixture
@@ -187,6 +195,7 @@ def packet(suite: str = "a01_controls", actual: Any = None) -> dict[str, Any]:
     binding = protocol.plan(suite, count)
     cases = engine.load_cases(protocol.ROOT / protocol.SUITES[suite][0])
     when = datetime.now(UTC)
+    evidence = {"bootstrap": observed(), "inference": observed()}
     rows = []
     for case, message in zip(cases, prepared["cases"], strict=True):
         raw = experiment.compact(
@@ -207,6 +216,7 @@ def packet(suite: str = "a01_controls", actual: Any = None) -> dict[str, Any]:
             )
             generated = [*actual.encode(raw, add_special_tokens=False), protocol.EOS]
         row = dict(
+            runtime_evidence_sha256=compatibility.digest(evidence),
             case_id=case.case_id,
             raw_text=raw,
             prompt_token_ids=ids,
@@ -226,10 +236,12 @@ def packet(suite: str = "a01_controls", actual: Any = None) -> dict[str, Any]:
         "schema": "RES541_A0_MODEL_OUTPUTS_V1",
         "status": "COMPLETE",
         "cases": rows,
+        "runtime_evidence": evidence,
         "runtime": {
+            **observed(),
             "decoding": dict(protocol.DECODING),
             "weight_dtype": "float16",
-            "gpu_name": "MOCK T4",
+            "gpu_name": "Tesla T4",
             "compute_capability": [7, 5],
             "total_vram_bytes": 15 * 1024**3,
             "model_weight_bytes_from_revision_metadata": 6 * 1024**3,
@@ -267,6 +279,8 @@ def test_no_silent_budget_increase(suite: str, count: int) -> None:
 @pytest.mark.parametrize(
     "field",
     [
+        "runtime_profile_id",
+        "runtime_profile_sha256",
         "execution_version",
         "source_revision",
         "source_tree",
@@ -357,6 +371,8 @@ def test_remote_bootstrap_routes_only_the_three_a01_steps(tmp_path: Path) -> Non
 
     def fake(command: list[str], **kwargs: Any) -> str:
         calls.append(command)
+        if "prepare" in command:
+            Path(command[command.index("--output") + 1]).write_text("{}")
         return "OK"
 
     module.__dict__["_run"] = fake
@@ -379,7 +395,7 @@ def test_remote_python_mismatch_retains_observed_runtime_without_relaxing_pin(
 ) -> None:
     module = protocol.isolated_a0("a0_colab_entry")
     original = a0_colab_entry._preflight
-    monkeypatch.setattr(platform, "python_version", lambda: "3.14.0")
+    monkeypatch.setattr(compatibility, "inventory", lambda: {**observed(), "python": "3.14.0"})
     torch = ModuleType("torch")
     torch.__dict__["__version__"] = "2.11.0+cu130"
     monkeypatch.setitem(sys.modules, "torch", torch)
@@ -392,15 +408,15 @@ def test_remote_python_mismatch_retains_observed_runtime_without_relaxing_pin(
     assert entry.adapt(module, "a0_diagnostic", 16).run("a" * 40, "test", report_path) == 1
     report = json.loads(report_path.read_text())
     assert report["failure_stage"] == "GPU_PREFLIGHT"
-    assert report["failure_category"] == "PYTHON_VERSION_MISMATCH"
-    assert report["runtime_preflight"] == {
-        "python": "3.14.0",
-        "python_executable": sys.executable,
-        "torch": "2.11.0+cu130",
-    }
+    assert report["failure_category"] == "RUNTIME_INCOMPATIBLE"
+    assert report["runtime_preflight"] == {**observed(), "python": "3.14.0"}
     assert report["model_weights_downloaded"] is False
     assert report["inference_run"] is False and report["cases"] == []
     assert report["suite"] == "a0_diagnostic" and report["approved_case_count"] == 16
+    before = report_path.read_bytes()
+    with pytest.raises(ValueError, match="already exists"):
+        module.run("a" * 40, "test", report_path)
+    assert report_path.read_bytes() == before
     assert a0_colab_entry._preflight is original
 
 
@@ -421,6 +437,7 @@ def test_inference_private_module_cannot_fall_back_to_a0() -> None:
 def test_bootstrap_source_is_pinned_before_execution(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
+    monkeypatch.setattr(entry, "_RUNTIME", None)
     source = (protocol.ROOT / "scripts/a0_colab_entry.py").read_bytes()
     assert protocol.digest(source) == entry.A0_ENTRY_SHA256
     calls = []
@@ -441,7 +458,15 @@ def test_bootstrap_source_is_pinned_before_execution(
             "12",
         ],
     )
-    monkeypatch.setattr(entry, "urlopen", lambda *a, **k: BytesIO(source))
+    monkeypatch.setattr(
+        entry,
+        "urlopen",
+        lambda url, **k: BytesIO(
+            (protocol.ROOT / "scripts/a01_runtime.py").read_bytes()
+            if url.endswith("a01_runtime.py")
+            else source
+        ),
+    )
 
     def adapted(module: ModuleType, suite: str, count: int) -> Any:
         def run(*args: Any) -> int:
@@ -462,7 +487,7 @@ def test_bootstrap_source_is_pinned_before_execution(
 def test_remote_failure_retains_generations_after_temporary_directory_disappears(
     tmp_path: Path,
 ) -> None:
-    module = ModuleType("mock_remote")
+    module = protocol.isolated_a0("a0_colab_entry")
     model = tmp_path / "model.json"
     report = tmp_path / "report.json"
 
@@ -487,6 +512,7 @@ def test_partial_stream_is_preserved_if_inference_raises(
 ) -> None:
     prepared = execution.prepare("a01_controls", 12)
     path, output = tmp_path / "prepared.json", tmp_path / "outputs.json"
+    prepared["bootstrap_inventory"] = observed()
     path.write_text(json.dumps(prepared))
     stream = SimpleNamespace(
         case_id=prepared["cases"][0]["case_id"],
@@ -530,7 +556,7 @@ def test_no_gpu_without_exact_interactive_owner_approval(
     # protocol Git reads remain real; only the execution transport is isolated.
     monkeypatch.setattr(execution, "subprocess", SimpleNamespace(run=forbidden))
     with pytest.raises(a0_colab.RunError, match="approval"):
-        execution.run("a01_controls", 12, tmp_path, tmp_path)
+        execution.run("a0_diagnostic", 16, tmp_path, tmp_path)
 
 
 @pytest.mark.parametrize("notice", ["", PRUNED_SESSION])
@@ -561,9 +587,9 @@ def test_owner_gated_transport_always_stops_and_verifies_zero_sessions(
     poisoned_colab_parent: None,
 ) -> None:
     parent = dict(os.environ)
-    suite, count = "a01_controls", 12
+    suite, count = "a0_diagnostic", 16
     binding = protocol.plan(suite, count)
-    remote_report = execution.score(packet(), suite, count)
+    remote_report = execution.score(packet(suite), suite, count)
     monkeypatch.setattr(a0_colab, "_prepare_host_storage", lambda _: tmp_path)
     monkeypatch.setattr(
         execution, "tokenizer", lambda _: SimpleNamespace(apply_chat_template=lambda *a, **k: [1])
@@ -586,14 +612,20 @@ def test_owner_gated_transport_always_stops_and_verifies_zero_sessions(
         calls.append((operation, kwargs.get("timeout")))
         if operation == "run":
             assert "a01_colab_entry.py" in command[10]
-            assert command[-4:] == ["--suite", suite, "--cases", "12"]
+            assert command[-4:] == ["--suite", suite, "--cases", "16"]
             run_id = command[6]
         if operation == failure:
             raise subprocess.TimeoutExpired(command, kwargs["timeout"])
         if operation == "download":
-            report = dict(remote_report, run_id=run_id, approved_case_count=count)
+            report = dict(
+                remote_report,
+                run_id=run_id,
+                approved_case_count=count,
+                runtime_inventory=observed(),
+            )
             if failure in {"remote_preflight", "foreign_failure", "malformed_failure"}:
                 report = {
+                    **compatibility.binding(),
                     "schema": execution.REPORT_SCHEMA,
                     "execution_version": protocol.VERSION,
                     "source_revision": binding["source_revision"],
@@ -694,6 +726,7 @@ def test_actual_tokenizer_replay_and_rebound_token_tampering(
     actual = execution.tokenizer(Path(os.environ["RES541_A01_TOKENIZER_DIR"]))
     prepared = execution.prepare(suite, protocol.SUITES[suite][1])
     path, output = tmp_path / "prepared.json", tmp_path / "outputs.json"
+    prepared["bootstrap_inventory"] = observed()
     path.write_text(json.dumps(prepared))
 
     class Array:
@@ -769,3 +802,38 @@ def test_actual_tokenizer_replay_and_rebound_token_tampering(
     row["binding_sha256"] = protocol.bind_row(row, protocol.plan(suite, count))
     with pytest.raises(ValueError, match="actual tokenizer replay"):
         execution.score(data, suite, count, actual)
+
+
+@pytest.mark.parametrize("mutation", ["profile", "bootstrap", "inference", "runtime", "digest"])
+def test_runtime_provenance_cannot_be_relabelled(mutation: str) -> None:
+    data = packet()
+    if mutation == "profile":
+        data["runtime_profile_sha256"] = "0" * 64
+    elif mutation in {"bootstrap", "inference"}:
+        data["runtime_evidence"][mutation]["python_build"] = ["foreign", "foreign"]
+    elif mutation == "runtime":
+        data["runtime"]["torch_cuda_runtime"] = "12.0"
+    else:
+        data["cases"][0]["runtime_evidence_sha256"] = "0" * 64
+    with pytest.raises(ValueError):
+        execution.score(data, "a01_controls", 12)
+
+
+def test_inference_mismatch_precedes_all_downloads(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    prepared = execution.prepare("a0_diagnostic", 16)
+    prepared["bootstrap_inventory"] = {**observed(), "python": "3.14.0"}
+    path, output = tmp_path / "prepared.json", tmp_path / "outputs.json"
+    path.write_text(json.dumps(prepared))
+
+    def forbidden() -> None:
+        raise AssertionError("runtime mismatch must precede tokenizer downloads")
+
+    monkeypatch.setattr(inference, "verify_tokenizer_assets", forbidden)
+    with pytest.raises(ValueError, match="INCOMPATIBLE"):
+        inference.run(path, output)
+    failure = json.loads(output.read_text())
+    assert failure["status"] == "NO_GO"
+    assert failure["runtime_evidence"]["bootstrap"]["python"] == "3.14.0"
+    assert failure["runtime_evidence"]["inference"] == observed()

@@ -6,7 +6,6 @@ import argparse
 import hashlib
 import json
 import os
-import platform
 import re
 import sys
 import tempfile
@@ -15,25 +14,54 @@ from types import ModuleType
 from typing import Any
 from urllib.request import urlopen
 
+RUNTIME_SHA256 = "9d482e9e74ba931d64ef5a9c85c0883185e69a6ea1d47862af61a1367650012b"
+_RUNTIME: Any = None
+
+
+def runtime_module() -> Any:
+    if _RUNTIME is not None:
+        return _RUNTIME
+    from scripts import a01_runtime
+
+    return a01_runtime
+
+
 A0_ENTRY_SHA256 = "3150cba8d6f75092e928eb207bad12dbb360b36614289609b931b6d77bcbb123"
 
 
 def adapt(module: ModuleType, suite: str, count: int) -> ModuleType:
     """Reuse the frozen bootstrap with A0.1 routing and failure diagnostics."""
     original_run = module._run
+    compatibility = runtime_module()
+
+    def check() -> bool:
+        compatibility.qualify(observed_runtime)
+        return True
+
+    compatibility.adapt_gate(
+        module, "a0_colab_entry", Path(str(module.__file__)).read_bytes(), check
+    )
     original_preflight = module._preflight
     retained: dict[str, Any] = {}
     observed_runtime: dict[str, Any] = {}
 
     def preflight() -> Any:
+        observed_runtime.update(compatibility.inventory())
+        compatibility.immutable(
+            inventory_path,
+            {
+                "schema": "RES541_A01_RUNTIME_INVENTORY_V1",
+                "source_revision": revision_id,
+                "run_id": session_id,
+                **compatibility.binding(),
+                "inventory": observed_runtime,
+            },
+        )
         try:
-            return original_preflight()
-        finally:
-            observed_runtime["python"] = platform.python_version()
-            observed_runtime["python_executable"] = sys.executable
-            torch = sys.modules.get("torch")
-            if torch is not None:
-                observed_runtime["torch"] = str(torch.__version__)
+            compatibility.qualify(observed_runtime)
+        except ValueError as exc:
+            raise module.A0Error("GPU_PREFLIGHT", "RUNTIME_INCOMPATIBLE") from exc
+        return original_preflight()
 
     module.__dict__["_preflight"] = preflight
 
@@ -71,7 +99,14 @@ def adapt(module: ModuleType, suite: str, count: int) -> ModuleType:
         if "scripts.a01_execution" in replacement or "scripts.a01_inference" in replacement:
             kwargs["env"] = {**(kwargs.get("env") or os.environ), "RES541_A01_REMOTE": "1"}
         try:
-            return str(original_run(replacement, **kwargs))
+            result = str(original_run(replacement, **kwargs))
+            if "scripts.a01_execution" in replacement and "prepare" in replacement:
+                path = Path(replacement[replacement.index("--output") + 1])
+                prepared = json.loads(path.read_text())
+                prepared["bootstrap_inventory"] = observed_runtime
+                prepared["run_id"] = session_id
+                path.write_text(json.dumps(prepared, sort_keys=True) + "\n")
+            return result
         finally:
             if "scripts.a01_inference" in replacement:
                 path = Path(replacement[replacement.index("--output") + 1])
@@ -81,12 +116,22 @@ def adapt(module: ModuleType, suite: str, count: int) -> ModuleType:
     module.__dict__["_run"] = dispatch
     original = module.run
 
+    revision_id = session_id = ""
+    inventory_path = Path("/nonexistent")
+
     def run(revision: str, run_id: str, report_path: Path) -> int:
+        nonlocal revision_id, session_id, inventory_path
+        revision_id, session_id = revision, run_id
+        inventory_path = report_path.with_suffix(".inventory.json")
+        if report_path.exists() or inventory_path.exists():
+            raise ValueError("immutable A0.1 runtime report already exists")
         code = int(original(revision, run_id, report_path))
         report = json.loads(report_path.read_text())
         report.update(retained)
         report["schema"] = "RES541_A01_REPORT_V1"
-        report["execution_version"] = "RES541_A01_EXECUTION_V1"
+        report["execution_version"] = compatibility.VERSION
+        report.update(compatibility.binding())
+        report["runtime_inventory"] = observed_runtime
         report["suite"] = suite
         report["approved_case_count"] = count
         report["run_id"] = run_id
@@ -129,6 +174,14 @@ def main() -> int:
         source = response.read(64 * 1024 + 1)
     if hashlib.sha256(source).hexdigest() != A0_ENTRY_SHA256:
         raise ValueError("immutable A0 bootstrap SHA-256 mismatch")
+    global _RUNTIME
+    runtime_url = url.rsplit("/", 1)[0] + "/a01_runtime.py"
+    with urlopen(runtime_url, timeout=30) as response:
+        runtime_source = response.read(64 * 1024 + 1)
+    if hashlib.sha256(runtime_source).hexdigest() != RUNTIME_SHA256:
+        raise ValueError("A0.1 runtime adapter SHA-256 mismatch")
+    _RUNTIME = ModuleType("_a01_runtime")
+    exec(compile(runtime_source, "a01_runtime.py", "exec"), _RUNTIME.__dict__)
     with tempfile.TemporaryDirectory(prefix="res541-a01-bootstrap-") as temporary:
         path = Path(temporary) / "a0_colab_entry.py"
         path.write_bytes(source)

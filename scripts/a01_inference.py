@@ -13,6 +13,7 @@ from types import ModuleType
 from typing import Any
 
 from scripts import a01_protocol as protocol
+from scripts import a01_runtime as compatibility
 
 
 def verify_tokenizer_assets() -> None:
@@ -47,6 +48,18 @@ def runtime(prepared: dict[str, Any]) -> tuple[ModuleType, list[dict[str, Any]],
     ):
         raise ValueError("prepared A0.1 suite case IDs/count mismatch")
     module = protocol.isolated_a0("a0_colab_inference")
+
+    def check() -> bool:
+        module.__dict__["_a01_inventory"] = compatibility.inventory()
+        compatibility.agree(prepared["bootstrap_inventory"], module.__dict__["_a01_inventory"])
+        return True
+
+    compatibility.adapt_gate(
+        module,
+        "a0_colab_inference",
+        (protocol.ROOT / "scripts/a0_colab_inference.py").read_bytes(),
+        check,
+    )
     module.__dict__["SYSTEM_PROMPT"] = protocol.prompt()
     records: list[dict[str, Any]] = []
     streamers: list[Any] = []
@@ -110,10 +123,15 @@ def run(prepared_path: Path, output: Path) -> None:
     time.tzset()
     # The inherited loader keeps checkpoint, hardware/dtype, dependencies and decoding fixed.
     document: dict[str, Any] = {**binding, "schema": "RES541_A0_MODEL_OUTPUTS_V1", "cases": []}
+    observed: dict[str, Any] = {}
     try:
+        observed = compatibility.inventory()
+        compatibility.agree(prepared["bootstrap_inventory"], observed)
+        evidence = {"bootstrap": prepared["bootstrap_inventory"], "inference": observed}
         verify_tokenizer_assets()
         document = module.run_inference(prepared_path, output)
         document.update(binding)
+        document["runtime_evidence"] = evidence
         if len(records) != binding["case_count"] or len(streamers) != len(records):
             raise ValueError("incomplete actual-token evidence")
         for row, record, streamer in zip(document["cases"], records, streamers, strict=True):
@@ -126,9 +144,14 @@ def run(prepared_path: Path, output: Path) -> None:
                 raw_text=raw,
                 generated_token_ids=streamer.ids,
             )
+            row["runtime_evidence_sha256"] = compatibility.digest(evidence)
             row["binding_sha256"] = protocol.bind_row(row, binding)
         protocol.validate_outputs(document, binding, prepared["cases"], tokenizer)
     except Exception as exc:
+        document["runtime_evidence"] = {
+            "bootstrap": prepared.get("bootstrap_inventory", {}),
+            "inference": module.__dict__.get("_a01_inventory", observed),
+        }
         document["status"] = "NO_GO"
         document["failure_category"] = type(exc).__name__
         raise

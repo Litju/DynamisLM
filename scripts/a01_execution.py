@@ -16,6 +16,7 @@ from scripts import a0_colab as control
 from scripts import a0_engine as engine
 from scripts import a01_experiment as experiment
 from scripts import a01_protocol as protocol
+from scripts import a01_runtime as compatibility
 
 REPORT_SCHEMA = "RES541_A01_REPORT_V1"
 
@@ -107,6 +108,7 @@ def confirmation(binding: dict[str, Any], balance: str) -> str:
     return (
         f"RUN RES-541 {protocol.VERSION} | suite={binding['suite']} | cases={binding['case_count']}"
         f" | source={binding['source_revision']} | prompt={protocol.PROMPT_SHA256}"
+        f" | profile={binding['runtime_profile_id']}:{binding['runtime_profile_sha256']}"
         f" | manifest={binding['case_manifest_sha256']} | quota={balance} CU"
         " | gpu=T4 | run<=900s | download<=120s | stop<=30s | verify<=30s"
         " | input=1024 | output=64 | weights<=8GiB | one session; no retry"
@@ -126,6 +128,11 @@ def zero_sessions(text: str) -> bool:
 
 
 def run(suite: str, count: int, output_dir: Path, tokenizer_dir: Path) -> int:
+    compatibility.require_approval()
+    if (suite, count) != ("a0_diagnostic", 16):
+        raise control.RunError(
+            "runtime compatibility attempt requires the 16-case diagnostic suite"
+        )
     output_dir = control._prepare_host_storage(output_dir)
     prepared = prepare(suite, count)
     binding = protocol.plan(suite, count)
@@ -236,7 +243,7 @@ def run(suite: str, count: int, output_dir: Path, tokenizer_dir: Path) -> int:
                     )
                 except Exception as exc:
                     state["sessions_error"] = type(exc).__name__
-                receipt.write_text(json.dumps(state, indent=2, sort_keys=True) + "\n")
+                compatibility.immutable(receipt, state)
     if not state["session_absent_after_stop"]:
         raise control.RunError(
             f"A0.1 teardown unverified; colab --auth=oauth2 stop --session {run_id}; "
@@ -247,6 +254,8 @@ def run(suite: str, count: int, output_dir: Path, tokenizer_dir: Path) -> int:
     if artifact.stat().st_size > 2 * 1024**2:
         raise control.RunError("A0.1 remote artifact exceeds 2 MiB")
     report = json.loads(artifact.read_text())
+    if any(report.get(k) != v for k, v in compatibility.binding().items()):
+        raise control.RunError("retrieved runtime profile provenance mismatch")
     if (
         report.get("schema") != REPORT_SCHEMA
         or report.get("source_revision") != revision
@@ -278,6 +287,10 @@ def run(suite: str, count: int, output_dir: Path, tokenizer_dir: Path) -> int:
         for key, value in binding.items()
     ):
         raise control.RunError("retrieved A0.1 report provenance mismatch")
+    if report.get("runtime_inventory") != report["model_outputs"].get("runtime_evidence", {}).get(
+        "bootstrap"
+    ):
+        raise control.RunError("retrieved bootstrap inventory provenance mismatch")
     replay = score(report["model_outputs"], suite, count, actual_tokenizer)
     if (
         report.get("layered_score") != experiment.normalized(replay["layered_score"])

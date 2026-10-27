@@ -178,24 +178,27 @@ requesting GPU allocation.
 
 ## Explicit execution adapter (not launched during implementation)
 
-Execution protocol: `RES541_A01_EXECUTION_V1`. The adapter loads exactly
+Execution protocol: `RES541_A01_EXECUTION_V2` (runtime profile inactive). The adapter loads exactly
 `A0.1_PROMPT_V1` / SHA-256
 `3a427cbddec385a60e2843f921d3b8a3e3d0b80af8167f12a71a4d07a5639362`.
 The reviewed freeze manifest itself is also hash pinned. Original A0 source,
 reports, cases, scientific contracts and `tests/fixtures/a0/` remain immutable.
 
-The new remote entry downloads only the SHA-verified original bootstrap source
-from the approved Git revision, then reuses its exact source checkout, Python
+The remote entry downloads the SHA-verified original bootstrap and A0.1 runtime
+adapter from the approved Git revision, then reuses its exact source checkout, Python
 3.12 scientific environment, Python 3.13/Torch environment, T4 preflight and bounded
 subprocesses. It redirects only preparation, inference and scoring to A0.1 modules.
 The inference adapter creates a private instance of the frozen A0 module and
-substitutes the verified A0.1 prompt plus token-capture hooks. Original A0 modules
+substitutes the verified A0.1 prompt plus token-capture hooks. Both private Python
+version comparisons use the reviewed compatibility profile; all other gates stay.
+Original A0 modules
 and their behavior remain unchanged. The inherited inference loop preserves the
 checkpoint, FP16, greedy decoding, non-thinking mode and 1,024/64 token bounds.
 All four remote tokenizer assets are SHA-verified before model loading.
 
-After separate owner review/authorization, in an interactive WSL terminal with
-the E: environment shown above, select **one** command. Scope the tokenizer path
+After independent runtime-profile review, explicit activation and fresh owner
+authorization, in an interactive WSL terminal with the E: environment shown above,
+use the 16-case command below. Scope the tokenizer path
 to the host adapter process; its Colab children use the isolated environment:
 
 ```bash
@@ -206,20 +209,14 @@ env -u PYTHONHOME \
   --output-dir /mnt/e/DynamisLM-A0/reports/a01/diagnostic \
   --tokenizer-dir /mnt/e/DynamisLM-A0/a01/tokenizer
 
-# Alternative: 12 frozen controls, one T4, run <=900 s plus bounded cleanup.
-env -u PYTHONHOME \
-  PYTHONPATH=/mnt/e/DynamisLM-A0/a01/tokenizer-venv/lib/python3.12/site-packages \
-  .venv/bin/python -m scripts.a01_execution run --suite a01_controls --cases 12 \
-  --output-dir /mnt/e/DynamisLM-A0/reports/a01/controls \
-  --tokenizer-dir /mnt/e/DynamisLM-A0/a01/tokenizer
 ```
 
-Use `.venv/bin/python` for the existing WSL project environment. These are separate
-proposals, not authorization to execute both. There is no combined 28-case option,
+Use `.venv/bin/python` for the existing WSL project environment. The runtime-compatible run path accepts only
+the 16 diagnostic cases; control preparation/replay remains available. There is no combined option,
 noninteractive approval flag, retry or GPU fallback. Each invocation requires a
 clean pushed mission revision, actual tokenizer fit, positive fresh Colab quota,
 zero active assignments and an exact interactive confirmation containing source,
-prompt, manifest, suite, actual count, available quota, T4, 900 seconds, 8 GiB
+prompt, manifest, runtime profile ID/hash, suite, actual count, available quota, T4, 900 seconds, 8 GiB
 weight-download ceiling, token limits and download/stop/verification timeouts.
 The 900 seconds bounds the run command; retained-session download and teardown
 are additional bounded time and can consume GPU quota until stop succeeds.
@@ -251,14 +248,15 @@ sessions. Unknown output fails closed with a control receipt and manual stop
 command. Host downloads, raw artifacts, control receipts and verified reports
 remain under mounted E:. Weights and remote caches remain ephemeral on Colab.
 
-The inherited remote preflight requires Python **3.13.15** and PyTorch
-**2.11.0+cu130** exactly. A runtime mismatch stops before source setup or model
-download; these pins are not relaxed by the A0.1 adapter. The adapter preserves
-the observed Python version/executable and, when imported, Torch version even
-when preflight fails. Early failure reports are checked for source/run/suite
-identity and reported as infrastructure failures after verified teardown. They
-are not complete inference evidence and never enter scientific scoring; complete
-reports still require every execution binding and actual tokenizer replay.
+The A0.1 profile proposes standard CPython 3.13 final patches while preserving exact
+PyTorch **2.11.0+cu130**, CUDA **13.0**, one Tesla T4/SM 7.5 and FP16. It is inactive,
+with no approved patches or approval records. The host currently refuses allocation.
+After activation, bootstrap inventories actual build/ABI, Torch/CUDA and GPU/driver
+metadata before setup. Both adapted gates qualify the same profile, and inference
+must match the bootstrap inventory before downloads. Mismatch produces an
+exclusive-create inventory and NO_GO report, followed by verified teardown.
+Complete evidence includes the profile hash and per-case-bound runtime observations;
+missing evidence fails CPU replay. See the runtime-profile decision below.
 
 The first diagnostic attempt, `res541-a01-a0-diagnostic-20261025-093109735899`,
 stopped at `GPU_PREFLIGHT / PYTHON_VERSION_MISMATCH` before model download or
@@ -284,3 +282,7 @@ Tests use synthetic CPU model doubles, including whitespace/partial generations;
 they do not measure model performance or prove live Colab operation. The exact
 pinned tokenizer is exercised separately on all 16+12 inputs. GPU allocation,
 weights and actual inference remain separately owner gated.
+
+Runtime portability now uses inactive execution binding V2 and an explicitly
+reviewed profile. See [runtime profile V1](../../docs/experiments/RES-541-A01-RUNTIME-PROFILE-V1.md).
+The `run` command currently refuses allocation because the profile is inactive.

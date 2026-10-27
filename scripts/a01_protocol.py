@@ -11,8 +11,10 @@ from pathlib import Path
 from types import ModuleType
 from typing import Any
 
+from scripts import a01_runtime as compatibility
+
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = "RES541_A01_EXECUTION_V1"
+VERSION = compatibility.VERSION
 PROMPT_VERSION = "A0.1_PROMPT_V1"
 PROMPT_SHA256 = "3a427cbddec385a60e2843f921d3b8a3e3d0b80af8167f12a71a4d07a5639362"
 FREEZE_SHA256 = "923b39087168dc97431a3de9e00bd4c292b5d3308bc0be0e0660196bc8e5ed0d"
@@ -77,6 +79,7 @@ def plan(suite: str, count: int) -> dict[str, Any]:
     path, _ = SUITES[suite]
     return {
         "execution_version": VERSION,
+        **compatibility.binding(),
         "suite": suite,
         "case_count": count,
         "source_revision": git("rev-parse", "HEAD"),
@@ -110,6 +113,7 @@ def bind_row(row: dict[str, Any], binding: dict[str, Any]) -> str:
         compact(
             {
                 "binding": binding,
+                "runtime_evidence_sha256": row["runtime_evidence_sha256"],
                 "case_id": row["case_id"],
                 "prompt_sha256": row["prompt_sha256"],
                 "chat_template_date": row["chat_template_date"],
@@ -135,7 +139,21 @@ def validate_outputs(
         or document.get("status") != "COMPLETE"
     ):
         raise ValueError("A0.1 inference did not complete")
+    evidence = document.get("runtime_evidence", {})
+    compatibility.agree(evidence.get("bootstrap", {}), evidence.get("inference", {}))
     runtime = document.get("runtime", {})
+    if any(
+        runtime.get(k) != evidence["inference"].get(k)
+        for k in (
+            "python",
+            "torch",
+            "torch_cuda_runtime",
+            "gpu_name",
+            "compute_capability",
+            "total_vram_bytes",
+        )
+    ):
+        raise ValueError("inference runtime provenance mismatch")
     if (
         compact(runtime.get("decoding")) != compact(DECODING)
         or runtime.get("weight_dtype") != "float16"
@@ -158,6 +176,8 @@ def validate_outputs(
     ):
         raise ValueError("A0.1 output case IDs/order/count mismatch")
     for row, message in zip(rows, messages, strict=True):
+        if row.get("runtime_evidence_sha256") != compatibility.digest(evidence):
+            raise ValueError("runtime evidence provenance mismatch")
         ids, generated = row.get("prompt_token_ids"), row.get("generated_token_ids")
         if (
             not isinstance(ids, list)
