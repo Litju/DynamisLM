@@ -2,7 +2,9 @@
 
 Runtime decision:
 [V1 — BLOCKED_RUNTIME_VERSION_UNKNOWN](../../docs/experiments/RES-541-A01-RUNTIME-DECISION-V1.md).
-The CPython patch candidate is inactive; neither execution gate is relaxed.
+The historical V1 candidate remained inactive; V2 source activation is documented
+in the newer decision below. Live runtime qualification and owner GPU approval
+remain mandatory.
 
 This is `A0.1_PROMPT_V1`, a prompt-only development experiment using the unchanged
 `RES541_A0_INTENT_V1` parser and registered Python authority. A0 remains scientific
@@ -248,11 +250,12 @@ sessions. Unknown output fails closed with a control receipt and manual stop
 command. Host downloads, raw artifacts, control receipts and verified reports
 remain under mounted E:. Weights and remote caches remain ephemeral on Colab.
 
-The A0.1 profile proposes standard CPython 3.13 final patches while preserving exact
-PyTorch **2.11.0+cu130**, CUDA **13.0**, one Tesla T4/SM 7.5 and FP16. It is inactive,
-with no approved patches or approval records. The host currently refuses allocation.
-After activation, bootstrap inventories actual build/ABI, Torch/CUDA and GPU/driver
-metadata before setup. Both adapted gates qualify the same profile, and inference
+The A0.1 profile prospectively admits only CPython **3.13.15, 3.13.16,
+3.13.17 and 3.13.18**, preserving exact PyTorch **2.11.0+cu130**, CUDA
+**13.0**, one Tesla T4/SM 7.5 and FP16. Source activation is recorded in V2,
+but this does not prove a compatible Colab VM or authorize paid execution.
+The bootstrap inventories actual build/ABI, Torch/CUDA and GPU/driver metadata
+before setup. Both adapted gates qualify the same profile, and inference
 must match the bootstrap inventory before downloads. Mismatch produces an
 exclusive-create inventory and NO_GO report, followed by verified teardown.
 Complete evidence includes the profile hash and per-case-bound runtime observations;
