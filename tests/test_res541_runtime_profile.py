@@ -41,9 +41,7 @@ def activate(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_shipped_profile_has_attributed_automated_review_and_owner_consent() -> None:
     assert runtime.PROFILE["active"] is True
-    assert runtime.PROFILE["approved_python_patches"] == runtime.PROFILE[
-        "candidate_python_patches"
-    ]
+    assert runtime.PROFILE["approved_python_patches"] == runtime.PROFILE["candidate_python_patches"]
     assert runtime.PROFILE["independent_review"]["identity"] == "coderabbitai[bot]"
     assert "pullrequestreview-5677323707" in runtime.PROFILE["independent_review"]["evidence"]
     assert runtime.PROFILE["owner_approval"]["identity"] == "Litju"
@@ -263,9 +261,7 @@ def test_approved_patches_still_require_exact_runtime(
         "3.13.17",
         "3.13.18",
     ]
-    assert runtime.PROFILE["approved_python_patches"] == runtime.PROFILE[
-        "candidate_python_patches"
-    ]
+    assert runtime.PROFILE["approved_python_patches"] == runtime.PROFILE["candidate_python_patches"]
     sample = {**observed(), "python": python_patch}
     runtime.qualify(sample)
     activate(monkeypatch)

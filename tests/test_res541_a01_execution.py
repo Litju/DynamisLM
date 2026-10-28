@@ -834,6 +834,7 @@ def test_inference_mismatch_precedes_all_downloads(
     assert failure["runtime_evidence"]["bootstrap"]["python"] == "3.14.0"
     assert failure["runtime_evidence"]["inference"] == observed()
 
+
 @pytest.mark.parametrize("canonical_sha", ["match", "foreign", "absent"])
 def test_canonical_source_check_fails_closed_before_gpu(
     monkeypatch: pytest.MonkeyPatch, canonical_sha: str
