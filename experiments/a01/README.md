@@ -178,7 +178,7 @@ requesting GPU allocation.
 
 ## Explicit execution adapter (not launched during implementation)
 
-Execution protocol: `RES541_A01_EXECUTION_V2` (runtime profile inactive). The adapter loads exactly
+Execution protocol: `RES541_A01_EXECUTION_V2` (reviewed prospective profile; owner-gated). The adapter loads exactly
 `A0.1_PROMPT_V1` / SHA-256
 `3a427cbddec385a60e2843f921d3b8a3e3d0b80af8167f12a71a4d07a5639362`.
 The reviewed freeze manifest itself is also hash pinned. Original A0 source,
@@ -283,12 +283,12 @@ they do not measure model performance or prove live Colab operation. The exact
 pinned tokenizer is exercised separately on all 16+12 inputs. GPU allocation,
 weights and actual inference remain separately owner gated.
 
-Runtime portability now uses inactive execution binding V2 and an explicitly
-reviewed profile. See [runtime profile V1](../../docs/experiments/RES-541-A01-RUNTIME-PROFILE-V1.md).
-The `run` command currently refuses allocation because the profile is inactive.
-
-The [prospective activation decision V1](../../docs/experiments/RES-541-A01-ACTIVATION-DECISION-V1.md)
-limits candidate screening to Python **3.13.15, 3.13.16, 3.13.17, 3.13.18**.
-These are prospective eligibility candidates. The approved list remains empty,
-both approval records null and the profile inactive: exact eligibility/budget
-owner approval and independent review of the four-patch proposal are still required.
+Runtime portability uses execution binding V2 and the exact four-version
+prospective eligibility set. [Activation decision V2](../../docs/experiments/RES-541-A01-ACTIVATION-DECISION-V2.md)
+records owner consent and a separately attributed automated CodeRabbit review.
+The profile is activated for conditional screening only, **not** proven
+runtime equivalence or GPU allocation permission. The runner still requires
+fresh personal interactive confirmation. There are no automatic retries.
+The original [runtime profile V1](../../docs/experiments/RES-541-A01-RUNTIME-PROFILE-V1.md)
+and [activation decision V1](../../docs/experiments/RES-541-A01-ACTIVATION-DECISION-V1.md)
+remain preserved as historical inactive-state records.

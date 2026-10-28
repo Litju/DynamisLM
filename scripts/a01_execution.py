@@ -127,6 +127,27 @@ def zero_sessions(text: str) -> bool:
     )
 
 
+def verified_revision() -> str:
+    """Require the canonical repository to contain this exact pushed commit."""
+    revision = control._check_clean_pushed_revision()
+    branch_ref = f"refs/heads/{control.BRANCH}"
+    canonical = f"https://github.com/{control.REPOSITORY}.git"
+    try:
+        result = subprocess.run(
+            ["git", "ls-remote", "--exit-code", canonical, branch_ref],
+            cwd=protocol.ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=30,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise control.RunError("canonical repository source check failed") from exc
+    if result.returncode != 0 or result.stdout.split() != [revision, branch_ref]:
+        raise control.RunError("canonical repository does not contain the exact pushed revision")
+    return revision
+
+
 def run(suite: str, count: int, output_dir: Path, tokenizer_dir: Path) -> int:
     compatibility.require_approval()
     if (suite, count) != ("a0_diagnostic", 16):
@@ -152,7 +173,7 @@ def run(suite: str, count: int, output_dir: Path, tokenizer_dir: Path) -> int:
             raise control.RunError("A0.1 complete prompt exceeds the unchanged input limit")
     if not sys.stdin.isatty() or not sys.stdout.isatty():
         raise control.RunError("A0.1 requires interactive owner approval; no session was started")
-    revision = control._check_clean_pushed_revision()
+    revision = verified_revision()
     if revision != binding["source_revision"]:
         raise control.RunError("source changed during A0.1 preparation")
     balance, _ = usage()
@@ -160,7 +181,7 @@ def run(suite: str, count: int, output_dir: Path, tokenizer_dir: Path) -> int:
     if input(f"Type exactly `{expected}` to authorize this one A0.1 run: ") != expected:
         raise control.RunError("owner A0.1 approval did not match; no session was started")
     # Approval cannot survive a source change while the owner was reading the prompt.
-    if prepare(suite, count) != prepared or control._check_clean_pushed_revision() != revision:
+    if prepare(suite, count) != prepared or verified_revision() != revision:
         raise control.RunError("approved A0.1 source or suite changed")
     run_id = f"res541-a01-{suite.replace('_', '-')}-{datetime.now(UTC):%Y%m%d-%H%M%S%f}"
     remote = f"/content/{run_id}-report.json"

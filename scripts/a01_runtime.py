@@ -1,4 +1,4 @@
-"""A0.1-only inactive compatibility profile and audited frozen-gate adapter."""
+"""A0.1-only reviewed compatibility profile and audited frozen-gate adapter."""
 
 from __future__ import annotations
 
@@ -17,11 +17,17 @@ from typing import Any
 VERSION = "RES541_A01_EXECUTION_V2"
 PROFILE: dict[str, Any] = {
     "id": "RES541_A01_CPYTHON313_T4_V1",
-    "active": False,
+    "active": True,
     "candidate_python_patches": ["3.13.15", "3.13.16", "3.13.17", "3.13.18"],
-    "approved_python_patches": [],
-    "independent_review": None,
-    "owner_approval": None,
+    "approved_python_patches": ["3.13.15", "3.13.16", "3.13.17", "3.13.18"],
+    "independent_review": {
+        "identity": "coderabbitai[bot]",
+        "evidence": "https://github.com/Litju/DynamisLM/pull/46#pullrequestreview-5677323707",
+    },
+    "owner_approval": {
+        "identity": "Litju",
+        "evidence": "https://github.com/Litju/DynamisLM/pull/46#issuecomment-6458914435",
+    },
     "requirements": {
         "implementation": "CPython",
         "python_final_release_pattern": r"3\.13\.(?:0|[1-9][0-9]*)",

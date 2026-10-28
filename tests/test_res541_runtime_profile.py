@@ -39,11 +39,17 @@ def activate(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(runtime, "PROFILE", profile)
 
 
-def test_shipped_profile_is_inactive() -> None:
-    assert runtime.PROFILE["active"] is False
-    with pytest.raises(ValueError, match="inactive"):
-        runtime.qualify(observed())
-    runtime.qualify(observed(), approved=False)
+def test_shipped_profile_has_attributed_automated_review_and_owner_consent() -> None:
+    assert runtime.PROFILE["active"] is True
+    assert runtime.PROFILE["approved_python_patches"] == runtime.PROFILE[
+        "candidate_python_patches"
+    ]
+    assert runtime.PROFILE["independent_review"]["identity"] == "coderabbitai[bot]"
+    assert "pullrequestreview-5677323707" in runtime.PROFILE["independent_review"]["evidence"]
+    assert runtime.PROFILE["owner_approval"]["identity"] == "Litju"
+    assert "issuecomment-6458914435" in runtime.PROFILE["owner_approval"]["evidence"]
+    runtime.require_approval()
+    runtime.qualify(observed())
 
 
 @pytest.mark.parametrize(
@@ -129,12 +135,16 @@ def test_immutable_report(tmp_path: Path) -> None:
     assert path.read_bytes() == before
 
 
-def test_inactive_profile_stops_before_host_or_transport(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_missing_review_stops_before_host_or_transport(monkeypatch: pytest.MonkeyPatch) -> None:
     from scripts import a0_colab
     from scripts import a01_execution as execution
 
+    profile = copy.deepcopy(runtime.PROFILE)
+    profile["independent_review"] = None
+    monkeypatch.setattr(runtime, "PROFILE", profile)
+
     def forbidden(*args: Any, **kwargs: Any) -> Any:
-        raise AssertionError("inactive profile must not touch host setup or transport")
+        raise AssertionError("missing review must not touch host setup or transport")
 
     monkeypatch.setattr(a0_colab, "_prepare_host_storage", forbidden)
     with pytest.raises(ValueError, match="inactive"):
@@ -244,7 +254,7 @@ def test_inventory_records_partial_failure_without_installing(
 
 
 @pytest.mark.parametrize("python_patch", ["3.13.15", "3.13.16", "3.13.17", "3.13.18"])
-def test_finite_candidates_are_not_approval(
+def test_approved_patches_still_require_exact_runtime(
     python_patch: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     assert runtime.PROFILE["candidate_python_patches"] == [
@@ -253,13 +263,11 @@ def test_finite_candidates_are_not_approval(
         "3.13.17",
         "3.13.18",
     ]
-    assert runtime.PROFILE["approved_python_patches"] == []
-    assert runtime.PROFILE["independent_review"] is None
-    assert runtime.PROFILE["owner_approval"] is None
+    assert runtime.PROFILE["approved_python_patches"] == runtime.PROFILE[
+        "candidate_python_patches"
+    ]
     sample = {**observed(), "python": python_patch}
-    runtime.qualify(sample, approved=False)
-    with pytest.raises(ValueError, match="inactive"):
-        runtime.qualify(sample)
+    runtime.qualify(sample)
     activate(monkeypatch)
     serialized = json.loads(json.dumps(sample))
     runtime.qualify(serialized)

@@ -544,9 +544,7 @@ def test_no_gpu_without_exact_interactive_owner_approval(
     )
     monkeypatch.setattr(sys, "stdin", SimpleNamespace(isatty=lambda: approval != "not_tty"))
     monkeypatch.setattr(sys.stdout, "isatty", lambda: True)
-    monkeypatch.setattr(
-        a0_colab, "_check_clean_pushed_revision", lambda: protocol.git("rev-parse", "HEAD")
-    )
+    monkeypatch.setattr(execution, "verified_revision", lambda: protocol.git("rev-parse", "HEAD"))
     monkeypatch.setattr(execution, "usage", lambda: ("100", ""))
     monkeypatch.setattr("builtins.input", lambda _: "RUN RES-541 A0")
 
@@ -596,9 +594,7 @@ def test_owner_gated_transport_always_stops_and_verifies_zero_sessions(
     )
     monkeypatch.setattr(sys, "stdin", SimpleNamespace(isatty=lambda: True))
     monkeypatch.setattr(sys.stdout, "isatty", lambda: True)
-    monkeypatch.setattr(
-        a0_colab, "_check_clean_pushed_revision", lambda: binding["source_revision"]
-    )
+    monkeypatch.setattr(execution, "verified_revision", lambda: binding["source_revision"])
     monkeypatch.setattr("builtins.input", lambda _: execution.confirmation(binding, "257.80"))
     calls: list[tuple[str, int | None]] = []
     run_id = ""
@@ -837,3 +833,33 @@ def test_inference_mismatch_precedes_all_downloads(
     assert failure["status"] == "NO_GO"
     assert failure["runtime_evidence"]["bootstrap"]["python"] == "3.14.0"
     assert failure["runtime_evidence"]["inference"] == observed()
+
+@pytest.mark.parametrize("canonical_sha", ["match", "foreign", "absent"])
+def test_canonical_source_check_fails_closed_before_gpu(
+    monkeypatch: pytest.MonkeyPatch, canonical_sha: str
+) -> None:
+    revision = "a" * 40
+    branch_ref = f"refs/heads/{a0_colab.BRANCH}"
+    monkeypatch.setattr(a0_colab, "_check_clean_pushed_revision", lambda: revision)
+
+    def fake(command: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        assert command == [
+            "git",
+            "ls-remote",
+            "--exit-code",
+            f"https://github.com/{a0_colab.REPOSITORY}.git",
+            branch_ref,
+        ]
+        assert kwargs["timeout"] == 30
+        assert kwargs["cwd"] == protocol.ROOT
+        if canonical_sha == "absent":
+            return subprocess.CompletedProcess(command, 2, "", "")
+        remote_sha = revision if canonical_sha == "match" else "b" * 40
+        return subprocess.CompletedProcess(command, 0, f"{remote_sha}\t{branch_ref}\n", "")
+
+    monkeypatch.setattr(execution, "subprocess", SimpleNamespace(run=fake))
+    if canonical_sha == "match":
+        assert execution.verified_revision() == revision
+    else:
+        with pytest.raises(a0_colab.RunError, match="canonical repository"):
+            execution.verified_revision()
