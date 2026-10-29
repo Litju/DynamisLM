@@ -103,7 +103,13 @@ CMJ is no longer merely the next authorized unit. The repository contains substa
 - provenance;
 - serialization and ranking authority.
 
-Additional CMJ force, power, RFD, RSI-mod and asymmetry completion work belongs downstream under RES-65. No metric is implied here beyond what the existing registered implementation and tests establish.
+RES-65 is complete: registered CMJ force, power, RFD, RSI-mod and bilateral
+asymmetry methods reuse the existing CMJ authority. These are method-specific
+identities, not universal metric labels. RES-66–70 extend strength, field testing,
+explosive tests, longitudinal statistics, comparability and claim authority.
+RES-71 is Done with `SCIENTIFIC_ENGINE_GATE=PASS` for the intentionally exposed,
+registered capabilities; unsupported computations still fail closed. See the
+[qualification report](docs/qualification/RES71-SCIENTIFIC-ENGINE-QUALIFICATION.md).
 
 RES-64 adds external-load identity, Source A interpretation mapping, unit and
 relative-distance operations, and a raw velocity threshold-summary operation.
@@ -147,29 +153,45 @@ uv run mypy .
 uv run pytest
 ```
 
-The runtime kernel uses only the Python standard library. Development tools are locked in `uv.lock`.
+The scientific kernel uses the Python standard library; XLSX ingestion uses
+`openpyxl`. Runtime and development dependencies are locked in `uv.lock`.
+Install local hooks with `./scripts/install-hooks.sh`; `./scripts/ci.sh` runs the
+complete local gate. See [contribution policy](CONTRIBUTING.md).
 
 ## Licensing and artifacts
 
-The source code is `AGPL-3.0-only`. Model weights and adapters are license-deferred until an upstream base-model license is selected and reviewed. Datasets and corpora remain licensed by their individual sources and provenance. Project name, logo, and branding rights are separate from software copyright. See [NOTICE.md](NOTICE.md), [CONTRIBUTING.md](CONTRIBUTING.md), and [SECURITY.md](SECURITY.md).
+The source code is `AGPL-3.0-only`. No model weights or adapters are distributed. RES-419 selected a pinned research
+base model/tokenizer; that decision does not license a trained DynamisLM release. Datasets and corpora remain licensed by their individual sources and provenance. Project name, logo, and branding rights are separate from software copyright. See [NOTICE.md](NOTICE.md), [CONTRIBUTING.md](CONTRIBUTING.md), and [SECURITY.md](SECURITY.md).
 
 ## Roadmap
 
-The current executable program is defined by the canonical Linear sequence:
+The completed scientific-engine sequence is:
 
 ```text
 RES-59 → RES-60 → RES-61 → RES-62 → RES-63 → RES-64...RES-70 → RES-71
 ```
 
-RES-59 re-seals the V2 scientific constitution; RES-60 through RES-63 establish typed population, football-world, longitudinal-record and canonical-dataset authority; RES-64...RES-70 expand deterministic scientific engine coverage; RES-71 is the Scientific Engine Qualification Gate. Project control remains in Linear; this repository records executable code and curated authority documents.
+RES-59–71 established V2 scientific, population, football-world, longitudinal,
+ingestion and bounded deterministic engine authority. Project control remains
+in Linear; this repository records executable code and curated authority documents.
 
-No operational model, inference, baseline-inference benchmark, paid GPU qualification, CPT/DAPT, SFT/PEFT, RLVR/GRPO or scaling work may begin before RES-71 records `SCIENTIFIC_ENGINE_GATE = PASS`. Candidate-model research notes are downstream planning only; no model is shipped here.
+`main` at the audit baseline `6d6892c95134f83ffdb224e11e6e3603296fc5ed`
+contains the qualified scientific engine and RES-419 CPU model/tokenizer decision.
+Experimental [RES-541 PR #46](https://github.com/Litju/DynamisLM/pull/46) is a
+separate draft branch; its A0/A0.1 inference code and evidence are not on `main`.
+A0.1 remains `SCIENTIFIC_NO_GO`. RES-541 is parked while
+[RES-556](https://linear.app/alignerr-cmj/issue/RES-556/unified-repository-hygiene-and-governance-hardening)
+delivers this unified repository hygiene/governance mission.
+
+RES-71 PASS does not authorize model training, A1, formal M0, protected PSE
+access or release. RES-407 scientific qualification remains parked and unresolved;
+RES-420 M0 and subsequent model work retain their separate gates.
 
 ## Current limitations
 
 - No trained checkpoint, model weights, corpus, database, API, frontend, GPU runtime, or deployment is included.
-- The other performance-test families and scientific-engine qualification remain downstream work in the RES-64→RES-71 sequence; RES-63 dataset qualification remains limited to its current ingestion boundary, while RES-64's external-load operations remain limited to their registered identities and methods.
-- The current CMJ implementation is not a complete CMJ science program; additional force, power, RFD, RSI-mod and asymmetry methods remain downstream under RES-65.
+- RES-64–71 qualification is bounded by registered identities, inputs and methods; it does not qualify every published metric or confer readiness, fatigue, injury-risk or causal authority.
+- RES-65 CMJ completion covers its registered methods, not a universal CMJ science program.
 - The generic kernel and CMJ vertical slice represent registered contracts and provenance; they are not a complete persistence layer or clinical/return-to-play authority.
 - Comparability without a registered deterministic rule remains explicitly unresolved/insufficient.
 
