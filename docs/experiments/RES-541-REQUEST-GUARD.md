@@ -1,80 +1,115 @@
 # RES-541 CPU request-contract boundary
 
-`scripts.request_guard.evaluate` is an opt-in experimental CPU adapter around
-the existing frozen A0 scientific execution path. It does not modify or protect
-the historical A0/A0.1 entry points. No model or GPU call is made.
+`scripts.request_issuer` adds opt-in local operator issuance and execution around
+`scripts.request_guard`. Both use the frozen A0 scientific execution path. They
+do not modify or protect the historical A0/A0.1 entry points, invoke a model,
+or grant scientific permission independently of RES-69/70.
 
-## Trusted origin
+## Trusted origin and confirmation
 
-An operator-controlled issuer independently records and confirms the request's
-structured meaning, including every objective. It issues a `Requirements` record
-with version `RES541_REQUEST_REQUIREMENTS_V1` and HMAC-SHA256 over UTF-8 JSON from
-`dataclasses.asdict(requirements)`, sorted keys, compact separators, no NaN.
-The detached signature is lowercase hexadecimal. Issuance is deliberately absent
-from the adapter: never sign a model proposal automatically.
+The trusted control plane is the operator's local OS account, private state
+directory, pinned public signing identity and encrypted Ed25519 private key.
+The model is an untrusted producer of proposal **data**, not a process allowed
+arbitrary code execution under that account. Filesystem permissions do not
+isolate same-account hostile code. Such code, a stolen passphrase, a compromised
+host, or an operator who falsely confirms a model's interpretation defeats this
+trust assumption. A terminal alone is not proof that a human approved anything.
 
-The issuer identifier and a secret verification key of at least 32 bytes must
-come from trusted application configuration, outside the proposal payload and
-outside Git. An attacker must not control these arguments. This is a shared-key
-operator attestation, not a user signature, proof of human confirmation, or proof
-of language understanding. The issuer owns the meaning and completeness
-attestation; a confirmation reference alone grants no trust. An unconfigured
-issuer/key, missing confirmation, unresolved requirements or expired contract
-must stop execution. There is no real operator key or issuance integration in
-this repository; test keys and confirmations are explicitly synthetic.
+Initialization pins the public identity only after a controlling-terminal
+confirmation of its exact digest. Existing state is never overwritten. Private
+key/state files must be owned by the current UID, mode 0600, with mode 0700 state
+and key directories, outside Git and without symlink final paths. Use a POSIX
+filesystem for these permissions; Windows E: mounts generally cannot supply them.
+No credential is provisioned automatically and no production credential is in Git.
 
-## Bounded ontology and binding
+Issuance reads only `/dev/tty`, never stdin, a requirements file, a model proposal
+or fixture expectations. The operator independently selects every objective,
+analysis class, baseline/follow-up roles and **both** claim axes. NONE deliberately
+excludes an axis; UNKNOWN blocks issuance. Unresolved/contradictory requirements,
+an incomplete inventory, duplicate IDs and invalid intents block issuance.
+The original question, evidence and complete selected requirements are displayed
+again, and the operator must type `CONFIRM RES-541 <exact-contract-digest>`.
+No keyword or model classifier establishes meaning or detects contradictions.
 
-Only synthetic development requests at ATHLETE_WITHIN / WITHIN_ATHLETE scope
-are supported. Each objective has a unique ID and an explicit `ModelIntent`:
-registered analysis class, baseline/follow-up roles, measurement claim axis,
-relationship claim axis, and EXECUTE (submission for scientific authorization).
-Null means that the issuer deliberately excludes that axis; an unknown axis,
-ambiguous objective, prediction, unsupported target or unresolved objective
-inventory must be represented by nonempty `unknowns`, not silently mapped to
-null. `complete=True` attests the entire objective inventory, not just the subset
-the model proposed. These are issuer obligations, not text-derived assertions.
+Only after this confirmation does OpenSSH request the encrypted private key's
+passphrase through the terminal and sign the canonical requirements. Agent and
+askpass shortcuts are disabled for signing. The passphrase is not placed in
+Python variables, arguments, environment variables, proposal files or receipts.
+Execution verifies with the pinned public identity and does not read the private
+key or ask for its passphrase. A model-supplied signature/issuer/confirmation is
+not an execution input. All test credentials and terminal operators are synthetic.
 
-The context digest binds exact request text and ID, current Git revision,
-adapter source bytes, canonical support hash and the separately stored role to
-entry-ID mapping. Changing any bound input requires a newly issued contract.
-The context must reproduce from the existing deterministic synthetic case
-constructor; arbitrary externally supplied scientific support is rejected.
-This does not prove that an operator's input values originated synthetically.
-Frozen scientific source is checked before execution. Requirements have explicit
-issue/expiry times, evaluated against the trusted host clock; they may be reused
-within that interval only with exactly matching bindings. This is not a one-time
-authorization or an anti-replay service.
+## Contract, binding and lifecycle
 
-## Dispatch and results
+The existing inner `RES541_REQUEST_REQUIREMENTS_V1` contract is unchanged. It
+contains issuer, confirmation reference, issue/expiry times, exact context digest,
+fixed synthetic ATHLETE_WITHIN / WITHIN_ATHLETE scope, complete objective inventory
+and explicit unknowns. Completeness is an operator attestation against the original
+question, not a machine-verified natural-language property.
 
-Supply the context, signed requirements and a tuple of `(objective_id, raw_json)`
-proposals to `evaluate`, with the configured issuer/key as keyword arguments.
-The entire batch is checked for missing, duplicate or extra objectives and exact
-typed agreement before any analysis authorization or calculation. A typed model
-REFUSE is a contract rejection, never a canonical scientific refusal.
+Canonical bytes are UTF-8 JSON from `dataclasses.asdict(requirements)`, sorted keys,
+compact separators, no NaN. OpenSSH signs these bytes in the separate namespace
+`dynamislm-res541-request-v1`. Their SHA-256 is the contract ID. The confirmation
+reference binds the local UID, a random issuance nonce and issuer source digest.
+The context digest binds exact request text/ID, current Git revision, guard source,
+canonical support and role-to-entry mapping. Source/context changes require fresh
+issuance. The supplied context must exactly reproduce from the existing synthetic
+constructor; this does not establish that input numbers originated synthetically.
 
-Accepted proposals use the original `_evaluate` implementation with only its
-evaluation-only oracle replaced by a fixed non-execution sentinel in a private
-function namespace. The scoring field is removed. Fixture expectations never
-enter runtime authorization; canonical RES-69/70 calls remain unchanged.
+A private SQLite ledger stores the canonical bytes, signature and ACTIVE/USED/
+REVOKED state. No key or passphrase is stored there. Contracts expire 600 seconds
+after collection. A verified execution attempt atomically consumes the contract
+**before** dispatch, including a proposal mismatch or scientific refusal; concurrent
+replay has at most one accepted attempt. Crash after consumption requires fresh
+issuance, not a retry. Revocation requires its own exact terminal confirmation.
+Backing up/restoring or rewriting the ledger is trusted administration, not an
+untrusted model capability; no rollback-resistant remote ledger is claimed.
 
-Every objective retains its own scientific outcome. Eligible descriptive
-computation may precede refusal of a faithfully preserved higher-level claim.
-If separately requested numerical and causal objectives produce mixed outcomes,
-the aggregate is PARTIALLY_REFUSED, never RESULT. The existing execution path
-withholds numbers for the individual objective whose higher claim is refused.
+After SSH verification and lifecycle admission, an ephemeral in-memory HMAC adapts
+the authenticated requirements to the unchanged guard API. This HMAC key is never
+stored or supplied by the model. The low-level `request_guard.evaluate` API still
+requires trusted caller configuration; it is not the issuance endpoint.
 
-Rejected batches return `RES541_REQUEST_CONTRACT_REJECTED`, the failure stage
-(AUTHORITY, CONTEXT or PROPOSALS), and no objective
-results; this orchestration refusal has no RES-70 authority. Accepted batches
-return requirement/context digests, issuer/confirmation provenance, objective IDs,
-raw proposal digests and the original scientific results and authority hashes.
-The caller must retain the signed contract alongside this receipt. Evaluate
-semantic consistency, analysis eligibility, computation, claim disposition and
-response safety separately. A VERIFIED guard is not scientific success.
+The whole proposal inventory and every typed intent must match before scientific
+authorization. Unknown requirements and missing, duplicate, extra or substituted
+objectives fail closed. A model REFUSE is not a canonical scientific refusal.
+Accepted objectives retain separate RES-69/70 results/refusals. Descriptive
+computation can legitimately precede refusal of a preserved higher-level claim.
+A separately requested numerical result plus a causal refusal yields aggregate
+PARTIALLY_REFUSED, never RESULT for the complete question.
 
-No unrestricted natural-language semantics are established. Without an actual
-trusted issuer independently confirming all requirements, the adapter remains
-unqualified for live use and must fail closed. Arbitrary Python execution or a
-compromised issuer/host is outside this boundary; HMAC is not process isolation.
+The original `_evaluate` function runs with only its evaluation-only oracle
+disabled in a private namespace; its scoring field is removed. Canonical scientific
+functions remain unchanged. Receipts bind the contract/context, issuer/confirmation,
+objective IDs, proposal digests and scientific authority hashes. ISSUANCE rejection
+and guard contract rejection are orchestration dispositions, not RES-70 authority.
+
+## Operator use (CPU only)
+
+Run from the existing worktree in a personally controlled local terminal. Create
+an encrypted key interactively; choose a nonempty passphrase and keep it out of
+agent sessions and logs. Do not run a model under this operator account with shell
+or credential/state access.
+
+```sh
+install -d -m 700 "$HOME/.config/dynamislm"
+ssh-keygen -t ed25519 -a 64 -f "$HOME/.config/dynamislm/request-signing"
+.venv/bin/python -m scripts.request_issuer initialize --issuer local-operator \
+  --key "$HOME/.config/dynamislm/request-signing"
+.venv/bin/python -m scripts.request_issuer issue --case-id valid-positive-01
+.venv/bin/python -m scripts.request_issuer execute --case-id valid-positive-01 \
+  --contract-id CONTRACT_ID --proposals /mnt/e/DynamisLM-A0/proposals.json
+.venv/bin/python -m scripts.request_issuer revoke --contract-id CONTRACT_ID
+```
+
+The CLI is deliberately restricted to the existing 16 synthetic development case
+IDs. It reads their questions/observations, never their expected scientific answers.
+Proposal files contain only a JSON list of `objective_id` / `raw_json` objects.
+`--state-dir` is trusted operator configuration, not a field accepted from a model.
+Keep public proposal/report artifacts on E: and credentials/private state outside
+Git in the protected POSIX directory. No real owner contract is generated by tests.
+
+Engineering checks establish an authenticated operator-contract path and contract
+consistency, not language comprehension, operator scientific competence, objective
+completeness against free text, generalization or model qualification. Without
+actual operator configuration and fresh confirmation/passphrase, no issuance occurs.
