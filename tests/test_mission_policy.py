@@ -302,9 +302,9 @@ def test_unchanged_legacy_artifacts_pass_only_for_observed_pr46(legacy_tree: str
     assert repository_policy.repository_failures(REPO_ROOT, legacy_tree, pr=OBSERVED_PRS[46]) == ()
     wrong = copy.deepcopy(OBSERVED_PRS[46])
     wrong["number"] = 50
-    assert "NONCODE_INVENTORY_MISMATCH" in repository_policy.repository_failures(
-        REPO_ROOT, legacy_tree, pr=wrong
-    )
+    failures = repository_policy.repository_failures(REPO_ROOT, legacy_tree, pr=wrong)
+    assert "NONCODE_INVENTORY_MISMATCH" in failures
+    assert "SECRET_CONTENT=scripts/request_issuer.py" in failures
 
 
 def test_future_legacy_commits_require_current_metadata_and_subjects(legacy_tree: str) -> None:
