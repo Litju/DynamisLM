@@ -236,3 +236,8 @@ def test_authority_cannot_be_downgraded_in_inventory(policy_repo: Path) -> None:
     assert "UNCLASSIFIED_OR_UNPINNED_AUTHORITY=docs/decisions/synthetic-authority.md" in (
         policy.repository_failures(policy_repo)
     )
+
+
+def test_registry_exception_cannot_admit_nested_cache_or_dataset_paths() -> None:
+    for path in ("registries/datasets/.cache/file.json", "registries/datasets/data/rows.json"):
+        assert evaluate_paths(((path, 1),)) == (f"FORBIDDEN_PATH={path}",)

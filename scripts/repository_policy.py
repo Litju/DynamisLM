@@ -110,7 +110,11 @@ def _is_secret_like(path: str) -> bool:
 
 
 def _is_public_dataset_registry(path: str) -> bool:
-    return _is_under(path, APPROVED_DATASET_REGISTRY_ROOT) and PurePosixPath(path).suffix == ".json"
+    candidate = PurePosixPath(path)
+    return (
+        candidate.parent.as_posix() == APPROVED_DATASET_REGISTRY_ROOT
+        and candidate.suffix == ".json"
+    )
 
 
 def _path_failures(
