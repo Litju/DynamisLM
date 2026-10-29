@@ -103,8 +103,10 @@ CMJ is no longer merely the next authorized unit. The repository contains substa
 - provenance;
 - serialization and ranking authority.
 
-RES-65 is complete: registered CMJ force, power, RFD, RSI-mod and bilateral
-asymmetry methods reuse the existing CMJ authority. These are method-specific
+RES-65 is complete: registered CMJ force, power, RSI-mod and bilateral
+asymmetry methods reuse the existing CMJ authority. RFD remains explicitly
+unregistered and refused; mission completion does not register its computation.
+These are method-specific
 identities, not universal metric labels. RES-66–70 extend strength, field testing,
 explosive tests, longitudinal statistics, comparability and claim authority.
 RES-71 is Done with `SCIENTIFIC_ENGINE_GATE=PASS` for the intentionally exposed,
