@@ -29,15 +29,14 @@ class StubModel:
 
 class StubScorer:
     scorer_id = "test-only-exact-scoring"
+    scorer_version = "1.0.0"
     scorer_sha256 = D
 
     def score(
         self, reference: Mapping[str, object], response: Mapping[str, object]
     ) -> runner.Score:
         match = response == reference
-        return runner.Score(
-            "PASS" if match else "FAIL", () if match else ("DIAGNOSTIC_MISMATCH",)
-        )
+        return runner.Score("PASS" if match else "FAIL", () if match else ("DIAGNOSTIC_MISMATCH",))
 
 
 def case(case_id: str, request: str = "Question about a jump") -> runner.PublicSyntheticCase:
@@ -57,6 +56,7 @@ def spec(cases: tuple[runner.PublicSyntheticCase, ...]) -> runner.RunSpec:
         model_revision=D,
         tokenizer_revision=D,
         scorer_id=StubScorer.scorer_id,
+        scorer_version=StubScorer.scorer_version,
         scorer_sha256=D,
         source_revision=GIT,
         environment_sha256=D,
@@ -93,6 +93,7 @@ def test_public_stub_end_to_end_and_byte_identical_rescore() -> None:
         '{"decision":"ANSWER","fields":[]}',
         '{"decision":"ANSWER","fields":{},"decision":"ANSWER"}',
         '{"decision":"ANSWER","fields":{"value":NaN}}',
+        '{"decision":"ANSWER","fields":{"value":1e999}}',
         '{"decision":"EXECUTE","fields":{}}',
         '{"decision":"REFUSE","fields":{"value":5}}',
         '{"decision":"ANSWER","fields":{},"extra":true}',
@@ -107,7 +108,7 @@ def test_invalid_model_response_cannot_be_scored_as_pass(message: str) -> None:
     assert result.verdict is None
 
 
-@pytest.mark.parametrize("bad", [RuntimeError("private traceback"), {}, "x" * 17000])
+@pytest.mark.parametrize("bad", [RuntimeError("private traceback"), {}, "x" * 17000, "\ud800"])
 def test_model_errors_are_counted_but_never_disclosed(bad: object) -> None:
     cases = (case("alpha"),)
     evidence = runner.execute(spec(cases), cases, StubModel({"alpha": bad}), StubScorer())
@@ -158,6 +159,8 @@ def test_model_and_scorer_version_bindings_fail_closed() -> None:
     model = StubModel({"alpha": raw()})
     with pytest.raises(ValueError, match="trusted scorer identity"):
         runner.execute(replace(s, scorer_sha256="2" * 64), cases, model, StubScorer())
+    with pytest.raises(ValueError, match="trusted scorer identity"):
+        runner.execute(replace(s, scorer_version="2.0.0"), cases, model, StubScorer())
     assert model.requests == []
     with pytest.raises(ValueError):
         replace(s, source_revision="unknown")
@@ -225,15 +228,22 @@ def test_refusal_is_scored_by_trusted_port_not_by_runner() -> None:
         spec(cases),
         cases,
         StubModel(
-            {
-                "alpha": (
-                    '{"decision":"REFUSE","fields":{},'
-                    '"refusal":{"reason":"NO_AUTHORITY"}}'
-                )
-            }
+            {"alpha": ('{"decision":"REFUSE","fields":{},"refusal":{"reason":"NO_AUTHORITY"}}')}
         ),
         StubScorer(),
     )
     assert result.receipt.case_results[0].state == "SCORED"
     assert result.receipt.case_results[0].verdict == "FAIL"
     assert result.receipt.qualification == runner.QUALIFICATION
+
+
+def test_partial_batch_failure_is_not_scored_and_later_cases_continue() -> None:
+    cases = (case("alpha"), case("beta"))
+    evidence = runner.execute(
+        spec(cases), cases, StubModel({"alpha": RuntimeError(), "beta": raw()}), StubScorer()
+    )
+    assert [(r.state, r.verdict) for r in evidence.receipt.case_results] == [
+        ("MODEL_ERROR", None),
+        ("SCORED", "PASS"),
+    ]
+    assert runner.verify_replay(evidence, cases, StubScorer()) == evidence.receipt

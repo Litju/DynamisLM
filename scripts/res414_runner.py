@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import re
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass
@@ -62,8 +63,20 @@ def _not_constant(value: str) -> object:
     raise ValueError(f"non-finite JSON constant: {value}")
 
 
+def _finite_float(value: str) -> float:
+    number = float(value)
+    if not math.isfinite(number):
+        raise ValueError("non-finite JSON number")
+    return number
+
+
 def _strict_object(raw: str) -> dict[str, object]:
-    value = json.loads(raw, object_pairs_hook=_no_duplicate_keys, parse_constant=_not_constant)
+    value = json.loads(
+        raw,
+        object_pairs_hook=_no_duplicate_keys,
+        parse_constant=_not_constant,
+        parse_float=_finite_float,
+    )
     if type(value) is not dict:
         raise ValueError("response/reference must be a JSON object")
     return value
@@ -110,8 +123,7 @@ class Score:
         if self.verdict not in {"PASS", "FAIL"}:
             raise ValueError("scorer must return PASS or FAIL")
         if type(self.reason_codes) is not tuple or any(
-            type(code) is not str or _REASON.fullmatch(code) is None
-            for code in self.reason_codes
+            type(code) is not str or _REASON.fullmatch(code) is None for code in self.reason_codes
         ):
             raise ValueError("scorer returned invalid reason codes")
 
@@ -120,6 +132,7 @@ class ScorerPort(Protocol):
     """Trusted scorer adapter; NOT a PSE scoring implementation."""
 
     scorer_id: str
+    scorer_version: str
     scorer_sha256: str
 
     def score(self, reference: Mapping[str, object], response: Mapping[str, object]) -> Score: ...
@@ -134,13 +147,14 @@ class RunSpec:
     model_revision: str
     tokenizer_revision: str
     scorer_id: str
+    scorer_version: str
     scorer_sha256: str
     source_revision: str
     environment_sha256: str
     seed: int
 
     def __post_init__(self) -> None:
-        for name in ("run_id", "suite_id", "model_id", "scorer_id"):
+        for name in ("run_id", "suite_id", "model_id", "scorer_id", "scorer_version"):
             _identifier(getattr(self, name), name)
         for name in (
             "suite_sha256",
@@ -231,7 +245,11 @@ def _admit(spec: RunSpec, cases: tuple[PublicSyntheticCase, ...], scorer: Scorer
         raise ValueError("a versioned RunSpec is required")
     if spec.suite_sha256 != suite_sha256(cases):
         raise ValueError("suite changed since its digest was recorded")
-    if scorer.scorer_id != spec.scorer_id or scorer.scorer_sha256 != spec.scorer_sha256:
+    if (scorer.scorer_id, scorer.scorer_version, scorer.scorer_sha256) != (
+        spec.scorer_id,
+        spec.scorer_version,
+        spec.scorer_sha256,
+    ):
         raise ValueError("trusted scorer identity differs from run spec")
 
 
@@ -266,7 +284,11 @@ def _result(case: PublicSyntheticCase, response: RawResponse, scorer: ScorerPort
         parsed = _parse_response(response.raw)
     except (ValueError, TypeError, RecursionError):
         return CaseResult(
-            case.case_id, request_hash, response_hash, "INVALID_RESPONSE", None,
+            case.case_id,
+            request_hash,
+            response_hash,
+            "INVALID_RESPONSE",
+            None,
             ("INVALID_TYPED_RESPONSE",),
         )
     # Invalid trusted scorer behavior aborts the run rather than inflating results.
@@ -286,15 +308,16 @@ def rescore(
 ) -> RunReceipt:
     """Deterministically score stored outputs without invoking a model."""
     _admit(spec, cases, scorer)
-    if type(responses) is not tuple or len(responses) != len(cases) or any(
-        type(row) is not RawResponse for row in responses
+    if (
+        type(responses) is not tuple
+        or len(responses) != len(cases)
+        or any(type(row) is not RawResponse for row in responses)
     ):
         raise ValueError("every case requires one typed response")
     if [r.case_id for r in responses] != [c.case_id for c in cases]:
         raise ValueError("response inventory or ordering differs from suite")
     rows = tuple(
-        _result(case, response, scorer)
-        for case, response in zip(cases, responses, strict=True)
+        _result(case, response, scorer) for case, response in zip(cases, responses, strict=True)
     )
     payload: dict[str, object] = {
         "version": VERSION,
@@ -323,10 +346,15 @@ def execute(
             continue
         if type(raw) is not str:
             responses.append(RawResponse(case.case_id, None, "INVALID_RETURN"))
-        elif len(raw.encode()) > MAX_RESPONSE_BYTES:
-            responses.append(RawResponse(case.case_id, None, "RESPONSE_TOO_LARGE"))
         else:
-            responses.append(RawResponse(case.case_id, raw))
+            try:
+                responses.append(
+                    RawResponse(case.case_id, raw)
+                    if len(raw.encode()) <= MAX_RESPONSE_BYTES
+                    else RawResponse(case.case_id, None, "RESPONSE_TOO_LARGE")
+                )
+            except UnicodeEncodeError:
+                responses.append(RawResponse(case.case_id, None, "INVALID_RETURN"))
     transcript = tuple(responses)
     return RunEvidence(rescore(spec, cases, transcript, scorer), transcript)
 
