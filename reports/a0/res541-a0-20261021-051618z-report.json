@@ -1,0 +1,45 @@
+{
+  "cases": [],
+  "control_plane": {
+    "active_assignments_before": 0,
+    "artifact_download_exit_code": 0,
+    "available_compute_units_confirmed_by_owner": true,
+    "case_count": 16,
+    "colab_cli_version": "Version: 0.7.5",
+    "gpu_requested": "T4",
+    "max_model_weight_bytes": 8589934592,
+    "max_new_tokens_per_case": 64,
+    "max_total_runtime_seconds": 900,
+    "quota_checked": true,
+    "retry_or_tier_fallback": false,
+    "runner_exit_code": 1,
+    "session_absent_after_stop": true,
+    "session_name": "res541-a0-20261021-051618z",
+    "session_stop_exit_code": 0,
+    "sessions_check_exit_code": 0
+  },
+  "failure_category": "UV_VERSION_MISMATCH",
+  "failure_stage": "PYTHON_312_BOOTSTRAP",
+  "inference_run": false,
+  "model_download_stage_entered": false,
+  "model_weights_downloaded": false,
+  "remote_elapsed_seconds": 10.986,
+  "run_id": "res541-a0-20261021-051618z",
+  "runtime_preflight": {
+    "compute_capability": [
+      7,
+      5
+    ],
+    "disk_free_before_setup_bytes": 207569244160,
+    "free_vram_before_setup_bytes": 15527116800,
+    "gpu_name": "Tesla T4",
+    "python": "3.13.15",
+    "torch": "2.11.0+cu130",
+    "torch_cuda_runtime": "13.0",
+    "total_vram_bytes": 15637086208
+  },
+  "schema": "RES541_A0_REPORT_V1",
+  "scope": "SYNTHETIC_DEVELOPMENT_ONLY",
+  "source_revision": "9176d8552a029c38c5238496a2fb741565c2df7c",
+  "status": "NO_GO"
+}
