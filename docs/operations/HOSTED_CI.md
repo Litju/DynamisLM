@@ -34,6 +34,19 @@ There are no self-hosted runners, secrets, uploads, services, deployment steps
 or required external AI-review checks. External review is advisory; independent
 human approval and required scientific/adversarial review remain merge evidence.
 
+The sole historical mission exception is PR #46 in `Litju/DynamisLM`, on
+`julitocrztuga/res-541-a0-wslcolab-gpu-scientific-reasoning-alpha-development-only`.
+Only the 27 commits from audit baseline through pinned
+`97d361badf02a80b411aaefdb6ddac1c4e8e126e` are exempt from new subject/metadata
+requirements. Exact PR/repository/branch identity and pinned ancestry are checked.
+Subsequent commits must use `RES-541: ` subjects, current PR metadata and current
+artifact admission. Only unchanged additions at that historical head receive automatic historical
+admission. This includes the public private-key-format marker in the exact pinned
+issuer source; changed source bytes receive normal secret scanning. Modified/new
+non-code artifacts require the inventory.
+Local hooks on that branch read PR #46 via authenticated GitHub CLI and fail closed
+if identity/history cannot be verified. This authorizes no experiment or merge.
+
 ## Artifact and scientific evidence policy
 
 `.repo-policy/noncode-inventory.tsv` exhaustively lists tracked non-code files,
@@ -68,7 +81,7 @@ The effective main rules endpoint agrees. Classic branch protection returns
 | Dismiss stale approvals on push | false | Enable |
 | Last-push approval by another reviewer | false | Enable; provision another eligible reviewer |
 | Resolve review conversations | false | Enable |
-| Required check | `ci`, strict/up-to-date | Retain; verify check integration provenance |
+| Required check | `ci`, strict/up-to-date; integration unbound | Bind `integration_id: 15368` (GitHub Actions) |
 | Force pushes | Blocked (`non_fast_forward`) | Retain |
 | Branch deletion | Blocked (`deletion`) | Retain |
 | Bypass actors | Empty; current user `never` | Retain; no admin force/deletion bypass |
@@ -80,6 +93,15 @@ for merge until an administrator enables the missing review requirements,
 confirms an eligible independent reviewer exists, and API read-back verifies
 all required values. Do not rewrite historical commits to introduce signatures
 or new naming. A successful CI run is necessary but insufficient for merge.
+
+A separate active **branch** ruleset should target `refs/heads/work/res-*` with
+only `non_fast_forward` and an empty bypass list. Do **not** add a `deletion`
+rule to mission branches: ordinary deletion after merge must remain possible.
+Do not copy the main-branch PR/check restrictions onto working branches; routine
+fast-forward development pushes must remain possible. This pattern does not cover
+the legacy PR #46 branch, which stays unchanged. No such mission-branch ruleset
+was present in the API listing; this proposal is administrator work, not applied
+configuration. Validate it in a disposable branch before relying on enforcement.
 
 ```bash
 gh api repos/Litju/DynamisLM/rulesets/22691929

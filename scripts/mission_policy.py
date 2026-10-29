@@ -7,8 +7,14 @@ import json
 import re
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from typing import Any
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from scripts.repository_policy import LEGACY_HEAD, is_legacy_pr, local_legacy_pr
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
 
 BRANCH = re.compile(r"work/res-([1-9][0-9]*)-[a-z0-9]+(?:-[a-z0-9]+)*")
 BOT_BRANCH = re.compile(r"dependabot/github_actions/[a-zA-Z0-9_./-]+")
@@ -41,8 +47,11 @@ def validate_pr(pr: dict[str, Any], merge_base: str) -> tuple[str, bool]:
         if not BOT_TITLE.fullmatch(pr["title"]):
             raise ValueError("BOT_TITLE: only bounded GitHub Actions dependency updates")
         return "", True
-    issue = mission(branch)
+    legacy = is_legacy_pr(pr, REPO_ROOT)
+    issue = "RES-541" if legacy else mission(branch)
     validate_subject(pr["title"], issue)
+    if legacy and pr["head"]["sha"] == LEGACY_HEAD:
+        return issue, False
     fields: dict[str, str] = {}
     for line in (pr.get("body") or "").splitlines():
         key, sep, value = line.partition(":")
@@ -87,8 +96,17 @@ def validate_pr(pr: dict[str, Any], merge_base: str) -> tuple[str, bool]:
     return issue, False
 
 
-def validate_range(base: str, head: str, issue: str, *, bot: bool = False) -> None:
-    for commit in git("rev-list", "--reverse", f"{base}..{head}").splitlines():
+def validate_range(
+    base: str,
+    head: str,
+    issue: str,
+    *,
+    bot: bool = False,
+    pr: dict[str, Any] | None = None,
+    event: Path | None = None,
+) -> None:
+    excluded = ["--not", LEGACY_HEAD] if pr is not None and is_legacy_pr(pr, REPO_ROOT) else []
+    for commit in git("rev-list", "--reverse", f"{base}..{head}", *excluded).splitlines():
         subject = git("show", "-s", "--format=%s", commit)
         if bot:
             if not BOT_TITLE.fullmatch(subject):
@@ -110,6 +128,7 @@ def validate_range(base: str, head: str, issue: str, *, bot: bool = False) -> No
                 str(Path(__file__).with_name("repository_policy.py")),
                 "--revision",
                 commit,
+                *(["--event", str(event)] if event else []),
             ],
             check=True,
         )
@@ -148,7 +167,7 @@ def main() -> int:
                 base, head = pr["base"]["sha"], pr["head"]["sha"]
                 merge_base = git("merge-base", base, head)
                 issue, bot = validate_pr(pr, merge_base)
-                validate_range(merge_base, head, issue, bot=bot)
+                validate_range(merge_base, head, issue, bot=bot, pr=pr, event=args.event)
             else:
                 # PR gates check branch commits; main continuity checks resulting main trees.
                 base, head = event["before"], event["after"]
@@ -164,7 +183,8 @@ def main() -> int:
                     )
         else:
             branch, head = git("branch", "--show-current"), git("rev-parse", "HEAD")
-            issue = mission(branch)
+            pr = local_legacy_pr(REPO_ROOT)
+            issue = "RES-541" if pr is not None else mission(branch)
             if args.commit_message:
                 subject = args.commit_message.read_text().splitlines()[0]
                 validate_subject(subject, issue)
@@ -173,7 +193,13 @@ def main() -> int:
                     validate_push(sys.stdin.read().splitlines(), branch, head)
                     subprocess.run(["git", "diff", "--quiet", "HEAD", "--"], check=True)
                 base = git("merge-base", "origin/main", head)
-                validate_range(base, head, issue)
+                if pr is None:
+                    validate_range(base, head, issue)
+                else:
+                    with tempfile.TemporaryDirectory() as directory:
+                        event = Path(directory) / "event.json"
+                        event.write_text(json.dumps({"pull_request": pr}))
+                        validate_range(base, head, issue, pr=pr, event=event)
     except (ValueError, KeyError, IndexError, OSError, subprocess.CalledProcessError) as exc:
         print(f"MISSION_POLICY=FAIL: {exc}", file=sys.stderr)
         return 1

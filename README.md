@@ -162,8 +162,8 @@ complete local gate. See [contribution policy](CONTRIBUTING.md).
 
 ## Licensing and artifacts
 
-The source code is `AGPL-3.0-only`. No model weights or adapters are distributed. RES-419 selected a pinned research
-base model/tokenizer; that decision does not license a trained DynamisLM release. Datasets and corpora remain licensed by their individual sources and provenance. Project name, logo, and branding rights are separate from software copyright. See [NOTICE.md](NOTICE.md), [CONTRIBUTING.md](CONTRIBUTING.md), and [SECURITY.md](SECURITY.md).
+The source code is `AGPL-3.0-only`. No model weights or adapters are distributed. RES-419 selected pinned SmolLM3-3B, an instruction/reasoning-post-trained
+research candidate and tokenizer, not the distinct base checkpoint for continued pretraining; that decision does not license a trained DynamisLM release. Datasets and corpora remain licensed by their individual sources and provenance. Project name, logo, and branding rights are separate from software copyright. See [NOTICE.md](NOTICE.md), [CONTRIBUTING.md](CONTRIBUTING.md), and [SECURITY.md](SECURITY.md).
 
 ## Roadmap
 
