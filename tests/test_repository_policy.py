@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import hashlib
+import subprocess
 from pathlib import Path
 
+import pytest
+from scripts import repository_policy as policy
 from scripts.repository_policy import (
     MAX_FIXTURE_SIZE_BYTES,
     evaluate_paths,
@@ -104,3 +108,136 @@ def test_existing_tracked_repository_passes_live_policy() -> None:
         )
         == ()
     )
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "notebooks/run.ipynb",
+        ".cache/snapshot.json",
+        "DATA/rows.json",
+        "research/rows.jsonl",
+        "weights/model.gguf",
+        "credentials.json",
+        "cache/secret.key",
+        "src/__pycache__/run.pyc",
+        "x/model.onnx",
+        "research/rows.ndjson",
+    ],
+)
+def test_additional_artifacts_are_rejected(path: str) -> None:
+    assert evaluate_paths(((path, 10),))
+
+
+def test_all_files_have_a_size_limit() -> None:
+    assert evaluate_paths((("research/large.pdf", MAX_FIXTURE_SIZE_BYTES + 1),))
+
+
+def _stage(root: Path, *paths: str) -> None:
+    subprocess.run(["git", "add", "--", *paths], cwd=root, check=True, capture_output=True)
+
+
+@pytest.fixture
+def policy_repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    (tmp_path / "docs/decisions").mkdir(parents=True)
+    (tmp_path / ".repo-policy").mkdir()
+    evidence = "docs/decisions/synthetic-authority.md"
+    (tmp_path / evidence).write_text("Synthetic immutable authority\n")
+    inventory = tmp_path / policy.INVENTORY
+    inventory.write_text(
+        "path\tclassification\tsha256\treason\n"
+        f"{policy.INVENTORY}\tconfiguration\t-\tAdmission list\n"
+        f"{evidence}\tauthority\t"
+        f"{hashlib.sha256((tmp_path / evidence).read_bytes()).hexdigest()}"
+        "\tSynthetic baseline evidence\n"
+    )
+    _stage(tmp_path, ".")
+    subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.name=Synthetic",
+            "-c",
+            "user.email=synthetic@example.invalid",
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "-qm",
+            "synthetic baseline",
+        ],
+        cwd=tmp_path,
+        check=True,
+    )
+    baseline = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=tmp_path, text=True
+    ).strip()
+    monkeypatch.setattr(policy, "BASELINE", baseline)
+    return tmp_path
+
+
+def test_clean_synthetic_policy_repo_passes(policy_repo: Path) -> None:
+    assert policy.repository_failures(policy_repo) == ()
+
+
+def test_staged_secret_cannot_hide_behind_clean_working_bytes(policy_repo: Path) -> None:
+    path = policy_repo / "innocent.py"
+    path.write_text('secret = "' + "ghp_" + "X" * 36 + '"\n')
+    _stage(policy_repo, "innocent.py")
+    path.write_text("# clean replacement after staging\n")
+    failures = policy.repository_failures(policy_repo)
+    assert "SECRET_CONTENT=innocent.py" in failures
+    assert "INDEX_WORKTREE_MISMATCH=innocent.py" in failures
+    tree = subprocess.check_output(["git", "write-tree"], cwd=policy_repo, text=True).strip()
+    assert "SECRET_CONTENT=innocent.py" in policy.repository_failures(policy_repo, tree)
+
+
+def test_uninventoried_research_json_is_rejected(policy_repo: Path) -> None:
+    (policy_repo / "uncontrolled.json").write_text('{"synthetic": true}\n')
+    _stage(policy_repo, "uncontrolled.json")
+    assert "NONCODE_INVENTORY_MISMATCH" in policy.repository_failures(policy_repo)
+
+
+def test_evidence_cannot_be_rehashed_to_obtain_pass(policy_repo: Path) -> None:
+    path = policy_repo / "docs/decisions/synthetic-authority.md"
+    old_digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    path.write_text("Altered synthetic authority\n")
+    inventory = policy_repo / policy.INVENTORY
+    inventory.write_text(
+        inventory.read_text().replace(old_digest, hashlib.sha256(path.read_bytes()).hexdigest())
+    )
+    _stage(policy_repo, ".")
+    failures = policy.repository_failures(policy_repo)
+    assert "BASELINE_EVIDENCE_CHANGED=docs/decisions/synthetic-authority.md" in failures
+    assert "BASELINE_EVIDENCE_UNPINNED=docs/decisions/synthetic-authority.md" in failures
+
+
+def test_deleted_evidence_is_rejected(policy_repo: Path) -> None:
+    (policy_repo / "docs/decisions/synthetic-authority.md").unlink()
+    _stage(policy_repo, ".")
+    assert "BASELINE_EVIDENCE_CHANGED=docs/decisions/synthetic-authority.md" in (
+        policy.repository_failures(policy_repo)
+    )
+
+
+def test_symlinks_and_binary_code_disguise_are_rejected(policy_repo: Path) -> None:
+    (policy_repo / "link.py").symlink_to("/etc/passwd")
+    (policy_repo / "binary.py").write_bytes(b"synthetic\0data")
+    _stage(policy_repo, "link.py", "binary.py")
+    failures = policy.repository_failures(policy_repo)
+    assert "NON_REGULAR_OR_UNMERGED_FILE=link.py" in failures
+    assert "BINARY_FILE=binary.py" in failures
+
+
+def test_authority_cannot_be_downgraded_in_inventory(policy_repo: Path) -> None:
+    inventory = policy_repo / policy.INVENTORY
+    inventory.write_text(inventory.read_text().replace("\tauthority\t", "\tdocumentation\t"))
+    _stage(policy_repo, ".")
+    assert "UNCLASSIFIED_OR_UNPINNED_AUTHORITY=docs/decisions/synthetic-authority.md" in (
+        policy.repository_failures(policy_repo)
+    )
+
+
+def test_registry_exception_cannot_admit_nested_cache_or_dataset_paths() -> None:
+    for path in ("registries/datasets/.cache/file.json", "registries/datasets/data/rows.json"):
+        assert evaluate_paths(((path, 1),)) == (f"FORBIDDEN_PATH={path}",)

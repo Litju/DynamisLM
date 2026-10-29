@@ -7,19 +7,19 @@ Branch:
 Base head:
 Current head:
 Decision record:
-Mission scope isolated to this PR? YES/NO
+Mission scope isolated to this PR?: YES/NO
 
 ## Authority impact
 
-Scientific numerical authority changed? YES/NO
-Serialization version changed? YES/NO
-Historical hashes intentionally changed? YES/NO
-Source/data artifact added? YES/NO
-Population authority affected? YES/NO
-Measurement identity affected? YES/NO
-Comparability authority affected? YES/NO
-Repository/governance authority affected? YES/NO
-Model-training authority affected? YES/NO
+Scientific numerical authority changed?: YES/NO
+Serialization version changed?: YES/NO
+Historical hashes intentionally changed?: YES/NO
+Source/data artifact added?: YES/NO
+Population authority affected?: YES/NO
+Measurement identity affected?: YES/NO
+Comparability authority affected?: YES/NO
+Repository/governance authority affected?: YES/NO
+Model-training authority affected?: YES/NO
 
 ## Qualification
 
@@ -33,9 +33,9 @@ Tracked mutation:
 
 ## Evidence invariants
 
-Expected hashes/counts changed? YES/NO
+Expected hashes/counts changed?: YES/NO
 If YES, exact reason:
-Real raw/canonical empirical data committed? YES/NO
+Real raw/canonical empirical data committed?: YES/NO
 
 ## Review findings
 

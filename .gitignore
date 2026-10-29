@@ -56,3 +56,22 @@ hf-cache/
 *.swp
 .DS_Store
 Thumbs.db
+
+# Policy also rejects these when force-added; ignore rules alone are not enforcement.
+*.ipynb
+.ipynb_checkpoints/
+*.jsonl
+*.ndjson
+*.gguf
+*.ggml
+*.onnx
+*.pkl
+*.pickle
+*.sqlite
+*.sqlite3
+*.db
+*.pem
+*.key
+credentials.json
+.netrc
+.pypirc

@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+set -euo pipefail
+exec uv run --no-sync python scripts/mission_policy.py --commit-message "$1"

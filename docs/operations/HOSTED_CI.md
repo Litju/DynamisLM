@@ -1,173 +1,117 @@
 # Hosted CI operations
 
-## Architecture
+One active engineering mission uses one Linear issue, one `work/res-N-description`
+branch from qualified `main`, one PR and one merge decision. Same-mission review
+fixes remain on that PR. Linear is scheduling authority; GitHub checks do not
+prove that an issue is active. Follow [CONTRIBUTING.md](../../CONTRIBUTING.md) for
+commit subjects, artifact admission and narrowly bounded automation exceptions.
 
-Local hooks provide developer feedback. GitHub-hosted `ubuntu-24.04` CI runs
-the same full-QA command in a clean environment. The active `DynamisLM Main
-Authority` ruleset makes the successful `ci` check the merge gate for `main`.
+## Local and hosted gates
 
-There is one workflow, one job, and one deterministic CI check. CI runs for
-pull requests targeting `main` and for pushes to `main`; it has no secrets,
-cache, artifact upload, service container, or deployment step.
+Install hooks with `./scripts/install-hooks.sh`. Pre-commit checks staged artifact
+bytes and whitespace plus Ruff; commit-msg validates the mission subject.
+Pre-push rejects direct main pushes, mismatched/untested refs, non-fast-forward
+updates and deletions, then runs `./scripts/ci.sh` on the clean committed head.
+Hooks are developer feedback and can be bypassed.
 
-## Branch-per-mission topology
+`./scripts/ci.sh` runs frozen uv synchronization, Ruff lint/format, mypy,
+repository policy and pytest, and checks that QA did not mutate tracked files.
+Stage reviewed changes before full QA: policy compares index and working bytes.
+Ignored local data are never scanned or imported by these gates.
 
-The repository uses one bounded mission, one branch, one reviewable pull
-request, and one merge decision:
+One pinned GitHub-hosted `ubuntu-24.04` workflow/job produces required `ci`.
+It runs on PR opening, commit synchronization, reopening, metadata editing and
+ready-for-review events, plus pushes to main. Full history is fetched for exact
+baseline evidence and new-commit checks. The event payload is read as data,
+never interpolated into shell commands. The PR gate validates mission naming,
+matching issue/branch/base/head metadata and explicit authority declarations.
+Each new mission commit tree is checked, including artifacts subsequently
+removed. Only new commit subjects are constrained; historical signed/provenance
+ancestors are preserved. Authenticated Dependabot Actions updates receive only
+the path/subject exception documented in CONTRIBUTING; they still run full QA.
 
-```text
-main
-  -> work/<mission>-<bounded-scope>
-  -> one PR targeting main
-```
+There are no self-hosted runners, secrets, uploads, services, deployment steps
+or required external AI-review checks. External review is advisory; independent
+human approval and required scientific/adversarial review remain merge evidence.
 
-Unrelated missions must not share a branch or pull request. Review fixes for
-the same mission remain on that mission branch and PR. A new mission starts
-from the current qualified `main`. Multiple branches do not require multiple
-worktrees; one canonical checkout may switch branches. Direct development on
-`main` is not part of the workflow. Stacked PRs are exceptional and require an
-independently useful prerequisite with its own merge decision. Trivial cleanup
-must not be fragmented into artificial PRs.
+The sole historical mission exception is PR #46 in `Litju/DynamisLM`, on
+`julitocrztuga/res-541-a0-wslcolab-gpu-scientific-reasoning-alpha-development-only`.
+Only the 27 commits from audit baseline through pinned
+`97d361badf02a80b411aaefdb6ddac1c4e8e126e` are exempt from new subject/metadata
+requirements. Exact PR/repository/branch identity and pinned ancestry are checked.
+Subsequent commits must use `RES-541: ` subjects, current PR metadata and current
+artifact admission. Only unchanged additions at that historical head receive automatic historical
+admission. This includes the public private-key-format marker in the exact pinned
+issuer source; changed source bytes receive normal secret scanning. Modified/new
+non-code artifacts require the inventory.
+Local hooks on that branch read PR #46 via authenticated GitHub CLI and fail closed
+if identity/history cannot be verified. This authorizes no experiment or merge.
 
-RES-63 is grandfathered on `work/res-63-canonical-dataset-ingestion` and PR
-`#24`; RES-64 starts fresh from `main` after RES-63 and RES-77 are sealed.
+## Artifact and scientific evidence policy
 
-## PR lifecycle
+`.repo-policy/noncode-inventory.tsv` exhaustively lists tracked non-code files,
+classifications, retention reasons and immutable evidence SHA-256 values.
+It is the reviewed admission list for new Markdown, JSON and other non-code
+artifacts, not a blanket research-output exception. Baseline scientific documents,
+receipts, public registry metadata, qualification reports and the synthetic table
+are compared against audit commit `6d6892c95134f83ffdb224e11e6e3603296fc5ed`.
+Changing an inventory digest cannot authorize changing baseline evidence.
+The historical RES75 decision record is retained unchanged; current operating
+policy is this document and CONTRIBUTING.
 
-The normal lifecycle is:
+No baseline file was demonstrated safe and unnecessary to delete; the exact
+deletion inventory is empty. Source reports are metadata/qualification evidence,
+not raw source bytes or real canonical row tables. The sole tabular fixture is
+100 bytes, explicitly synthetic, allowlisted and pinned. All files are limited
+to 1 MiB; notebooks, binary artifacts, datasets, weights, caches, private keys,
+known token forms, symlinks and submodules are rejected. Arbitrary text cannot be
+certified non-sensitive mechanically; review and data-use authority still apply.
 
-```text
-implementation
-  -> local QA
-  -> push
-  -> PR
-  -> hosted ci
-  -> adversarial review
-  -> repair on the same mission branch
-  -> rerun deterministic QA
-  -> final review of the current head
-  -> merge
-  -> delete the merged branch
-```
+## Live main ruleset audit and required administration
 
-The PR description records the full Linear issue URL, the base and head SHAs,
-authority-impact declarations, deterministic QA evidence, review findings,
-limitations, and the final qualification state. Every finding is verified
-against the current head before code changes are made. Blocking findings are
-resolved or explicitly dispositioned before merge.
+API read-back on 2026-10-29 verified active repository ruleset **22691929**,
+`DynamisLM Main Authority`, targeting `~DEFAULT_BRANCH` with no exclusions.
+The effective main rules endpoint agrees. Classic branch protection returns
+404; protection is supplied by the ruleset, not a classic protection rule.
 
-## Review layers
+| Setting | API-observed value | Required disposition |
+| --- | --- | --- |
+| Pull request required | Yes | Retain |
+| Approving reviews | 0 | Set at least 1 independent approval |
+| Dismiss stale approvals on push | false | Enable |
+| Last-push approval by another reviewer | false | Enable; provision another eligible reviewer |
+| Resolve review conversations | false | Enable |
+| Required check | `ci`, strict/up-to-date; integration unbound | Bind `integration_id: 15368` (GitHub Actions) |
+| Force pushes | Blocked (`non_fast_forward`) | Retain |
+| Branch deletion | Blocked (`deletion`) | Retain |
+| Bypass actors | Empty; current user `never` | Retain; no admin force/deletion bypass |
+| Allowed merge methods | merge, squash, rebase | Prefer merge commits when provenance binds commit identities |
+| Code-owner review | false | Optional; not a substitute for independent approval |
 
-The repository review architecture is:
+**Administrative changes above are specified, not applied.** Do not declare GO
+for merge until an administrator enables the missing review requirements,
+confirms an eligible independent reviewer exists, and API read-back verifies
+all required values. Do not rewrite historical commits to introduce signatures
+or new naming. A successful CI run is necessary but insufficient for merge.
 
-```text
-LOCAL_HOOKS = developer feedback
-HOSTED_CI = independent deterministic verification
-GITHUB_RULESET = enforced merge authority
-AGENT_REVIEW = advisory/adversarial reasoning
-FINAL_SCIENTIFIC_REVIEW = project-process requirement for authority-changing scientific missions
-```
-
-No external AI-review service is a required status check or merge dependency.
-Rate limits, SaaS outages, reviewer quotas, and plan changes must not block
-DynamisLM merge eligibility. AI review findings can be useful evidence, but
-they are not self-authenticating and do not replace deterministic CI or final
-scientific/adversarial review.
-
-## Ruleset relationship
-
-The `DynamisLM Main Authority` ruleset remains the root merge authority for
-the default branch. It requires a pull request, strict up-to-date `ci`, blocks
-force pushes and branch deletion, has no bypass actors, and preserves the
-repository's existing merge and review settings. This mission removes an
-external review dependency without changing the ruleset authority.
-
-Read the live ruleset when diagnosing a merge decision:
-
-```bash
-gh api repos/Litju/DynamisLM/rulesets
-gh api repos/Litju/DynamisLM/rulesets/<RULESET_ID>
-```
-
-## Local use
-
-Install the repository-local hooks:
-
-```bash
-./scripts/install-hooks.sh
-```
-
-The installer is idempotent and sets only the local `core.hooksPath` to
-`.githooks`. Fast checks can be run directly:
-
-```bash
-./scripts/qa-fast.sh
-```
-
-The staged pre-commit form also checks staged whitespace:
+A separate active **branch** ruleset should target `refs/heads/work/res-*` with
+only `non_fast_forward` and an empty bypass list. Do **not** add a `deletion`
+rule to mission branches: ordinary deletion after merge must remain possible.
+Do not copy the main-branch PR/check restrictions onto working branches; routine
+fast-forward development pushes must remain possible. This pattern does not cover
+the legacy PR #46 branch, which stays unchanged. No such mission-branch ruleset
+was present in the API listing; this proposal is administrator work, not applied
+configuration. Validate it in a disposable branch before relying on enforcement.
 
 ```bash
-./scripts/qa-fast.sh --staged
-```
-
-Run the complete local gate before pushing:
-
-```bash
-./scripts/ci.sh
-```
-
-`ci.sh` runs `uv sync --frozen`, fast QA, mypy, the tracked-repository policy,
-and pytest. It preserves unrelated local edits and fails if those QA commands
-mutate the tracked index or worktree.
-
-## Remote CI and ruleset
-
-The pull-request workflow is the independent clean-environment verification.
-The check name is exactly `ci`; it must be successful and up to date before a
-pull request can update `main`. Read the workflow run and job steps when
-diagnosing a failure:
-
-```bash
+gh api repos/Litju/DynamisLM/rulesets/22691929
+gh api repos/Litju/DynamisLM/rules/branches/main
 gh pr checks <PR_NUMBER>
-gh run list --workflow CI
-gh run view <RUN_ID> --log-failed
 gh run view <RUN_ID> --json jobs,headSha,status,conclusion
 ```
 
-The ruleset is intentionally the only merge-enforcement layer for this mission.
-
-## Action pins and Dependabot
-
-Workflow Actions use full commit SHAs and same-line release comments. To
-update a pin safely, inspect the official Action repository's current stable
-release, resolve its tag through the Git refs API, dereference annotated tags
-to the commit object, verify the commit belongs to the intended repository,
-update the SHA and release comment, and let the normal pull-request `ci` check
-qualify the change. Do not replace a pin with a mutable tag.
-
-Dependabot creates weekly updates only for GitHub Actions. Treat each update as
-a normal pull request; do not auto-merge it.
-
-## Repository policy and synthetic fixtures
-
-The policy reads tracked paths from `git ls-files`, not arbitrary ignored local
-files. It rejects data/model/checkpoint/corpus directories, large scientific
-data extensions, and secret-like files. `.env.example` is explicitly allowed.
-
-CSV, XLSX, and ZIP are allowed only as small, clearly synthetic fixtures under
-`tests/fixtures/synthetic/` with an exact entry in
-`.repo-policy/allowed-fixtures.txt`. The maximum size is 1 MiB. The allowlist
-may remain empty while no controlled fixture exists. Real RES-63 source files
-must never be added there.
-
-## Scope boundaries
-
-The Actions SHA policy and ruleset may be modified only through an explicit
-repository-governance issue. This mission makes no workflow change, uses no
-self-hosted runner, and adds no CD because neither is needed for the current
-verification boundary.
-
-RES-63 remains responsible for canonical dataset qualification and source/data
-authority. RES-75 established hosted CI and repository governance; it does not
-ingest or qualify a dataset and does not change scientific formulas, numerical
-authority, serialization version, or historical hashes.
+Read the live issue, open PRs, branch lineage, current-head review findings,
+scientific/data boundaries and required check results for the final merge
+decision. RES-541 PR #46 remains draft/parked with historical evidence unchanged;
+RES-556 does not authorize A1, M0, GPU, model training, protected PSE access,
+release, or a scientific authority change.

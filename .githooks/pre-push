@@ -1,3 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
+# Git exports index/worktree variables during nested pushes; use the actual checkout.
+while IFS= read -r variable; do
+    unset "$variable"
+done < <(git rev-parse --local-env-vars)
+cd "$(git rev-parse --show-toplevel)"
+uv run --no-sync python scripts/mission_policy.py --pre-push
 exec ./scripts/ci.sh
