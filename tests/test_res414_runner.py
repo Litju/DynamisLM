@@ -8,7 +8,6 @@ from dataclasses import replace
 from typing import Any
 
 import pytest
-
 from scripts import res414_runner as runner
 
 D = "1" * 64

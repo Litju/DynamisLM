@@ -257,7 +257,9 @@ def _parse_response(raw: str) -> dict[str, object]:
 def _result(case: PublicSyntheticCase, response: RawResponse, scorer: ScorerPort) -> CaseResult:
     request_hash = _sha(case.message.encode())
     if response.failure is not None:
-        return CaseResult(case.case_id, request_hash, None, "MODEL_ERROR", None, (response.failure,))
+        return CaseResult(
+            case.case_id, request_hash, None, "MODEL_ERROR", None, (response.failure,)
+        )
     assert response.raw is not None
     response_hash = _sha(response.raw.encode())
     try:
@@ -290,7 +292,10 @@ def rescore(
         raise ValueError("every case requires one typed response")
     if [r.case_id for r in responses] != [c.case_id for c in cases]:
         raise ValueError("response inventory or ordering differs from suite")
-    rows = tuple(_result(case, response, scorer) for case, response in zip(cases, responses))
+    rows = tuple(
+        _result(case, response, scorer)
+        for case, response in zip(cases, responses, strict=True)
+    )
     payload: dict[str, object] = {
         "version": VERSION,
         "qualification": QUALIFICATION,
