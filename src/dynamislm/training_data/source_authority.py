@@ -12,9 +12,10 @@ import hashlib
 import json
 import re
 import subprocess
+from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Mapping, cast
+from typing import Any, cast
 
 from dynamislm.ingestion.registry import load_committed_dataset_registry
 
