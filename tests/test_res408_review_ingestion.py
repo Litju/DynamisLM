@@ -184,3 +184,208 @@ def test_untrusted_author_and_revoked_parent(tmp_path: Path) -> None:
             revoked_reviewers=frozenset({record.reviewer_id}),
             parent_promotion_evidence=ParentPromotionEvidence(packet, record, result),
         )
+
+
+def test_recovery_admission_rotation_and_tampering(tmp_path: Path) -> None:
+    import sqlite3
+
+    from dynamislm.benchmark.review_ingestion import admit_authenticated_promotion, recover_review
+
+    packet = _semantic_candidate()
+    approval = _approved_record(packet)
+    old = Ed25519PrivateKey.generate()
+    new = Ed25519PrivateKey.generate()
+
+    def public(key: Ed25519PrivateKey) -> bytes:
+        return key.public_key().public_bytes(
+            serialization.Encoding.Raw, serialization.PublicFormat.Raw
+        )
+
+    old_pin = {approval.reviewer_id: public(old)}
+    rotated = {approval.reviewer_id: (public(new), public(old))}
+    db = tmp_path / "ledger.db"
+    bare = promote_with_receipt(packet, approval)
+    with pytest.raises(ValueError, match="not authenticated"):
+        admit_authenticated_promotion(db, bare, trusted_keys=old_pin, revoked_reviewers=frozenset())
+    ingest_review(
+        db,
+        packet,
+        approval,
+        old.sign(decision_message(approval)),
+        trusted_keys=old_pin,
+        revoked_reviewers=frozenset(),
+    )
+    recovered, evidence = recover_review(
+        db,
+        packet.candidate_id,
+        packet.candidate_version,
+        trusted_keys=rotated,
+        revoked_reviewers=frozenset(),
+    )
+    assert recovered == approval and evidence is not None and evidence.result == bare
+    assert (
+        admit_authenticated_promotion(db, bare, trusted_keys=rotated, revoked_reviewers=frozenset())
+        == bare
+    )
+    with pytest.raises(ValueError, match="untrusted"):
+        recover_review(
+            db,
+            packet.candidate_id,
+            packet.candidate_version,
+            trusted_keys={approval.reviewer_id: public(new)},
+            revoked_reviewers=frozenset(),
+        )
+    with pytest.raises(ValueError, match="revoked"):
+        admit_authenticated_promotion(
+            db, bare, trusted_keys=rotated, revoked_reviewers=frozenset({approval.reviewer_id})
+        )
+    with sqlite3.connect(db) as conn:
+        original = conn.execute("SELECT approval, result FROM review_evidence_v1").fetchone()
+        conn.execute(
+            "UPDATE review_evidence_v1 SET approval = ?",
+            (original[0].replace(approval.reviewer_id, "forged"),),
+        )
+    with pytest.raises(ValueError):
+        recover_review(
+            db,
+            packet.candidate_id,
+            packet.candidate_version,
+            trusted_keys=rotated,
+            revoked_reviewers=frozenset(),
+        )
+    with sqlite3.connect(db) as conn:
+        conn.execute(
+            "UPDATE review_evidence_v1 SET approval = ?, result = ?",
+            (original[0], original[1].replace(bare.receipt.receipt_digest, "sha256:" + "0" * 64)),
+        )
+    with pytest.raises(ValueError):
+        admit_authenticated_promotion(db, bare, trusted_keys=rotated, revoked_reviewers=frozenset())
+
+
+def test_rejection_recovery_and_multilevel_restart(tmp_path: Path) -> None:
+    from dynamislm.benchmark.review_ingestion import admit_authenticated_promotion, recover_review
+
+    key = Ed25519PrivateKey.generate()
+    packet = _semantic_candidate()
+    record = _approved_record(packet)
+    pins = {
+        record.reviewer_id: key.public_key().public_bytes(
+            serialization.Encoding.Raw, serialization.PublicFormat.Raw
+        )
+    }
+    db = tmp_path / "reviews.db"
+    parent = None
+    for index in range(3):
+        record = _approved_record(packet, approval_record_id=f"synthetic-{index}")
+        result = ingest_review(
+            db,
+            packet,
+            record,
+            key.sign(decision_message(record)),
+            trusted_keys=pins,
+            revoked_reviewers=frozenset(),
+            parent_promotion_evidence=parent,
+        )
+        assert result is not None
+        # Recover through a new connection, as after a committed response is lost.
+        _, parent = recover_review(
+            db,
+            packet.candidate_id,
+            packet.candidate_version,
+            trusted_keys=pins,
+            revoked_reviewers=frozenset(),
+        )
+        assert parent is not None and parent.result == result
+        assert (
+            admit_authenticated_promotion(
+                db, result, trusted_keys=pins, revoked_reviewers=frozenset()
+            )
+            == result
+        )
+        if index < 2:
+            packet = _mutation_candidate(packet)
+            if index == 1:
+                from dynamislm.benchmark.pre_review import bind_candidate_review_packet
+
+                packet = bind_candidate_review_packet(
+                    replace(
+                        packet,
+                        authority=tuple(
+                            binding
+                            for binding in packet.authority
+                            if binding.authority_kind != "MUTATION_PARENT"
+                            or binding.source_reference_id == parent.packet.candidate_id
+                        ),
+                    )
+                )
+    rejected_packet = _semantic_candidate()
+    rejected = _approved_record(rejected_packet, decision=HumanReviewDecision.REJECTED)
+    rejected_db = tmp_path / "rejected.db"
+    assert (
+        ingest_review(
+            rejected_db,
+            rejected_packet,
+            rejected,
+            key.sign(decision_message(rejected)),
+            trusted_keys=pins,
+            revoked_reviewers=frozenset(),
+        )
+        is None
+    )
+    assert recover_review(
+        rejected_db,
+        rejected_packet.candidate_id,
+        rejected_packet.candidate_version,
+        trusted_keys=pins,
+        revoked_reviewers=frozenset(),
+    ) == (rejected, None)
+
+
+def test_lost_response_after_commit_and_stored_signature_forgery(tmp_path: Path) -> None:
+    import sqlite3
+
+    from dynamislm.benchmark.review_ingestion import recover_review
+
+    packet = _semantic_candidate()
+    approval = _approved_record(packet)
+    key = Ed25519PrivateKey.generate()
+    pins = {
+        approval.reviewer_id: key.public_key().public_bytes(
+            serialization.Encoding.Raw, serialization.PublicFormat.Raw
+        )
+    }
+    db = tmp_path / "crash.db"
+
+    def crash_after_commit() -> None:
+        ingest_review(
+            db,
+            packet,
+            approval,
+            key.sign(decision_message(approval)),
+            trusted_keys=pins,
+            revoked_reviewers=frozenset(),
+        )
+        raise RuntimeError("simulated lost response")
+
+    with pytest.raises(RuntimeError, match="lost response"):
+        crash_after_commit()
+    assert (
+        recover_review(
+            db,
+            packet.candidate_id,
+            packet.candidate_version,
+            trusted_keys=pins,
+            revoked_reviewers=frozenset(),
+        )[1]
+        is not None
+    )
+    with sqlite3.connect(db) as conn:
+        conn.execute("UPDATE review_evidence_v1 SET signature = ?", (b"x" * 64,))
+    with pytest.raises(ValueError, match="signature"):
+        recover_review(
+            db,
+            packet.candidate_id,
+            packet.candidate_version,
+            trusted_keys=pins,
+            revoked_reviewers=frozenset(),
+        )
