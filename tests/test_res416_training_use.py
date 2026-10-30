@@ -39,10 +39,7 @@ def test_all_locked_sources_are_metadata_only_and_training_denied() -> None:
     assert tuple(item.source_id for item in decisions) == LOCKED_EMPIRICAL_SOURCE_IDS
     assert len(decisions) == 4
     assert all(not item.training_permitted for item in decisions)
-    assert all(
-        "RES63_DOES_NOT_AUTHORIZE_LM_TRAINING" in item.reason_codes
-        for item in decisions
-    )
+    assert all("RES63_DOES_NOT_AUTHORIZE_LM_TRAINING" in item.reason_codes for item in decisions)
     assert decisions[0].qualification_state == "QUALIFIED"
     assert decisions[0].license_expression == "CC-BY-NC-4.0"
     assert "NONCOMMERCIAL_LICENSE_REQUIRES_INDEPENDENT_SCOPE_CHECK" in decisions[0].reason_codes
@@ -87,9 +84,7 @@ def test_unknown_source_and_modified_identity_fail_closed() -> None:
         assess_registered_empirical_source(doc, **refs)
     doc["source_id"] = LOCKED_EMPIRICAL_SOURCE_IDS[0]
     with pytest.raises(ValueError, match="committed-byte identity"):
-        assess_registered_empirical_source(
-            doc, **{**refs, "registry_sha256": "sha256:" + "0" * 63}
-        )
+        assess_registered_empirical_source(doc, **{**refs, "registry_sha256": "sha256:" + "0" * 63})
 
 
 def test_fabricated_positive_decision_is_not_permission() -> None:
