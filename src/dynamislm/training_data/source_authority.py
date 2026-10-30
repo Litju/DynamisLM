@@ -77,13 +77,9 @@ def assess_registered_empirical_source(
         raise ValueError("not a previously locked empirical source")
     if _required_text(document, "source_id") != source_id:
         raise ValueError("source identity disagrees with the committed registry path")
-    if not _SHA256.fullmatch(registry_sha256) or not _GIT_OID.fullmatch(
-        registry_git_blob_oid
-    ):
+    if not _SHA256.fullmatch(registry_sha256) or not _GIT_OID.fullmatch(registry_git_blob_oid):
         raise ValueError("source registry lacks a valid committed-byte identity")
-    if not registry_path.startswith("registries/datasets/") or not registry_path.endswith(
-        ".json"
-    ):
+    if not registry_path.startswith("registries/datasets/") or not registry_path.endswith(".json"):
         raise ValueError("source registry is outside the committed metadata authority")
     version = _required_text(_mapping(document, "version"), "repository_version")
     license_record = _mapping(document, "license")
@@ -128,16 +124,12 @@ def assess_registered_empirical_source(
     )
 
 
-def assess_locked_empirical_sources(
-    *, repository_root: Path
-) -> tuple[TrainingSourceDecision, ...]:
+def assess_locked_empirical_sources(*, repository_root: Path) -> tuple[TrainingSourceDecision, ...]:
     """Inspect only committed Git registries; do not load/download athlete rows."""
 
     results: list[TrainingSourceDecision] = []
     for source_id in LOCKED_EMPIRICAL_SOURCE_IDS:
-        registered = load_committed_dataset_registry(
-            source_id, repository_root=repository_root
-        )
+        registered = load_committed_dataset_registry(source_id, repository_root=repository_root)
         results.append(
             assess_registered_empirical_source(
                 registered.document,
