@@ -10,7 +10,10 @@ readme = "README.md"
 requires-python = ">=3.12,<3.13"
 license = "AGPL-3.0-only"
 license-files = ["LICENSE"]
-dependencies = ["openpyxl>=3.1,<4"]
+dependencies = [
+    "cryptography>=44,<47",
+    "openpyxl>=3.1,<4",
+]
 authors = [{ name = "Julio Rodriguez" }]
 classifiers = [
   "Development Status :: 3 - Alpha",
