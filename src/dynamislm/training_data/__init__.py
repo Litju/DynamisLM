@@ -15,3 +15,25 @@ __all__ = [
     "build_training_use_report",
     "require_training_permission",
 ]
+
+from dynamislm.training_data.admission import (
+    Code,
+    Purpose,
+    Request,
+    Source,
+    SourceClass,
+    admit_sources,
+    authorize_training_bytes,
+    require_admitted,
+)
+
+__all__ += [
+    "Code",
+    "Purpose",
+    "Request",
+    "Source",
+    "SourceClass",
+    "admit_sources",
+    "authorize_training_bytes",
+    "require_admitted",
+]
