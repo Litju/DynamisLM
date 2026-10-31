@@ -222,10 +222,6 @@ def test_missing_exclusion_authority(
         bundle["entries"] = [] if case == "empty" else bundle["entries"][:1]
         raw = json.dumps(bundle).encode()
         monkeypatch.setattr(p, "_EXCLUSION_COMMITMENTS", frozenset({p.sha256(raw)}))
-    if case == "empty":
-        with pytest.raises(ValueError):
-            p.process_training_inputs(items, exclusion_bundle=raw, output_root=tmp_path / "out")
-        return
     result = p.process_training_inputs(items, exclusion_bundle=raw, output_root=tmp_path / "out")
     assert result["status"] == "UNQUALIFIED"
     assert not list((tmp_path / "out").rglob("shard.json"))

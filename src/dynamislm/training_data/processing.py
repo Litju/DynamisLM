@@ -69,8 +69,10 @@ def _exclusions(raw: bytes | None) -> list[dict[str, Any]] | None:
     if set(bundle) != {"schema", "entries"} or bundle["schema"] != "RES417-EXCLUSIONS-1":
         raise ValueError("invalid exclusion bundle")
     entries = bundle["entries"]
-    if not isinstance(entries, list) or not 0 < len(entries) <= MAX_DOCUMENTS:
+    if not isinstance(entries, list) or len(entries) > MAX_DOCUMENTS:
         raise ValueError("invalid exclusion entries")
+    if not entries:
+        return None
     roles: set[str] = set()
     identities: set[str] = set()
     for entry in entries:
