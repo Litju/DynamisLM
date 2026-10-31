@@ -1,4 +1,4 @@
-"""Metadata-only admission CLI; source and grant bytes must live outside Git."""
+"""Historical diagnostic CLI; output never authorizes bytes. Inputs must live outside Git."""
 
 import argparse
 import json

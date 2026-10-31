@@ -7,9 +7,15 @@ remains SCIENTIFIC_NO_GO. The four RES-63 empirical audit decisions are unchange
 
 `registries/training_authority.json` is read from the exact Git HEAD, never from
 working-tree edits or applicant metadata. It initially contains no grants.
-Repository governance is the trust root, as for the existing source registries;
-use only a reviewed repository revision. A malicious repository administrator or
-modified Python installation is outside this boundary's trust model.
+Production release uses the repository containing the installed module and an
+independently provisioned SHA-256 commitment embedded in the reviewed code release.
+The commitment currently pins the empty registry. Neither a different Git HEAD,
+a matching remote URL, environment configuration nor caller metadata can install
+new production authority. Any registry change (including revocation) fails closed
+until a separately reviewed code release provisions its exact new commitment.
+Install this code through a trusted release process; an attacker who can replace
+the installed Python code is outside this boundary's trust model. There is no
+production trust/clock override; tests inject their authority only via monkeypatch.
 
 A grant is exact UTF-8 JSON with schema `RES416-GRANT-1`; see the isolated
 synthetic fixture in `tests/test_res416_admission.py` for every required field.
@@ -44,7 +50,9 @@ clearance. Unknown provenance must never receive a pin.
 
 ## API and CLI
 
-`admit_sources` takes tuples of `(Request, exact_content_bytes, exact_grant_bytes)`,
+`admit_sources` is a historical diagnostic, never a production permission gate.
+Its caller-selected repository and timestamp can produce a positive audit for an
+untrusted repository; such an audit confers no authority. It takes tuples of `(Request, exact_content_bytes, exact_grant_bytes)`,
 a repository root and explicit timezone-aware evaluation time. It returns a
 reproducible content-addressed manifest containing AUTHORIZED, DENIED or
 EVIDENCE_REQUIRED decisions, purpose, restrictions and exact grant/source digests.
@@ -59,13 +67,24 @@ Stdout is the manifest; invalid authority configuration fails the whole command.
 Per-source failures use bounded Code values. The existing
 `scripts/res416_training_use.py` continues to emit the four-source RES-63 audit.
 
-Loaders must call `authorize_training_bytes` with the current UTC evaluation time
-immediately before consuming bytes. It rechecks committed trust, content and grant
-and rejects synthetic material. A saved manifest, its hash, or `require_admitted`
-alone is not an authority credential; no unsigned saved receipt is trusted.
-Re-evaluate after any HEAD, content, purpose, transformation or authority change.
-Synthetic acceptance is available only for explicit test-result inspection;
-production byte release rejects synthetic grants.
+Loaders must call `authorize_training_bytes(request, content, grant)` immediately
+before consuming bytes. It reads the current system UTC clock itself and rechecks
+exact committed trust against the provisioned commitment, content and grant.
+It accepts no repository or timestamp argument and rejects synthetic material.
+The host clock and installed code are trusted operational dependencies.
+A saved manifest or its public hash is never a credential: `require_admitted`
+now always raises, including for fresh, positive and rehashed diagnostics.
+Re-evaluate after any content, purpose, transformation or authority change.
+
+Empirical admission fails closed with `EMPIRICAL_QUALIFICATION_REQUIRED`, even
+with independently pinned training rights. This request format has no verified
+RES-63 population/provenance/qualification receipt binding, so it cannot establish
+an eligible empirical role. All four locked source IDs are also refused under
+**every** source class, preserving UNIFESP's qualified-but-not-training-authorized
+status and the other three sources' quarantine. This API provides no noncanonical
+empirical exception. A future empirical loader needs an independently reviewed
+qualification binding; a rights grant or source-class change cannot supply it.
+Synthetic positive diagnostics cover text, instructions and engine traces only.
 
 ## Next executable mission
 

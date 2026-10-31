@@ -13,8 +13,12 @@ from pathlib import Path
 from typing import Any
 
 from dynamislm.serialization import canonical_bytes, canonical_hash
+from dynamislm.training_data.source_authority import LOCKED_EMPIRICAL_SOURCE_IDS
 
 TRUST_PATH = "registries/training_authority.json"
+_PRODUCTION_ROOT = Path(__file__).resolve().parents[3]
+# Provisioned with the reviewed code release; Git HEAD or applicant input cannot update it.
+_PRODUCTION_TRUST_SHA256 = "sha256:24ad3b963cfe0243bd779647a9b02d4ea293190ffacdf2e52f42acdee57151df"
 
 
 class Purpose(StrEnum):
@@ -40,6 +44,7 @@ class Code(StrEnum):
     CONTAMINATION = "CONTAMINATION"
     DUPLICATE = "DUPLICATE_IDENTITY"
     SYNTHETIC = "SYNTHETIC_ONLY"
+    QUALIFICATION = "EMPIRICAL_QUALIFICATION_REQUIRED"
 
 
 @dataclass(frozen=True)
@@ -92,7 +97,7 @@ def admit_sources(
     repository_root: Path,
     evaluated_at: datetime,
 ) -> dict[str, Any]:
-    """Reverify all inputs against HEAD on every call; never trust a saved decision.
+    """Historical diagnostics only: caller-selected roots and times confer no rights.
 
     Each tuple contains a typed request, exact content bytes, and exact grant JSON
     bytes. The committed trust store pins grants reviewed outside this boundary.
@@ -227,6 +232,13 @@ def admit_sources(
                 code = Code.CONTENT
             if not source.source_id.strip() or not source.version.strip():
                 code = Code.INVALID
+            # A rights grant cannot establish population, provenance or scientific role.
+            # No qualification-bound empirical loader is implemented in this API.
+            if (
+                source.source_class == SourceClass.EMPIRICAL
+                or source.source_id in LOCKED_EMPIRICAL_SOURCE_IDS
+            ):
+                code = Code.QUALIFICATION
             if (
                 identities.count((source.source_id, source.version)) > 1
                 or contents.count(source.content_sha256) > 1
@@ -258,26 +270,24 @@ def admit_sources(
 
 
 def require_admitted(manifest: dict[str, Any], *, allow_synthetic: bool = False) -> None:
-    """Check a freshly recomputed admission result before handing bytes to a loader."""
-    payload = {k: v for k, v in manifest.items() if k != "manifest_sha256"}
-    if canonical_hash(payload) != manifest.get("manifest_sha256") or not manifest["sources"]:
-        raise PermissionError(Code.INVALID)
-    for row in manifest["sources"]:
-        if row["code"] != Code.ADMITTED or (row["synthetic"] and not allow_synthetic):
-            raise PermissionError(row["code"] if row["code"] != Code.ADMITTED else Code.SYNTHETIC)
+    """Saved or caller-owned diagnostics can never authorize byte release."""
+    raise PermissionError("manifest is diagnostic only; use authorize_training_bytes")
 
 
-def authorize_training_bytes(
-    request: Request,
-    content: bytes,
-    grant: bytes,
-    *,
-    repository_root: Path,
-    evaluated_at: datetime,
-) -> bytes:
-    """Loader boundary: recompute authority; serialized manifests alone confer no rights."""
+def authorize_training_bytes(request: Request, content: bytes, grant: bytes) -> bytes:
+    """Release bytes only after fresh verification against provisioned trust and live time.
+
+    Repository/clock injection belongs in tests (monkeypatch), never in this API.
+    Updating the commitment requires independent review of a new code release.
+    """
     manifest = admit_sources(
-        ((request, content, grant),), repository_root=repository_root, evaluated_at=evaluated_at
+        ((request, content, grant),),
+        repository_root=_PRODUCTION_ROOT,
+        evaluated_at=datetime.now(UTC),
     )
-    require_admitted(manifest)
+    if manifest["trust_sha256"] != _PRODUCTION_TRUST_SHA256:
+        raise PermissionError("unprovisioned training trust registry")
+    row = manifest["sources"][0]
+    if row["code"] != Code.ADMITTED or row["synthetic"]:
+        raise PermissionError(row["code"] if row["code"] != Code.ADMITTED else Code.SYNTHETIC)
     return content
