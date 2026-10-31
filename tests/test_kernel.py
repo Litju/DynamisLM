@@ -623,6 +623,13 @@ def test_no_test_specific_arithmetic_or_science_is_in_generic_public_package() -
         # RES-71 qualification metadata inventories upstream family names but
         # does not add a generic numerical operation to the public kernel.
         and path.relative_to(package_root).parts[0] != "qualification"
+        # RES-402's explicitly scoped developer catalogue names upstream families;
+        # its responses replay registered operations, not generic kernel formulas.
+        and path.relative_to(package_root).as_posix()
+        not in {
+            "training_data/scientific_sft.py",
+            "training_data/synthetic_science.py",
+        }
     )
 
     assert "cmj" not in source.lower()

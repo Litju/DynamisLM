@@ -249,3 +249,114 @@ qualification scope. The repaired tests additionally falsify budget exhaustion,
 permutation invariance, exact matches after exhaustion, token/byte limits,
 Unicode notation, conservative retention of former detections and forged or
 reloaded corpus qualification. All positive authority remains test-only.
+
+## RES-402 scientific SFT constructor and CPU loader
+
+Run the original synthetic development catalogue on CPU:
+
+```sh
+uv run python -m dynamislm.training_data.sft_cpu \
+  --seed 402 --output-root /external/res402-development
+uv run pytest tests/test_res402_sft.py -q
+```
+
+`scientific_sft.generate_development_set(seed)` produces 39 examples, three per
+category: unit conversion, duration-normalized distance, absolute longitudinal
+change, analysis/method selection, descriptive within-athlete dispersion, unit
+mismatch, reliability inadequacy, unbridged source-method comparison, missing
+data, unknown provenance, unsupported causation, contradictory objectives and
+association requests that must not become scalar change. Seeds are integers
+from 0 through 1,000,000; the catalogue has exactly 39 indexed examples with
+canonical digest ordering. All athletes, clubs, sessions, inputs and provenance
+are explicitly fictional/original. No empirical adapter, textbook or protected
+PSE case supplies content. This is a bounded developer-authored constructor,
+not a generic importer or the formal RES-424 frozen dataset.
+
+Versioned registered dataclasses describe tasks, scalar arguments, tool calls,
+tool responses, examples and development sets. `validate_example` reconstructs
+the entire original task from seed/index, calls the engine again and compares
+the complete typed example and conversation. It accepts only this catalogue.
+Rehashing an edited question, objective, unit, operation, response, provenance,
+rights marker or conversation cannot make it valid. The requested analytical
+objective is separate from the requested analysis class and available operation;
+causal/contradictory requests select no numerical operation. Deferred within-
+athlete association retains that requested class and gets an authority refusal.
+
+Numerical results come exclusively from the RES-71 inventory's IMPLEMENTED
+operations, checked against their actual callable paths before invocation:
+
+- `unit-normalization@1.0.0`: `convert_external_load_value`.
+- `duration-normalized-distance@1.0.0`: `duration_normalized_distance`.
+- `longitudinal-absolute-change-v1@1.0.0`: `calculate_absolute_change`.
+- `longitudinal-within-athlete-sample-sd-v1@1.0.0`:
+  `calculate_descriptive_within_athlete_sd`.
+
+All have the existing `dynamislm:registered-operation:` prefix. Longitudinal
+support uses RES-62 source qualification, exact observations, source artifacts,
+football contexts, records and statistical-support builders. Synthetic source
+reuse metadata remains UNKNOWN; scientific source eligibility confers no rights.
+Successful scalar-change analyses also retain their canonical RES-70 analysis
+authorization. Missing evidence, deferred association and inadequate reliability
+use `authorize_analysis`, referencing existing capability identities; these
+checks are authority tools, not invented numerical registered operations.
+
+Each trace retains typed arguments, the full canonical engine response, exact
+input/result digests, operation/version or capability reference, the canonical
+inventory/capability hash and a digest of package implementation files. Package
+identity is captured once per process; restart after code changes. Messages use
+user / assistant tool-call / tool / assistant-final roles, with linked call IDs,
+compact exact argument/result references and values. Full provenance remains in
+the external example. No model-generated number is accepted as ground truth.
+Final language is a deterministic conservative template; arbitrary generated
+interpretations are not validated by this slice.
+
+Fifteen examples have numerical results, thirty have tool-use traces, and twenty-
+four are refusals. Descriptive sample SD is explicitly not random measurement
+error, SEM or reliability. Causal identification, valid reliability design and
+normative/readiness/injury-risk interpretations are unavailable here; no positive
+example for those stronger claims is fabricated. Refusal tests pair these cases
+with supported descriptive requests while preserving their different objectives.
+The unit, provenance, comparability and missing-support boundaries also have
+positive exact-source descriptive counterexamples.
+
+`write_development_artifacts` writes private external content-addressed
+`examples.json` and `receipt.json`, both Serialization V3 envelopes, and verifies
+existing bytes before reuse. The receipt records example/batch/registry/code
+hashes, seed, counts and validation results. `--input` reloads only that exact
+canonical catalogue and checks seed, ordering, duplicates, lineage and full
+science replay. The development loader is capped at 16 MB and batches at 39
+examples. The normal run formats ten batches of four (last batch three), with no
+optimizer, tensor model, GPU or checkpoint. Development inspection has scope
+DEVELOPMENT_ONLY/BATCH_LOCAL_ONLY and training/corpus authorization false.
+
+Development inspection of these original fixtures is distinct from candidate
+training submission. `sft_cpu.process_training_example(example, grant, ...)`
+validates an example, constructs its exact RES-416 Source/Request, and calls
+RES-417 `process_training_inputs`; no training permission is generated. The
+existing 1 MB/text, token/work and overlap bounds still apply. Examples with
+large provenance traces can require manual review; similarly patterned examples
+are not silently deduplicated. Positive admission tests provision grants and
+exclusion commitments only in isolated temporary repositories with monkeypatch.
+Production still has zero grants and zero exclusion commitments. Saved manifests
+cannot release bytes. `load_training_corpus` always crosses the unchanged
+`authorize_sft_corpus_bytes` gate, which rejects even forged/rehashed/reloaded
+corpus-qualified receipts. Development artifacts are not production corpus input.
+
+RES-419's provisional SmolLM3-3B revision remains
+`a07cc9a04f16550a088caea529712d1d335b0ac1`. RES-402 inspected its existing local
+snapshot's tokenizer, configuration, special-token map and actual Jinja chat
+template; exact SHA-256 pins are in `sft_cpu.TOKENIZER_PINS`. No template is
+invented. The default summary reports tokenizer PENDING. Optional
+`--tokenizer-directory /external/exact-snapshot` accepts only those pinned files
+and an already installed Transformers runtime. It uses `local_files_only=True`,
+`trust_remote_code=False` and the actual `apply_chat_template`, with thinking and
+generation-prefix insertion disabled; it rejects sequences beyond the documented
+65,536 native context rather than truncating. No files, packages or weights are
+downloaded. A missing runtime/resource fails explicitly. Fixture tests exercise
+the adapter; they do not establish real tokenizer/model integration.
+
+This slice does not alter Serialization V3, scientific formulas, empirical
+population qualifications, formal PSE V1 decisions or RES-418/420/424 gates. A
+LoRA run still needs independent review/integration, separately granted original
+training material and protected exclusions, trusted corpus assembly/split
+qualification, model/tokenizer run binding and the separately authorized GPU gate.
