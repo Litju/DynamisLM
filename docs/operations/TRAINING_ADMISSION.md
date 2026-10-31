@@ -97,3 +97,95 @@ inputs before construction. Then add a CPU dry-run loader using this admission
 API. A subsequent explicitly gated LoRA experiment may consume those shards with
 the RES-419 selected model/tokenizer once their own license and training gates
 pass. Neither construction nor LoRA is executed in RES-416.
+
+## RES-417 CPU processing
+
+API: `dynamislm.training_data.processing.process_training_inputs(inputs,
+exclusion_bundle=raw_bundle_or_none, output_root=external_path)`. Each input is
+`(Request, exact_content_bytes, exact_grant_bytes)`. The only implemented
+transformation is `("res417-utf8-lines-v1",)`, which the exact RES-416 grant must
+independently authorize. Only strict UTF-8 plain scientific text is supported;
+PDF, HTML extraction and Unicode/whitespace folding are not implemented. CRLF
+and CR become LF. Equations, symbols, numbers, units and all other characters
+remain unchanged. Raw and normalized SHA-256 identities remain distinct.
+
+Run the production CLI:
+
+```sh
+uv run python -m dynamislm.training_data.process_cli /external/request.json \
+  --exclusions /external/exclusions.json --output-root /external/processed
+```
+
+The request is a JSON object with only `inputs`, a nonempty list. Each entry has
+`source` (the RES-416 source object), `purpose`, `transformations`, `partition`,
+`content_path` and `grant_path`. Paths must be outside Git. Use absolute paths;
+relative paths resolve from the working directory. There is no manifest,
+license override, synthetic permission flag, clock or alternate trust option.
+Every call checks live RES-416 admission, including another check immediately
+before artifact publication. Current production grants remain empty.
+
+Exclusions have a separate provisioned commitment in
+`processing._EXCLUSION_COMMITMENTS`; the production set is deliberately empty.
+An independent review must authorize a bundle's exact bytes and complete scope
+before a reviewed code release provisions its digest. Training rights do not
+confer exclusion authority. No applicant-provided digest list confers authority.
+The external bundle has schema `RES417-EXCLUSIONS-1` and `entries`, each with
+`identity`, `role`, `text` and the exact UTF-8 text's `sha256`. Required roles are
+PSE_VALIDATION, PSE_HIDDEN_FINAL, BENCHMARK_ANSWERS, UNAPPROVED_BENCHMARK and
+VALIDATION. The provisioned commitment must represent the complete independently
+reviewed exclusion snapshot, including other partitions. Protected text remains
+external; receipts contain only digests and roles. Missing/untrusted evidence or
+incomplete coverage yields UNQUALIFIED; an invalid trusted bundle is rejected.
+
+Exact-byte and normalized-content duplicates quarantine all affected identities;
+the processor never merges measurements or silently picks an evidence survivor.
+Repeated source/version identities also quarantine even if their text differs.
+Exact protected overlap is CONTAMINATED. Bounded near/partial overlap is
+MANUAL_REVIEW. Screening uses case-sensitive word/punctuation tokens and Python
+3.12 SequenceMatcher with autojunk disabled: ratio >= 0.5 or a shared contiguous
+run >= 8 tokens requires review. Above 4096 tokens any nonexact comparison
+requires review. Batches and exclusion sets are bounded at 256 documents each,
+and each text at 1,000,000 bytes. This is a small CPU processing boundary, not a
+large-corpus indexing engine. These bounds and thresholds are screening policy,
+not scientific equivalence thresholds. Arbitrary semantic paraphrases can evade
+lexical screening; CLEAN means only that these bounded checks passed against
+the provisioned exclusion snapshot, never proof of semantic independence.
+There is no automatic manual-review clearance path.
+
+All statuses other than CLEAN withhold the entire batch's shard. Exit codes are
+0 for CLEAN, 1 for an unqualified/quarantined/review batch, and 2 for rejection.
+Output is an external content-addressed directory containing `receipt.json` and,
+only for CLEAN, `shard.json`. Both use the unchanged Serialization V3 envelope
+(read its `payload`). The directory name is the canonical receipt SHA-256;
+receipts bind source/version/class, purpose, grants, raw/normalized hashes,
+transformation, exclusion bundle, screening parameters, TRAIN partition and
+shard hash. Split isolation is explicitly BOUNDED_SCREEN_PASSED, not a semantic
+or formal PSE qualification. Writes use private staging and directory rename;
+repeated outputs are checked byte-for-byte and never overwritten. Receipts are
+not reusable admission tokens. Callers must keep artifacts external and rerun
+admission before any later use; a receipt does not grandfather expired rights.
+
+Reproduce the synthetic CPU dry run and adversarial checks:
+
+```sh
+uv run pytest tests/test_res417_processing.py -q
+./scripts/ci.sh
+```
+
+Tests provision both trust boundaries only in isolated temporary repositories
+using monkeypatch, with visibly SYNTHETIC content. No production switch enables
+that authority. The CLI is exercised through the same test-provisioned boundary;
+separate checks prove production still denies those grants. Tests cover changed
+bytes, duplicate identities, revoked grants, unsupported transformations,
+validation-partition leakage, exact/normalized/near/partial overlaps, missing
+protected evidence, forged manifests, symlink paths, output tampering and a
+trust change during screening. No real corpus is ingested and no model runs.
+RES-71 development SFT construction remains a separate mission after RES-417
+integration; formal PSE V1 gates and existing datasets remain unchanged.
+
+Each document identity binds its request, grant, normalized bytes and transform.
+This version emits one full-document chunk, with an identity bound to its
+parent document and exact normalized UTF-8 byte span `[0, length)`. No arbitrary
+scientific sentence/equation splitting occurs. Shard rows carry both identities.
+The receipt also pins the processor implementation bytes. Findings and sources
+are canonically sorted, so input enumeration order does not change artifacts.
