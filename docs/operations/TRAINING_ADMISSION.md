@@ -141,16 +141,46 @@ Exact-byte and normalized-content duplicates quarantine all affected identities;
 the processor never merges measurements or silently picks an evidence survivor.
 Repeated source/version identities also quarantine even if their text differs.
 Exact protected overlap is CONTAMINATED. Bounded near/partial overlap is
-MANUAL_REVIEW. Screening uses case-sensitive word/punctuation tokens and Python
-3.12 SequenceMatcher with autojunk disabled: ratio >= 0.5 or a shared contiguous
-run >= 8 tokens requires review. Above 4096 tokens any nonexact comparison
-requires review. Batches and exclusion sets are bounded at 256 documents each,
-and each text at 1,000,000 bytes. This is a small CPU processing boundary, not a
-large-corpus indexing engine. These bounds and thresholds are screening policy,
-not scientific equivalence thresholds. Arbitrary semantic paraphrases can evade
-lexical screening; CLEAN means only that these bounded checks passed against
-the provisioned exclusion snapshot, never proof of semantic independence.
-There is no automatic manual-review clearance path.
+MANUAL_REVIEW. Screening policy `res417-lcs-weighted-cells-v2` uses unchanged
+case-sensitive word/punctuation tokens. One dynamic-programming pass computes
+the longest common subsequence (LCS) and longest contiguous common token run.
+A pair requires review if `4 * LCS >= token_count_a + token_count_b` (equivalent
+to similarity `2 * LCS / (count_a + count_b) >= 0.5`) or a contiguous run has
+at least 8 tokens. Both lengths and the predicate are symmetric. LCS is at
+least the total ordered matches selected by either former SequenceMatcher
+orientation, so a previous positive cannot become negative. This screening
+policy is more conservative; it makes no scientific-equivalence assertion.
+
+Each request has one immutable production limit of **2,000,000 work units**,
+shared by source/source and source/exclusion comparisons. Before a nonexact
+pair runs, it reserves `n * m * (1 + min(max_token_length_a,
+max_token_length_b))` units. The factor conservatively bounds token-character
+equality work per cell plus the constant-size LCS/contiguous-run updates. Each
+cell performs one token equality; there is no recursive or greedy matcher.
+The receipt records the limit, reserved/consumed units, actual DP cell count,
+all comparison attempts, deferred comparisons and budget-exhaustion flag.
+Units never exceed the cap, nor can DP cell updates exceed 2,000,000. Completed
+comparisons consume their full reservation even if overlap is found early.
+Memory for the DP is O(m), at most four rows of 4097 integers.
+
+Source requests are canonically ordered before any comparisons; exclusion
+entries are also canonically ordered. This fixes the schedule and makes both
+results and accounting invariant to input permutations. Any pair exceeding the
+remaining budget returns MANUAL_REVIEW without running the DP, even when the
+budget has room for some later smaller pair. No unchecked pair returns NONE.
+All such results contribute findings and withhold the batch shard. Exact
+normalized SHA-256 identities are still checked even after exhaustion.
+Nonexact comparisons with empty token sequences or over 4096 tokens also
+require manual review. Each document is tokenized once, retaining at most
+4097 tokens; byte scanning/hashing/normalization is linear in the bounded
+source and exclusion bytes. Batches and exclusions each have at most 256
+entries and each text at most 1,000,000 bytes: at most 512 MB of text preparation
+and 98,176 fixed-size digest/pair checks, followed by the shared DP budget.
+These are algorithmic bounds, not a wall-clock timeout claim.
+
+Arbitrary semantic paraphrases can evade lexical screening. CLEAN means only
+that this batch passed these bounded checks against its provisioned exclusion
+snapshot. There is no automatic manual-review clearance path.
 
 All statuses other than CLEAN withhold the entire batch's shard. Exit codes are
 0 for CLEAN, 1 for an unqualified/quarantined/review batch, and 2 for rejection.
@@ -159,8 +189,11 @@ only for CLEAN, `shard.json`. Both use the unchanged Serialization V3 envelope
 (read its `payload`). The directory name is the canonical receipt SHA-256;
 receipts bind source/version/class, purpose, grants, raw/normalized hashes,
 transformation, exclusion bundle, screening parameters, TRAIN partition and
-shard hash. Split isolation is explicitly BOUNDED_SCREEN_PASSED, not a semantic
-or formal PSE qualification. Writes use private staging and directory rename;
+shard hash. Receipt schema is now `RES417-PROCESSING-2`; Serialization V3 is
+unchanged. Every receipt and shard row declares `qualification_scope` as
+`BATCH_LOCAL_ONLY`. The receipt has `corpus_qualification: ASSEMBLY_REQUIRED`
+and always `split_isolation: UNQUALIFIED`, including for batch-local CLEAN.
+The CLI's success status likewise indicates only a completed batch-local run. Writes use private staging and directory rename;
 repeated outputs are checked byte-for-byte and never overwritten. Receipts are
 not reusable admission tokens. Callers must keep artifacts external and rerun
 admission before any later use; a receipt does not grandfather expired rights.
@@ -189,3 +222,30 @@ parent document and exact normalized UTF-8 byte span `[0, length)`. No arbitrary
 scientific sentence/equation splitting occurs. Shard rows carry both identities.
 The receipt also pins the processor implementation bytes. Findings and sources
 are canonically sorted, so input enumeration order does not change artifacts.
+
+### Corpus-consumer boundary
+
+`processing.authorize_sft_corpus_bytes(receipt, shard)` always raises
+`PermissionError(CORPUS_ASSEMBLY_REQUIRED)`. There is no permission flag,
+manifest shortcut or provisioned corpus authority. Edited, rehashed, legacy
+and reloaded receipts cannot confer global corpus approval. Future SFT
+consumers must cross this boundary; reading a development shard directly is
+not corpus qualification. No production SFT loader is introduced here.
+
+Future independently trusted corpus assembly must reconcile **all** source
+identities, raw/normalized-content digests, document/chunk identities,
+partitions and exclusion snapshots across every shard; it must also recheck
+live source rights. Neither batch-local CLEAN nor repeated artifact-byte
+verification performs that reconciliation. Two separately processed identical
+texts with distinct source IDs can therefore produce two development shards,
+but neither is admitted by the corpus-consumer gate. No global index, corpus
+qualification assertion or new training permission is implemented in RES-417.
+
+Targeted review regressions were executed before their repairs: the supplied
+four-token pair failed symmetry; its separately authorized batch permutations
+changed CLEAN/MANUAL_REVIEW; a request with repetitive inputs had no cumulative
+work accounting; two independent identical-content batches lacked batch-local
+qualification scope. The repaired tests additionally falsify budget exhaustion,
+permutation invariance, exact matches after exhaustion, token/byte limits,
+Unicode notation, conservative retention of former detections and forged or
+reloaded corpus qualification. All positive authority remains test-only.

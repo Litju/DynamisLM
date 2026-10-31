@@ -317,13 +317,13 @@ def test_changed_exclusion_evidence(tmp_path: Path, monkeypatch: pytest.MonkeyPa
 def test_publication_rechecks_admission(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     items = provision(tmp_path / "trust", monkeypatch)
     bundle = exclusions(monkeypatch)
-    real_overlap = p._overlap
+    real_overlap = p._screen_pair
 
-    def revoke_during_scan(a: bytes, b: bytes) -> str:
+    def revoke_during_scan(a: p._Text, b: p._Text, work: p._ScreeningWork) -> str:
         monkeypatch.setattr(admission, "_PRODUCTION_TRUST_SHA256", "sha256:" + "0" * 64)
-        return real_overlap(a, b)
+        return real_overlap(a, b, work)
 
-    monkeypatch.setattr(p, "_overlap", revoke_during_scan)
+    monkeypatch.setattr(p, "_screen_pair", revoke_during_scan)
     with pytest.raises(PermissionError, match="unprovisioned"):
         p.process_training_inputs(items, exclusion_bundle=bundle, output_root=tmp_path / "out")
     assert not (tmp_path / "out").exists()
@@ -368,3 +368,244 @@ def test_expired_source_no_shard(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
             ((request, CONTENT, grant),), exclusion_bundle=None, output_root=tmp_path / "out"
         )
     assert not (tmp_path / "out").exists()
+
+
+def test_review_direction_counterexample() -> None:
+    # Independently supplied SYNTHETIC four-token regression.
+    a = b"force velocity impulse power"
+    b = b"impulse velocity power force"
+    assert p._overlap(a, b) == p._overlap(b, a) == "MANUAL_REVIEW"
+
+
+def test_review_authorized_permutations(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    items = provision(
+        tmp_path / "trust",
+        monkeypatch,
+        (b"force velocity impulse power", b"impulse velocity power force"),
+    )
+    bundle = exclusions(monkeypatch)
+    first = p.process_training_inputs(items, exclusion_bundle=bundle, output_root=tmp_path / "out")
+    second = p.process_training_inputs(
+        tuple(reversed(items)), exclusion_bundle=bundle, output_root=tmp_path / "out"
+    )
+    assert first["status"] == second["status"] == "MANUAL_REVIEW"
+    assert first["sources"] == second["sources"]
+    assert canonical_hash(first) == canonical_hash(second)
+    assert not list((tmp_path / "out").rglob("shard.json"))
+
+
+def test_review_cumulative_work_budget(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    items = provision(
+        tmp_path / "trust",
+        monkeypatch,
+        (
+            b"SYNTHETIC force " * 128 + b"alpha",
+            b"SYNTHETIC force " * 128 + b"beta",
+            b"SYNTHETIC short control",
+        ),
+    )
+    bundle = exclusions(monkeypatch)
+    # Test-only policy reduction; the production API offers no budget override.
+    monkeypatch.setattr(p, "MAX_WORK_UNITS", 1000, raising=False)
+    first = p.process_training_inputs(items, exclusion_bundle=bundle, output_root=tmp_path / "out")
+    second = p.process_training_inputs(
+        tuple(reversed(items)), exclusion_bundle=bundle, output_root=tmp_path / "out"
+    )
+    assert first == second
+    assert first["screening"].get("deferred_comparisons", 0) > 0
+    assert first["screening"]["budget_exhausted"]
+    from itertools import permutations
+
+    for ordered in permutations(items):
+        assert first == p.process_training_inputs(
+            ordered, exclusion_bundle=bundle, output_root=tmp_path / "out"
+        )
+    assert 0 < first["screening"]["used_work_units"] <= 1000
+    assert first["screening"]["comparisons"] == 3 + 3 * len(p.REQUIRED_EXCLUSIONS)
+    assert first["status"] != "CLEAN"
+    assert not list((tmp_path / "out").rglob("shard.json"))
+
+
+def test_review_independent_batches_need_corpus_gate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    items = provision(tmp_path / "trust", monkeypatch, (CONTENT, CONTENT))
+    bundle = exclusions(monkeypatch)
+    receipts = [
+        p.process_training_inputs((item,), exclusion_bundle=bundle, output_root=tmp_path / "out")
+        for item in items
+    ]
+    assert all(receipt["status"] == "CLEAN" for receipt in receipts)
+    assert (
+        receipts[0]["sources"][0]["normalized_sha256"]
+        == receipts[1]["sources"][0]["normalized_sha256"]
+    )
+    assert (
+        receipts[0]["sources"][0]["document_sha256"] != receipts[1]["sources"][0]["document_sha256"]
+    )
+    assert len(list((tmp_path / "out").rglob("shard.json"))) == 2
+    for receipt in receipts:
+        assert receipt.get("qualification_scope") == "BATCH_LOCAL_ONLY"
+        assert receipt["split_isolation"] == "UNQUALIFIED"
+        destination = tmp_path / "out" / canonical_hash(receipt).removeprefix("sha256:")
+        shard = (destination / "shard.json").read_bytes()
+        for candidate in (
+            receipt,
+            json.loads((destination / "receipt.json").read_bytes())["payload"],
+        ):
+            with pytest.raises(PermissionError, match="CORPUS_ASSEMBLY_REQUIRED"):
+                p.authorize_sft_corpus_bytes(candidate, shard)
+            candidate["qualification_scope"] = "CORPUS_QUALIFIED"
+            candidate["corpus_qualified"] = True
+            candidate["split_isolation"] = "COMPLETE"
+            candidate["manifest_sha256"] = canonical_hash(candidate)
+            forged = json.loads(json.dumps(candidate))
+            with pytest.raises(PermissionError, match="CORPUS_ASSEMBLY_REQUIRED"):
+                p.authorize_sft_corpus_bytes(forged, shard)
+
+
+@pytest.mark.parametrize(
+    ("a", "b", "expected"),
+    [
+        (b"force velocity impulse power", b"impulse velocity power force", "MANUAL_REVIEW"),
+        (b"SYNTHETIC exact F=ma", b"SYNTHETIC exact F=ma", "EXACT"),
+        (
+            b"one two three four five six seven eight",
+            b"prefix one two three four five six seven eight tail",
+            "MANUAL_REVIEW",
+        ),
+        (b"force " * 80 + b"velocity", b"force " * 80 + b"power", "MANUAL_REVIEW"),
+        (b"a b c d e f g h", b"x y z", "NONE"),
+        (
+            "SYNTHETIC F = m × a; −2.50 m·s⁻²".encode(),  # noqa: RUF001
+            "SYNTHETIC F = m × a; −3.50 m·s⁻²".encode(),  # noqa: RUF001
+            "MANUAL_REVIEW",
+        ),
+    ],
+)
+def test_symmetric_overlap_cases(a: bytes, b: bytes, expected: str) -> None:
+    for _ in range(3):
+        assert p._overlap(a, b) == p._overlap(b, a) == expected
+
+
+def test_bounded_algorithm_retains_former_detections() -> None:
+    from difflib import SequenceMatcher
+    from itertools import product
+
+    # Exhaustively falsify conservatism on a small finite alphabet, in both directions.
+    sequences = list(product(("force", "power"), repeat=4))
+    for a in sequences:
+        for b in sequences:
+            previous = max(
+                SequenceMatcher(None, a, b, autojunk=False).ratio(),
+                SequenceMatcher(None, b, a, autojunk=False).ratio(),
+            )
+            forward = p._overlap(" ".join(a).encode(), " ".join(b).encode())
+            assert forward == p._overlap(" ".join(b).encode(), " ".join(a).encode())
+            if previous >= 0.5:
+                assert forward in {"EXACT", "MANUAL_REVIEW"}
+
+
+def test_precise_work_accounting_and_exact_after_exhaustion(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    work = p._ScreeningWork()
+    a, b = p._text(b"a b"), p._text(b"a c")
+    monkeypatch.setattr(p, "MAX_WORK_UNITS", 8)
+    assert p._screen_pair(a, b, work) == "MANUAL_REVIEW"
+    assert (work.dp_cells, work.used_work_units, work.comparisons) == (4, 8, 1)
+    assert not work.budget_exhausted
+    assert p._screen_pair(a, b, work) == "MANUAL_REVIEW"
+    assert work.budget_exhausted and work.deferred_comparisons == 1
+    assert (work.dp_cells, work.used_work_units) == (4, 8)
+    assert p._screen_pair(a, a, work) == "EXACT"
+    assert (work.dp_cells, work.used_work_units, work.comparisons) == (4, 8, 3)
+
+
+def test_pathological_repetition_is_bounded() -> None:
+    work = p._ScreeningWork()
+    a = p._text(b"force " * (p.MAX_TOKENS - 1) + b"velocity")
+    b = p._text(b"force " * (p.MAX_TOKENS - 1) + b"power")
+    assert p._screen_pair(a, b, work) == "MANUAL_REVIEW"
+    assert work.budget_exhausted
+    assert work.dp_cells == work.used_work_units == 0
+    assert p._screen_pair(b, a, work) == "MANUAL_REVIEW"
+    assert work.deferred_comparisons == 2
+    assert work.dp_cells == work.used_work_units == 0
+
+
+def test_byte_limit_and_token_preparation_bound() -> None:
+    raw = b"x" * p.MAX_BYTES
+    prepared = p._text(raw)
+    work = p._ScreeningWork()
+    assert p._screen_pair(prepared, p._text(raw[:-1] + b"y"), work) == "NONE"
+    assert work.used_work_units == p.MAX_BYTES + 1
+    assert work.dp_cells == 1
+    many = p._text(b"x " * (p.MAX_BYTES // 2))
+    assert len(many.tokens) == p.MAX_TOKENS + 1
+    assert p._screen_pair(many, p._text(b"x"), work) == "MANUAL_REVIEW"
+    assert work.deferred_comparisons == 1
+
+
+def test_exhaustion_still_detects_normalized_duplicates(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    items = provision(tmp_path / "trust", monkeypatch, (b"SYNTHETIC F=ma\r\n", b"SYNTHETIC F=ma\n"))
+    bundle = exclusions(monkeypatch)
+    monkeypatch.setattr(p, "MAX_WORK_UNITS", 0)
+    result = p.process_training_inputs(items, exclusion_bundle=bundle, output_root=tmp_path / "out")
+    assert result["status"] == "QUARANTINED"
+    assert result["screening"]["budget_exhausted"]
+    assert result["screening"]["used_work_units"] == 0
+    assert all(
+        any(f["kind"] == "NORMALIZED_CONTENT" for f in row["findings"]) for row in result["sources"]
+    )
+    assert not list((tmp_path / "out").rglob("shard.json"))
+
+
+def test_corpus_gate_has_no_flag_override() -> None:
+    attack: dict[str, Any] = {"corpus_qualified": True}
+    with pytest.raises(TypeError):
+        p.authorize_sft_corpus_bytes({}, b"SYNTHETIC", **attack)
+    with pytest.raises(PermissionError, match="CORPUS_ASSEMBLY_REQUIRED"):
+        p.authorize_sft_corpus_bytes({"schema": "TRUSTED_CORPUS", "corpus_qualified": True}, b"")
+
+
+def test_batch_shard_explicit_scope(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    items = provision(tmp_path / "trust", monkeypatch)
+    result = p.process_training_inputs(
+        items, exclusion_bundle=exclusions(monkeypatch), output_root=tmp_path / "out"
+    )
+    destination = tmp_path / "out" / canonical_hash(result).removeprefix("sha256:")
+    shard = json.loads((destination / "shard.json").read_bytes())["payload"]
+    assert all(row["qualification_scope"] == "BATCH_LOCAL_ONLY" for row in shard)
+    assert result["corpus_qualification"] == "ASSEMBLY_REQUIRED"
+    assert result["status"] == "CLEAN"
+    assert result["screening"]["deferred_comparisons"] == 0
+
+
+def test_partial_contiguous_overlap_below_ratio_threshold() -> None:
+    shared = "force velocity impulse power acceleration mass time distance"
+    a = (shared + " " + " ".join(f"left{i}" for i in range(20))).encode()
+    b = (shared + " " + " ".join(f"right{i}" for i in range(20))).encode()
+    assert p._overlap(a, b) == p._overlap(b, a) == "MANUAL_REVIEW"
+
+
+def test_dp_accounting_counts_executed_token_equalities() -> None:
+    equalities = 0
+
+    class CountingToken(str):
+        def __eq__(self, other: object) -> bool:
+            nonlocal equalities
+            equalities += 1
+            return str(self) == str(other)
+
+    a = p._Text("synthetic-a", tuple(CountingToken(x) for x in ("a", "b", "c")), 1)
+    b = p._Text("synthetic-b", tuple(CountingToken(x) for x in ("b", "a")), 1)
+    work = p._ScreeningWork()
+    assert p._screen_pair(a, b, work) == "NONE"
+    assert equalities == work.dp_cells == 6
+    assert work.used_work_units == 12
+    work.used_work_units = p.MAX_WORK_UNITS
+    assert p._screen_pair(a, b, work) == "MANUAL_REVIEW"
+    assert equalities == work.dp_cells == 6
