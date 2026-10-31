@@ -97,3 +97,155 @@ inputs before construction. Then add a CPU dry-run loader using this admission
 API. A subsequent explicitly gated LoRA experiment may consume those shards with
 the RES-419 selected model/tokenizer once their own license and training gates
 pass. Neither construction nor LoRA is executed in RES-416.
+
+## RES-417 CPU processing
+
+API: `dynamislm.training_data.processing.process_training_inputs(inputs,
+exclusion_bundle=raw_bundle_or_none, output_root=external_path)`. Each input is
+`(Request, exact_content_bytes, exact_grant_bytes)`. The only implemented
+transformation is `("res417-utf8-lines-v1",)`, which the exact RES-416 grant must
+independently authorize. Only strict UTF-8 plain scientific text is supported;
+PDF, HTML extraction and Unicode/whitespace folding are not implemented. CRLF
+and CR become LF. Equations, symbols, numbers, units and all other characters
+remain unchanged. Raw and normalized SHA-256 identities remain distinct.
+
+Run the production CLI:
+
+```sh
+uv run python -m dynamislm.training_data.process_cli /external/request.json \
+  --exclusions /external/exclusions.json --output-root /external/processed
+```
+
+The request is a JSON object with only `inputs`, a nonempty list. Each entry has
+`source` (the RES-416 source object), `purpose`, `transformations`, `partition`,
+`content_path` and `grant_path`. Paths must be outside Git. Use absolute paths;
+relative paths resolve from the working directory. There is no manifest,
+license override, synthetic permission flag, clock or alternate trust option.
+Every call checks live RES-416 admission, including another check immediately
+before artifact publication. Current production grants remain empty.
+
+Exclusions have a separate provisioned commitment in
+`processing._EXCLUSION_COMMITMENTS`; the production set is deliberately empty.
+An independent review must authorize a bundle's exact bytes and complete scope
+before a reviewed code release provisions its digest. Training rights do not
+confer exclusion authority. No applicant-provided digest list confers authority.
+The external bundle has schema `RES417-EXCLUSIONS-1` and `entries`, each with
+`identity`, `role`, `text` and the exact UTF-8 text's `sha256`. Required roles are
+PSE_VALIDATION, PSE_HIDDEN_FINAL, BENCHMARK_ANSWERS, UNAPPROVED_BENCHMARK and
+VALIDATION. The provisioned commitment must represent the complete independently
+reviewed exclusion snapshot, including other partitions. Protected text remains
+external; receipts contain only digests and roles. Missing/untrusted evidence or
+incomplete coverage yields UNQUALIFIED; an invalid trusted bundle is rejected.
+
+Exact-byte and normalized-content duplicates quarantine all affected identities;
+the processor never merges measurements or silently picks an evidence survivor.
+Repeated source/version identities also quarantine even if their text differs.
+Exact protected overlap is CONTAMINATED. Bounded near/partial overlap is
+MANUAL_REVIEW. Screening policy `res417-lcs-weighted-cells-v2` uses unchanged
+case-sensitive word/punctuation tokens. One dynamic-programming pass computes
+the longest common subsequence (LCS) and longest contiguous common token run.
+A pair requires review if `4 * LCS >= token_count_a + token_count_b` (equivalent
+to similarity `2 * LCS / (count_a + count_b) >= 0.5`) or a contiguous run has
+at least 8 tokens. Both lengths and the predicate are symmetric. LCS is at
+least the total ordered matches selected by either former SequenceMatcher
+orientation, so a previous positive cannot become negative. This screening
+policy is more conservative; it makes no scientific-equivalence assertion.
+
+Each request has one immutable production limit of **2,000,000 work units**,
+shared by source/source and source/exclusion comparisons. Before a nonexact
+pair runs, it reserves `n * m * (1 + min(max_token_length_a,
+max_token_length_b))` units. The factor conservatively bounds token-character
+equality work per cell plus the constant-size LCS/contiguous-run updates. Each
+cell performs one token equality; there is no recursive or greedy matcher.
+The receipt records the limit, reserved/consumed units, actual DP cell count,
+all comparison attempts, deferred comparisons and budget-exhaustion flag.
+Units never exceed the cap, nor can DP cell updates exceed 2,000,000. Completed
+comparisons consume their full reservation even if overlap is found early.
+Memory for the DP is O(m), at most four rows of 4097 integers.
+
+Source requests are canonically ordered before any comparisons; exclusion
+entries are also canonically ordered. This fixes the schedule and makes both
+results and accounting invariant to input permutations. Any pair exceeding the
+remaining budget returns MANUAL_REVIEW without running the DP, even when the
+budget has room for some later smaller pair. No unchecked pair returns NONE.
+All such results contribute findings and withhold the batch shard. Exact
+normalized SHA-256 identities are still checked even after exhaustion.
+Nonexact comparisons with empty token sequences or over 4096 tokens also
+require manual review. Each document is tokenized once, retaining at most
+4097 tokens; byte scanning/hashing/normalization is linear in the bounded
+source and exclusion bytes. Batches and exclusions each have at most 256
+entries and each text at most 1,000,000 bytes: at most 512 MB of text preparation
+and 98,176 fixed-size digest/pair checks, followed by the shared DP budget.
+These are algorithmic bounds, not a wall-clock timeout claim.
+
+Arbitrary semantic paraphrases can evade lexical screening. CLEAN means only
+that this batch passed these bounded checks against its provisioned exclusion
+snapshot. There is no automatic manual-review clearance path.
+
+All statuses other than CLEAN withhold the entire batch's shard. Exit codes are
+0 for CLEAN, 1 for an unqualified/quarantined/review batch, and 2 for rejection.
+Output is an external content-addressed directory containing `receipt.json` and,
+only for CLEAN, `shard.json`. Both use the unchanged Serialization V3 envelope
+(read its `payload`). The directory name is the canonical receipt SHA-256;
+receipts bind source/version/class, purpose, grants, raw/normalized hashes,
+transformation, exclusion bundle, screening parameters, TRAIN partition and
+shard hash. Receipt schema is now `RES417-PROCESSING-2`; Serialization V3 is
+unchanged. Every receipt and shard row declares `qualification_scope` as
+`BATCH_LOCAL_ONLY`. The receipt has `corpus_qualification: ASSEMBLY_REQUIRED`
+and always `split_isolation: UNQUALIFIED`, including for batch-local CLEAN.
+The CLI's success status likewise indicates only a completed batch-local run. Writes use private staging and directory rename;
+repeated outputs are checked byte-for-byte and never overwritten. Receipts are
+not reusable admission tokens. Callers must keep artifacts external and rerun
+admission before any later use; a receipt does not grandfather expired rights.
+
+Reproduce the synthetic CPU dry run and adversarial checks:
+
+```sh
+uv run pytest tests/test_res417_processing.py -q
+./scripts/ci.sh
+```
+
+Tests provision both trust boundaries only in isolated temporary repositories
+using monkeypatch, with visibly SYNTHETIC content. No production switch enables
+that authority. The CLI is exercised through the same test-provisioned boundary;
+separate checks prove production still denies those grants. Tests cover changed
+bytes, duplicate identities, revoked grants, unsupported transformations,
+validation-partition leakage, exact/normalized/near/partial overlaps, missing
+protected evidence, forged manifests, symlink paths, output tampering and a
+trust change during screening. No real corpus is ingested and no model runs.
+RES-71 development SFT construction remains a separate mission after RES-417
+integration; formal PSE V1 gates and existing datasets remain unchanged.
+
+Each document identity binds its request, grant, normalized bytes and transform.
+This version emits one full-document chunk, with an identity bound to its
+parent document and exact normalized UTF-8 byte span `[0, length)`. No arbitrary
+scientific sentence/equation splitting occurs. Shard rows carry both identities.
+The receipt also pins the processor implementation bytes. Findings and sources
+are canonically sorted, so input enumeration order does not change artifacts.
+
+### Corpus-consumer boundary
+
+`processing.authorize_sft_corpus_bytes(receipt, shard)` always raises
+`PermissionError(CORPUS_ASSEMBLY_REQUIRED)`. There is no permission flag,
+manifest shortcut or provisioned corpus authority. Edited, rehashed, legacy
+and reloaded receipts cannot confer global corpus approval. Future SFT
+consumers must cross this boundary; reading a development shard directly is
+not corpus qualification. No production SFT loader is introduced here.
+
+Future independently trusted corpus assembly must reconcile **all** source
+identities, raw/normalized-content digests, document/chunk identities,
+partitions and exclusion snapshots across every shard; it must also recheck
+live source rights. Neither batch-local CLEAN nor repeated artifact-byte
+verification performs that reconciliation. Two separately processed identical
+texts with distinct source IDs can therefore produce two development shards,
+but neither is admitted by the corpus-consumer gate. No global index, corpus
+qualification assertion or new training permission is implemented in RES-417.
+
+Targeted review regressions were executed before their repairs: the supplied
+four-token pair failed symmetry; its separately authorized batch permutations
+changed CLEAN/MANUAL_REVIEW; a request with repetitive inputs had no cumulative
+work accounting; two independent identical-content batches lacked batch-local
+qualification scope. The repaired tests additionally falsify budget exhaustion,
+permutation invariance, exact matches after exhaustion, token/byte limits,
+Unicode notation, conservative retention of former detections and forged or
+reloaded corpus qualification. All positive authority remains test-only.
