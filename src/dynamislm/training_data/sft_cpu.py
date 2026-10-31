@@ -21,6 +21,7 @@ from dynamislm.training_data.processing import (
     sha256,
 )
 from dynamislm.training_data.scientific_sft import (
+    USER_REQUEST_VERSION,
     DevelopmentSet,
     ScientificExample,
     generate_development_set,
@@ -116,7 +117,9 @@ def write_development_artifacts(
     batches = cpu_batches(loaded)
     tokenization = offline_tokenizer_smoke(loaded, tokenizer_directory)
     receipt = {
-        "schema": "RES402-CPU-RECEIPT-1",
+        "schema": "RES402-CPU-RECEIPT-2",
+        "dataset_schema": dataset.schema,
+        "user_request_version": USER_REQUEST_VERSION,
         "scope": "DEVELOPMENT_ONLY",
         "qualification_scope": "BATCH_LOCAL_ONLY",
         "training_authorized": False,

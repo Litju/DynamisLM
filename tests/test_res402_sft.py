@@ -15,6 +15,7 @@ from dynamislm.longitudinal.statistics import (
     StatisticalSupport,
     calculate_absolute_change,
 )
+from dynamislm.measurement.result import ScalarValue
 from dynamislm.serialization import canonical_bytes, canonical_hash, from_canonical_json
 from dynamislm.training_data import scientific_sft as s
 from dynamislm.training_data import sft_cpu as cpu
@@ -204,6 +205,9 @@ def test_external_writer_replay_tamper_and_corpus_gate(
     first = cpu.write_development_artifacts(dataset, tmp_path)
     assert first == cpu.write_development_artifacts(dataset, tmp_path)
     assert first["examples"] == 39 and first["cpu_batches"] == 10
+    assert first["schema"] == "RES402-CPU-RECEIPT-2"
+    assert first["dataset_schema"] == s.SCHEMA
+    assert first["user_request_version"] == s.USER_REQUEST_VERSION
     assert first["scientific_replay"] == "PASS"
     assert first["tokenizer"]["status"] == "PENDING"
     root = tmp_path / first["receipt_sha256"].removeprefix("sha256:")
@@ -432,3 +436,351 @@ def test_constructor_does_not_add_kernel_operations() -> None:
     assert not hasattr(dynamislm, "generate_development_set")
     assert not hasattr(dynamislm, "calculate_metric")
     assert all(not entry.operation_id.startswith("synthetic-res402:") for entry in inventory)
+
+
+@pytest.mark.parametrize(
+    ("name", "intent", "refusal"),
+    [
+        (Category.CAUSAL, "CAUSAL_IDENTIFICATION", "CAUSAL_IDENTIFICATION_UNSUPPORTED"),
+        (Category.CONTRADICTORY, "CONTRADICTORY_COMPOSITE", "CONTRADICTORY_OBJECTIVES"),
+    ],
+)
+def test_review_requested_intent_is_not_descriptive_scalar(
+    name: Category,
+    intent: str,
+    refusal: str,
+) -> None:
+    example = s.construct_example(402, tuple(Category).index(name))
+    assert example.task.requested_analysis_class is None
+    assert getattr(example.task, "requested_intent", None) == intent
+    assert example.call is None
+    assert example.response.refusal_codes == (refusal,)
+    external = json.loads(canonical_bytes(example))["payload"]
+    assert external["task"]["requested_analysis_class"] is None
+    messages = json.loads(example.messages_json)
+    assistant = json.loads(messages[-1]["content"])
+    assert assistant["intent"]["requested_intent"] == intent
+    assert assistant["intent"]["requested_analysis_class"] is None
+    assert assistant["intent"]["authorized_analysis_class"] is None
+    assert assistant["intent"]["selected_operation"] is None
+
+
+def test_review_user_request_has_no_authoring_labels(dataset: s.DevelopmentSet) -> None:
+    for example in dataset.examples:
+        user = json.loads(example.messages_json)[0]["content"]
+        assert "Evidence case:" not in user
+        assert '"category"' not in user
+        assert '"requested_analysis_class"' not in user
+        assert '"requested_intent"' not in user
+        assert '"seed"' not in user and '"index"' not in user
+
+
+def test_review_user_request_is_not_serialized_task(dataset: s.DevelopmentSet) -> None:
+    from dynamislm.serialization import canonical_json
+
+    for example in dataset.examples:
+        user = json.loads(example.messages_json)[0]["content"]
+        assert canonical_json(example.task) not in user
+        assert "SYNTHETIC instruction" not in user
+        assert f"{example.task.seed}-{example.task.index}" not in user
+
+
+def test_user_projection_has_strict_input_allowlist(dataset: s.DevelopmentSet) -> None:
+    hidden = {
+        "category",
+        "seed",
+        "index",
+        "requested_intent",
+        "requested_analysis_class",
+        "authorized_analysis_class",
+        "selected_operation",
+        "operation_id",
+        "refusal_codes",
+        "engine_response",
+        "answer",
+        "expected_result",
+        "example_sha256",
+        "result_sha256",
+        "input_sha256",
+        "registry_sha256",
+        "implementation_sha256",
+        "source_provenance",
+        "rights",
+        "partition",
+        "__type__",
+        "payload",
+        "serialization_version",
+    }
+
+    def check_keys(value: object) -> None:
+        if isinstance(value, dict):
+            assert not hidden.intersection(value)
+            for nested in value.values():
+                check_keys(nested)
+        elif isinstance(value, list):
+            for nested in value:
+                check_keys(nested)
+
+    for example in dataset.examples:
+        user = json.loads(example.messages_json)[0]["content"]
+        visible = json.loads(user)
+        assert set(visible) == {
+            "question",
+            "objective",
+            "football_context",
+            "measurement",
+            "protocol",
+            "observations",
+            "source_documentation",
+            "comparability_evidence",
+            "available_evidence",
+            "missing_evidence",
+        }
+        check_keys(visible)
+        assert user == s.render_user_request(example.task)
+        assert visible["question"] == example.task.question
+        assert visible["objective"] == example.task.objective
+        assert all(f'"{name.value}"' not in user for name in Category)
+        assert all(code not in user for code in example.response.refusal_codes)
+        assert set(visible["football_context"]) == {
+            "population",
+            "athlete",
+            "team",
+            "session",
+            "time",
+        }
+        assert visible["football_context"]["athlete"] == "SYNTHETIC player A"
+        assert len(visible["observations"]) == len(example.task.values)
+        for i, observation in enumerate(visible["observations"]):
+            assert observation["value"] == example.task.values[i]
+            assert observation["unit"] == example.task.measurement_units[i].display_label
+            assert observation["measurement"]
+            assert observation["time"] and observation["role"]
+
+
+def test_hidden_supervision_is_not_a_user_rendering_input(dataset: s.DevelopmentSet) -> None:
+    example = category(dataset, Category.LONGITUDINAL)
+    hidden_changes = replace(
+        example.task,
+        seed=999999,
+        index=38,
+        category=Category.CAUSAL,
+        requested_intent=s.RequestedIntent.CONTRADICTORY_COMPOSITE,
+        requested_analysis_class=None,
+        source_provenance="HIDDEN_PROVENANCE",
+        rights="HIDDEN_TRAINING_FLAG",
+        partition="PSE_HIDDEN_FINAL",
+    )
+    assert s.render_user_request(hidden_changes) == s.render_user_request(example.task)
+    with pytest.raises(ValueError, match="failed replay"):
+        s.validate_example(rehash(replace(example, task=hidden_changes)))
+
+
+def test_visible_observations_reconcile_to_engine_support(dataset: s.DevelopmentSet) -> None:
+    for example in dataset.examples:
+        if example.call is None or example.call.support is None:
+            continue
+        user = json.loads(json.loads(example.messages_json)[0]["content"])
+        entries = example.call.support.included_entries
+        assert len(entries) == len(user["observations"])
+        for entry, visible in zip(entries, user["observations"], strict=True):
+            assert isinstance(entry.observation.result.value, ScalarValue)
+            assert visible["value"] == entry.observation.result.value.value
+            assert entry.observation.result.unit is not None
+            assert visible["unit"] == entry.observation.result.unit.display_label
+            assert visible["time"] == entry.observed_at.isoformat()
+            method = entry.observation.identity.version.processing_method
+            assert method is not None
+            assert (
+                visible["processing_method"]
+                == {"cmj-method": "method A", "unbridged-other-method": "method B"}[
+                    method.identifier.key
+                ]
+            )
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        Category.MISSING_DATA,
+        Category.UNKNOWN_PROVENANCE,
+        Category.CROSS_SOURCE,
+        Category.UNIT_MISMATCH,
+    ],
+)
+def test_refusal_is_supported_by_visible_evidence(
+    dataset: s.DevelopmentSet, name: Category
+) -> None:
+    example = category(dataset, name)
+    user = json.loads(json.loads(example.messages_json)[0]["content"])
+    assert example.response.refusal_codes
+    if name == Category.MISSING_DATA:
+        assert len(user["observations"]) == 1
+        assert user["observations"][0]["role"] == "baseline"
+        assert "follow-up observation is not supplied" in " ".join(user["missing_evidence"])
+    elif name == Category.UNKNOWN_PROVENANCE:
+        assert len(user["observations"]) == 2
+        assert user["protocol"] is None
+        assert all(obs["processing_method"] is None for obs in user["observations"])
+        assert "no documented origin" in user["source_documentation"]
+    elif name == Category.CROSS_SOURCE:
+        assert [obs["processing_method"] for obs in user["observations"]] == [
+            "method A",
+            "method B",
+        ]
+        assert "no calibration or bridge evidence" in user["comparability_evidence"]
+        assert [obs["unit"] for obs in user["observations"]] == ["m", "m"]
+    else:
+        assert [obs["unit"] for obs in user["observations"]] == ["m", "s"]
+        assert len({obs["measurement"] for obs in user["observations"]}) == 1
+    positive = category(dataset, Category.LONGITUDINAL)
+    positive_user = json.loads(json.loads(positive.messages_json)[0]["content"])
+    assert not positive.response.refusal_codes
+    assert [obs["unit"] for obs in positive_user["observations"]] == ["m", "m"]
+    assert [obs["processing_method"] for obs in positive_user["observations"]] == [
+        "method A",
+        "method A",
+    ]
+    assert positive_user["observations"][0]["time"] < positive_user["observations"][1]["time"]
+
+
+def test_unsupported_intents_never_call_a_scalar_operation(monkeypatch: pytest.MonkeyPatch) -> None:
+    def forbidden(*args: Any, **kwargs: Any) -> Any:
+        raise AssertionError("unsupported intent reached numerical/analysis execution")
+
+    monkeypatch.setattr(s, "calculate_absolute_change", forbidden)
+    monkeypatch.setattr(s, "authorize_analysis", forbidden)
+    for index in range(39):
+        task = s.make_task(402, index)
+        if task.category in {Category.CAUSAL, Category.CONTRADICTORY}:
+            example = s.construct_example(402, index)
+            assert example.call is None and example.response.value is None
+            assert task.requested_analysis_class is None
+
+
+def test_supported_intents_and_no_downgrade_are_retained(dataset: s.DevelopmentSet) -> None:
+    positive = category(dataset, Category.LONGITUDINAL)
+    assert positive.task.requested_intent is s.RequestedIntent.RES70_ANALYSIS
+    assert positive.task.requested_analysis_class is AnalysisClass.SCALAR_ABSOLUTE_CHANGE
+    assert (
+        positive.response.analysis_authorization is not None and not positive.response.refusal_codes
+    )
+    intent = json.loads(json.loads(positive.messages_json)[1]["content"])
+    assert (
+        intent["requested_analysis_class"]
+        == intent["authorized_analysis_class"]
+        == "SCALAR_ABSOLUTE_CHANGE"
+    )
+    unsupported = category(dataset, Category.NO_DOWNGRADE)
+    assert unsupported.task.requested_analysis_class is AnalysisClass.WITHIN_ATHLETE_ASSOCIATION
+    assert unsupported.task.requested_intent is s.RequestedIntent.RES70_ANALYSIS
+    assert unsupported.response.refusal_codes == ("COMPUTATION_NOT_REGISTERED",)
+    request = json.loads(json.loads(unsupported.messages_json)[0]["content"])
+    assert "within-athlete association" in request["question"]
+    for name in (Category.CAUSAL, Category.RELIABILITY):
+        visible = json.loads(category(dataset, name).messages_json)[0]["content"]
+        assert "causal" in visible and "reliability" in visible
+
+
+def test_supervision_and_engine_records_stay_external_and_complete(
+    dataset: s.DevelopmentSet,
+) -> None:
+    for example in dataset.examples:
+        assert isinstance(example.task.requested_intent, s.RequestedIntent)
+        external = json.loads(canonical_bytes(example))["payload"]
+        assert external["task"]["category"] == example.task.category.value
+        assert external["task"]["requested_intent"] == example.task.requested_intent.value
+        assert external["response"]["engine_response"] == example.response.engine_response
+        assert external["response"]["refusal_codes"] == list(example.response.refusal_codes)
+        assert example.input_sha256 == canonical_hash((example.task, example.call))
+        assert example.result_sha256 == canonical_hash(example.response)
+        if example.call:
+            tool = json.loads(example.messages_json)[2]
+            assert tool["role"] == "tool" and tool["tool_call_id"] == "science-1"
+            assert json.loads(tool["content"])["payload"]["result_sha256"] == example.result_sha256
+
+
+@pytest.mark.parametrize(
+    "case", ["intent", "analysis_class", "visible_input", "hidden_label", "result"]
+)
+def test_rehashed_v2_supervision_and_message_forgeries_fail(
+    dataset: s.DevelopmentSet, case: str
+) -> None:
+    example = category(
+        dataset, Category.CAUSAL if case in {"intent", "analysis_class"} else Category.LONGITUDINAL
+    )
+    if case == "intent":
+        example = replace(
+            example, task=replace(example.task, requested_intent=s.RequestedIntent.RES70_ANALYSIS)
+        )
+    elif case == "analysis_class":
+        example = replace(
+            example,
+            task=replace(
+                example.task, requested_analysis_class=AnalysisClass.SCALAR_ABSOLUTE_CHANGE
+            ),
+        )
+    elif case == "result":
+        example = replace(example, response=replace(example.response, value=123.0))
+    else:
+        messages = json.loads(example.messages_json)
+        user = json.loads(messages[0]["content"])
+        if case == "visible_input":
+            user["observations"][0]["value"] = 999.0
+        else:
+            user["category"] = example.task.category.value
+        messages[0]["content"] = json.dumps(user)
+        example = replace(example, messages_json=json.dumps(messages))
+    example = rehash(
+        replace(
+            example,
+            input_sha256=canonical_hash((example.task, example.call)),
+            result_sha256=canonical_hash(example.response),
+        )
+    )
+    forged_dataset = replace(
+        dataset,
+        examples=tuple(
+            sorted(
+                (example if e.task.index == example.task.index else e for e in dataset.examples),
+                key=lambda e: e.example_sha256,
+            )
+        ),
+    )
+    with pytest.raises(ValueError):
+        s.validate_example(example)
+    with pytest.raises(ValueError):
+        cpu.load_development_bytes(canonical_bytes(forged_dataset))
+
+
+def test_v2_contract_rejects_legacy_and_untyped_intent(dataset: s.DevelopmentSet) -> None:
+    assert dataset.schema == "RES402-SCIENTIFIC-SFT-2"
+    with pytest.raises(ValueError, match="scope/schema"):
+        cpu.load_development_bytes(
+            canonical_bytes(replace(dataset, schema="RES402-SCIENTIFIC-SFT-1"))
+        )
+    example = dataset.examples[0]
+    untyped: dict[str, Any] = {"requested_intent": example.task.requested_intent.value}
+    with pytest.raises(ValueError, match="typed"):
+        s.validate_example(rehash(replace(example, task=replace(example.task, **untyped))))
+    incomplete: dict[str, Any] = {"observation_contexts": ()}
+    with pytest.raises(ValueError, match="incomplete"):
+        s.render_user_request(replace(example.task, **incomplete))
+
+
+def test_visible_scalar_quantities_reconcile_to_engine_arguments(dataset: s.DevelopmentSet) -> None:
+    for example in dataset.examples:
+        if example.call is None or example.call.scalar is None:
+            continue
+        args = example.call.scalar
+        user = json.loads(json.loads(example.messages_json)[0]["content"])
+        assert user["observations"][0]["value"] == args.value
+        assert user["observations"][0]["unit"] == args.input_unit.display_label
+        if args.duration is not None:
+            assert len(user["observations"]) == 2
+            assert args.duration_unit is not None
+            assert user["observations"][1]["value"] == args.duration
+            assert user["observations"][1]["unit"] == args.duration_unit.display_label
+            assert user["observations"][1]["measurement"] == "Valid session duration"
+        else:
+            assert len(user["observations"]) == 1

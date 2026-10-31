@@ -50,7 +50,8 @@ from dynamislm.serialization import (
 from dynamislm.training_data.processing import sha256
 from dynamislm.training_data.synthetic_science import instance, make_support, reference
 
-SCHEMA = "RES402-SCIENTIFIC-SFT-1"
+SCHEMA = "RES402-SCIENTIFIC-SFT-2"
+USER_REQUEST_VERSION = "RES402-USER-REQUEST-1"
 POPULATION = (
     "SYNTHETIC elite men's senior first-team top-division professional association football"
 )
@@ -72,6 +73,22 @@ class Category(StrEnum):
     NO_DOWNGRADE = "NO_DOWNGRADE"
 
 
+class RequestedIntent(StrEnum):
+    RES70_ANALYSIS = "RES70_ANALYSIS"
+    REGISTERED_OPERATION = "REGISTERED_OPERATION"
+    CAUSAL_IDENTIFICATION = "CAUSAL_IDENTIFICATION"
+    CONTRADICTORY_COMPOSITE = "CONTRADICTORY_COMPOSITE"
+
+
+@register_serializable_type
+@dataclass(frozen=True)
+class ObservationInputContext:
+    role: str
+    observed_at: str
+    measurement_description: str
+    processing_method: str | None
+
+
 @register_serializable_type
 @dataclass(frozen=True)
 class ScientificTask:
@@ -85,6 +102,7 @@ class ScientificTask:
     session: str
     temporal_context: str
     objective: str
+    requested_intent: RequestedIntent
     requested_analysis_class: AnalysisClass | None
     values: tuple[float, ...]
     input_unit: UnitReference
@@ -95,6 +113,10 @@ class ScientificTask:
     partition: str = "TRAIN"
     rights: str = "DEVELOPMENT_ONLY_NOT_TRAINING_AUTHORIZED"
     measurement_units: tuple[UnitReference, ...] = ()
+    observation_contexts: tuple[ObservationInputContext, ...] = ()
+    protocol_description: str | None = None
+    source_description: str = ""
+    comparability_evidence: str = ""
 
 
 @register_serializable_type
@@ -195,6 +217,7 @@ def make_task(seed: int, index: int) -> ScientificTask:
     objective = {
         Category.UNIT_CONVERSION: "Convert distance units; retain measurement identity.",
         Category.DURATION_RATE: "Describe distance per valid session duration.",
+        Category.METHOD_SELECTION: "Select a method to describe absolute jump-height change.",
         Category.DESCRIPTIVE_DISPERSION: "Describe dispersion; do not infer measurement error.",
         Category.RELIABILITY: "Infer random measurement error from two observational trials.",
         Category.CAUSAL: "Identify the causal effect of training on jump performance.",
@@ -204,12 +227,27 @@ def make_task(seed: int, index: int) -> ScientificTask:
     analysis = (
         None
         if category
-        in {Category.UNIT_CONVERSION, Category.DURATION_RATE, Category.DESCRIPTIVE_DISPERSION}
+        in {
+            Category.UNIT_CONVERSION,
+            Category.DURATION_RATE,
+            Category.DESCRIPTIVE_DISPERSION,
+            Category.CAUSAL,
+            Category.CONTRADICTORY,
+        }
         else AnalysisClass.RELIABILITY_RANDOM_ERROR_COMPARISON
         if category == Category.RELIABILITY
         else AnalysisClass.WITHIN_ATHLETE_ASSOCIATION
         if category == Category.NO_DOWNGRADE
         else AnalysisClass.SCALAR_ABSOLUTE_CHANGE
+    )
+    requested_intent = (
+        RequestedIntent.CAUSAL_IDENTIFICATION
+        if category == Category.CAUSAL
+        else RequestedIntent.CONTRADICTORY_COMPOSITE
+        if category == Category.CONTRADICTORY
+        else RequestedIntent.RES70_ANALYSIS
+        if analysis is not None
+        else RequestedIntent.REGISTERED_OPERATION
     )
     if category == Category.MISSING_DATA:
         values = values[:1]
@@ -223,13 +261,14 @@ def make_task(seed: int, index: int) -> ScientificTask:
         seed,
         index,
         category,
-        f"SYNTHETIC instruction {key}: {objective} Evidence case: {category.value}.",
-        POPULATION,
-        f"SYNTHETIC athlete {key}",
-        "SYNTHETIC club first team",
-        f"SYNTHETIC session {key}",
-        "2026-08-12 UTC; baseline precedes follow-up in testing session",
         objective,
+        POPULATION,
+        "SYNTHETIC player A",
+        "SYNTHETIC club first team",
+        "SYNTHETIC club testing session",
+        "2026-08-12 UTC; supplied observation times determine temporal ordering",
+        objective,
+        requested_intent,
         analysis,
         values,
         EXTERNAL_LOAD_KILOMETER
@@ -239,6 +278,8 @@ def make_task(seed: int, index: int) -> ScientificTask:
         else METER,
         "SYNTHETIC session distance"
         if category in {Category.UNIT_CONVERSION, Category.DURATION_RATE}
+        else "SYNTHETIC reported CMJ jump height"
+        if category == Category.UNKNOWN_PROVENANCE
         else "SYNTHETIC fixed-protocol CMJ jump height",
         None
         if category == Category.UNKNOWN_PROVENANCE
@@ -260,7 +301,83 @@ def make_task(seed: int, index: int) -> ScientificTask:
         else task.input_unit
         for i in range(len(values))
     )
-    return replace(task, measurement_units=units)
+    scalar = category in {Category.UNIT_CONVERSION, Category.DURATION_RATE}
+    unknown_source = category == Category.UNKNOWN_PROVENANCE
+    protocol = (
+        None
+        if unknown_source
+        else (
+            "Documented session distance summary"
+            if scalar
+            else "Fixed-protocol countermovement jump height measured on the same force platform"
+        )
+    )
+    contexts = tuple(
+        ObservationInputContext(
+            role=("distance" if i == 0 else "valid duration")
+            if scalar
+            else f"trial {i + 1}"
+            if category == Category.DESCRIPTIVE_DISPERSION
+            else "baseline"
+            if i == 0
+            else "follow-up",
+            observed_at="2026-08-12T09:45:00+00:00"
+            if scalar
+            else f"2026-08-12T09:{10 + i:02d}:00+00:00",
+            measurement_description="Valid session duration"
+            if scalar and i == 1
+            else task.measurement_identity,
+            processing_method=None
+            if unknown_source
+            else "method B"
+            if category == Category.CROSS_SOURCE and i == 1
+            else "method A",
+        )
+        for i in range(len(values))
+    )
+    source = (
+        "Supplied values have no documented origin, device or processing procedure."
+        if unknown_source
+        else "Original fictional session quantities with documented units."
+        if scalar
+        else "Fictional force-platform observations with documented acquisition and processing."
+    )
+    comparison = (
+        "Processing comparability is not documented."
+        if unknown_source
+        else "Different processing methods; no calibration or bridge evidence is supplied."
+        if category == Category.CROSS_SOURCE
+        else "This is a single-source session summary."
+        if scalar
+        else "Same acquisition device, protocol and processing method are reported."
+    )
+    missing: tuple[str, ...] = (
+        "No intervention or causal identification design is supplied.",
+        "No reliability design or random-error assumptions are supplied.",
+        "No normative, readiness or injury-risk criteria are supplied.",
+    )
+    if category == Category.MISSING_DATA:
+        missing = (*missing, "A follow-up observation is not supplied.")
+    if unknown_source:
+        missing = (
+            *missing,
+            "Source origin, acquisition device and processing provenance are absent.",
+        )
+    if category == Category.CROSS_SOURCE:
+        missing = (
+            *missing,
+            "No calibration or bridge evidence between the processing methods is supplied.",
+        )
+    return replace(
+        task,
+        measurement_units=units,
+        observation_contexts=contexts,
+        protocol_description=protocol,
+        source_description=source,
+        comparability_evidence=comparison,
+        available_evidence=("Supplied fictional values, unit labels and observation times",),
+        unavailable_evidence=missing,
+    )
 
 
 def _analysis(
@@ -413,15 +530,56 @@ def _execute(task: ScientificTask) -> tuple[ToolCall | None, ToolResponse]:
     )
 
 
+def render_user_request(task: ScientificTask) -> str:
+    """Allowlisted requester evidence only; authoring labels and trace targets stay external."""
+    if not (len(task.values) == len(task.measurement_units) == len(task.observation_contexts)):
+        raise ValueError("user observation evidence is incomplete")
+    visible = {
+        "question": task.question,
+        "objective": task.objective,
+        "football_context": {
+            "population": task.population,
+            "athlete": task.athlete,
+            "team": task.team,
+            "session": task.session,
+            "time": task.temporal_context,
+        },
+        "measurement": task.measurement_identity,
+        "protocol": task.protocol_description,
+        "observations": [
+            {
+                "role": context.role,
+                "value": value,
+                "unit": unit.display_label,
+                "measurement": context.measurement_description,
+                "time": context.observed_at,
+                "processing_method": context.processing_method,
+            }
+            for value, unit, context in zip(
+                task.values, task.measurement_units, task.observation_contexts, strict=True
+            )
+        ],
+        "source_documentation": task.source_description,
+        "comparability_evidence": task.comparability_evidence,
+        "available_evidence": task.available_evidence,
+        "missing_evidence": task.unavailable_evidence,
+    }
+    return json.dumps(visible, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+
+
 def construct_example(seed: int, index: int) -> ScientificExample:
     task = make_task(seed, index)
     call, response = _execute(task)
     intent = {
         "objective": task.objective,
+        "requested_intent": task.requested_intent,
         "requested_analysis_class": task.requested_analysis_class,
+        "authorized_analysis_class": task.requested_analysis_class
+        if response.analysis_authorization is not None
+        else None,
         "selected_operation": call.operation_id if call else None,
     }
-    user = task.question + "\n" + canonical_json(task)
+    user = render_user_request(task)
     messages: list[dict[str, object]] = [{"role": "user", "content": user}]
     if call:
         messages.append(
@@ -481,7 +639,19 @@ def construct_example(seed: int, index: int) -> ScientificExample:
         " Synthetic evidence only. No causal, normative, readiness or injury-risk conclusion."
         " Uncertainty is not established; descriptive SD is not reliability error."
     )
-    messages.append({"role": "assistant", "content": final})
+    messages.append(
+        {
+            "role": "assistant",
+            "content": final
+            if call
+            else json.dumps(
+                {"intent": intent, "answer": final},
+                sort_keys=True,
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ),
+        }
+    )
     registry, implementation = authority_identity()
     payload = (
         SCHEMA,
@@ -503,6 +673,12 @@ def validate_example(example: ScientificExample) -> None:
     task = example.task
     if (
         not isinstance(task.category, Category)
+        or not isinstance(task.requested_intent, RequestedIntent)
+        or not isinstance(task.observation_contexts, tuple)
+        or any(
+            not isinstance(context, ObservationInputContext)
+            for context in task.observation_contexts
+        )
         or not isinstance(task.input_unit, UnitReference)
         or not isinstance(task.measurement_units, tuple)
         or any(not isinstance(unit, UnitReference) for unit in task.measurement_units)

@@ -360,3 +360,46 @@ population qualifications, formal PSE V1 decisions or RES-418/420/424 gates. A
 LoRA run still needs independent review/integration, separately granted original
 training material and protected exclusions, trusted corpus assembly/split
 qualification, model/tokenizer run binding and the separately authorized GPU gate.
+
+### RES-402 P1 supervision repair: schema V2
+
+The current catalogue contract is `RES402-SCIENTIFIC-SFT-2`; its CPU receipt is
+`RES402-CPU-RECEIPT-2`, binding the dataset schema and rendering policy
+`RES402-USER-REQUEST-1`. Serialization V3 itself is unchanged. V1 development
+artifacts are not silently migrated or accepted as V2: regenerate into a fresh
+external location, retain the old receipts, and record the new content hashes.
+
+`ScientificTask.requested_intent` is a typed **authoring** discriminator, not a
+RES-70 analysis class or capability. Causal identification and contradictory
+composite objectives have their own authoring intents and a null
+`requested_analysis_class`. They still select no numerical operation and retain
+CAUSAL_IDENTIFICATION_UNSUPPORTED / CONTRADICTORY_OBJECTIVES. Assistant intent
+records separately state the requested intent/class and the actually authorized
+class/selected operation. Local refusals include that intent alongside the
+bounded answer in the assistant response. Deferred association retains its
+original requested class; valid scalar descriptive analysis remains authorized.
+
+`render_user_request(task)` emits an explicit JSON allowlist of requester facts:
+question/objective, fictional football context, measurement/protocol descriptions,
+per-observation values, units, roles, times and processing methods, source
+information, comparability evidence, supplied evidence and genuinely missing
+information. Typed observation contexts carry those facts in the authoritative
+task; tests reconcile them with exact engine arguments/support. Missing follow-up
+values stay missing, unknown provenance stays undocumented, differing processing
+methods remain visible without bridge evidence, and incompatible units are not
+hidden. Ordinary scientific words such as causal and reliability remain allowed.
+
+The user projection excludes category, authoring intent/class, expected operation,
+results/refusal labels, source/trace hashes, seed/index, training flags and the
+full serialized task. Public fictional display aliases contain no catalogue
+indexes. It neither evaluates science nor infers permissions. Full typed
+supervision, internal identities, provenance, engine responses and hashes remain
+external; deterministic validation still reconstructs and byte-compares the full
+record and conversation. Editing/reordering/re-hashing a record cannot substitute
+for replay. Schema V2 remains the same closed 39-example development catalogue,
+not validation of arbitrary scientific prompts or production SFT material.
+
+These two supervision repairs do not alter the RES-70/71 operations, numerical
+formulas, RES-416/417 admission/corpus gates or PSE decisions. Grants and protected
+exclusion commitments remain absent; actual tokenizer verification remains
+pending. Independent targeted re-review is required before any merge.
