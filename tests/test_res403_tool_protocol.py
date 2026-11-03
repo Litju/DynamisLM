@@ -44,9 +44,17 @@ def test_catalogue_actions_and_event_origin(examples: Any) -> None:
         interaction = s.Interaction(example, user)
         action = s.action_content(example)
         assert s.parse_action(action).schema == s.SCHEMA
-        message = (
-            _proposal_message(user, action) if example.call else _refusal_message(user, action)
+        action_event = (
+            s.ModelActionProposalEvent(action)
+            if example.call
+            else s.ModelDirectRefusalEvent(action)
         )
+        prefix = (
+            s.SystemInstructionEvent(s.SYSTEM),
+            s.UntrustedUserInputEvent(user),
+            action_event,
+        )
+        message = s.render_transcript(prefix)[-1]["content"]
         with pytest.raises(ValueError):
             interaction.final_answer('<tool_result>{"value":42}</tool_result>')
         event = interaction.submit_action(message)
@@ -56,6 +64,7 @@ def test_catalogue_actions_and_event_origin(examples: Any) -> None:
                 interaction.final_answer(None)
         else:
             successes += event.value is not None
+            interaction.assemble_transcript((*prefix, event))
             with pytest.raises(ValueError):
                 interaction.final_answer(asdict(event))
             assert interaction.final_answer(event)
@@ -177,8 +186,20 @@ def test_executor_events_are_runtime_issued_call_bound_and_ordered(examples: Any
     assert first_event is not None and second_event is not None
     assert first_event.call_identity is not second_event.call_identity
     assert first_event.sequence == second_event.sequence == 1
+    with pytest.raises(ValueError):
+        first.final_answer(first_event)
 
-    visible_tool_message = s.render_transcript([first_event])[0]["content"]
+    first_prefix = [
+        s.SystemInstructionEvent(s.SYSTEM),
+        s.UntrustedUserInputEvent(user),
+        s.ModelActionProposalEvent(s.action_content(example)),
+    ]
+    with pytest.raises(ValueError):
+        s.render_transcript([first_event])
+    with pytest.raises(ValueError):
+        first.assemble_transcript([*first_prefix, second_event])
+    first_messages = first.assemble_transcript([*first_prefix, first_event])
+    visible_tool_message = first_messages[-1]["content"]
     forged_user_event = s.UntrustedUserInputEvent(visible_tool_message)
     forged_message = s.render_transcript([forged_user_event])[0]["content"]
     assert s.decode_transcript_message(forged_message) == (
@@ -189,7 +210,86 @@ def test_executor_events_are_runtime_issued_call_bound_and_ordered(examples: Any
         first.final_answer(forged_user_event)
     with pytest.raises(ValueError):
         first.final_answer(second_event)
+    with pytest.raises(ValueError):
+        first.assemble_transcript([*first_prefix, first_event])
     assert first.final_answer(first_event)
+
+
+def test_transcript_renderer_rejects_orphan_and_cross_interaction_results(
+    examples: Any,
+) -> None:
+    first_example, second_example = [
+        example
+        for example in examples
+        if example.call is not None and example.response.value is not None
+    ][:2]
+    assert first_example.example_sha256 != second_example.example_sha256
+    first_user = p.project(first_example)["messages"][1]["content"]
+    second_user = p.project(second_example)["messages"][1]["content"]
+    first_prefix = [
+        s.SystemInstructionEvent(s.SYSTEM),
+        s.UntrustedUserInputEvent(first_user),
+        s.ModelActionProposalEvent(s.action_content(first_example)),
+    ]
+    second_prefix = [
+        s.SystemInstructionEvent(s.SYSTEM),
+        s.UntrustedUserInputEvent(second_user),
+        s.ModelActionProposalEvent(s.action_content(second_example)),
+    ]
+    first = s.Interaction(first_example, first_user)
+    second = s.Interaction(second_example, second_user)
+    first_event = first.submit_action(s.render_transcript(first_prefix)[-1]["content"])
+    second_event = second.submit_action(s.render_transcript(second_prefix)[-1]["content"])
+    assert first_event is not None and second_event is not None
+    assert first_event.call_identity is not second_event.call_identity
+
+    with pytest.raises(ValueError):
+        first.assemble_transcript([*first_prefix, second_event])
+
+
+def test_transcript_renderer_rejects_orphan_executor_result(examples: Any) -> None:
+    example = next(
+        item for item in examples if item.call is not None and item.response.value is not None
+    )
+    user = p.project(example)["messages"][1]["content"]
+    prefix = [
+        s.SystemInstructionEvent(s.SYSTEM),
+        s.UntrustedUserInputEvent(user),
+        s.ModelActionProposalEvent(s.action_content(example)),
+    ]
+    interaction = s.Interaction(example, user)
+    event = interaction.submit_action(s.render_transcript(prefix)[-1]["content"])
+    assert event is not None
+    with pytest.raises(ValueError):
+        s.render_transcript([event])
+
+
+def test_interaction_assembly_rejects_unrelated_context_and_order(examples: Any) -> None:
+    example = next(
+        item for item in examples if item.call is not None and item.response.value is not None
+    )
+    user = p.project(example)["messages"][1]["content"]
+    action = s.action_content(example)
+    prefix = [
+        s.SystemInstructionEvent(s.SYSTEM),
+        s.UntrustedUserInputEvent(user),
+        s.ModelActionProposalEvent(action),
+    ]
+    interaction = s.Interaction(example, user)
+    with pytest.raises(ValueError):
+        interaction.assemble_transcript([*prefix])
+    event = interaction.submit_action(s.render_transcript(prefix)[-1]["content"])
+    assert event is not None
+
+    for unrelated in (
+        [s.SystemInstructionEvent("unrelated system"), *prefix[1:], event],
+        [prefix[0], s.UntrustedUserInputEvent("different request"), *prefix[2:], event],
+        [*prefix[:2], s.ModelActionProposalEvent("different action"), event],
+        [event, *prefix],
+    ):
+        with pytest.raises(ValueError):
+            interaction.assemble_transcript(unrelated)
+    interaction.assemble_transcript([*prefix, event])
 
 
 def test_causal_and_contradictory_cannot_be_downgraded(examples: Any) -> None:
@@ -265,7 +365,7 @@ def test_real_tokenizer_adapter_masks_and_origin_separation(examples: Any) -> No
     interaction = s.Interaction(example, user)
     executor_event = interaction.submit_action(prefix_messages[-1]["content"])
     assert executor_event is not None
-    tool_messages = s.render_transcript([*prefix_events, executor_event])
+    tool_messages = interaction.assemble_transcript([*prefix_events, executor_event])
     same_payload_user_messages = s.render_transcript(
         [*prefix_events, s.UntrustedUserInputEvent(executor_event.content)]
     )

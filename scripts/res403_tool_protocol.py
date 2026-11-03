@@ -271,9 +271,11 @@ def decode_transcript_message(content: str) -> tuple[str, str]:
 
 
 def render_transcript(events: list[object] | tuple[object, ...]) -> list[dict[str, str]]:
-    """Render immutable application events into strict, origin-specific messages."""
+    """Encode nontrusted transcript events; executor results require an Interaction."""
     if type(events) not in (list, tuple) or not events or len(events) > 64:
         raise ValueError("bounded event sequence required")
+    if any(type(event) is TrustedExecutorResultEvent for event in events):
+        raise ValueError("trusted executor events require interaction-scoped assembly")
     messages = []
     for event in events:
         if type(event) is SystemInstructionEvent:
@@ -293,16 +295,6 @@ def render_transcript(events: list[object] | tuple[object, ...]) -> list[dict[st
             message = {
                 "role": "assistant",
                 "content": _encode_transcript_message("model_direct_refusal", event.content),
-            }
-        elif type(event) is TrustedExecutorResultEvent:
-            if (
-                getattr(event, "_issuer", None) is not _EXECUTOR_EVENT_ISSUER
-                or getattr(event, "sequence", None) != 1
-            ):
-                raise ValueError("executor event was not issued by the trusted runtime")
-            message = {
-                "role": "tool",
-                "content": _encode_transcript_message("trusted_executor_result", event.content),
             }
         elif type(event) is ModelFinalAnswerEvent:
             message = {
@@ -328,6 +320,8 @@ class Interaction:
         self._state = "await_action"
         self._call_identity = object()
         self._event: TrustedExecutorResultEvent | None = None
+        self._accepted_proposal: str | None = None
+        self._transcript_rendered = False
 
     def submit_action(self, content: str) -> TrustedExecutorResultEvent | None:
         if self._state != "await_action":
@@ -366,12 +360,56 @@ class Interaction:
         object.__setattr__(self._event, "call_identity", self._call_identity)
         object.__setattr__(self._event, "sequence", 1)
         object.__setattr__(self._event, "_issuer", _EXECUTOR_EVENT_ISSUER)
+        self._accepted_proposal = proposal
         self._state = "executed"
         return self._event
+
+    def assemble_transcript(
+        self, events: list[object] | tuple[object, ...]
+    ) -> list[dict[str, str]]:
+        """Render this interaction's executor result only in its validated context."""
+        if (
+            self._state != "executed"
+            or self._transcript_rendered
+            or self._event is None
+            or self._accepted_proposal is None
+            or type(events) not in (list, tuple)
+            or len(events) not in {4, 5}
+        ):
+            raise ValueError("executor result is not available for transcript assembly")
+        system, user, action, event = events[:4]
+        if (
+            type(system) is not SystemInstructionEvent
+            or system.content != SYSTEM
+            or type(user) is not UntrustedUserInputEvent
+            or user.content != self._request
+            or type(action) is not ModelActionProposalEvent
+            or action.content != self._accepted_proposal
+            or type(event) is not TrustedExecutorResultEvent
+            or event is not self._event
+            or event.call_identity is not self._call_identity
+            or event.sequence != 1
+            or event._issuer is not _EXECUTOR_EVENT_ISSUER
+            or (len(events) == 5 and type(events[4]) is not ModelFinalAnswerEvent)
+        ):
+            raise ValueError("executor event context, identity, or ordering is invalid")
+
+        messages = render_transcript(events[:3])
+        messages.append(
+            {
+                "role": "tool",
+                "content": _encode_transcript_message("trusted_executor_result", event.content),
+            }
+        )
+        if len(events) == 5:
+            messages.extend(render_transcript([events[4]]))
+        self._transcript_rendered = True
+        return messages
 
     def final_answer(self, event: object) -> str:
         if (
             self._state != "executed"
+            or not self._transcript_rendered
             or type(event) is not TrustedExecutorResultEvent
             or event is not self._event
             or event.call_identity is not self._call_identity
@@ -404,7 +442,7 @@ def _origin_separation_evidence(tokenizer: Any, example: ScientificExample) -> d
     if event is None:
         raise ValueError("registered calculation did not issue an executor result")
 
-    trusted_messages = render_transcript((*prefix_events, event))
+    trusted_messages = interaction.assemble_transcript((*prefix_events, event))
     user_messages = render_transcript((*prefix_events, UntrustedUserInputEvent(event.content)))
     if (
         trusted_messages[:-1] != user_messages[:-1]
@@ -497,8 +535,12 @@ def qualification(tokenizer: Any) -> dict[str, Any]:
         interaction = Interaction(example, user)
         event = interaction.submit_action(prefix_messages[-1]["content"])
         if event is not None:
-            answer = interaction.final_answer(event)
-            messages = render_transcript((*prefix, event, ModelFinalAnswerEvent(answer)))
+            answer = json.loads(example.messages_json)[-1]["content"]
+            messages = interaction.assemble_transcript(
+                (*prefix, event, ModelFinalAnswerEvent(answer))
+            )
+            if interaction.final_answer(event) != answer:
+                raise ValueError("interaction final answer diverged from the authorized target")
         else:
             messages = prefix_messages
         first = projection.token_labels(tokenizer, messages)

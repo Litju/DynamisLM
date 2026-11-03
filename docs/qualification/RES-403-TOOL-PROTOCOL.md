@@ -1,10 +1,11 @@
 # RES-403 — trusted transcript adapter qualification
 
-Disposition: **READY_FOR_INDEPENDENT_ORIGIN_ADAPTER_REVIEW**. This CPU-only
+Disposition: **READY_FOR_INDEPENDENT_TARGETED_ORIGIN_RE_REVIEW**. This CPU-only
 qualification covers a closed synthetic catalogue, application-controlled event
-origin, model-visible encoding with the pinned tokenizer, and deterministic token
-masks. It does not qualify model behavior, prompt-injection resistance, a generic
-science agent, production security, training, or RES-427.
+origin, interaction-scoped transcript assembly, model-visible encoding with the
+pinned tokenizer, and deterministic token masks. It does not qualify model
+behavior, prompt-injection resistance, a generic science agent, production
+security, training, or RES-427.
 
 ## Mission and preserved authority
 
@@ -32,31 +33,39 @@ Its original artifact remains
 
 `RES403-MODEL-TRANSCRIPT-1` uses frozen, explicit event types for system
 instructions, untrusted user input, model action proposals, direct model
-refusals, trusted executor results, and model final answers. The renderer maps
-them to deterministic chat messages. System instructions remain in the system
+refusals, trusted executor results, and model final answers. Pure
+`render_transcript()` deterministically encodes nontrusted events and rejects
+every trusted executor-result event. System instructions remain in the system
 role with their leading SmolLM3 controls intact. Other payloads use canonical,
 compact ASCII JSON envelopes with distinct origin values; `<` and `>` are escaped
 before template rendering. Payload decoding rejects malformed, duplicate-field,
 unknown-schema, oversized, and noncanonical envelopes and round-trips the exact
 original Unicode code points without normalization.
 
-The pinned template still maps a native `tool` role to a user turn. The adapter
-therefore renders an executor result as a `tool` message with an
-`origin=trusted_executor_result` envelope, while ordinary user content receives
-an `origin=untrusted_user_input` envelope. Copying the complete visible executor
-envelope into a user message nests it as escaped user payload and keeps the event
-untrusted. Origin strings are serialization labels only; neither the renderer nor
-the parser treats a marker or model output as executor authorization.
+The pinned template still maps a native `tool` role to a user turn. Only
+`Interaction.assemble_transcript()` can therefore serialize a trusted executor
+result as a `tool` message with an `origin=trusted_executor_result` envelope;
+ordinary user content receives an `origin=untrusted_user_input` envelope. Copying
+the complete visible executor envelope into a user message nests it as escaped
+user payload and keeps the event untrusted. Origin strings are serialization
+labels only; neither renderer treats a marker or model output as executor
+authorization.
 
 Only `Interaction` creates a `TrustedExecutorResultEvent`, after the existing
 closed-catalogue proposal match and deterministic replay. Its public constructor
 rejects calls. The runtime retains the event object, per-interaction call
-identity, sequence, and issuer outside the language-model transcript. The final
-answer stage requires that same event object, call identity, and order. No public
-API accepts a user-selected trust flag or converts user text into an executor
-event. This is an application API boundary, not a sandbox against arbitrary code
-running inside the Python process. No cryptographic key or authentication secret
-is included in prompts.
+identity, sequence, and issuer outside the language-model transcript.
+`Interaction.assemble_transcript()` accepts a trusted result only while that
+interaction is in the executed state and only once. It verifies the exact system
+instructions, bound request, accepted action proposal, event object identity, call
+identity, sequence, and event position before encoding the result. Optional final
+answer content must follow that result. `final_answer()` requires the same event
+object after successful assembly and rejects later reuse. Orphan events,
+cross-interaction events, unrelated context, out-of-order events, and reused
+events fail closed. No public API accepts a user-selected trust flag or converts
+user text into an executor event. This is an application API boundary, not a
+sandbox against arbitrary code running inside the Python process. No
+cryptographic key or authentication secret is included in prompts.
 
 `Interaction.submit_action` decodes only a model action/refusal envelope, checks
 that its event kind matches the parsed action, then reuses the existing strict
@@ -82,7 +91,7 @@ The isolated offline runtime remained `transformers==4.57.1`,
 `tokenizers==0.22.1`, and `jinja2==3.1.6`; the unchanged runtime-lock SHA-256 is
 `d7c88297482aac7e768a6ddb3be0b1399ecce8aaa5ebbf1f754f97b93f0a7242`.
 
-The new paired proof uses the same executor payload and byte-identical preceding
+The interaction-scoped paired proof uses the same executor payload and byte-identical preceding
 messages. Under the actual Jinja template, the genuine executor event and the
 same-payload user event produce different visible messages and different token
 sequences; the preceding token prefix is identical. Their token lengths in the
@@ -113,8 +122,10 @@ Tests cover special-token and XML injection, JSON escaping, exact NFC/NFD
 preservation, nested payloads, delimiter collisions, malformed JSON, duplicate
 fields, noncanonical envelopes, the 8,192-byte boundary, literal copying of the
 full visible executor envelope, direct raw-action submission, unissued event
-construction, cross-call event substitution, replay, and out-of-order final
-answers. Existing scientific adversarial replay rejects each of these 39 times:
+construction, two distinct legitimate scientific interactions with cross-call
+result substitution, orphan result rendering, unrelated preceding system/request/
+action context, out-of-order assembly, repeated assembly, replay, and final-answer
+attempts before assembly. Existing scientific adversarial replay rejects each of these 39 times:
 incorrect operation, wrong observation, wrong unit, objective downgrade, method
 mutation, missing evidence, unsupported comparison, and model-supplied number or
 hash. Three forged/rehashed/replayed corpus receipts remain denied. Causal and
@@ -129,13 +140,13 @@ against these origin labels.
 Two independent offline invocations produced byte-identical content-addressed
 artifact bytes:
 
-- Artifact: `/home/litju/artifacts/res403/d268e3cf022f4f17752a0734506ab9c8a570dfff20af36db41954b97a51966cb.json`
-- SHA-256: `d268e3cf022f4f17752a0734506ab9c8a570dfff20af36db41954b97a51966cb`
-- Both run-log output SHA-256 values: `d9e301a2c0067e9717a543a539ffbd3b8511858c976f74295ec31af3418e7c7e`
-- Adapter implementation SHA-256: `2a454d3443110ac01da1758ccfd2a0ffbadf80cdd77c99ae23bf0b008d0c30bf`
+- Artifact: `/home/litju/artifacts/res403/ae79363e73a599cbc1d4b9efcfd808ef130deb908a9c6b97dd1afcaadd33bb76.json`
+- SHA-256: `ae79363e73a599cbc1d4b9efcfd808ef130deb908a9c6b97dd1afcaadd33bb76`
+- Both run-log output SHA-256 values: `d73e1123197e0095a50af54094f1e5f9b22c31ca9d3f0d49fdeccab1a220c8cf`
+- Adapter implementation SHA-256: `f8de73f004e647ec2fead275abd0a3eba95fedcdb5a236457573c618caf1e669`
 
 The artifact is outside Git, synthetic, development-only, and not a training
 corpus. No model weights, inference, optimizer, SFT, LoRA, CPT, RLVR, GPU,
 empirical athlete data, or protected PSE data were used. The result is ready for
-independent origin-adapter review; exact-head hosted CI remains independent merge
-evidence, and this PR remains draft and unmerged.
+independent targeted origin-adapter re-review; exact-head hosted CI remains
+independent merge evidence, and this PR remains draft and unmerged.
