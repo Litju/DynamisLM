@@ -641,7 +641,12 @@ def verify_run(
     a01_report, a01_hashes = _a01_baseline(protocol)
     binding = control.get("binding", {})
     owner_phrase = a02_execution._confirmation(control.get("preflight", {}), binding)
-    attempt_marker_path = _under_e(a02_execution.ATTEMPT_MARKER)
+    attempt = binding.get("attempt", 1)
+    if attempt not in (1, 2):
+        raise ValueError("unsupported attempt")
+    attempt_marker_path = _under_e(
+        a02_execution.ATTEMPT_MARKER if attempt == 1 else a02_execution.REPLACEMENT_MARKER
+    )
     attempt_marker_bytes = attempt_marker_path.read_bytes()
     attempt_marker = json.loads(attempt_marker_bytes)
     if (
@@ -664,6 +669,21 @@ def verify_run(
         or control.get("preflight", {}).get("host_model_weights") != "NOT_PRESENT_IN_CHECKED_CACHE"
     ):
         raise ValueError("interactive owner, T4, or E: preflight binding is incomplete")
+    if attempt == 2:
+        authorization_path = _under_e(control_path.parent / "authorization.json")
+        authorization_bytes = authorization_path.read_bytes()
+        authorization = json.loads(authorization_bytes)
+        if (
+            attempt_marker.get("attempt") != 2
+            or attempt_marker.get("authorization_sha256") != sha256(authorization_bytes)
+            or authorization.get("schema") != "RES541_A02_AUTHORIZATION_V1"
+            or authorization.get("attempt") != 2
+            or authorization.get("binding") != binding
+            or authorization.get("owner_confirmation") != owner_phrase
+            or binding.get("recovery") != a02_execution._check_attempt(2, allow_used=True)
+            or attempt_marker.get("recovery") != binding.get("recovery")
+        ):
+            raise ValueError("replacement authorization or original evidence binding is invalid")
     run_preflight_path = _under_e(Path(control["preflight_path"]))
     if sha256(run_preflight_path.read_bytes()) != control.get("binding", {}).get(
         "preflight_sha256"

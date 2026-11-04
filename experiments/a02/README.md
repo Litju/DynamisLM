@@ -12,7 +12,7 @@ Every case receives two model generations: a typed action, then a short explanat
 
 The science engine runs under Python 3.12.13. The model runs under the reviewed Python 3.13/T4 compatibility profile with pinned Transformers and tokenizer packages. `huggingface-hub==0.33.4` receives an explicit asset allowlist; weights are fetched only to the ephemeral Colab VM. `trust_remote_code=False` remains on tokenizer/model loading. The WSL runner strips `PYTHONPATH` and `PYTHONHOME` from every Colab CLI subprocess to keep the A0.1 tokenizer `filelock==3.18.0` environment from conflicting with CLI state.
 
-After T4 allocation, the WSL runner uses `colab drivemount`. Before any Colab Drive write, it checks that the mounted folder contains a unique marker uploaded by the connected Drive owner, then performs a bounded write/read/delete probe. It finds the mount point at runtime and creates an exclusive run directory named from the protocol and case hashes. Partial report checkpoints are best-effort and bounded; `/content/a02-report.json` remains authoritative if Drive writes fail. The complete report is downloaded to E:, replayed and scored on CPU, then the final evidence package is synchronized to the same Drive run directory and checked by SHA-256. The sanitized Colab log omits code, outputs, paths, and credential-like fields.
+The runner does not mount Drive in the GPU session. It downloads the report to E:, stops the exact allocated session, verifies the provider reports zero active sessions, and then scores on CPU. A separate connected Google Drive workflow synchronizes the verified evidence package to the owner-only folder and reads each file back to check SHA-256. Drive failure does not trigger another allocation or change the scientific result. The sanitized Colab log omits code, outputs, paths, and credential-like fields.
 
 Final-answer handling is measured only for this fixed synthetic development transcript. It does not qualify arbitrary RES-403 transcript origin or tool-result authenticity beyond these cases.
 
@@ -27,10 +27,10 @@ PYTHONPATH=/mnt/e/DynamisLM-A0/a01/tokenizer-venv/lib/python3.12/site-packages:s
   HF_HOME=/mnt/e/DynamisLM-A0/cache/huggingface \
   USE_TORCH=0 USE_TF=0 USE_FLAX=0 TRANSFORMERS_OFFLINE=1 HF_HUB_OFFLINE=1 \
   .venv/bin/python -m scripts.a02_preflight
-.venv/bin/python -m scripts.a02_execution preflight
-.venv/bin/python -m scripts.a02_execution run
+.venv/bin/python -m scripts.a02_execution preflight --attempt 2
+.venv/bin/python -m scripts.a02_execution run --attempt 2
 ```
 
-`run` displays the exact source revision, protocol/case/prompt hashes, current Colab balance, one-session T4 limit, 900-second cap, and no-retry/no-upgrade policy. It proceeds only after the owner types the displayed phrase in the interactive WSL terminal. It downloads the small report and Drive receipt to E:, exports a sanitized CLI log, stops the session even on failure, verifies zero active sessions, and runs `scripts.a02_score` on WSL CPU. It never downloads model weights to the host.
+`run --attempt 2` displays the exact source revision, protocol/case/prompt hashes, incident inventory, current Colab balance, one-session T4 limit, 900-second cap, and no-retry/no-upgrade policy. It proceeds only after the owner types the displayed phrase in an interactive WSL terminal. The controller preserves the original `one-attempt-used.json` and forensic inventory, writes an exclusive replacement authorization and `attempt-002-used.json`, and starts a separate bounded watchdog before allocating. The watchdog attempts to stop only this session if the controller dies or its deadline expires. A stop is considered verified only when the provider session listing independently confirms zero active sessions. No third attempt is authorized.
 
-The first confirmed allocation attempt creates `one-attempt-used.json` on E:. Every later preflight refuses to launch another GPU attempt, including after an unsuccessful allocation.
+After CPU scoring, use the connected Google Drive file workflow to upload the small evidence package to the existing owner-only folder. Read each uploaded file back and compare its SHA-256 with `artifact-hashes.json`, recording the file IDs and verification results in a separate local receipt. A Drive failure leaves the E: evidence and scientific result intact; it does not authorize another GPU allocation.

@@ -708,3 +708,225 @@ def test_colab_preflight_blocks_a_second_gpu_allocation_attempt(
     monkeypatch.setattr(a02_execution, "ATTEMPT_MARKER", marker)
     with pytest.raises(a02_execution.RunError, match="single A0.2 GPU allocation attempt"):
         a02_execution.preflight()
+
+
+def test_cleanup_restores_signal_handlers_after_failure() -> None:
+    import signal
+
+    previous_int = signal.getsignal(signal.SIGINT)
+    previous_term = signal.getsignal(signal.SIGTERM)
+    with pytest.raises(RuntimeError, match="receipt failure"):
+        with a02_execution._cleanup_signals(previous_term):
+            assert signal.getsignal(signal.SIGINT) == signal.SIG_IGN
+            assert signal.getsignal(signal.SIGTERM) == signal.SIG_IGN
+            raise RuntimeError("receipt failure")
+    assert signal.getsignal(signal.SIGINT) == previous_int
+    assert signal.getsignal(signal.SIGTERM) == previous_term
+
+
+def test_replacement_inventory_and_attempt_limit(tmp_path: Path, monkeypatch: Any) -> None:
+    report = tmp_path / "a02"
+    report.mkdir()
+    marker = report / "one-attempt-used.json"
+    marker.write_text(json.dumps({"run_id": "res541-a02-219a94c0d64e3af6c0cce654"}))
+    evidence = report / "evidence"
+    evidence.write_bytes(b"original evidence")
+    inventory = report / "recovery.json"
+    inventory.write_text(
+        json.dumps(
+            {
+                "files": {
+                    "one-attempt-used.json": hashlib.sha256(marker.read_bytes()).hexdigest(),
+                    "evidence": hashlib.sha256(evidence.read_bytes()).hexdigest(),
+                }
+            }
+        )
+    )
+    monkeypatch.setattr(a02_execution, "REPORT_DIR", report)
+    monkeypatch.setattr(a02_execution, "ATTEMPT_MARKER", marker)
+    monkeypatch.setattr(a02_execution, "REPLACEMENT_MARKER", report / "attempt-002-used.json")
+    monkeypatch.setattr(a02_execution, "RECOVERY_INVENTORY", inventory)
+    monkeypatch.setattr(
+        a02_execution,
+        "RECOVERY_INVENTORY_SHA256",
+        hashlib.sha256(inventory.read_bytes()).hexdigest(),
+    )
+    before = (marker.read_bytes(), evidence.read_bytes(), inventory.read_bytes())
+    assert (
+        a02_execution._check_attempt(2)["original_marker_sha256"]
+        == hashlib.sha256(before[0]).hexdigest()
+    )
+    with pytest.raises(a02_execution.RunError, match="only the separately authorized"):
+        a02_execution._check_attempt(3)
+    (report / "attempt-002-used.json").write_text("used")
+    with pytest.raises(a02_execution.RunError, match="already been used"):
+        a02_execution._check_attempt(2)
+    assert before == (marker.read_bytes(), evidence.read_bytes(), inventory.read_bytes())
+    evidence.write_bytes(b"tampered")
+    with pytest.raises(a02_execution.RunError, match="original evidence changed"):
+        a02_execution._check_attempt(2, allow_used=True)
+
+
+def test_attempt_identity_includes_attempt_and_source() -> None:
+    protocol = json.loads(a02_experiment.PROTOCOL_PATH.read_text())
+    first = a02_execution._run_id(protocol, "protocol", 1, "source")
+    assert first != a02_execution._run_id(protocol, "protocol", 2, "source")
+    assert first != a02_execution._run_id(protocol, "protocol", 1, "other")
+    assert first != a02_execution._run_id(protocol, "other", 1, "source")
+
+
+@pytest.mark.parametrize(
+    ("fault", "expected"),
+    [
+        ("interrupt_exec", "REMOTE_INFERENCE_INCOMPLETE"),
+        ("interrupt_download", None),
+        ("lost_connection", "REMOTE_INFERENCE_INCOMPLETE"),
+        ("download_timeout", "REMOTE_REPORT_NOT_RECOVERED"),
+        ("stop_failure", "SESSION_STOP_NOT_CONFIRMED"),
+        ("unknown_sessions", "ZERO_ACTIVE_SESSIONS_NOT_VERIFIED"),
+        ("drive_unavailable", None),
+    ],
+)
+def test_replacement_cleanup_faults(
+    tmp_path: Path, monkeypatch: Any, fault: str, expected: str | None
+) -> None:
+    import io
+    import os
+    import select
+    import signal
+    import subprocess
+    import sys
+
+    root = tmp_path / "a02"
+    root.mkdir()
+    original = root / "one-attempt-used.json"
+    original.write_text("original marker")
+    original_hash = hashlib.sha256(original.read_bytes()).hexdigest()
+    marker = root / "attempt-002-used.json"
+    doc = {
+        "attempt": 2,
+        "recovery": {"recovery_inventory_sha256": "inventory"},
+        "source_revision": "a" * 40,
+        "source_tree": "b" * 40,
+        "compute_unit_balance": 10.0,
+        "drive_account_matches_colab": True,
+        "drive_write_allowed": True,
+        "drive_owner_email": "owner@example.com",
+        "drive_probe_sha256": "probe",
+    }
+    monkeypatch.setattr(a02_execution, "REPORT_DIR", root)
+    monkeypatch.setattr(a02_execution, "E_ROOT", tmp_path)
+    monkeypatch.setattr(a02_execution, "ATTEMPT_MARKER", original)
+    monkeypatch.setattr(a02_execution, "REPLACEMENT_MARKER", marker)
+    monkeypatch.setattr(a02_execution, "preflight", lambda attempt: doc)
+    monkeypatch.setattr(a02_execution, "_copy_frozen_inputs", lambda path: [])
+    monkeypatch.setattr(a02_execution, "_archive_source", lambda path: path.write_bytes(b"source"))
+    monkeypatch.setattr(a02_execution, "_confirmation", lambda d, b: "owner approval")
+    monkeypatch.setattr("builtins.input", lambda prompt: "owner approval")
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
+    monkeypatch.setattr(sys.stdout, "isatty", lambda: True)
+    calls: list[str] = []
+
+    class Watchdog:
+        pid = 123
+        stdin = io.StringIO()
+        stdout = io.StringIO("READY\n")
+
+    monkeypatch.setattr(subprocess, "Popen", lambda *a, **kw: Watchdog())
+    monkeypatch.setattr(select, "select", lambda *a: ([Watchdog.stdout], [], []))
+
+    def provider(command: list[str], *, timeout: int, capture: bool = True) -> Any:
+        action = command[2]
+        calls.append(action)
+        if action == "exec" and fault == "interrupt_exec":
+            raise KeyboardInterrupt()
+        if action == "exec" and fault == "lost_connection":
+            raise a02_execution.RunError("CLI connection lost")
+        if action == "download" and fault == "download_timeout":
+            raise a02_execution.RunError("timeout")
+        if action == "download":
+            if fault == "interrupt_download":
+                os.kill(os.getpid(), signal.SIGINT)
+                os.kill(os.getpid(), signal.SIGINT)
+            Path(command[-1]).write_text(json.dumps({"status": "COMPLETE", "cases": []}))
+        output = ""
+        if action == "status":
+            output = "GPU T4"
+        if action == "sessions":
+            output = (
+                "unknown"
+                if fault == "unknown_sessions"
+                else "[colab] No active sessions found on server."
+            )
+        if action == "usage":
+            output = "Current balance: 9.00 compute units"
+        return subprocess.CompletedProcess(
+            command, 1 if action == "stop" and fault == "stop_failure" else 0, output, ""
+        )
+
+    def score(command: list[str], **kwargs: Any) -> Any:
+        output = Path(command[command.index("--output-dir") + 1])
+        (output / "verified.json").write_text(
+            json.dumps({"schema": "RES541_A02_VERIFIED_REPORT_V1", "terminal_outcome": "PASS"})
+        )
+        (output / "scientific-report.md").write_text("synthetic")
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(a02_execution, "_run", provider)
+    monkeypatch.setattr(subprocess, "run", score)
+    old_int = signal.getsignal(signal.SIGINT)
+    old_term = signal.getsignal(signal.SIGTERM)
+    result = a02_execution.run(2)
+    assert result == (1 if expected else 0)
+    run_dir = next(path for path in root.iterdir() if path.is_dir())
+    control = json.loads((run_dir / "control.json").read_text())
+    if expected:
+        assert control["external_blocker"] == expected
+    assert marker.exists()
+    assert json.loads(marker.read_text())["attempt"] == 2
+    assert (run_dir / "authorization.json").exists()
+    assert hashlib.sha256(original.read_bytes()).hexdigest() == original_hash
+    assert calls.count("new") == 1
+    assert "drivemount" not in calls
+    assert calls.index("stop") < calls.index("sessions")
+    assert signal.getsignal(signal.SIGINT) == old_int
+    assert signal.getsignal(signal.SIGTERM) == old_term
+
+
+def test_watchdog_stops_only_exact_session_after_controller_disconnect(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    import os
+    import subprocess
+    import sys
+
+    command_log = tmp_path / "commands"
+    executable = tmp_path / "colab"
+    executable.write_text(
+        '#!/bin/sh\nprintf "%s\\n" "$*" >> "$A02_TEST_COMMAND_LOG"\n'
+        'if [ "$2" = sessions ]; then echo "[colab] No active sessions found on server."; fi\n'
+    )
+    executable.chmod(0o755)
+    monkeypatch.setenv("PATH", str(tmp_path) + os.pathsep + os.environ["PATH"])
+    monkeypatch.setenv("A02_TEST_COMMAND_LOG", str(command_log))
+    receipt = tmp_path / "watchdog.json"
+    process = subprocess.Popen(
+        [sys.executable, "-m", "scripts.a02_execution", "watchdog", "exact-session", str(receipt)],
+        cwd=ROOT,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        text=True,
+    )
+    assert process.stdout is not None
+    assert process.stdin is not None
+    assert process.stdout.readline().strip() == "READY"
+    process.stdin.close()
+    assert process.wait(timeout=10) == 0
+    process.stdout.close()
+    assert command_log.read_text().splitlines() == [
+        "--auth=oauth2 stop --session exact-session",
+        "--auth=oauth2 sessions",
+    ]
+    state = json.loads(receipt.read_text())
+    assert state["phase"] == "VERIFY_RETURNED"
+    assert state["session_absent"] is True

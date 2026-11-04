@@ -7,10 +7,14 @@ import hashlib
 import json
 import os
 import re
+import select
 import shutil
+import signal
 import subprocess
 import sys
 import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -21,6 +25,9 @@ ROOT = Path(__file__).resolve().parents[1]
 E_ROOT = Path("/mnt/e/DynamisLM-A0")
 REPORT_DIR = E_ROOT / "a02"
 ATTEMPT_MARKER = REPORT_DIR / "one-attempt-used.json"
+REPLACEMENT_MARKER = REPORT_DIR / "attempt-002-used.json"
+RECOVERY_INVENTORY = REPORT_DIR / "recovery-inventory-20261104.json"
+RECOVERY_INVENTORY_SHA256 = "034bd0fc97906e87dd8c62d6a52a2ce28fabf60ce34357b68489d665238c549f"
 MAX_SESSION_SECONDS = 900
 MAX_EXEC_SECONDS = 720
 NEW_TIMEOUT_SECONDS = 120
@@ -81,6 +88,61 @@ def _run(
         ) from exc
 
 
+@contextmanager
+def _cleanup_signals(original_sigterm: Any) -> Iterator[None]:
+    previous_sigint = signal.signal(signal.SIGINT, signal.SIG_IGN)
+    try:
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
+        yield
+    finally:
+        try:
+            signal.signal(signal.SIGINT, previous_sigint)
+        finally:
+            signal.signal(signal.SIGTERM, original_sigterm)
+
+
+def _write_json(path: Path, value: dict[str, Any]) -> None:
+    temporary = path.with_name(path.name + ".tmp")
+    with temporary.open("w", encoding="utf-8") as stream:
+        json.dump(value, stream, indent=2, sort_keys=True)
+        stream.write("\n")
+        stream.flush()
+        os.fsync(stream.fileno())
+    os.replace(temporary, path)
+
+
+def _watchdog(run_id: str, receipt: Path) -> None:
+    # EOF means the controller died; a deadline also bounds a stuck controller.
+    print("READY", flush=True)
+    ready, _, _ = select.select([sys.stdin], [], [], MAX_SESSION_SECONDS)
+    if ready and sys.stdin.read(1) == "D":
+        return
+    state: dict[str, Any] = {"session": run_id, "phase": "STOP_REQUESTED"}
+    _write_json(receipt, state)
+    try:
+        stopped = _run(
+            ["colab", "--auth=oauth2", "stop", "--session", run_id],
+            timeout=STOP_TIMEOUT_SECONDS,
+        )
+        state["stop_exit_code"] = stopped.returncode
+    except Exception as exc:
+        state["stop_error"] = type(exc).__name__
+    state["phase"] = "STOP_RETURNED"
+    _write_json(receipt, state)
+    state["phase"] = "VERIFY_REQUESTED"
+    _write_json(receipt, state)
+    try:
+        sessions = _run(["colab", "--auth=oauth2", "sessions"], timeout=VERIFY_TIMEOUT_SECONDS)
+        state["sessions_exit_code"] = sessions.returncode
+        state["session_list"] = sessions.stdout.strip()
+        state["session_absent"] = sessions.returncode == 0 and _zero_sessions(sessions.stdout)
+    except Exception as exc:
+        state["verification_error"] = type(exc).__name__
+        state["session_absent"] = False
+    state["phase"] = "VERIFY_RETURNED"
+    _write_json(receipt, state)
+
+
 def _parse_balance(text: str) -> float:
     match = re.search(
         r"Current balance:\s*([0-9]+(?:\.[0-9]+)?)\s*compute units", text, re.IGNORECASE
@@ -124,15 +186,19 @@ def _drive_owner() -> dict[str, Any]:
     return value
 
 
-def _run_id(protocol: dict[str, Any], protocol_sha256: str) -> str:
+def _run_id(
+    protocol: dict[str, Any], protocol_sha256: str, attempt: int = 1, source: str = ""
+) -> str:
     content = "\n".join(
         (
             protocol_sha256,
+            str(attempt),
+            source,
             protocol["historical_a01"]["case_manifest_sha256"],
             protocol["new_a02_cases"]["case_manifest_sha256"],
         )
     )
-    return f"res541-a02-{hashlib.sha256(content.encode()).hexdigest()[:24]}"
+    return f"res541-a02-{attempt:03d}-{hashlib.sha256(content.encode()).hexdigest()[:24]}"
 
 
 def _sanitize_colab_log(raw: str, run_id: str) -> str:
@@ -216,9 +282,71 @@ def _check_tracked_model_weights() -> None:
         raise RunError("host model cache contains a file over 100 MiB; weights must remain remote")
 
 
-def preflight() -> dict[str, Any]:
-    if ATTEMPT_MARKER.exists():
-        raise RunError("the single A0.2 GPU allocation attempt has already been used")
+def _check_attempt(attempt: int, *, allow_used: bool = False) -> dict[str, str]:
+    if attempt == 1:
+        if ATTEMPT_MARKER.exists():
+            raise RunError("the single A0.2 GPU allocation attempt has already been used")
+        return {}
+    if attempt != 2:
+        raise RunError("only the separately authorized replacement attempt 2 is permitted")
+    if REPLACEMENT_MARKER.exists() and not allow_used:
+        raise RunError("replacement attempt 2 has already been used")
+    try:
+        inventory_bytes = RECOVERY_INVENTORY.read_bytes()
+        if hashlib.sha256(inventory_bytes).hexdigest() != RECOVERY_INVENTORY_SHA256:
+            raise RunError("recovery inventory identity changed")
+        inventory = json.loads(inventory_bytes)
+        for name, expected in inventory["files"].items():
+            path = REPORT_DIR / name
+            if path.resolve().is_relative_to(REPORT_DIR.resolve()) is False:
+                raise RunError("recovery inventory contains an unsafe path")
+            if hashlib.sha256(path.read_bytes()).hexdigest() != expected:
+                raise RunError(f"original evidence changed: {name}")
+        original = json.loads(ATTEMPT_MARKER.read_bytes())
+        if original["run_id"] != "res541-a02-219a94c0d64e3af6c0cce654":
+            raise RunError("original incident identity changed")
+    except (OSError, KeyError, TypeError, json.JSONDecodeError) as exc:
+        raise RunError("original attempt evidence is unavailable or invalid") from exc
+    return {
+        "original_marker_sha256": hashlib.sha256(ATTEMPT_MARKER.read_bytes()).hexdigest(),
+        "recovery_inventory_sha256": RECOVERY_INVENTORY_SHA256,
+        "previous_run_id": original["run_id"],
+    }
+
+
+def _verify_replacement_science(recovery: dict[str, str]) -> None:
+    previous_path = REPORT_DIR / recovery["previous_run_id"] / "protocol-v1.json"
+    try:
+        previous = json.loads(previous_path.read_bytes())
+        current = json.loads(a02_experiment.PROTOCOL_PATH.read_bytes())
+        immutable = (
+            "schema",
+            "status",
+            "prepared_from_main",
+            "population",
+            "protected_data_used",
+            "model",
+            "historical_a01",
+            "new_a02_cases",
+            "scientific_source_sha256",
+            "scientific_source_files",
+            "tokenizer_preflight",
+            "historical_inputs_sha256",
+            "limits",
+            "evaluation_rules",
+            "decision_rules",
+        )
+        if any(previous[key] != current[key] for key in immutable):
+            raise RunError("replacement protocol changes frozen scientific identities")
+        a02_experiment.verify_protocol_source_bindings(current)
+    except (OSError, KeyError, json.JSONDecodeError, ValueError) as exc:
+        raise RunError("replacement protocol source or scientific binding is invalid") from exc
+
+
+def preflight(attempt: int = 1) -> dict[str, Any]:
+    recovery = _check_attempt(attempt)
+    if attempt == 2:
+        _verify_replacement_science(recovery)
     _check_e_mount()
     _prepare_e_directories()
     _check_tracked_model_weights()
@@ -256,6 +384,8 @@ def preflight() -> dict[str, Any]:
         raise RunError("Colab reports no existing compute-unit balance")
     return {
         "schema": "RES541_A02_COLAB_PREFLIGHT_V1",
+        "attempt": attempt,
+        "recovery": recovery,
         "utc": datetime.now(UTC).isoformat(),
         "branch": branch,
         "source_revision": head,
@@ -307,6 +437,8 @@ def _binding(
     return {
         "schema": "RES541_A02_RUN_BINDING_V1",
         "run_id": run_id,
+        "attempt": preflight_doc["attempt"],
+        "recovery": preflight_doc["recovery"],
         "source_revision": preflight_doc["source_revision"],
         "source_tree": preflight_doc["source_tree"],
         "source_archive_sha256": archive_hash,
@@ -331,7 +463,12 @@ def _confirmation(doc: dict[str, Any], binding: dict[str, Any]) -> str:
     profile_sha = protocol["runtime"]["runtime_profile_sha256"]
     return (
         "AUTHORIZE ONE RES-541 A0.2 T4 RUN"
-        f" | source={doc['source_revision']}"
+        + (
+            f" | attempt=2 | recovery={doc['recovery']['recovery_inventory_sha256']}"
+            if doc.get("attempt", 1) == 2
+            else ""
+        )
+        + f" | source={doc['source_revision']}"
         f" | protocol={binding['protocol_sha256']}"
         f" | cases={cases_sha}"
         f" | action-prompt={prompt_sha}"
@@ -430,7 +567,7 @@ def _write_artifact_manifest(
         raise RunError("A0.2 artifact manifest already exists; refusing overwrite")
     files = []
     seen = set()
-    for path in paths:
+    for path in dict.fromkeys(paths):
         if not path.is_file():
             continue
         if path.name in seen:
@@ -464,13 +601,13 @@ def _write_artifact_manifest(
     return manifest_path, content
 
 
-def run() -> int:
+def run(attempt: int = 1) -> int:
     if not sys.stdin.isatty() or not sys.stdout.isatty():
         raise RunError("Colab allocation requires the owner at an interactive WSL terminal")
-    doc = preflight()
+    doc = preflight(attempt)
     protocol = json.loads(a02_experiment.PROTOCOL_PATH.read_text(encoding="utf-8"))
     protocol_sha = hashlib.sha256(a02_experiment.PROTOCOL_PATH.read_bytes()).hexdigest()
-    run_id = _run_id(protocol, protocol_sha)
+    run_id = _run_id(protocol, protocol_sha, attempt, doc["source_revision"])
     REPORT_DIR.mkdir(parents=True, exist_ok=True)
     run_dir = REPORT_DIR / run_id
     if run_dir.exists():
@@ -501,8 +638,12 @@ def run() -> int:
         raise RunError("interactive owner confirmation did not match; no Colab session was started")
 
     try:
-        fresh = preflight()
-        if fresh["source_revision"] != doc["source_revision"] or fresh["compute_unit_balance"] <= 0:
+        fresh = preflight(attempt)
+        if (
+            fresh["source_revision"] != doc["source_revision"]
+            or fresh["recovery"] != doc["recovery"]
+            or fresh["compute_unit_balance"] <= 0
+        ):
             raise RunError("source or Colab quota changed after confirmation")
         if fresh["compute_unit_balance"] != doc["compute_unit_balance"]:
             raise RunError(
@@ -523,14 +664,18 @@ def run() -> int:
     control_path = run_dir / "control.json"
     log_path = run_dir / "colab-execution-log.jsonl"
     drive_receipt_path = run_dir / "remote-drive-receipt.json"
-    attempt_copy = run_dir / "one-attempt-used.json"
+    marker_path = ATTEMPT_MARKER if attempt == 1 else REPLACEMENT_MARKER
+    attempt_copy = run_dir / marker_path.name
+    authorization_path = run_dir / "authorization.json"
     base_evidence_paths = [
         *frozen_inputs,
         preflight_path,
         source_archive,
         binding_path,
         attempt_copy,
+        authorization_path,
         control_path,
+        run_dir / "watchdog-receipt.json",
     ]
     state: dict[str, Any] = {
         "schema": "RES541_A02_CONTROL_RECEIPT_V1",
@@ -554,6 +699,8 @@ def run() -> int:
         "stop_exit_code": None,
         "session_absent_after_stop": False,
     }
+    watchdog: subprocess.Popen[str] | None = None
+    _write_json(control_path, state)
     started = time.monotonic()
     deadline = started + MAX_SESSION_SECONDS
 
@@ -563,13 +710,54 @@ def run() -> int:
         remaining = int(deadline - time.monotonic())
         if remaining <= 0:
             raise subprocess.TimeoutExpired(command, timeout)
-        return _run(command, timeout=min(timeout, remaining), capture=capture)
+        return tracked_call(command, min(timeout, remaining), capture=capture)
+
+    def tracked_call(
+        command: list[str], timeout: int, *, capture: bool = True
+    ) -> subprocess.CompletedProcess[str]:
+        action = command[2] if len(command) > 2 else command[0]
+        state["external_call"] = {"action": action, "phase": "REQUESTED"}
+        _write_json(control_path, state)
+        try:
+            result = _run(command, timeout=timeout, capture=capture)
+            state["external_call"] = {
+                "action": action,
+                "phase": "RETURNED",
+                "exit_code": result.returncode,
+            }
+            return result
+        except BaseException as exc:
+            state["external_call"] = {
+                "action": action,
+                "phase": "FAILED",
+                "error": type(exc).__name__,
+            }
+            raise
+        finally:
+            _write_json(control_path, state)
 
     allocation_attempted = False
     created = False
+
+    def cancel_on_sigterm(signum: int, frame: Any) -> None:
+        raise KeyboardInterrupt("SIGTERM")
+
+    original_sigterm = signal.signal(signal.SIGTERM, cancel_on_sigterm)
     try:
+        authorization = {
+            "schema": "RES541_A02_AUTHORIZATION_V1",
+            "attempt": attempt,
+            "binding": binding,
+            "owner_confirmation": approval,
+            "recorded_utc": datetime.now(UTC).isoformat(),
+        }
+        with authorization_path.open("x", encoding="utf-8") as receipt:
+            receipt.write(json.dumps(authorization, indent=2, sort_keys=True) + "\n")
         attempt_record = {
             "schema": "RES541_A02_ONE_ATTEMPT_USED_V1",
+            "attempt": attempt,
+            "authorization_sha256": hashlib.sha256(authorization_path.read_bytes()).hexdigest(),
+            "recovery": doc["recovery"],
             "run_id": run_id,
             "source_revision": doc["source_revision"],
             "binding_sha256": hashlib.sha256(
@@ -578,13 +766,40 @@ def run() -> int:
             "owner_confirmation_sha256": hashlib.sha256(approval.encode()).hexdigest(),
             "recorded_utc": datetime.now(UTC).isoformat(),
         }
-        with ATTEMPT_MARKER.open("x", encoding="utf-8") as marker:
+        with marker_path.open("x", encoding="utf-8") as marker:
             marker.write(json.dumps(attempt_record, indent=2, sort_keys=True) + "\n")
         state["allocation_attempted"] = True
-        state["one_attempt_marker"] = str(ATTEMPT_MARKER)
-        state["one_attempt_marker_sha256"] = hashlib.sha256(ATTEMPT_MARKER.read_bytes()).hexdigest()
-        attempt_copy.write_bytes(ATTEMPT_MARKER.read_bytes())
+        state["one_attempt_marker"] = str(marker_path)
+        state["one_attempt_marker_sha256"] = hashlib.sha256(marker_path.read_bytes()).hexdigest()
+        attempt_copy.write_bytes(marker_path.read_bytes())
         allocation_attempted = True
+        state["watchdog_phase"] = "START_REQUESTED"
+        _write_json(control_path, state)
+        watchdog = subprocess.Popen(
+            [
+                sys.executable,
+                "-m",
+                "scripts.a02_execution",
+                "watchdog",
+                run_id,
+                str(run_dir / "watchdog-receipt.json"),
+            ],
+            cwd=ROOT,
+            env=clean_colab_env(),
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            start_new_session=True,
+        )
+        if watchdog.stdout is None:
+            raise RunError("watchdog readiness pipe unavailable")
+        ready, _, _ = select.select([watchdog.stdout], [], [], 10)
+        if not ready or watchdog.stdout.readline().strip() != "READY":
+            raise RunError("watchdog failed to become ready; no allocation requested")
+        state["watchdog_phase"] = "STARTED"
+        state["watchdog_pid"] = watchdog.pid
+        _write_json(control_path, state)
         new = call(
             ["colab", "--auth=oauth2", "new", "--session", run_id, "--gpu", "T4"],
             NEW_TIMEOUT_SECONDS,
@@ -602,23 +817,6 @@ def run() -> int:
         if status.returncode != 0 or not re.search(r"\bT4\b", status.stdout, re.IGNORECASE):
             state["execution_blocker"] = "REQUESTED_T4_NOT_VERIFIED"
             raise RunError("Colab status did not verify the requested T4; inference not started")
-
-        if doc["drive_write_allowed"]:
-            try:
-                mounted = call(
-                    ["colab", "--auth=oauth2", "drivemount", "--session", run_id],
-                    120,
-                    capture=False,
-                )
-                state["drive_mount_exit_code"] = mounted.returncode
-                state["drive_mount_status"] = (
-                    "MOUNTED_IDENTITY_PENDING_REMOTE_PROBE"
-                    if mounted.returncode == 0
-                    else "MOUNT_FAILED"
-                )
-            except Exception as exc:
-                state["drive_mount_status"] = "MOUNT_FAILED"
-                state["drive_mount_error"] = type(exc).__name__
 
         for local_path, remote_path, state_key in (
             (source_archive, "/content/a02-source.tar", "upload_source_exit_code"),
@@ -660,133 +858,112 @@ def run() -> int:
             "--timeout",
             str(exec_timeout),
         ]
-        if state["drive_mount_status"] == "MOUNTED_IDENTITY_PENDING_REMOTE_PROBE":
-            owner = _drive_owner()
-            command.extend(
-                (
-                    "--env",
-                    "A02_DRIVE_IDENTITY_CONFIRMED=1",
-                    "--env",
-                    f"A02_DRIVE_OWNER_EMAIL={owner['email'].lower()}",
-                    "--env",
-                    f"A02_DRIVE_FOLDER_ID={DRIVE_FOLDER_ID}",
-                    "--env",
-                    f"A02_DRIVE_PROBE_NAME={owner['probe_name']}",
-                    "--env",
-                    f"A02_DRIVE_PROBE_CONTENT={owner['probe_content']}",
-                    "--env",
-                    f"A02_DRIVE_PROBE_FILE_ID={owner['probe_file_id']}",
-                )
-            )
         execute = call(command, exec_timeout + 30)
         state["exec_exit_code"] = execute.returncode
         state["inference_returned_utc"] = datetime.now(UTC).isoformat()
-    except Exception as exc:
+    except (Exception, KeyboardInterrupt) as exc:
         state["control_error"] = type(exc).__name__
         state["control_error_message"] = str(exc)[:2000]
     finally:
-        if allocation_attempted:
-            if created:
+        with _cleanup_signals(original_sigterm):
+            if allocation_attempted:
+                if created:
+                    try:
+                        downloaded = call(
+                            [
+                                "colab",
+                                "--auth=oauth2",
+                                "download",
+                                "--session",
+                                run_id,
+                                REMOTE_REPORT,
+                                str(remote_artifact),
+                            ],
+                            DOWNLOAD_TIMEOUT_SECONDS,
+                        )
+                        state["download_exit_code"] = downloaded.returncode
+                        if downloaded.returncode != 0:
+                            state["download_stderr_tail"] = downloaded.stderr[-2000:]
+                    except Exception as exc:
+                        state["download_error"] = type(exc).__name__
+                    try:
+                        raw_log = E_ROOT / "tmp" / f"{run_id}-colab-log.jsonl"
+                        raw_log.parent.mkdir(parents=True, exist_ok=True)
+                        log = tracked_call(
+                            [
+                                "colab",
+                                "--auth=oauth2",
+                                "log",
+                                "--session",
+                                run_id,
+                                "--output",
+                                str(raw_log),
+                            ],
+                            timeout=VERIFY_TIMEOUT_SECONDS,
+                        )
+                        state["colab_log_exit_code"] = log.returncode
+                        if log.returncode == 0 and raw_log.is_file():
+                            sanitized = _sanitize_colab_log(raw_log.read_text(), run_id)
+                            if sanitized:
+                                log_path.write_text(sanitized, encoding="utf-8")
+                                state["sanitized_log_path"] = str(log_path)
+                                state["sanitized_log_sha256"] = hashlib.sha256(
+                                    sanitized.encode()
+                                ).hexdigest()
+                        raw_log.unlink(missing_ok=True)
+                    except Exception as exc:
+                        state["colab_log_error"] = type(exc).__name__
+                        raw_log.unlink(missing_ok=True) if "raw_log" in locals() else None
                 try:
-                    downloaded = call(
-                        [
-                            "colab",
-                            "--auth=oauth2",
-                            "download",
-                            "--session",
-                            run_id,
-                            REMOTE_REPORT,
-                            str(remote_artifact),
-                        ],
-                        DOWNLOAD_TIMEOUT_SECONDS,
+                    stopped = tracked_call(
+                        ["colab", "--auth=oauth2", "stop", "--session", run_id],
+                        timeout=STOP_TIMEOUT_SECONDS,
                     )
-                    state["download_exit_code"] = downloaded.returncode
-                    if downloaded.returncode != 0:
-                        state["download_stderr_tail"] = downloaded.stderr[-2000:]
+                    state["stop_exit_code"] = stopped.returncode
+                    state["stop_returned_utc"] = datetime.now(UTC).isoformat()
                 except Exception as exc:
-                    state["download_error"] = type(exc).__name__
+                    state["stop_error"] = type(exc).__name__
                 try:
-                    receipt_download = call(
-                        [
-                            "colab",
-                            "--auth=oauth2",
-                            "download",
-                            "--session",
-                            run_id,
-                            REMOTE_DRIVE_RECEIPT,
-                            str(drive_receipt_path),
-                        ],
-                        DRIVE_RECEIPT_TIMEOUT_SECONDS,
+                    sessions = tracked_call(
+                        ["colab", "--auth=oauth2", "sessions"], timeout=VERIFY_TIMEOUT_SECONDS
                     )
-                    state["drive_receipt_download_exit_code"] = receipt_download.returncode
+                    state["session_absent_after_stop"] = (
+                        sessions.returncode == 0 and _zero_sessions(sessions.stdout)
+                    )
+                    state["session_list_after_stop"] = sessions.stdout.strip()
                 except Exception as exc:
-                    state["drive_receipt_download_error"] = type(exc).__name__
+                    state["sessions_error"] = type(exc).__name__
                 try:
-                    raw_log = E_ROOT / "tmp" / f"{run_id}-colab-log.jsonl"
-                    raw_log.parent.mkdir(parents=True, exist_ok=True)
-                    log = _run(
-                        [
-                            "colab",
-                            "--auth=oauth2",
-                            "log",
-                            "--session",
-                            run_id,
-                            "--output",
-                            str(raw_log),
-                        ],
-                        timeout=VERIFY_TIMEOUT_SECONDS,
+                    usage_after = tracked_call(
+                        ["colab", "--auth=oauth2", "usage"], timeout=VERIFY_TIMEOUT_SECONDS
                     )
-                    state["colab_log_exit_code"] = log.returncode
-                    if log.returncode == 0 and raw_log.is_file():
-                        sanitized = _sanitize_colab_log(raw_log.read_text(), run_id)
-                        if sanitized:
-                            log_path.write_text(sanitized, encoding="utf-8")
-                            state["sanitized_log_path"] = str(log_path)
-                            state["sanitized_log_sha256"] = hashlib.sha256(
-                                sanitized.encode()
-                            ).hexdigest()
-                    raw_log.unlink(missing_ok=True)
+                    state["usage_after_exit_code"] = usage_after.returncode
+                    state["usage_after_output"] = usage_after.stdout.strip()
+                    if usage_after.returncode == 0:
+                        state["compute_unit_balance_after"] = _parse_balance(usage_after.stdout)
+                        state["compute_unit_balance_delta"] = (
+                            state["preflight"]["compute_unit_balance"]
+                            - state["compute_unit_balance_after"]
+                        )
                 except Exception as exc:
-                    state["colab_log_error"] = type(exc).__name__
-                    raw_log.unlink(missing_ok=True) if "raw_log" in locals() else None
-            try:
-                stopped = _run(
-                    ["colab", "--auth=oauth2", "stop", "--session", run_id],
-                    timeout=STOP_TIMEOUT_SECONDS,
+                    state["usage_after_error"] = type(exc).__name__
+            if watchdog is not None and watchdog.stdin is not None:
+                try:
+                    if state["session_absent_after_stop"]:
+                        watchdog.stdin.write("D")
+                        watchdog.stdin.flush()
+                    watchdog.stdin.close()
+                except (OSError, BrokenPipeError) as exc:
+                    state["watchdog_error"] = type(exc).__name__
+                state["watchdog_phase"] = (
+                    "DISARMED" if state["session_absent_after_stop"] else "TRIGGERED"
                 )
-                state["stop_exit_code"] = stopped.returncode
-                state["stop_returned_utc"] = datetime.now(UTC).isoformat()
-            except Exception as exc:
-                state["stop_error"] = type(exc).__name__
-            try:
-                sessions = _run(
-                    ["colab", "--auth=oauth2", "sessions"], timeout=VERIFY_TIMEOUT_SECONDS
-                )
-                state["session_absent_after_stop"] = sessions.returncode == 0 and _zero_sessions(
-                    sessions.stdout
-                )
-                state["session_list_after_stop"] = sessions.stdout.strip()
-            except Exception as exc:
-                state["sessions_error"] = type(exc).__name__
-            try:
-                usage_after = _run(
-                    ["colab", "--auth=oauth2", "usage"], timeout=VERIFY_TIMEOUT_SECONDS
-                )
-                state["usage_after_exit_code"] = usage_after.returncode
-                state["usage_after_output"] = usage_after.stdout.strip()
-                if usage_after.returncode == 0:
-                    state["compute_unit_balance_after"] = _parse_balance(usage_after.stdout)
-                    state["compute_unit_balance_delta"] = (
-                        state["preflight"]["compute_unit_balance"]
-                        - state["compute_unit_balance_after"]
-                    )
-            except Exception as exc:
-                state["usage_after_error"] = type(exc).__name__
-        state["elapsed_seconds"] = time.monotonic() - started
-        state["finished_utc"] = datetime.now(UTC).isoformat()
-        control_path.write_text(
-            json.dumps(state, indent=2, sort_keys=True) + "\n", encoding="utf-8"
-        )
+                _write_json(control_path, state)
+            state["elapsed_seconds"] = time.monotonic() - started
+            state["finished_utc"] = datetime.now(UTC).isoformat()
+            control_path.write_text(
+                json.dumps(state, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+            )
 
     if not allocation_attempted:
         raise RunError(f"Colab allocation was not attempted; control receipt: {control_path}")
@@ -830,6 +1007,8 @@ def run() -> int:
 
     if not state["session_absent_after_stop"]:
         return external_blocker("ZERO_ACTIVE_SESSIONS_NOT_VERIFIED", remote_artifact)
+    if state["stop_exit_code"] != 0:
+        return external_blocker("SESSION_STOP_NOT_CONFIRMED", remote_artifact)
     if not remote_artifact.is_file() or state.get("download_exit_code") != 0:
         return external_blocker(
             state.get("execution_blocker", "REMOTE_REPORT_NOT_RECOVERED"), remote_artifact
@@ -953,6 +1132,7 @@ def run() -> int:
         source_archive,
         binding_path,
         attempt_copy,
+        authorization_path,
         remote_artifact,
         control_path,
         verified_path,
@@ -990,13 +1170,17 @@ def run() -> int:
 
 
 def main() -> int:
+    if len(sys.argv) == 4 and sys.argv[1] == "watchdog":
+        _watchdog(sys.argv[2], Path(sys.argv[3]))
+        return 0
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("command", choices=("preflight", "run"))
+    parser.add_argument("--attempt", type=int, default=1, choices=(1, 2))
     args = parser.parse_args()
     if args.command == "preflight":
-        print(json.dumps(preflight(), indent=2, sort_keys=True))
+        print(json.dumps(preflight(args.attempt), indent=2, sort_keys=True))
         return 0
-    return run()
+    return run(args.attempt)
 
 
 if __name__ == "__main__":

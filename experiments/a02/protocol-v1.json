@@ -32,7 +32,7 @@
   "experiment_files": {
     "experiments/a0/requirements-colab.txt": "e6389e1d37abda2cbbbb69b291f7d9ad8d6cb6ea00f16d3e3aaa81e002abd224",
     "experiments/a01/system-prompt-v1.txt": "3a427cbddec385a60e2843f921d3b8a3e3d0b80af8167f12a71a4d07a5639362",
-    "experiments/a02/README.md": "c1a1c12a48fb285a2202bd7b4219cc1e925d05b9d9054210830280e7e08d837b",
+    "experiments/a02/README.md": "21c22f9ed9a07e159c8ccf62cb3cd1d601852ce895614647ee27be7ba4bf6017",
     "experiments/a02/cases-v1.json": "f3a56dde310b2d64f2f8db2f9d02a432dd712d7b4a8aba50f836f1b3d6673dd3",
     "experiments/a02/historical-cases-v1.json": "619015ea1df55e8507316ff764e422ce95605549893d0748fb65cc5ad6aa7f38",
     "experiments/a02/historical-inputs-v1.json": "811cfaa6e8caf67e072c02539d719d9cec0dca02da6260808b22bc4951fa561d",
@@ -42,15 +42,15 @@
     "pyproject.toml": "4154fc938c7ee52efa75de2f8227044c9b83091983161bb6a333dc176664daa4",
     "scripts/a01_runtime.py": "d7528328f58f5a91ace07383c68e5a0d365f0ecd81e539d5291bff76c3d0e68e",
     "scripts/a02_engine.py": "74ce91055edd84318040f223b5808362bc8221e6d903194ec3721428398f97a8",
-    "scripts/a02_execution.py": "9f5e8642c6abfbfc9e4b91ae8aadbf49db5f49e70aff8c4ae2509f897b3e3c2a",
-    "scripts/a02_experiment.py": "4e4aa71d416c0bf47512e64d310f34c0c4cf0289c71ed4d628652283c6b729e2",
+    "scripts/a02_execution.py": "a29f6a02baa1796055343568ee66952ab5ab2422d6809395983197e59c6c8c60",
+    "scripts/a02_experiment.py": "0ac487be274b02a08a7c83b5759502bc47e3e7da9ffe177d0c8e4e2852f16e5b",
     "scripts/a02_preflight.py": "f82bbf94b21545b13bc8f26c403a2fe3826a575f4b0b19e49cc0b1ae40236072",
     "scripts/a02_remote.py": "d45e01ed754ca0cd64c5dafee632838db560ee1a2afca1ff473ba4748cf9f904",
-    "scripts/a02_score.py": "37d707eb3ebeeef940460d18f0d06747f840c55f1a6fcf9669452d93c15a9b71",
+    "scripts/a02_score.py": "97688c3802719c58ed4b652c4a3648391044ea592de49edb3436c08f558df5ca",
     "scripts/a0_engine.py": "6d6a92b32c3af3a698b88923854da3a8b12d3f1cc18264fc00eee9b0a64b0f33",
     "scripts/res403_tool_protocol.py": "f8de73f004e647ec2fead275abd0a3eba95fedcdb5a236457573c618caf1e669",
     "tests/test_longitudinal_statistics.py": "e9f7a2eda6e8ae97ebf923fdb28beff879ada827397b5bf31a05d366c4bbcce4",
-    "tests/test_res541_a02.py": "ba30674b6e8606f6f0a2f71426dc56aa6a9b4ed3beb48908b9f29537177ce83e",
+    "tests/test_res541_a02.py": "83cbf2f87a1cefe991f376cfb3f39c3ef8e268966e3414079be5b361787262c6",
     "uv.lock": "f274463b36249129fa8ba059c941031016cc201784cfc8ff43f1ff054dca50bd"
   },
   "historical_a01": {
@@ -160,9 +160,9 @@
   },
   "population": "SYNTHETIC_DEVELOPMENT_ONLY",
   "pre_inference_revision": {
-    "change_summary": "Pre-inference compatibility and persistence repair: remove the unsupported huggingface-hub snapshot_download trust_remote_code argument, constrain assets to the pinned model manifest, and add owner-verified Colab Drive persistence.",
+    "change_summary": "Replacement attempt authorization, interruption-safe teardown, and post-run Drive evidence synchronization; scientific cases, prompts, model, and rules remain frozen.",
     "current_runner_sha256": {
-      "scripts/a02_execution.py": "9f5e8642c6abfbfc9e4b91ae8aadbf49db5f49e70aff8c4ae2509f897b3e3c2a",
+      "scripts/a02_execution.py": "a29f6a02baa1796055343568ee66952ab5ab2422d6809395983197e59c6c8c60",
       "scripts/a02_remote.py": "d45e01ed754ca0cd64c5dafee632838db560ee1a2afca1ff473ba4748cf9f904"
     },
     "preserved_bindings": {
@@ -179,8 +179,8 @@
       "scripts/a02_execution.py": "9f5e8642c6abfbfc9e4b91ae8aadbf49db5f49e70aff8c4ae2509f897b3e3c2a",
       "scripts/a02_remote.py": "d45e01ed754ca0cd64c5dafee632838db560ee1a2afca1ff473ba4748cf9f904"
     },
-    "revision": 5,
-    "supersedes_protocol_sha256": "eb604df4e9e30dc3c10de0dfe32bc6bb91285fe584d901f95dcfa9defdee54ed"
+    "revision": 6,
+    "supersedes_protocol_sha256": "faed70c11201934407e35e691f2fe7d077bc02afa554d9a61a3e9c97580a3b03"
   },
   "pre_inference_revision_history": [
     {
@@ -251,6 +251,29 @@
       },
       "revision": 4,
       "supersedes_protocol_sha256": "add414cb21f123b1666d323384fd5a546431e0059a94d99bc603f019eee2a18a"
+    },
+    {
+      "change_summary": "Pre-inference compatibility and persistence repair: remove the unsupported huggingface-hub snapshot_download trust_remote_code argument, constrain assets to the pinned model manifest, and add owner-verified Colab Drive persistence.",
+      "current_runner_sha256": {
+        "scripts/a02_execution.py": "9f5e8642c6abfbfc9e4b91ae8aadbf49db5f49e70aff8c4ae2509f897b3e3c2a",
+        "scripts/a02_remote.py": "d45e01ed754ca0cd64c5dafee632838db560ee1a2afca1ff473ba4748cf9f904"
+      },
+      "preserved_bindings": {
+        "action_prompt_sha256": "6b57999a00d29a86364b6541844686e25cbc70662c3b93f444c3ce630fc9aeba",
+        "decision_rules_sha256": "dddb5d93812b054e7409aaac713045d91b0933a5ef691689ed526c91688255e9",
+        "evaluation_rules_sha256": "8d57f98564d541068d9548dd4af4aea1c5218b4733b8b50ed18b5e95e1a28316",
+        "final_prompt_sha256": "792de532f47612206786a5235ff4176cee9775dc1f6913754b7ee2e9462a1ca0",
+        "historical_case_manifest_sha256": "619015ea1df55e8507316ff764e422ce95605549893d0748fb65cc5ad6aa7f38",
+        "historical_inputs_sha256": "811cfaa6e8caf67e072c02539d719d9cec0dca02da6260808b22bc4951fa561d",
+        "model_revision": "a07cc9a04f16550a088caea529712d1d335b0ac1",
+        "new_case_manifest_sha256": "f3a56dde310b2d64f2f8db2f9d02a432dd712d7b4a8aba50f836f1b3d6673dd3"
+      },
+      "previous_runner_sha256": {
+        "scripts/a02_execution.py": "9f5e8642c6abfbfc9e4b91ae8aadbf49db5f49e70aff8c4ae2509f897b3e3c2a",
+        "scripts/a02_remote.py": "d45e01ed754ca0cd64c5dafee632838db560ee1a2afca1ff473ba4748cf9f904"
+      },
+      "revision": 5,
+      "supersedes_protocol_sha256": "eb604df4e9e30dc3c10de0dfe32bc6bb91285fe584d901f95dcfa9defdee54ed"
     }
   ],
   "prepared_from_main": "b8510aef00d1e3208562ceefea083c0fa57901fa",

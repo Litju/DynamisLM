@@ -894,9 +894,9 @@ def revise_pre_inference_protocol() -> None:
         },
         "current_runner_sha256": {name: current["experiment_files"][name] for name in runner_files},
         "change_summary": (
-            "Pre-inference compatibility and persistence repair: remove the unsupported "
-            "huggingface-hub snapshot_download trust_remote_code argument, constrain assets "
-            "to the pinned model manifest, and add owner-verified Colab Drive persistence."
+            "Replacement attempt authorization, interruption-safe teardown, and post-run "
+            "Drive evidence synchronization; scientific cases, prompts, model, "
+            "and rules remain frozen."
         ),
         "preserved_bindings": {
             "historical_case_manifest_sha256": previous["historical_a01"]["case_manifest_sha256"],
