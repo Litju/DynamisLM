@@ -22,6 +22,7 @@ from scripts import (
     a02_execution,
     a02_experiment,
     a02_preflight,
+    a02_prompt,
     res403_tool_protocol,
 )
 
@@ -161,22 +162,6 @@ def _historical_expected() -> dict[str, Any]:
     return {case.case_id: case for case in a02_experiment.load_historical_cases()}
 
 
-def _request_and_final_text(case_id: str, kind: str, row: dict[str, Any]) -> tuple[str, str, str]:
-    if kind == "historical":
-        user_text = row["user_message"]
-        return user_text, user_text, user_text
-    case = next(
-        item
-        for item in json.loads((ROOT / "experiments/a02/cases-v1.json").read_text())["cases"]
-        if item["case_id"] == case_id
-    )
-    user_text = canonical(case["request"])
-    action_user = res403_tool_protocol.render_transcript(
-        [res403_tool_protocol.UntrustedUserInputEvent(user_text)]
-    )[0]["content"]
-    return user_text, action_user, a02_experiment.final_request_text(case["request"])
-
-
 def _prompt_messages(
     *,
     kind: str,
@@ -185,15 +170,17 @@ def _prompt_messages(
     raw_action: str,
     event: dict[str, Any],
 ) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
-    user_text, action_user, final_user_text = _request_and_final_text(case_id, kind, row)
+    _, final_user_text, request = _request_and_final_text(case_id, kind, row)
     if kind == "historical":
         action_system = (ROOT / "experiments/a01/system-prompt-v1.txt").read_text().rstrip("\n")
+        action_messages = [
+            {"role": "system", "content": action_system},
+            {"role": "user", "content": row["user_message"]},
+        ]
     else:
         action_system = (ROOT / "experiments/a02/system-action-v1.txt").read_text().rstrip("\n")
-    action_messages = [
-        {"role": "system", "content": action_system},
-        {"role": "user", "content": row["user_message"] if kind == "historical" else action_user},
-    ]
+        assert request is not None
+        action_messages = a02_prompt.build_action_messages(request, action_system)
     final_messages = a02_preflight._final_messages(
         user_text=final_user_text,
         action_text=raw_action,
@@ -201,6 +188,23 @@ def _prompt_messages(
         origin=event["origin"],
     )
     return action_messages, final_messages
+
+
+def _request_and_final_text(
+    case_id: str, kind: str, row: dict[str, Any]
+) -> tuple[str, str, dict[str, Any] | None]:
+    if kind == "historical":
+        return row["user_message"], row["user_message"], None
+    case = next(
+        item
+        for item in json.loads((ROOT / "experiments/a02/cases-v1.json").read_text())["cases"]
+        if item["case_id"] == case_id
+    )
+    return (
+        canonical(case["request"]),
+        a02_experiment.final_request_text(case["request"]),
+        case["request"],
+    )
 
 
 def _verify_generation_settings(
@@ -235,6 +239,8 @@ def _verify_generation(
     output_limit: int,
     prompt_limit: int,
     decoding: dict[str, Any],
+    *,
+    frozen_prompt: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     _verify_generation_settings(
         generation,
@@ -246,11 +252,18 @@ def _verify_generation(
     )
     rendered_ids, rendered = a02_preflight._render(tokenizer, messages, template_date)
     ids = generation.get("prompt_token_ids")
+    if frozen_prompt is None:
+        prompt_ids_sha256 = sha256(canonical(ids).encode())
+    else:
+        a02_prompt.verify_frozen_prompt(
+            rendered, rendered_ids, frozen_prompt, frozen_prompt["case_id"]
+        )
+        prompt_ids_sha256 = frozen_prompt["prompt_token_ids_sha256"]
     if (
         ids != rendered_ids
         or generation.get("prompt_text") != rendered
         or generation.get("prompt_sha256") != sha256(rendered.encode())
-        or generation.get("prompt_token_ids_sha256") != sha256(canonical(ids).encode())
+        or generation.get("prompt_token_ids_sha256") != prompt_ids_sha256
         or generation.get("prompt_tokens") != len(rendered_ids)
         or len(rendered_ids) > prompt_limit
     ):
@@ -868,6 +881,7 @@ def verify_run(
             action_decoding["max_new_tokens"],
             action_decoding["max_prompt_tokens"],
             action_decoding,
+            frozen_prompt=preflight_action,
         )
         final_check = _verify_generation(
             row["final_generation"],

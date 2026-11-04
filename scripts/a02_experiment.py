@@ -608,6 +608,11 @@ def build_protocol() -> dict[str, Any]:
     tokenizer_preflight_path = E_ROOT / "a02/preflight-v1.json"
     if not tokenizer_preflight_path.is_file():
         raise ValueError("pinned-tokenizer CPU preflight must complete before protocol freeze")
+    regression_preflight_path = ROOT / "experiments/a02/tokenizer-preflight-v1.json"
+    if regression_preflight_path.read_bytes() != tokenizer_preflight_path.read_bytes():
+        raise ValueError(
+            "repository regression preflight differs from the retained frozen artifact"
+        )
     tokenizer_preflight = json.loads(tokenizer_preflight_path.read_text())
     if (
         tokenizer_preflight.get("status") != "READY_FOR_OWNER_GATE"
@@ -640,6 +645,7 @@ def build_protocol() -> dict[str, Any]:
         "experiments/a01/system-prompt-v1.txt",
         "experiments/a02/system-action-v1.txt",
         "experiments/a02/system-final-v1.txt",
+        "experiments/a02/tokenizer-preflight-v1.json",
         "experiments/a02/README.md",
         "experiments/a02/cases-v1.json",
         "experiments/a02/historical-inputs-v1.json",
@@ -648,11 +654,14 @@ def build_protocol() -> dict[str, Any]:
         "scripts/a02_experiment.py",
         "scripts/a02_engine.py",
         "scripts/a02_preflight.py",
+        "scripts/a02_prompt.py",
         "scripts/a02_remote.py",
         "scripts/a02_execution.py",
         "scripts/a02_score.py",
         "scripts/a01_runtime.py",
+        "scripts/ci.sh",
         "tests/test_res541_a02.py",
+        "tests/test_res541_a02_prompt_conformance.py",
         "tests/test_longitudinal_statistics.py",
         "pyproject.toml",
         "uv.lock",
@@ -882,6 +891,12 @@ def revise_pre_inference_protocol() -> None:
     if previous.get("experiment_files") == current.get("experiment_files"):
         raise ValueError("no source binding changed; refusing a no-op protocol revision")
     runner_files = ("scripts/a02_remote.py", "scripts/a02_execution.py")
+    prompt_files = (
+        "scripts/a02_prompt.py",
+        "scripts/a02_preflight.py",
+        "scripts/a02_remote.py",
+        "scripts/a02_score.py",
+    )
     revision = previous.get("pre_inference_revision", {}).get("revision", 1) + 1
     revision_history = list(previous.get("pre_inference_revision_history", []))
     if previous.get("pre_inference_revision"):
@@ -894,17 +909,25 @@ def revise_pre_inference_protocol() -> None:
         },
         "current_runner_sha256": {name: current["experiment_files"][name] for name in runner_files},
         "change_summary": (
-            "Attempt 3 bound to both closed infrastructure incidents; ensurepip-free pinned uv "
-            "bootstrap, verified wheel fallback, complete sanitized command failures; "
-            "scientific cases, prompts, model, "
-            "and rules remain frozen."
+            "Route A0.2 new-case request encoding through one Serialization V3 and RES-403 "
+            "action-prompt contract in preflight, remote inference, and scoring; compare all "
+            "26 rendered prompts, token IDs, lengths, and hashes with the retained frozen "
+            "preflight before generation. The prior runner and scorer used plain JSON for the "
+            "ten new cases. Scientific inputs, prompt text, model, and rules remain frozen."
         ),
+        "prompt_implementation_sha256": {
+            "previous": {
+                name: previous.get("experiment_files", {}).get(name) for name in prompt_files
+            },
+            "current": {name: current["experiment_files"][name] for name in prompt_files},
+        },
         "preserved_bindings": {
             "historical_case_manifest_sha256": previous["historical_a01"]["case_manifest_sha256"],
             "new_case_manifest_sha256": previous["new_a02_cases"]["case_manifest_sha256"],
             "historical_inputs_sha256": previous["historical_inputs_sha256"],
             "action_prompt_sha256": previous["new_a02_cases"]["action_prompt_sha256"],
             "final_prompt_sha256": previous["new_a02_cases"]["final_prompt_sha256"],
+            "tokenizer_preflight_sha256": previous["tokenizer_preflight"]["artifact_sha256"],
             "model_revision": previous["model"]["model_revision"],
             "evaluation_rules_sha256": sha256(canonical(previous["evaluation_rules"]).encode()),
             "decision_rules_sha256": sha256(canonical(previous["decision_rules"]).encode()),

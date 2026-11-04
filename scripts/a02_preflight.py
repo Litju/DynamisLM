@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from dynamislm.serialization import canonical_json
-from scripts import a0_engine, a02_engine, a02_experiment, res403_tool_protocol
+from scripts import a0_engine, a02_engine, a02_experiment, a02_prompt, res403_tool_protocol
 
 ROOT = Path(__file__).resolve().parents[1]
 E_ROOT = Path("/mnt/e/DynamisLM-A0")
@@ -22,7 +22,7 @@ BASELINE_REPORT = (
 TOKENIZER_DIR = E_ROOT / "a01/tokenizer"
 TEMPLATE_DATES = {
     "historical": datetime(2026, 10, 28, tzinfo=UTC),
-    "a02": datetime(2026, 11, 3, tzinfo=UTC),
+    "a02": a02_prompt.ACTION_TEMPLATE_DATE,
 }
 TOKENIZER_PINS = json.loads((ROOT / "experiments/a02/tokenizer-files-v1.json").read_text())["files"]
 
@@ -213,15 +213,9 @@ def run(tokenizer_dir: Path = TOKENIZER_DIR, output: Path | None = None) -> dict
     final_rows = []
     margin = "x " * 128
     for case in new_cases:
-        user_text = canonical_json(case["request"])
-        user_message = res403_tool_protocol.render_transcript(
-            [res403_tool_protocol.UntrustedUserInputEvent(user_text)]
-        )[0]
-        action_messages = [
-            {"role": "system", "content": action_system},
-            user_message,
-        ]
-        ids, rendered = _render(tokenizer, action_messages, TEMPLATE_DATES["a02"])
+        action_prompt = a02_prompt.build_action_prompt(tokenizer, case["request"], action_system)
+        ids = action_prompt["prompt_token_ids"]
+        rendered = action_prompt["rendered_prompt"]
         action_raw = _action_content(case["expected_action"])
         action_tokens = tokenizer.encode(action_raw, add_special_tokens=False)
         if len(ids) > 1024 or len(action_tokens) + 1 > 128:
@@ -234,10 +228,10 @@ def run(tokenizer_dir: Path = TOKENIZER_DIR, output: Path | None = None) -> dict
                 "case_id": case["case_id"],
                 "request_sha256": case["request_sha256"],
                 "rendered_prompt": rendered,
-                "rendered_prompt_sha256": sha256(rendered.encode()),
+                "rendered_prompt_sha256": action_prompt["rendered_prompt_sha256"],
                 "prompt_token_ids": ids,
-                "prompt_token_ids_sha256": sha256(canonical_json(ids).encode()),
-                "prompt_tokens": len(ids),
+                "prompt_token_ids_sha256": action_prompt["prompt_token_ids_sha256"],
+                "prompt_tokens": action_prompt["prompt_tokens"],
                 "expected_action_token_count_including_eos": len(action_tokens) + 1,
                 "action_output_token_limit": 128,
             }

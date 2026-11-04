@@ -99,6 +99,25 @@ def test_protocol_binds_all_scientific_and_runner_source_files() -> None:
         name: protocol["experiment_files"][name]
         for name in ("scripts/a02_remote.py", "scripts/a02_execution.py")
     }
+    prompt_lineage = revision["prompt_implementation_sha256"]
+    prompt_files = (
+        "scripts/a02_prompt.py",
+        "scripts/a02_preflight.py",
+        "scripts/a02_remote.py",
+        "scripts/a02_score.py",
+    )
+    assert prompt_lineage["current"] == {
+        name: protocol["experiment_files"][name] for name in prompt_files
+    }
+    prompt_repair = next(
+        item
+        for item in protocol["pre_inference_revision_history"]
+        if "prompt_implementation_sha256" in item
+        and item["prompt_implementation_sha256"]["previous"]["scripts/a02_prompt.py"] is None
+    )
+    assert prompt_repair["prompt_implementation_sha256"]["previous"]["scripts/a02_remote.py"] == (
+        "f4e563a1b832006f15919d6f2c6bc52ccb0df3fe6470e4cc8fddcac649133934"
+    )
     assert (
         revision["preserved_bindings"]["new_case_manifest_sha256"]
         == (protocol["new_a02_cases"]["case_manifest_sha256"])
@@ -108,6 +127,15 @@ def test_protocol_binds_all_scientific_and_runner_source_files() -> None:
         == (protocol["new_a02_cases"]["action_prompt_sha256"])
     )
     assert revision["preserved_bindings"]["model_revision"] == protocol["model"]["model_revision"]
+    assert (
+        revision["preserved_bindings"]["tokenizer_preflight_sha256"]
+        == (protocol["tokenizer_preflight"]["artifact_sha256"])
+    )
+    frozen_preflight = ROOT / "experiments/a02/tokenizer-preflight-v1.json"
+    assert (
+        a02_preflight.sha256(frozen_preflight.read_bytes())
+        == (protocol["tokenizer_preflight"]["artifact_sha256"])
+    )
     a02_experiment.verify_protocol_source_bindings(protocol)
 
 
@@ -1073,6 +1101,7 @@ def test_engine_and_inference_keep_distinct_pinned_interpreters(
 ) -> None:
     import sys
 
+    monkeypatch.delitem(sys.modules, "transformers", raising=False)
     monkeypatch.setattr(a02_remote, "WORK", tmp_path)
     monkeypatch.setattr(sys, "path", list(sys.path))
     calls: list[tuple[list[str], dict[str, Any]]] = []
@@ -1179,18 +1208,21 @@ def test_remote_bootstrap_failure_retains_report_without_drive(
     monkeypatch.setattr(a02_remote, "DRIVE_RUN_DIR", None)
     monkeypatch.delenv("A02_DRIVE_IDENTITY_CONFIRMED", raising=False)
     source = tmp_path / "source"
+    frozen_preflight = json.dumps({"schema": "synthetic"}).encode()
     protocol = {
         "schema": "RES541_A02_PROTOCOL_V1",
         "status": "FROZEN_PRE_INFERENCE",
         "experiment_files": {},
         "scientific_source_files": {},
         "scientific_source_sha256": hashlib.sha256(b"{}").hexdigest(),
+        "tokenizer_preflight": {"artifact_sha256": hashlib.sha256(frozen_preflight).hexdigest()},
     }
     data = json.dumps(protocol).encode()
 
     def extract(*args: Any) -> None:
         (source / "experiments/a02").mkdir(parents=True)
         (source / "experiments/a02/protocol-v1.json").write_bytes(data)
+        (source / "experiments/a02/tokenizer-preflight-v1.json").write_bytes(frozen_preflight)
 
     archive = tmp_path / "source.tar"
     archive.write_bytes(b"synthetic archive")

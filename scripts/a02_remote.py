@@ -723,6 +723,7 @@ def _generate(
     *,
     cap: int,
     template_date: datetime,
+    frozen_prompt: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     kwargs = {"enable_thinking": False, "strftime_now": template_date.strftime}
     encoded = tokenizer.apply_chat_template(
@@ -739,6 +740,12 @@ def _generate(
     )
     if tokenizer.encode(rendered, add_special_tokens=False) != ids:
         raise ValueError("actual rendered chat prompt differs from its recorded token IDs")
+    prompt_token_ids_sha256 = hashlib.sha256(_canonical(ids).encode()).hexdigest()
+    if frozen_prompt is not None:
+        from scripts import a02_prompt
+
+        a02_prompt.verify_frozen_prompt(rendered, ids, frozen_prompt, frozen_prompt["case_id"])
+        prompt_token_ids_sha256 = a02_prompt.prompt_token_ids_sha256(ids)
     if len(ids) > MAX_PROMPT_TOKENS:
         raise ValueError("rendered chat prompt exceeds 1024 tokens")
     input_ids = encoded["input_ids"].to(model.device)
@@ -775,7 +782,7 @@ def _generate(
         "prompt_text": rendered,
         "prompt_sha256": hashlib.sha256(rendered.encode()).hexdigest(),
         "prompt_token_ids": ids,
-        "prompt_token_ids_sha256": hashlib.sha256(_canonical(ids).encode()).hexdigest(),
+        "prompt_token_ids_sha256": prompt_token_ids_sha256,
         "prompt_tokens": len(ids),
         "raw_text": raw_text,
         "raw_with_special_tokens": rendered_raw,
@@ -831,8 +838,11 @@ def run() -> int:
         source = WORK / "source"
         source.mkdir(parents=True, exist_ok=False)
         _safe_extract(SOURCE_ARCHIVE, source)
-        if str(source) not in sys.path:
-            sys.path.insert(0, str(source))
+        for path in (source, source / "src"):
+            if str(path) not in sys.path:
+                sys.path.insert(0, str(path))
+        from scripts import a02_prompt
+
         report["source"] = {
             "run_id": binding["run_id"],
             "revision": binding["source_revision"],
@@ -850,6 +860,11 @@ def run() -> int:
             or protocol["status"] != "FROZEN_PRE_INFERENCE"
         ):
             raise ValueError("A02 protocol is not frozen")
+        frozen_preflight_path = source / "experiments/a02/tokenizer-preflight-v1.json"
+        frozen_preflight_bytes = frozen_preflight_path.read_bytes()
+        if _sha(frozen_preflight_bytes) != protocol["tokenizer_preflight"]["artifact_sha256"]:
+            raise ValueError("source tokenizer preflight differs from its frozen artifact hash")
+        frozen_preflight = json.loads(frozen_preflight_bytes)
         for name, expected in protocol["experiment_files"].items():
             if hashlib.sha256((source / name).read_bytes()).hexdigest() != expected:
                 raise ValueError(f"frozen A02 source hash mismatch: {name}")
@@ -980,6 +995,52 @@ def run() -> int:
             raise ValueError("remote pinned tokenizer file hashes differ")
         if tokenizer.chat_template != (weights_path / "chat_template.jinja").read_text():
             raise ValueError("loaded tokenizer template differs from pinned Jinja bytes")
+        if a02_prompt.ACTION_TEMPLATE_DATE != A02_DATE:
+            raise ValueError("shared A0.2 action template date differs from the remote runner")
+        historical = json.loads((source / "experiments/a02/historical-inputs-v1.json").read_text())[
+            "cases"
+        ]
+        new_cases = json.loads((source / "experiments/a02/cases-v1.json").read_text())["cases"]
+        historical_frozen = {row["case_id"]: row for row in frozen_preflight["historical_cases"]}
+        new_frozen = {row["case_id"]: row for row in frozen_preflight["new_action_cases"]}
+        if set(historical_frozen) != {row["case_id"] for row in historical} or set(new_frozen) != {
+            row["case_id"] for row in new_cases
+        }:
+            raise ValueError("tokenizer preflight does not bind the exact 16+10 case set")
+        action_inputs: dict[str, tuple[list[dict[str, str]], dict[str, Any]]] = {}
+        old_system = (source / "experiments/a01/system-prompt-v1.txt").read_text().rstrip("\n")
+        new_system = (source / "experiments/a02/system-action-v1.txt").read_text().rstrip("\n")
+        for row in historical:
+            frozen = historical_frozen[row["case_id"]]
+            if frozen["user_message_sha256"] != row["user_message_sha256"]:
+                raise ValueError(f"historical preflight request binding differs: {row['case_id']}")
+            messages = [
+                {"role": "system", "content": old_system},
+                {"role": "user", "content": row["user_message"]},
+            ]
+            kwargs = {
+                "enable_thinking": False,
+                "strftime_now": HISTORICAL_DATE.strftime,
+            }
+            ids = tokenizer.apply_chat_template(
+                messages, tokenize=True, add_generation_prompt=True, **kwargs
+            )
+            rendered = tokenizer.apply_chat_template(
+                messages, tokenize=False, add_generation_prompt=True, **kwargs
+            )
+            if tokenizer.encode(rendered, add_special_tokens=False) != ids:
+                raise ValueError("official Jinja rendering does not reproduce tokenizer IDs")
+            a02_prompt.verify_frozen_prompt(rendered, ids, frozen, row["case_id"])
+            action_inputs[row["case_id"]] = (messages, frozen)
+        for row in new_cases:
+            frozen = new_frozen[row["case_id"]]
+            if frozen["request_sha256"] != row["request_sha256"]:
+                raise ValueError(f"new-case preflight request binding differs: {row['case_id']}")
+            prompt = a02_prompt.build_action_prompt(tokenizer, row["request"], new_system)
+            a02_prompt.verify_frozen_prompt(
+                prompt["rendered_prompt"], prompt["prompt_token_ids"], frozen, row["case_id"]
+            )
+            action_inputs[row["case_id"]] = (prompt["messages"], frozen)
         torch.cuda.reset_peak_memory_stats(0)
         model_load_start = time.perf_counter()
         model = AutoModelForCausalLM.from_pretrained(
@@ -1016,12 +1077,6 @@ def run() -> int:
             bufsize=1,
             env=engine_env,
         )
-        historical = json.loads((source / "experiments/a02/historical-inputs-v1.json").read_text())[
-            "cases"
-        ]
-        new_cases = json.loads((source / "experiments/a02/cases-v1.json").read_text())["cases"]
-        old_system = (source / "experiments/a01/system-prompt-v1.txt").read_text().rstrip("\n")
-        new_system = (source / "experiments/a02/system-action-v1.txt").read_text().rstrip("\n")
         final_system = (source / "experiments/a02/system-final-v1.txt").read_text().rstrip("\n")
         prompt_started = time.perf_counter()
 
@@ -1031,18 +1086,21 @@ def run() -> int:
             user_text: str,
             final_text: str,
             user_message: str,
-            system_prompt: str,
+            action_messages: list[dict[str, str]],
+            frozen_action_prompt: dict[str, Any],
             date: datetime,
             action_cap: int,
             request_sha: str,
         ) -> None:
             interaction_id = f"{binding['run_id']}:{case_id}"
-            action_messages = [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_message},
-            ]
             action_generated = _generate(
-                model, tokenizer, torch, action_messages, cap=action_cap, template_date=date
+                model,
+                tokenizer,
+                torch,
+                action_messages,
+                cap=action_cap,
+                template_date=date,
+                frozen_prompt=frozen_action_prompt,
             )
             action_raw = action_generated["raw_text"]
             case_report: dict[str, Any] = {
@@ -1115,7 +1173,7 @@ def run() -> int:
                 row["user_message"],
                 row["user_message"],
                 row["user_message"],
-                old_system,
+                *action_inputs[row["case_id"]],
                 HISTORICAL_DATE,
                 HISTORICAL_TOKENS,
                 row["user_message_sha256"],
@@ -1130,7 +1188,7 @@ def run() -> int:
                 request_text,
                 final_text,
                 user_message,
-                new_system,
+                *action_inputs[row["case_id"]],
                 A02_DATE,
                 ACTION_TOKENS,
                 row["request_sha256"],
