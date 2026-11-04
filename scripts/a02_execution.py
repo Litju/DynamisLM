@@ -28,6 +28,9 @@ ATTEMPT_MARKER = REPORT_DIR / "one-attempt-used.json"
 REPLACEMENT_MARKER = REPORT_DIR / "attempt-002-used.json"
 RECOVERY_INVENTORY = REPORT_DIR / "recovery-inventory-20261104.json"
 RECOVERY_INVENTORY_SHA256 = "034bd0fc97906e87dd8c62d6a52a2ce28fabf60ce34357b68489d665238c549f"
+THIRD_MARKER = REPORT_DIR / "attempt-003-used.json"
+THIRD_RECOVERY = REPORT_DIR / "attempt-003-recovery-inventory.json"
+THIRD_RECOVERY_SHA256 = "9796cccbb6eba3e502ff7d36ebaaab01c9c47225dd5667cf0aea5f56ccc487e2"
 MAX_SESSION_SECONDS = 900
 MAX_EXEC_SECONDS = 720
 NEW_TIMEOUT_SECONDS = 120
@@ -294,8 +297,46 @@ def _check_attempt(attempt: int, *, allow_used: bool = False) -> dict[str, str]:
         if ATTEMPT_MARKER.exists():
             raise RunError("the single A0.2 GPU allocation attempt has already been used")
         return {}
+    if attempt == 3:
+        if THIRD_MARKER.exists() and not allow_used:
+            raise RunError("attempt 3 has already been used")
+        _check_attempt(2, allow_used=True)
+        try:
+            data = THIRD_RECOVERY.read_bytes()
+            if hashlib.sha256(data).hexdigest() != THIRD_RECOVERY_SHA256:
+                raise RunError("attempt 3 recovery inventory identity changed")
+            inventory = json.loads(data)
+            for name, expected in inventory["files"].items():
+                path = REPORT_DIR / name
+                if not path.resolve().is_relative_to(REPORT_DIR.resolve()):
+                    raise RunError("attempt 3 recovery inventory contains an unsafe path")
+                if hashlib.sha256(path.read_bytes()).hexdigest() != expected:
+                    raise RunError(f"previous attempt evidence changed: {name}")
+            previous = json.loads(REPLACEMENT_MARKER.read_bytes())
+            if previous["attempt"] != 2 or previous["run_id"] != inventory["previous_run_id"]:
+                raise RunError("attempt 2 consumed marker identity differs")
+            control = json.loads((REPORT_DIR / previous["run_id"] / "control.json").read_bytes())
+            remote = json.loads(
+                (REPORT_DIR / previous["run_id"] / "remote-report.json").read_bytes()
+            )
+            if (
+                control["stop_exit_code"] != 0
+                or not control["session_absent_after_stop"]
+                or control["watchdog_phase"] != "DISARMED"
+                or remote["cases"]
+                or remote["failure_stage"] != "RUNTIME_SETUP"
+                or "ensurepip" not in remote["failure_message"]
+            ):
+                raise RunError("attempt 2 is not the documented closed bootstrap failure")
+        except (OSError, KeyError, TypeError, json.JSONDecodeError) as exc:
+            raise RunError("attempt 2 recovery evidence is unavailable or invalid") from exc
+        return {
+            "recovery_inventory_sha256": THIRD_RECOVERY_SHA256,
+            "previous_run_id": previous["run_id"],
+            "previous_marker_sha256": hashlib.sha256(REPLACEMENT_MARKER.read_bytes()).hexdigest(),
+        }
     if attempt != 2:
-        raise RunError("only the separately authorized replacement attempt 2 is permitted")
+        raise RunError("only the separately authorized attempts 1, 2 and 3 are permitted")
     if REPLACEMENT_MARKER.exists() and not allow_used:
         raise RunError("replacement attempt 2 has already been used")
     try:
@@ -352,7 +393,7 @@ def _verify_replacement_science(recovery: dict[str, str]) -> None:
 
 def preflight(attempt: int = 1) -> dict[str, Any]:
     recovery = _check_attempt(attempt)
-    if attempt == 2:
+    if attempt in (2, 3):
         _verify_replacement_science(recovery)
     _check_e_mount()
     _prepare_e_directories()
@@ -471,8 +512,8 @@ def _confirmation(doc: dict[str, Any], binding: dict[str, Any]) -> str:
     return (
         "AUTHORIZE ONE RES-541 A0.2 T4 RUN"
         + (
-            f" | attempt=2 | recovery={doc['recovery']['recovery_inventory_sha256']}"
-            if doc.get("attempt", 1) == 2
+            f" | attempt={doc['attempt']} | recovery={doc['recovery']['recovery_inventory_sha256']}"
+            if doc.get("attempt", 1) in (2, 3)
             else ""
         )
         + f" | source={doc['source_revision']}"
@@ -671,7 +712,7 @@ def run(attempt: int = 1) -> int:
     control_path = run_dir / "control.json"
     log_path = run_dir / "colab-execution-log.jsonl"
     drive_receipt_path = run_dir / "remote-drive-receipt.json"
-    marker_path = ATTEMPT_MARKER if attempt == 1 else REPLACEMENT_MARKER
+    marker_path = {1: ATTEMPT_MARKER, 2: REPLACEMENT_MARKER, 3: THIRD_MARKER}[attempt]
     attempt_copy = run_dir / marker_path.name
     authorization_path = run_dir / "authorization.json"
     base_evidence_paths = [
@@ -760,6 +801,8 @@ def run(attempt: int = 1) -> int:
         }
         with authorization_path.open("x", encoding="utf-8") as receipt:
             receipt.write(json.dumps(authorization, indent=2, sort_keys=True) + "\n")
+            receipt.flush()
+            os.fsync(receipt.fileno())
         attempt_record = {
             "schema": "RES541_A02_ONE_ATTEMPT_USED_V1",
             "attempt": attempt,
@@ -775,6 +818,8 @@ def run(attempt: int = 1) -> int:
         }
         with marker_path.open("x", encoding="utf-8") as marker:
             marker.write(json.dumps(attempt_record, indent=2, sort_keys=True) + "\n")
+            marker.flush()
+            os.fsync(marker.fileno())
         state["allocation_attempted"] = True
         state["one_attempt_marker"] = str(marker_path)
         state["one_attempt_marker_sha256"] = hashlib.sha256(marker_path.read_bytes()).hexdigest()
@@ -1182,7 +1227,7 @@ def main() -> int:
         return 0
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("command", choices=("preflight", "run"))
-    parser.add_argument("--attempt", type=int, default=1, choices=(1, 2))
+    parser.add_argument("--attempt", type=int, default=1, choices=(1, 2, 3))
     args = parser.parse_args()
     if args.command == "preflight":
         print(json.dumps(preflight(args.attempt), indent=2, sort_keys=True))

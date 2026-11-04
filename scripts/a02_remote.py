@@ -7,15 +7,19 @@ import importlib.metadata
 import json
 import os
 import platform
+import re
 import resource
 import subprocess
 import sys
 import tarfile
 import time
 import uuid
+import zipfile
 from datetime import UTC, datetime
+from io import BytesIO
 from pathlib import Path
 from typing import Any, cast
+from urllib.request import urlopen
 
 MODEL_ID = "HuggingFaceTB/SmolLM3-3B"
 MODEL_REVISION = "a07cc9a04f16550a088caea529712d1d335b0ac1"
@@ -278,21 +282,53 @@ def _finalize_drive(report: dict[str, Any], run_id: str) -> None:
             )
 
 
-def _run(command: list[str], *, cwd: Path | None = None, timeout: int = 120) -> str:
-    result = subprocess.run(
-        command,
-        cwd=cwd,
-        capture_output=True,
-        text=True,
-        timeout=timeout,
-        check=False,
-        env=os.environ.copy(),
-    )
-    if result.returncode:
-        raise RuntimeError(
-            f"command failed ({result.returncode}): {Path(command[0]).name}; "
-            f"stderr={result.stderr[-1500:]}"
+def _sanitize(text: str) -> str:
+    text = re.sub(r"https?://[^\s<>\"']+", "[URL_REDACTED]", text)
+    text = re.sub(r"(?i)(bearer\s+|token[=:]\s*|password[=:]\s*)[^\s]+", r"\1[REDACTED]", text)
+    for key, value in os.environ.items():
+        if len(value) >= 8 and any(
+            word in key.upper() for word in ("TOKEN", "SECRET", "PASSWORD", "KEY")
+        ):
+            text = text.replace(value, "[REDACTED]")
+    return text
+
+
+class CommandError(RuntimeError):
+    def __init__(self, command: list[str], status: int | None, stderr: str, stage: str) -> None:
+        self.evidence = {
+            "command": [_sanitize(arg) for arg in command],
+            "exit_status": status,
+            "stderr": _sanitize(stderr),
+            "stage": stage,
+        }
+        super().__init__(f"{stage}: command failed ({status}): {Path(command[0]).name}")
+
+
+def _run(
+    command: list[str],
+    *,
+    cwd: Path | None = None,
+    timeout: int = 120,
+    env: dict[str, str] | None = None,
+    stage: str = "COMMAND",
+) -> str:
+    try:
+        result = subprocess.run(
+            command,
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+            env=os.environ.copy() if env is None else env,
         )
+    except subprocess.TimeoutExpired as exc:
+        stderr = (exc.stderr or b"").decode(errors="replace")
+        raise CommandError(command, None, stderr, stage) from exc
+    except OSError as exc:
+        raise CommandError(command, None, str(exc), stage) from exc
+    if result.returncode:
+        raise CommandError(command, result.returncode, result.stderr, stage)
     return result.stdout
 
 
@@ -306,23 +342,77 @@ def _safe_extract(archive: Path, destination: Path) -> None:
         source.extractall(destination, members=members, filter="data")
 
 
+# PyPI's immutable manylinux x86_64 wheel, used only when parent pip is unavailable.
+UV_WHEEL_URL = (
+    "https://files.pythonhosted.org/packages/a7/fe/"
+    "a87be2a492440945e745b0dc81aef7fea9730d8194af88d854b7641f5ddf/"
+    "uv-0.12.2-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl"
+)
+UV_WHEEL_SHA256 = "3a8d93d1fe019561b70494a8e1332492afb5f14dadc33d5239569d0964164d10"
+
+
 def _install_uv() -> Path:
     uv_env = WORK / "uv-venv"
-    if not (uv_env / "bin/python").exists():
-        _run([sys.executable, "-m", "venv", str(uv_env)], timeout=45)
+    parent = _run(
+        [sys.executable, "-c", "import platform; print(platform.python_version())"],
+        timeout=10,
+        stage="PARENT_PYTHON",
+    ).strip()
+    if parent != platform.python_version():
+        raise ValueError("parent Python executable identity differs")
+    _run([sys.executable, "-m", "venv", "--without-pip", str(uv_env)], timeout=45, stage="UV_VENV")
+    python = uv_env / "bin/python"
+    identity = json.loads(
         _run(
             [
-                str(uv_env / "bin/python"),
+                str(python),
+                "-c",
+                "import json,sys,platform; "
+                "print(json.dumps([sys.prefix, platform.python_version()]))",
+            ],
+            timeout=10,
+            stage="UV_INTERPRETER",
+        )
+    )
+    if identity != [str(uv_env), parent]:
+        raise ValueError("uv environment interpreter identity differs")
+    try:
+        help_text = _run([sys.executable, "-m", "pip", "--help"], timeout=10, stage="PARENT_PIP")
+    except CommandError:
+        help_text = ""
+    uv = uv_env / "bin/uv"
+    if "--python" in help_text:
+        _run(
+            [
+                sys.executable,
                 "-m",
                 "pip",
+                "--python",
+                str(python),
                 "install",
                 "--disable-pip-version-check",
+                "--only-binary=:all:",
+                "--no-deps",
                 f"uv=={UV_VERSION}",
             ],
             timeout=90,
+            stage="UV_PINNED_INSTALL",
         )
-    uv = uv_env / "bin/uv"
-    version = _run([str(uv), "--version"], timeout=10).strip().split()
+    else:
+        if platform.system() != "Linux" or platform.machine() != "x86_64":
+            raise ValueError("verified uv fallback requires Linux x86_64")
+        with urlopen(UV_WHEEL_URL, timeout=60) as response:
+            wheel = response.read(32 * 1024**2 + 1)
+        if len(wheel) > 32 * 1024**2 or _sha(wheel) != UV_WHEEL_SHA256:
+            raise ValueError("pinned uv fallback wheel hash or size differs")
+        with zipfile.ZipFile(BytesIO(wheel)) as archive:
+            binary = archive.read(f"uv-{UV_VERSION}.data/scripts/uv")
+        with uv.open("xb") as stream:
+            stream.write(binary)
+        uv.chmod(0o755)
+    if not uv.is_file() or not os.access(uv, os.X_OK):
+        raise ValueError("uv executable is missing")
+    version = _run([str(uv), "--version"], timeout=10, stage="UV_VERSION").strip().split()
     if len(version) < 2 or version[:2] != ["uv", UV_VERSION]:
         raise ValueError("remote uv version differs from the frozen runner")
     return uv
@@ -339,14 +429,18 @@ def _setup_engine(source: Path, uv: Path) -> Path:
     Path(env["UV_CACHE_DIR"]).mkdir(parents=True, exist_ok=True)
     Path(env["UV_PYTHON_INSTALL_DIR"]).mkdir(parents=True, exist_ok=True)
     Path(env["TMPDIR"]).mkdir(parents=True, exist_ok=True)
-    subprocess.run(
-        [str(uv), "python", "install", ENGINE_PYTHON], cwd=source, env=env, check=True, timeout=120
+    _run(
+        [str(uv), "python", "install", ENGINE_PYTHON],
+        cwd=source,
+        env=env,
+        timeout=120,
+        stage="ENGINE_PYTHON_INSTALL",
     )
-    subprocess.run(
+    _run(
         [str(uv), "sync", "--frozen", "--all-groups", "--python", ENGINE_PYTHON],
         cwd=source,
         env=env,
-        check=True,
+        stage="ENGINE_FROZEN_SYNC",
         timeout=240,
     )
     engine_python = source / ".venv/bin/python"
@@ -365,7 +459,7 @@ def _setup_engine(source: Path, uv: Path) -> Path:
 def _setup_inference(uv: Path, source: Path) -> Path:
     inference_env = WORK / "inference-venv"
     if not inference_env.exists():
-        subprocess.run(
+        _run(
             [
                 str(uv),
                 "venv",
@@ -375,12 +469,12 @@ def _setup_inference(uv: Path, source: Path) -> Path:
                 str(inference_env),
             ],
             cwd=source,
-            check=True,
+            stage="INFERENCE_VENV",
             timeout=60,
         )
     inference_python = inference_env / "bin/python"
     requirements = source / "experiments/a0/requirements-colab.txt"
-    subprocess.run(
+    _run(
         [
             str(uv),
             "pip",
@@ -388,11 +482,12 @@ def _setup_inference(uv: Path, source: Path) -> Path:
             "--python",
             str(inference_python),
             "--no-deps",
+            "--only-binary=:all:",
             "-r",
             str(requirements),
         ],
         cwd=source,
-        check=True,
+        stage="INFERENCE_PINNED_INSTALL",
         timeout=180,
     )
     site = _run(
@@ -783,8 +878,13 @@ def run() -> int:
 
         stage = "RUNTIME_SETUP"
         torch, inventory = _runtime_gate()
+        report["runtime_inventory_before_bootstrap"] = inventory
+        _write_report(report)
+        stage = "UV_BOOTSTRAP"
         uv = _install_uv()
+        stage = "ENGINE_SETUP"
         engine_python = _setup_engine(source, uv)
+        stage = "INFERENCE_SETUP"
         inference_python = _setup_inference(uv, source)
         inference_site = _run(
             [str(inference_python), "-c", "import site; print(site.getsitepackages()[0])"],
@@ -1062,11 +1162,18 @@ def run() -> int:
         )
         return 0
     except Exception as exc:
+        if isinstance(exc, CommandError):
+            report["command_failure"] = exc.evidence
+        report["failure_environment"] = {
+            "python": sys.version,
+            "executable": sys.executable,
+            "free_disk_bytes": os.statvfs(WORK).f_bavail * os.statvfs(WORK).f_frsize,
+        }
         report.update(
             status="NO_GO",
             failure_stage=stage,
             failure_category=type(exc).__name__,
-            failure_message=str(exc)[:2000],
+            failure_message=_sanitize(str(exc)),
             partial_case_count=len(report["cases"]),
         )
         _write_report(report)

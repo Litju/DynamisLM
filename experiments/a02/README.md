@@ -27,10 +27,48 @@ PYTHONPATH=/mnt/e/DynamisLM-A0/a01/tokenizer-venv/lib/python3.12/site-packages:s
   HF_HOME=/mnt/e/DynamisLM-A0/cache/huggingface \
   USE_TORCH=0 USE_TF=0 USE_FLAX=0 TRANSFORMERS_OFFLINE=1 HF_HUB_OFFLINE=1 \
   .venv/bin/python -m scripts.a02_preflight
-.venv/bin/python -m scripts.a02_execution preflight --attempt 2
-.venv/bin/python -m scripts.a02_execution run --attempt 2
+.venv/bin/python -m scripts.a02_execution preflight --attempt 3
+.venv/bin/python -m scripts.a02_execution run --attempt 3
 ```
 
-`run --attempt 2` displays the exact source revision, protocol/case/prompt hashes, incident inventory, current Colab balance, one-session T4 limit, 900-second cap, and no-retry/no-upgrade policy. It proceeds only after the owner types the displayed phrase in an interactive WSL terminal. The controller preserves the original `one-attempt-used.json` and forensic inventory, writes an exclusive replacement authorization and `attempt-002-used.json`, and starts a separate bounded watchdog before allocating. The watchdog attempts to stop only this session if the controller dies or its deadline expires. A stop is considered verified only when the provider session listing independently confirms zero active sessions. No third attempt is authorized.
+`run --attempt 3` displays the exact source revision, protocol/case/prompt hashes, incident inventory, current Colab balance, one-session T4 limit, 900-second cap, and no-retry/no-upgrade policy. It proceeds only after the owner types the displayed phrase in an interactive WSL terminal. The controller preserves the original `one-attempt-used.json` and forensic inventory, writes an exclusive third-attempt authorization and `attempt-003-used.json`, and starts a separate bounded watchdog before allocating. The watchdog attempts to stop only this session if the controller dies or its deadline expires. A stop is considered verified only when the provider session listing independently confirms zero active sessions. Attempt 4 and automatic retries are refused. Attempts 1 and 2 remain consumed and unchanged.
 
 After CPU scoring, use the connected Google Drive file workflow to upload the small evidence package to the existing owner-only folder. Read each uploaded file back and compare its SHA-256 with `artifact-hashes.json`, recording the file IDs and verification results in a separate local receipt. A Drive failure leaves the E: evidence and scientific result intact; it does not authorize another GPU allocation.
+
+## Attempt 3 bootstrap repair
+
+Attempt 2 (`res541-a02-002-0867ebaed2985601c5902829`) consumed its authorization
+at source `b5a64c54383172dea4b6af1d9d4918a10625e8e3`, protocol
+`d63dfa3537e2b9e279a0c5733b6e2d510ce5f1c48a48216fd313e91a04cde5bb`.
+Its retained report contains zero cases and an implicit `venv`/`ensurepip` failure.
+The hash-verified control receipt records successful stop, zero sessions, and a
+disarmed watchdog (therefore no separate watchdog cleanup receipt). The recorded
+balance was 249.98 CU before and after; later account usage cannot be attributed
+to this experiment. CLI history was retrieved independently during this repair.
+
+The owner requested one additional bounded attempt after both infrastructure
+failures. Its eligibility is bound to the append-only E: inventory
+`attempt-003-recovery-inventory.json`, SHA-256
+`9796cccbb6eba3e502ff7d36ebaaab01c9c47225dd5667cf0aea5f56ccc487e2`.
+That inventory includes both markers, prior recovery inventory, all attempt-2
+artifacts, and the independently retrieved sanitized history. Fresh interactive
+confirmation is required; this request does not supply the dynamic confirmation.
+
+Bootstrap checks the actual parent interpreter, creates a venv with
+`--without-pip`, checks parent pip's `--python` support, and installs only the
+pinned binary `uv==0.12.2` with no dependencies. If parent pip is absent or too
+old, it extracts only the executable from the size-bounded, SHA-256-verified
+PyPI manylinux x86_64 wheel. No remote installation script is executed.
+Interpreter prefix/version, executable access, and uv version are verified.
+The scientific engine remains Python 3.12.13 with frozen lockfile sync;
+inference inherits Colab's reviewed interpreter/PyTorch and installs the existing
+exact pins as wheels without dependency resolution. Full sanitized stderr,
+command, exit status (null on timeout/spawn failure), bootstrap stage, runtime
+inventory, and free disk space remain in the partial report on failure.
+
+The protocol revision records old/new runner hashes and its predecessor protocol
+hash. All scientific bindings remain mechanically compared against both previous
+runs. CPU qualification covers broken ensurepip, supported/missing/old pip,
+wheel tampering, wrong uv/interpreter versions, environment separation, error
+retention without Drive, attempt limits, and controller/watchdog failure paths.
+Actual CUDA/model behavior still requires the owner-approved T4 execution.

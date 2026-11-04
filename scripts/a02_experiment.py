@@ -894,8 +894,9 @@ def revise_pre_inference_protocol() -> None:
         },
         "current_runner_sha256": {name: current["experiment_files"][name] for name in runner_files},
         "change_summary": (
-            "Replacement attempt authorization, interruption-safe teardown, and post-run "
-            "Drive evidence synchronization; scientific cases, prompts, model, "
+            "Attempt 3 bound to both closed infrastructure incidents; ensurepip-free pinned uv "
+            "bootstrap, verified wheel fallback, complete sanitized command failures; "
+            "scientific cases, prompts, model, "
             "and rules remain frozen."
         ),
         "preserved_bindings": {

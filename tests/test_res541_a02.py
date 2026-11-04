@@ -757,7 +757,7 @@ def test_replacement_inventory_and_attempt_limit(tmp_path: Path, monkeypatch: An
         == hashlib.sha256(before[0]).hexdigest()
     )
     with pytest.raises(a02_execution.RunError, match="only the separately authorized"):
-        a02_execution._check_attempt(3)
+        a02_execution._check_attempt(4)
     (report / "attempt-002-used.json").write_text("used")
     with pytest.raises(a02_execution.RunError, match="already been used"):
         a02_execution._check_attempt(2)
@@ -779,6 +779,7 @@ def test_attempt_identity_includes_attempt_and_source() -> None:
     ("fault", "expected"),
     [
         ("interrupt_exec", "REMOTE_INFERENCE_INCOMPLETE"),
+        ("sigterm_exec", "REMOTE_INFERENCE_INCOMPLETE"),
         ("interrupt_download", None),
         ("lost_connection", "REMOTE_INFERENCE_INCOMPLETE"),
         ("download_timeout", "REMOTE_REPORT_NOT_RECOVERED"),
@@ -787,8 +788,9 @@ def test_attempt_identity_includes_attempt_and_source() -> None:
         ("drive_unavailable", None),
     ],
 )
+@pytest.mark.parametrize("attempt", [2, 3])
 def test_replacement_cleanup_faults(
-    tmp_path: Path, monkeypatch: Any, fault: str, expected: str | None
+    tmp_path: Path, monkeypatch: Any, fault: str, expected: str | None, attempt: int
 ) -> None:
     import io
     import os
@@ -802,9 +804,9 @@ def test_replacement_cleanup_faults(
     original = root / "one-attempt-used.json"
     original.write_text("original marker")
     original_hash = hashlib.sha256(original.read_bytes()).hexdigest()
-    marker = root / "attempt-002-used.json"
+    marker = root / f"attempt-{attempt:03d}-used.json"
     doc = {
-        "attempt": 2,
+        "attempt": attempt,
         "recovery": {"recovery_inventory_sha256": "inventory"},
         "source_revision": "a" * 40,
         "source_tree": "b" * 40,
@@ -817,7 +819,8 @@ def test_replacement_cleanup_faults(
     monkeypatch.setattr(a02_execution, "REPORT_DIR", root)
     monkeypatch.setattr(a02_execution, "E_ROOT", tmp_path)
     monkeypatch.setattr(a02_execution, "ATTEMPT_MARKER", original)
-    monkeypatch.setattr(a02_execution, "REPLACEMENT_MARKER", marker)
+    monkeypatch.setattr(a02_execution, "REPLACEMENT_MARKER", root / "attempt-002-used.json")
+    monkeypatch.setattr(a02_execution, "THIRD_MARKER", root / "attempt-003-used.json")
     monkeypatch.setattr(a02_execution, "preflight", lambda attempt: doc)
     if fault == "drive_unavailable":
 
@@ -846,6 +849,8 @@ def test_replacement_cleanup_faults(
         calls.append(action)
         if action == "exec" and fault == "interrupt_exec":
             raise KeyboardInterrupt()
+        if action == "exec" and fault == "sigterm_exec":
+            os.kill(os.getpid(), signal.SIGTERM)
         if action == "exec" and fault == "lost_connection":
             raise a02_execution.RunError("CLI connection lost")
         if action == "download" and fault == "download_timeout":
@@ -854,6 +859,7 @@ def test_replacement_cleanup_faults(
             if fault == "interrupt_download":
                 os.kill(os.getpid(), signal.SIGINT)
                 os.kill(os.getpid(), signal.SIGINT)
+                os.kill(os.getpid(), signal.SIGTERM)
             Path(command[-1]).write_text(json.dumps({"status": "COMPLETE", "cases": []}))
         output = ""
         if action == "status":
@@ -883,14 +889,14 @@ def test_replacement_cleanup_faults(
     monkeypatch.setattr(subprocess, "run", score)
     old_int = signal.getsignal(signal.SIGINT)
     old_term = signal.getsignal(signal.SIGTERM)
-    result = a02_execution.run(2)
+    result = a02_execution.run(attempt)
     assert result == (1 if expected else 0)
     run_dir = next(path for path in root.iterdir() if path.is_dir())
     control = json.loads((run_dir / "control.json").read_text())
     if expected:
         assert control["external_blocker"] == expected
     assert marker.exists()
-    assert json.loads(marker.read_text())["attempt"] == 2
+    assert json.loads(marker.read_text())["attempt"] == attempt
     assert (run_dir / "authorization.json").exists()
     assert hashlib.sha256(original.read_bytes()).hexdigest() == original_hash
     assert calls.count("new") == 1
@@ -941,3 +947,302 @@ def test_watchdog_stops_only_exact_session_after_controller_disconnect(
         state = json.loads(receipt.read_text())
         assert state["phase"] == "VERIFY_RETURNED"
         assert state["session_absent"] is True
+
+
+@pytest.mark.parametrize(
+    "pip_mode", ["supported", "missing", "old", "bad_hash", "bad_version", "bad_interpreter"]
+)
+def test_uv_bootstrap_never_invokes_ensurepip(
+    tmp_path: Path, monkeypatch: Any, pip_mode: str
+) -> None:
+    import io
+    import platform
+    import sys
+    import zipfile
+
+    wheel = io.BytesIO()
+    with zipfile.ZipFile(wheel, "w") as archive:
+        archive.writestr(f"uv-{a02_remote.UV_VERSION}.data/scripts/uv", b"verified uv binary")
+    data = wheel.getvalue()
+    monkeypatch.setattr(a02_remote, "WORK", tmp_path)
+    monkeypatch.setattr(a02_remote, "UV_WHEEL_SHA256", hashlib.sha256(data).hexdigest())
+    monkeypatch.setattr(a02_remote, "urlopen", lambda *a, **kw: io.BytesIO(data))
+    calls: list[list[str]] = []
+
+    def execute(command: list[str], **kwargs: Any) -> str:
+        calls.append(command)
+        assert "ensurepip" not in command
+        if "venv" in command:
+            assert "--without-pip" in command
+            (tmp_path / "uv-venv/bin").mkdir(parents=True)
+            return ""
+        if "pip" in command:
+            assert command[0] == sys.executable
+            if "--help" in command:
+                if pip_mode == "missing":
+                    raise a02_remote.CommandError(command, 1, "No module named pip", "PARENT_PIP")
+                return "--python" if pip_mode == "supported" else "old pip help"
+            assert "--python" in command and "--only-binary=:all:" in command
+            assert "uv==0.12.2" in command and "--no-deps" in command
+            target = tmp_path / "uv-venv/bin/uv"
+            target.write_bytes(b"uv")
+            target.chmod(0o755)
+            return ""
+        if "--version" in command:
+            return "uv 0.12.3" if pip_mode == "bad_version" else "uv 0.12.2 (build)\n"
+        if "sys.prefix" in command[-1]:
+            return json.dumps(
+                [
+                    str(
+                        tmp_path / "wrong"
+                        if pip_mode == "bad_interpreter"
+                        else tmp_path / "uv-venv"
+                    ),
+                    platform.python_version(),
+                ]
+            )
+        return platform.python_version()
+
+    monkeypatch.setattr(a02_remote, "_run", execute)
+    if pip_mode == "bad_hash":
+        monkeypatch.setattr(a02_remote, "UV_WHEEL_SHA256", "0" * 64)
+    if pip_mode.startswith("bad_"):
+        with pytest.raises(ValueError, match="differs"):
+            a02_remote._install_uv()
+        return
+    assert a02_remote._install_uv() == tmp_path / "uv-venv/bin/uv"
+    assert sum("venv" in call for call in calls) == 1
+
+
+def test_real_venv_with_broken_ensurepip(tmp_path: Path, monkeypatch: Any) -> None:
+    import os
+    import subprocess
+    import sys
+
+    # sitecustomize makes implicit ensurepip fail in the actual child interpreter.
+    (tmp_path / "sitecustomize.py").write_text(
+        "import venv\n"
+        "def broken(*args): raise RuntimeError('ensurepip forbidden')\n"
+        "venv.EnvBuilder._setup_pip = broken\n"
+    )
+    env = {**os.environ, "PYTHONPATH": str(tmp_path)}
+    bad = subprocess.run(
+        [sys.executable, "-m", "venv", str(tmp_path / "bad")],
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert bad.returncode != 0 and "ensurepip forbidden" in bad.stderr
+    monkeypatch.setenv("PYTHONPATH", str(tmp_path))
+    a02_remote._run([sys.executable, "-m", "venv", "--without-pip", str(tmp_path / "good")])
+    assert (tmp_path / "good/bin/python").exists()
+
+
+@pytest.mark.parametrize("failure", ["exit", "timeout", "missing"])
+def test_bootstrap_command_errors_preserve_complete_sanitized_stderr(
+    tmp_path: Path, monkeypatch: Any, failure: str
+) -> None:
+    import subprocess
+
+    secret = "test-secret-never-persist"
+    monkeypatch.setenv("HF_TOKEN", secret)
+    stderr = "x" * 5000 + f"\n{secret} https://owner:password@example.test/private\nlast line"
+
+    def fail(*args: Any, **kwargs: Any) -> Any:
+        if failure == "timeout":
+            raise subprocess.TimeoutExpired(["uv"], 1, stderr=stderr.encode())
+        if failure == "missing":
+            raise FileNotFoundError("uv missing")
+        return subprocess.CompletedProcess(["uv"], 42, "", stderr)
+
+    monkeypatch.setattr(subprocess, "run", fail)
+    with pytest.raises(a02_remote.CommandError) as caught:
+        a02_remote._run(["uv", "sync"], stage="ENGINE_FROZEN_SYNC")
+    evidence = caught.value.evidence
+    assert evidence["stage"] == "ENGINE_FROZEN_SYNC"
+    assert evidence["exit_status"] == (42 if failure == "exit" else None)
+    if failure != "missing":
+        assert "x" * 5000 in str(evidence["stderr"])
+        assert str(evidence["stderr"]).endswith("last line")
+    assert secret not in str(evidence) and "owner:password" not in str(evidence)
+
+
+def test_engine_and_inference_keep_distinct_pinned_interpreters(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    import sys
+
+    monkeypatch.setattr(a02_remote, "WORK", tmp_path)
+    monkeypatch.setattr(sys, "path", list(sys.path))
+    calls: list[tuple[list[str], dict[str, Any]]] = []
+
+    def execute(command: list[str], **kwargs: Any) -> str:
+        calls.append((command, kwargs))
+        if "platform.python_version()" in command[-1]:
+            return "3.12.13"
+        if "site.getsitepackages()" in command[-1]:
+            return str(tmp_path / "inference-site")
+        return ""
+
+    monkeypatch.setattr(a02_remote, "_run", execute)
+    source = tmp_path / "source"
+    assert a02_remote._setup_engine(source, Path("/uv")) == source / ".venv/bin/python"
+    assert (
+        a02_remote._setup_inference(Path("/uv"), source) == tmp_path / "inference-venv/bin/python"
+    )
+    assert calls[0][0] == ["/uv", "python", "install", "3.12.13"]
+    assert "--frozen" in calls[1][0]
+    assert "--system-site-packages" in calls[3][0] and sys.executable in calls[3][0]
+    assert "--no-deps" in calls[4][0] and "--only-binary=:all:" in calls[4][0]
+    assert "pip" not in calls[1][0]
+
+
+def test_third_attempt_requires_closed_immutable_incident_chain(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    original = tmp_path / "one-attempt-used.json"
+    original.write_text(json.dumps({"run_id": "res541-a02-219a94c0d64e3af6c0cce654"}))
+    recovery = tmp_path / "recovery.json"
+    recovery.write_text(
+        json.dumps({"files": {original.name: hashlib.sha256(original.read_bytes()).hexdigest()}})
+    )
+    previous = tmp_path / "previous"
+    previous.mkdir()
+    marker = tmp_path / "attempt-002-used.json"
+    marker.write_text(json.dumps({"attempt": 2, "run_id": "previous"}))
+    (previous / "control.json").write_text(
+        json.dumps(
+            {
+                "stop_exit_code": 0,
+                "session_absent_after_stop": True,
+                "watchdog_phase": "DISARMED",
+            }
+        )
+    )
+    (previous / "remote-report.json").write_text(
+        json.dumps(
+            {
+                "cases": [],
+                "failure_stage": "RUNTIME_SETUP",
+                "failure_message": "ensurepip failed",
+            }
+        )
+    )
+    inventory = tmp_path / "third-recovery.json"
+    paths = [original, recovery, marker, previous / "control.json", previous / "remote-report.json"]
+    inventory.write_text(
+        json.dumps(
+            {
+                "previous_run_id": "previous",
+                "files": {
+                    str(path.relative_to(tmp_path)): hashlib.sha256(path.read_bytes()).hexdigest()
+                    for path in paths
+                },
+            }
+        )
+    )
+    for name, value in {
+        "REPORT_DIR": tmp_path,
+        "ATTEMPT_MARKER": original,
+        "REPLACEMENT_MARKER": marker,
+        "RECOVERY_INVENTORY": recovery,
+        "THIRD_RECOVERY": inventory,
+        "THIRD_MARKER": tmp_path / "attempt-003-used.json",
+        "RECOVERY_INVENTORY_SHA256": hashlib.sha256(recovery.read_bytes()).hexdigest(),
+        "THIRD_RECOVERY_SHA256": hashlib.sha256(inventory.read_bytes()).hexdigest(),
+    }.items():
+        monkeypatch.setattr(a02_execution, name, value)
+    before = [path.read_bytes() for path in paths]
+    result = a02_execution._check_attempt(3)
+    assert result["previous_run_id"] == "previous"
+    assert before == [path.read_bytes() for path in paths]
+    with pytest.raises(a02_execution.RunError, match="only the separately authorized"):
+        a02_execution._check_attempt(4)
+    a02_execution.THIRD_MARKER.write_text("consumed")
+    with pytest.raises(a02_execution.RunError, match="already been used"):
+        a02_execution._check_attempt(3)
+    marker.write_text("tampered")
+    with pytest.raises(a02_execution.RunError, match="previous attempt evidence changed"):
+        a02_execution._check_attempt(3, allow_used=True)
+
+
+def test_remote_bootstrap_failure_retains_report_without_drive(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    import sys
+
+    monkeypatch.setattr(sys, "path", list(sys.path))
+    monkeypatch.setattr(a02_remote, "WORK", tmp_path)
+    monkeypatch.setattr(a02_remote, "REMOTE_REPORT", tmp_path / "report.json")
+    monkeypatch.setattr(a02_remote, "REMOTE_DRIVE_RECEIPT", tmp_path / "drive.json")
+    monkeypatch.setattr(a02_remote, "DRIVE_RUN_DIR", None)
+    monkeypatch.delenv("A02_DRIVE_IDENTITY_CONFIRMED", raising=False)
+    source = tmp_path / "source"
+    protocol = {
+        "schema": "RES541_A02_PROTOCOL_V1",
+        "status": "FROZEN_PRE_INFERENCE",
+        "experiment_files": {},
+        "scientific_source_files": {},
+        "scientific_source_sha256": hashlib.sha256(b"{}").hexdigest(),
+    }
+    data = json.dumps(protocol).encode()
+
+    def extract(*args: Any) -> None:
+        (source / "experiments/a02").mkdir(parents=True)
+        (source / "experiments/a02/protocol-v1.json").write_bytes(data)
+
+    archive = tmp_path / "source.tar"
+    archive.write_bytes(b"synthetic archive")
+    binding = tmp_path / "binding.json"
+    binding.write_text(
+        json.dumps(
+            {
+                "source_archive_sha256": hashlib.sha256(archive.read_bytes()).hexdigest(),
+                "run_id": "synthetic",
+                "source_revision": "synthetic",
+                "source_tree": "synthetic",
+                "protocol_sha256": hashlib.sha256(data).hexdigest(),
+                "preflight_sha256": "synthetic",
+            }
+        )
+    )
+    monkeypatch.setattr(a02_remote, "SOURCE_ARCHIVE", archive)
+    monkeypatch.setattr(a02_remote, "BINDING_PATH", binding)
+    monkeypatch.setattr(a02_remote, "_safe_extract", extract)
+    monkeypatch.setattr(a02_remote, "_runtime_gate", lambda: (None, {"synthetic": True}))
+
+    def fail() -> Any:
+        raise a02_remote.CommandError(
+            ["python", "-m", "pip"], 7, "full stderr\nlast", "UV_PINNED_INSTALL"
+        )
+
+    monkeypatch.setattr(a02_remote, "_install_uv", fail)
+    assert a02_remote.run() == 1
+    report = json.loads(a02_remote.REMOTE_REPORT.read_bytes())
+    assert report["failure_stage"] == "UV_BOOTSTRAP"
+    assert report["command_failure"]["stderr"] == "full stderr\nlast"
+    assert report["command_failure"]["exit_status"] == 7
+    assert report["runtime_inventory_before_bootstrap"] == {"synthetic": True}
+    assert report["partial_case_count"] == 0
+    assert report["drive_persistence"]["status"] == "NOT_MOUNTED"
+    assert a02_remote.REMOTE_DRIVE_RECEIPT.exists()
+
+
+def test_third_confirmation_cannot_reuse_previous_consent() -> None:
+    doc = {
+        "attempt": 3,
+        "recovery": {"recovery_inventory_sha256": "third-incident-chain"},
+        "source_revision": "current-source",
+        "compute_unit_balance": 10.0,
+        "drive_account_matches_colab": True,
+        "drive_probe_sha256": "probe",
+    }
+    binding = {"protocol_sha256": "current-protocol"}
+    phrase = a02_execution._confirmation(doc, binding)
+    assert "attempt=3 | recovery=third-incident-chain" in phrase
+    assert "source=current-source | protocol=current-protocol" in phrase
+    assert "current-balance=10.00 CU" in phrase
+    assert "no retry" in phrase and "inference only" in phrase
+    assert phrase != a02_execution._confirmation({**doc, "attempt": 2}, binding)
+    assert phrase != a02_execution._confirmation({**doc, "compute_unit_balance": 9.0}, binding)
