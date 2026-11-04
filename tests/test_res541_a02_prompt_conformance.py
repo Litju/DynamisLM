@@ -1,4 +1,4 @@
-"""CPU conformance checks against the independently retained A0.2 preflight."""
+"""CPU conformance checks of the A0.2 prompt fixture against the pinned tokenizer."""
 
 from __future__ import annotations
 

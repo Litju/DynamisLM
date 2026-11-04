@@ -118,10 +118,18 @@ def test_protocol_binds_all_scientific_and_runner_source_files() -> None:
     assert prompt_repair["prompt_implementation_sha256"]["previous"]["scripts/a02_remote.py"] == (
         "f4e563a1b832006f15919d6f2c6bc52ccb0df3fe6470e4cc8fddcac649133934"
     )
-    assert revision["recovery_verifier_sha256"] == {
-        "previous": None,
-        "current": protocol["experiment_files"]["scripts/a02_recover.py"],
-    }
+    recovery_revision = next(
+        item
+        for item in protocol["pre_inference_revision_history"]
+        if item.get("recovery_verifier_sha256", {}).get("previous") is None
+        and item.get("recovery_verifier_sha256", {}).get("current")
+    )
+    assert (
+        recovery_revision["recovery_verifier_sha256"]["current"]
+        == (protocol["experiment_files"]["scripts/a02_recover.py"])
+    )
+    assert "scripts/a02_experiment.py" in revision["change_summary"]
+    assert "tests/test_res541_a02.py" in revision["change_summary"]
     assert (
         revision["preserved_bindings"]["new_case_manifest_sha256"]
         == (protocol["new_a02_cases"]["case_manifest_sha256"])

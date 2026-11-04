@@ -924,6 +924,11 @@ def revise_pre_inference_protocol() -> None:
         raise ValueError("pre-inference revision would change frozen scientific inputs or rules")
     if previous.get("experiment_files") == current.get("experiment_files"):
         raise ValueError("no source binding changed; refusing a no-op protocol revision")
+    changed_files = sorted(
+        name
+        for name in previous["experiment_files"].keys() | current["experiment_files"].keys()
+        if previous["experiment_files"].get(name) != current["experiment_files"].get(name)
+    )
     runner_files = ("scripts/a02_remote.py", "scripts/a02_execution.py")
     prompt_files = (
         "scripts/a02_prompt.py",
@@ -943,11 +948,10 @@ def revise_pre_inference_protocol() -> None:
         },
         "current_runner_sha256": {name: current["experiment_files"][name] for name in runner_files},
         "change_summary": (
-            "Route A0.2 new-case request encoding through one Serialization V3 and RES-403 "
-            "action-prompt contract in preflight, remote inference, and scoring; compare all "
-            "26 rendered prompts, token IDs, lengths, and hashes with the retained frozen "
-            "preflight before generation. The prior runner and scorer used plain JSON for the "
-            "ten new cases. Scientific inputs, prompt text, model, and rules remain frozen."
+            "Use the shared Serialization V3/RES-403 contract and exact 26-case prompt "
+            "conformance checks. Changed source bindings: "
+            f"{', '.join(changed_files)}. Frozen scientific inputs, prompt bytes, model, "
+            "and thresholds remain unchanged."
         ),
         "prompt_implementation_sha256": {
             "previous": {
