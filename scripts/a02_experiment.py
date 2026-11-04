@@ -608,12 +608,8 @@ def build_protocol() -> dict[str, Any]:
     tokenizer_preflight_path = E_ROOT / "a02/preflight-v1.json"
     if not tokenizer_preflight_path.is_file():
         raise ValueError("pinned-tokenizer CPU preflight must complete before protocol freeze")
-    regression_preflight_path = ROOT / "experiments/a02/tokenizer-preflight-v1.json"
-    if regression_preflight_path.read_bytes() != tokenizer_preflight_path.read_bytes():
-        raise ValueError(
-            "repository regression preflight differs from the retained frozen artifact"
-        )
-    tokenizer_preflight = json.loads(tokenizer_preflight_path.read_text())
+    tokenizer_preflight_bytes = tokenizer_preflight_path.read_bytes()
+    tokenizer_preflight = json.loads(tokenizer_preflight_bytes)
     if (
         tokenizer_preflight.get("status") != "READY_FOR_OWNER_GATE"
         or tokenizer_preflight.get("historical_count") != 16
@@ -631,6 +627,43 @@ def build_protocol() -> dict[str, Any]:
         > 1024
     ):
         raise ValueError("tokenizer preflight is incomplete or contains model/GPU work")
+    prompt_fields = {
+        "historical_cases": (
+            "case_id",
+            "user_message_sha256",
+            "rendered_prompt",
+            "rendered_prompt_sha256",
+            "prompt_token_ids",
+            "prompt_token_ids_sha256",
+            "prompt_tokens",
+        ),
+        "new_action_cases": (
+            "case_id",
+            "request_sha256",
+            "rendered_prompt",
+            "rendered_prompt_sha256",
+            "prompt_token_ids",
+            "prompt_token_ids_sha256",
+            "prompt_tokens",
+        ),
+    }
+    prompt_fixture = {
+        "schema": "RES541_A02_PROMPT_CONFORMANCE_V1",
+        "source_preflight_sha256": sha256(tokenizer_preflight_bytes),
+        "tokenizer_revision": tokenizer_preflight["tokenizer_revision"],
+        "tokenizer_files": tokenizer_preflight["tokenizer_files"],
+        "chat_template_sha256": tokenizer_preflight["chat_template_sha256"],
+        "template_dates": tokenizer_preflight["template_dates"],
+        "model_weights_loaded": tokenizer_preflight["model_weights_loaded"],
+        "gpu_allocated": tokenizer_preflight["gpu_allocated"],
+        **{
+            key: [{field: row[field] for field in fields} for row in tokenizer_preflight[key]]
+            for key, fields in prompt_fields.items()
+        },
+    }
+    regression_fixture_path = ROOT / "experiments/a02/prompt-conformance-v1.json"
+    if canonical(json.loads(regression_fixture_path.read_text())) != canonical(prompt_fixture):
+        raise ValueError("prompt regression fixture differs from the retained frozen preflight")
     assets = {
         "model_id": "HuggingFaceTB/SmolLM3-3B",
         "model_revision": "a07cc9a04f16550a088caea529712d1d335b0ac1",
@@ -645,7 +678,7 @@ def build_protocol() -> dict[str, Any]:
         "experiments/a01/system-prompt-v1.txt",
         "experiments/a02/system-action-v1.txt",
         "experiments/a02/system-final-v1.txt",
-        "experiments/a02/tokenizer-preflight-v1.json",
+        "experiments/a02/prompt-conformance-v1.json",
         "experiments/a02/README.md",
         "experiments/a02/cases-v1.json",
         "experiments/a02/historical-inputs-v1.json",

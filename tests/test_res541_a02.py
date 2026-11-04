@@ -131,9 +131,9 @@ def test_protocol_binds_all_scientific_and_runner_source_files() -> None:
         revision["preserved_bindings"]["tokenizer_preflight_sha256"]
         == (protocol["tokenizer_preflight"]["artifact_sha256"])
     )
-    frozen_preflight = ROOT / "experiments/a02/tokenizer-preflight-v1.json"
+    prompt_fixture = json.loads((ROOT / "experiments/a02/prompt-conformance-v1.json").read_bytes())
     assert (
-        a02_preflight.sha256(frozen_preflight.read_bytes())
+        prompt_fixture["source_preflight_sha256"]
         == (protocol["tokenizer_preflight"]["artifact_sha256"])
     )
     a02_experiment.verify_protocol_source_bindings(protocol)
@@ -1208,21 +1208,27 @@ def test_remote_bootstrap_failure_retains_report_without_drive(
     monkeypatch.setattr(a02_remote, "DRIVE_RUN_DIR", None)
     monkeypatch.delenv("A02_DRIVE_IDENTITY_CONFIRMED", raising=False)
     source = tmp_path / "source"
-    frozen_preflight = json.dumps({"schema": "synthetic"}).encode()
+    source_preflight = b"synthetic retained tokenizer preflight"
+    prompt_fixture = json.dumps(
+        {
+            "schema": "synthetic",
+            "source_preflight_sha256": hashlib.sha256(source_preflight).hexdigest(),
+        }
+    ).encode()
     protocol = {
         "schema": "RES541_A02_PROTOCOL_V1",
         "status": "FROZEN_PRE_INFERENCE",
         "experiment_files": {},
         "scientific_source_files": {},
         "scientific_source_sha256": hashlib.sha256(b"{}").hexdigest(),
-        "tokenizer_preflight": {"artifact_sha256": hashlib.sha256(frozen_preflight).hexdigest()},
+        "tokenizer_preflight": {"artifact_sha256": hashlib.sha256(source_preflight).hexdigest()},
     }
     data = json.dumps(protocol).encode()
 
     def extract(*args: Any) -> None:
         (source / "experiments/a02").mkdir(parents=True)
         (source / "experiments/a02/protocol-v1.json").write_bytes(data)
-        (source / "experiments/a02/tokenizer-preflight-v1.json").write_bytes(frozen_preflight)
+        (source / "experiments/a02/prompt-conformance-v1.json").write_bytes(prompt_fixture)
 
     archive = tmp_path / "source.tar"
     archive.write_bytes(b"synthetic archive")

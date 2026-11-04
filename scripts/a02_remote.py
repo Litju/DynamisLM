@@ -860,11 +860,14 @@ def run() -> int:
             or protocol["status"] != "FROZEN_PRE_INFERENCE"
         ):
             raise ValueError("A02 protocol is not frozen")
-        frozen_preflight_path = source / "experiments/a02/tokenizer-preflight-v1.json"
-        frozen_preflight_bytes = frozen_preflight_path.read_bytes()
-        if _sha(frozen_preflight_bytes) != protocol["tokenizer_preflight"]["artifact_sha256"]:
-            raise ValueError("source tokenizer preflight differs from its frozen artifact hash")
-        frozen_preflight = json.loads(frozen_preflight_bytes)
+        prompt_fixture = json.loads(
+            (source / "experiments/a02/prompt-conformance-v1.json").read_bytes()
+        )
+        if (
+            prompt_fixture.get("source_preflight_sha256")
+            != protocol["tokenizer_preflight"]["artifact_sha256"]
+        ):
+            raise ValueError("prompt fixture does not bind to the retained tokenizer preflight")
         for name, expected in protocol["experiment_files"].items():
             if hashlib.sha256((source / name).read_bytes()).hexdigest() != expected:
                 raise ValueError(f"frozen A02 source hash mismatch: {name}")
@@ -1001,8 +1004,8 @@ def run() -> int:
             "cases"
         ]
         new_cases = json.loads((source / "experiments/a02/cases-v1.json").read_text())["cases"]
-        historical_frozen = {row["case_id"]: row for row in frozen_preflight["historical_cases"]}
-        new_frozen = {row["case_id"]: row for row in frozen_preflight["new_action_cases"]}
+        historical_frozen = {row["case_id"]: row for row in prompt_fixture["historical_cases"]}
+        new_frozen = {row["case_id"]: row for row in prompt_fixture["new_action_cases"]}
         if set(historical_frozen) != {row["case_id"] for row in historical} or set(new_frozen) != {
             row["case_id"] for row in new_cases
         }:

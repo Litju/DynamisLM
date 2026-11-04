@@ -14,7 +14,7 @@ from scripts import a02_engine, a02_experiment, a02_preflight, a02_prompt, a02_r
 from dynamislm.serialization import canonical_json
 
 ROOT = Path(__file__).resolve().parents[1]
-FROZEN_PATH = ROOT / "experiments/a02/tokenizer-preflight-v1.json"
+FROZEN_PATH = ROOT / "experiments/a02/prompt-conformance-v1.json"
 TOKENIZER_PATH = Path("/mnt/e/DynamisLM-A0/a01/tokenizer")
 MODEL_ID = "HuggingFaceTB/SmolLM3-3B"
 MODEL_REVISION = "a07cc9a04f16550a088caea529712d1d335b0ac1"
@@ -66,7 +66,7 @@ def _assert_frozen(rendered: str, token_ids: list[int], frozen: dict[str, Any]) 
 def test_actual_pinned_tokenizer_reproduces_all_26_frozen_action_prompts(
     tokenizer: Any,
 ) -> None:
-    assert _sha(FROZEN_PATH.read_bytes()) == PROTOCOL["tokenizer_preflight"]["artifact_sha256"]
+    assert FROZEN["source_preflight_sha256"] == PROTOCOL["tokenizer_preflight"]["artifact_sha256"]
     assert FROZEN["tokenizer_revision"] == MODEL_REVISION
     assert FROZEN["tokenizer_files"] == PROTOCOL["model"]["tokenizer_files"]
     assert FROZEN["model_weights_loaded"] is False
