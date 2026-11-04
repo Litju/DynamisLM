@@ -819,6 +819,12 @@ def test_replacement_cleanup_faults(
     monkeypatch.setattr(a02_execution, "ATTEMPT_MARKER", original)
     monkeypatch.setattr(a02_execution, "REPLACEMENT_MARKER", marker)
     monkeypatch.setattr(a02_execution, "preflight", lambda attempt: doc)
+    if fault == "drive_unavailable":
+
+        def unavailable_drive() -> Any:
+            raise OSError("Drive unavailable")
+
+        monkeypatch.setattr(a02_execution, "_drive_owner", unavailable_drive)
     monkeypatch.setattr(a02_execution, "_copy_frozen_inputs", lambda path: [])
     monkeypatch.setattr(a02_execution, "_archive_source", lambda path: path.write_bytes(b"source"))
     monkeypatch.setattr(a02_execution, "_confirmation", lambda d, b: "owner approval")
@@ -865,6 +871,7 @@ def test_replacement_cleanup_faults(
         )
 
     def score(command: list[str], **kwargs: Any) -> Any:
+        assert calls.index("stop") < calls.index("sessions")
         output = Path(command[command.index("--output-dir") + 1])
         (output / "verified.json").write_text(
             json.dumps({"schema": "RES541_A02_VERIFIED_REPORT_V1", "terminal_outcome": "PASS"})

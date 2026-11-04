@@ -50,7 +50,7 @@
     "scripts/a0_engine.py": "6d6a92b32c3af3a698b88923854da3a8b12d3f1cc18264fc00eee9b0a64b0f33",
     "scripts/res403_tool_protocol.py": "f8de73f004e647ec2fead275abd0a3eba95fedcdb5a236457573c618caf1e669",
     "tests/test_longitudinal_statistics.py": "e9f7a2eda6e8ae97ebf923fdb28beff879ada827397b5bf31a05d366c4bbcce4",
-    "tests/test_res541_a02.py": "39e52963b14ae0ecdead42183bc96e587e52136c0b22c39e497665919da878dd",
+    "tests/test_res541_a02.py": "4381a53d9c256c4cc424380c3233dabe5d8bb82fc01b193e12eee694507ce1a6",
     "uv.lock": "f274463b36249129fa8ba059c941031016cc201784cfc8ff43f1ff054dca50bd"
   },
   "historical_a01": {
