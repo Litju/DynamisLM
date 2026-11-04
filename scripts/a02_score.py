@@ -231,6 +231,31 @@ def _verify_generation_settings(
         raise ValueError("retained generation settings or latency differ from the frozen protocol")
 
 
+def _decoding_metadata_equal(actual: dict[str, Any], expected: dict[str, Any]) -> bool:
+    if not isinstance(actual, dict) or not isinstance(expected, dict):
+        return False
+    if actual == expected:
+        return True
+    if actual.keys() != expected.keys():
+        return False
+    actual_date = actual.get("template_date")
+    expected_date = expected.get("template_date")
+    if not isinstance(actual_date, str) or not isinstance(expected_date, str):
+        return False
+    try:
+        actual_day = datetime.strptime(actual_date, "%d %B %Y").date()
+        expected_day = datetime.strptime(expected_date, "%d %B %Y").date()
+    except ValueError:
+        return False
+    allowed = {expected_day.strftime("%d %B %Y"), f"{expected_day.day} {expected_day:%B %Y}"}
+    return (
+        actual_day == expected_day
+        and actual_date in allowed
+        and expected_date in allowed
+        and {**actual, "template_date": expected_date} == expected
+    )
+
+
 def _verify_generation(
     generation: dict[str, Any],
     messages: list[dict[str, str]],
@@ -780,16 +805,16 @@ def verify_run(
         )
     ):
         raise ValueError("remote peak GPU memory evidence is missing or exceeds total VRAM")
-    if (
-        any(
-            remote["runtime"].get(remote_key) != protocol["new_a02_cases"][protocol_key]
-            for remote_key, protocol_key in (
-                ("new_action_decoding", "action_decoding"),
-                ("final_decoding", "final_decoding"),
-            )
+    if any(
+        not _decoding_metadata_equal(
+            remote["runtime"].get(remote_key), protocol["new_a02_cases"][protocol_key]
         )
-        or remote["runtime"].get("historical_action_decoding")
-        != protocol["historical_a01"]["decoding"]
+        for remote_key, protocol_key in (
+            ("new_action_decoding", "action_decoding"),
+            ("final_decoding", "final_decoding"),
+        )
+    ) or not _decoding_metadata_equal(
+        remote["runtime"].get("historical_action_decoding"), protocol["historical_a01"]["decoding"]
     ):
         raise ValueError("remote action/final decoding differs from the frozen protocol")
     expected_packages = {

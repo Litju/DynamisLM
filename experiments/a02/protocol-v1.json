@@ -44,16 +44,17 @@
     "scripts/a01_runtime.py": "d7528328f58f5a91ace07383c68e5a0d365f0ecd81e539d5291bff76c3d0e68e",
     "scripts/a02_engine.py": "74ce91055edd84318040f223b5808362bc8221e6d903194ec3721428398f97a8",
     "scripts/a02_execution.py": "1a5a846321f88cc5b8c0cb921789c719988472856560e3ac3d11836889434e16",
-    "scripts/a02_experiment.py": "c0e4bfb60b5518fc7ab590aa1b242af9b2b765c8ef407a9837fd23e98a7a6361",
+    "scripts/a02_experiment.py": "4fa5cbcc5c37ea28fa9d503e6475a7a398f9ed882d6a86e16956c9135c71f5c2",
     "scripts/a02_preflight.py": "4619d6a01701a086ad2543d6e186758d4f91a4583f36f7e3ac137a70ab5b7638",
     "scripts/a02_prompt.py": "2a772b83d5cf99fddd8e63972cd9b6c6fe576889c269c6fd4a6ee256391dd3db",
+    "scripts/a02_recover.py": "5fe3b3fd68486955d696cc215927a3c269f925170f3477640d7c18d08470bdd3",
     "scripts/a02_remote.py": "866113240c2cf2c27ad42241d65a31308ff546c2b07ce13a787280977de76544",
-    "scripts/a02_score.py": "7c0f624438abbb50c770921573de5b9f0cc137cc061994a43edfab3b20203ace",
+    "scripts/a02_score.py": "92dd4043d563b25508ae5d14f2a1b56b3e93738a28eea626189babfce28c14c5",
     "scripts/a0_engine.py": "6d6a92b32c3af3a698b88923854da3a8b12d3f1cc18264fc00eee9b0a64b0f33",
     "scripts/ci.sh": "dda571f5fe91664ae81ebfa9ffc9da9ad406cf2437214edbda0b4094b4ee9248",
     "scripts/res403_tool_protocol.py": "f8de73f004e647ec2fead275abd0a3eba95fedcdb5a236457573c618caf1e669",
     "tests/test_longitudinal_statistics.py": "e9f7a2eda6e8ae97ebf923fdb28beff879ada827397b5bf31a05d366c4bbcce4",
-    "tests/test_res541_a02.py": "6a98f9324f69f1a6e65f9756fa295b1a340bd46b9408d14b3a5c9dd219b2a835",
+    "tests/test_res541_a02.py": "a9aea38be5f3e40a157f27369bf9291f84113ff7fc835e5e210efe35062bb34d",
     "tests/test_res541_a02_prompt_conformance.py": "bb7b92a2bf6fe9a704df90390bf28d63871ac0ba75c04638416b2e399107edb1",
     "uv.lock": "9fc27c03d239a42ce6f0e411cbb9b4e210163139fd7c5b53f3f48fdddfc4eb50"
   },
@@ -182,24 +183,28 @@
     },
     "previous_runner_sha256": {
       "scripts/a02_execution.py": "1a5a846321f88cc5b8c0cb921789c719988472856560e3ac3d11836889434e16",
-      "scripts/a02_remote.py": "33e0038ae7afe43eae231a522e30f93f15a4ac13a956c76540f3030caec7e12f"
+      "scripts/a02_remote.py": "866113240c2cf2c27ad42241d65a31308ff546c2b07ce13a787280977de76544"
     },
     "prompt_implementation_sha256": {
       "current": {
         "scripts/a02_preflight.py": "4619d6a01701a086ad2543d6e186758d4f91a4583f36f7e3ac137a70ab5b7638",
         "scripts/a02_prompt.py": "2a772b83d5cf99fddd8e63972cd9b6c6fe576889c269c6fd4a6ee256391dd3db",
         "scripts/a02_remote.py": "866113240c2cf2c27ad42241d65a31308ff546c2b07ce13a787280977de76544",
-        "scripts/a02_score.py": "7c0f624438abbb50c770921573de5b9f0cc137cc061994a43edfab3b20203ace"
+        "scripts/a02_score.py": "92dd4043d563b25508ae5d14f2a1b56b3e93738a28eea626189babfce28c14c5"
       },
       "previous": {
         "scripts/a02_preflight.py": "4619d6a01701a086ad2543d6e186758d4f91a4583f36f7e3ac137a70ab5b7638",
         "scripts/a02_prompt.py": "2a772b83d5cf99fddd8e63972cd9b6c6fe576889c269c6fd4a6ee256391dd3db",
-        "scripts/a02_remote.py": "33e0038ae7afe43eae231a522e30f93f15a4ac13a956c76540f3030caec7e12f",
-        "scripts/a02_score.py": "7c0f624438abbb50c770921573de5b9f0cc137cc061994a43edfab3b20203ace"
+        "scripts/a02_remote.py": "866113240c2cf2c27ad42241d65a31308ff546c2b07ce13a787280977de76544",
+        "scripts/a02_score.py": "92dd4043d563b25508ae5d14f2a1b56b3e93738a28eea626189babfce28c14c5"
       }
     },
-    "revision": 14,
-    "supersedes_protocol_sha256": "7b85d2e2fbec106c7c329be8b871d193dcf59a9bbf7703400368cee7d85c75f3"
+    "recovery_verifier_sha256": {
+      "current": "5fe3b3fd68486955d696cc215927a3c269f925170f3477640d7c18d08470bdd3",
+      "previous": null
+    },
+    "revision": 16,
+    "supersedes_protocol_sha256": "c5638c17225a344bc0b29d55a1e66fc44f2aaa16eda307984d8ec5dd117826e4"
   },
   "pre_inference_revision_history": [
     {
@@ -567,6 +572,82 @@
       },
       "revision": 13,
       "supersedes_protocol_sha256": "e81cb7154cdec82998029f31442bd1d69341b8e85088df33a3d77c488fe7e76d"
+    },
+    {
+      "change_summary": "Route A0.2 new-case request encoding through one Serialization V3 and RES-403 action-prompt contract in preflight, remote inference, and scoring; compare all 26 rendered prompts, token IDs, lengths, and hashes with the retained frozen preflight before generation. The prior runner and scorer used plain JSON for the ten new cases. Scientific inputs, prompt text, model, and rules remain frozen.",
+      "current_runner_sha256": {
+        "scripts/a02_execution.py": "1a5a846321f88cc5b8c0cb921789c719988472856560e3ac3d11836889434e16",
+        "scripts/a02_remote.py": "866113240c2cf2c27ad42241d65a31308ff546c2b07ce13a787280977de76544"
+      },
+      "preserved_bindings": {
+        "action_prompt_sha256": "6b57999a00d29a86364b6541844686e25cbc70662c3b93f444c3ce630fc9aeba",
+        "decision_rules_sha256": "dddb5d93812b054e7409aaac713045d91b0933a5ef691689ed526c91688255e9",
+        "evaluation_rules_sha256": "8d57f98564d541068d9548dd4af4aea1c5218b4733b8b50ed18b5e95e1a28316",
+        "final_prompt_sha256": "792de532f47612206786a5235ff4176cee9775dc1f6913754b7ee2e9462a1ca0",
+        "historical_case_manifest_sha256": "619015ea1df55e8507316ff764e422ce95605549893d0748fb65cc5ad6aa7f38",
+        "historical_inputs_sha256": "811cfaa6e8caf67e072c02539d719d9cec0dca02da6260808b22bc4951fa561d",
+        "model_revision": "a07cc9a04f16550a088caea529712d1d335b0ac1",
+        "new_case_manifest_sha256": "f3a56dde310b2d64f2f8db2f9d02a432dd712d7b4a8aba50f836f1b3d6673dd3",
+        "tokenizer_preflight_sha256": "c6237858d84acd7c6350b9e70642d636f11fdbf4d3e87a7eea66bbd2d549b8a7"
+      },
+      "previous_runner_sha256": {
+        "scripts/a02_execution.py": "1a5a846321f88cc5b8c0cb921789c719988472856560e3ac3d11836889434e16",
+        "scripts/a02_remote.py": "33e0038ae7afe43eae231a522e30f93f15a4ac13a956c76540f3030caec7e12f"
+      },
+      "prompt_implementation_sha256": {
+        "current": {
+          "scripts/a02_preflight.py": "4619d6a01701a086ad2543d6e186758d4f91a4583f36f7e3ac137a70ab5b7638",
+          "scripts/a02_prompt.py": "2a772b83d5cf99fddd8e63972cd9b6c6fe576889c269c6fd4a6ee256391dd3db",
+          "scripts/a02_remote.py": "866113240c2cf2c27ad42241d65a31308ff546c2b07ce13a787280977de76544",
+          "scripts/a02_score.py": "7c0f624438abbb50c770921573de5b9f0cc137cc061994a43edfab3b20203ace"
+        },
+        "previous": {
+          "scripts/a02_preflight.py": "4619d6a01701a086ad2543d6e186758d4f91a4583f36f7e3ac137a70ab5b7638",
+          "scripts/a02_prompt.py": "2a772b83d5cf99fddd8e63972cd9b6c6fe576889c269c6fd4a6ee256391dd3db",
+          "scripts/a02_remote.py": "33e0038ae7afe43eae231a522e30f93f15a4ac13a956c76540f3030caec7e12f",
+          "scripts/a02_score.py": "7c0f624438abbb50c770921573de5b9f0cc137cc061994a43edfab3b20203ace"
+        }
+      },
+      "revision": 14,
+      "supersedes_protocol_sha256": "7b85d2e2fbec106c7c329be8b871d193dcf59a9bbf7703400368cee7d85c75f3"
+    },
+    {
+      "change_summary": "Route A0.2 new-case request encoding through one Serialization V3 and RES-403 action-prompt contract in preflight, remote inference, and scoring; compare all 26 rendered prompts, token IDs, lengths, and hashes with the retained frozen preflight before generation. The prior runner and scorer used plain JSON for the ten new cases. Scientific inputs, prompt text, model, and rules remain frozen.",
+      "current_runner_sha256": {
+        "scripts/a02_execution.py": "1a5a846321f88cc5b8c0cb921789c719988472856560e3ac3d11836889434e16",
+        "scripts/a02_remote.py": "866113240c2cf2c27ad42241d65a31308ff546c2b07ce13a787280977de76544"
+      },
+      "preserved_bindings": {
+        "action_prompt_sha256": "6b57999a00d29a86364b6541844686e25cbc70662c3b93f444c3ce630fc9aeba",
+        "decision_rules_sha256": "dddb5d93812b054e7409aaac713045d91b0933a5ef691689ed526c91688255e9",
+        "evaluation_rules_sha256": "8d57f98564d541068d9548dd4af4aea1c5218b4733b8b50ed18b5e95e1a28316",
+        "final_prompt_sha256": "792de532f47612206786a5235ff4176cee9775dc1f6913754b7ee2e9462a1ca0",
+        "historical_case_manifest_sha256": "619015ea1df55e8507316ff764e422ce95605549893d0748fb65cc5ad6aa7f38",
+        "historical_inputs_sha256": "811cfaa6e8caf67e072c02539d719d9cec0dca02da6260808b22bc4951fa561d",
+        "model_revision": "a07cc9a04f16550a088caea529712d1d335b0ac1",
+        "new_case_manifest_sha256": "f3a56dde310b2d64f2f8db2f9d02a432dd712d7b4a8aba50f836f1b3d6673dd3",
+        "tokenizer_preflight_sha256": "c6237858d84acd7c6350b9e70642d636f11fdbf4d3e87a7eea66bbd2d549b8a7"
+      },
+      "previous_runner_sha256": {
+        "scripts/a02_execution.py": "1a5a846321f88cc5b8c0cb921789c719988472856560e3ac3d11836889434e16",
+        "scripts/a02_remote.py": "866113240c2cf2c27ad42241d65a31308ff546c2b07ce13a787280977de76544"
+      },
+      "prompt_implementation_sha256": {
+        "current": {
+          "scripts/a02_preflight.py": "4619d6a01701a086ad2543d6e186758d4f91a4583f36f7e3ac137a70ab5b7638",
+          "scripts/a02_prompt.py": "2a772b83d5cf99fddd8e63972cd9b6c6fe576889c269c6fd4a6ee256391dd3db",
+          "scripts/a02_remote.py": "866113240c2cf2c27ad42241d65a31308ff546c2b07ce13a787280977de76544",
+          "scripts/a02_score.py": "92dd4043d563b25508ae5d14f2a1b56b3e93738a28eea626189babfce28c14c5"
+        },
+        "previous": {
+          "scripts/a02_preflight.py": "4619d6a01701a086ad2543d6e186758d4f91a4583f36f7e3ac137a70ab5b7638",
+          "scripts/a02_prompt.py": "2a772b83d5cf99fddd8e63972cd9b6c6fe576889c269c6fd4a6ee256391dd3db",
+          "scripts/a02_remote.py": "866113240c2cf2c27ad42241d65a31308ff546c2b07ce13a787280977de76544",
+          "scripts/a02_score.py": "7c0f624438abbb50c770921573de5b9f0cc137cc061994a43edfab3b20203ace"
+        }
+      },
+      "revision": 15,
+      "supersedes_protocol_sha256": "dd38f08168812755d65cc1a0222f51c02b7724d78954cd7648bc7a897eaa3bd1"
     }
   ],
   "prepared_from_main": "b8510aef00d1e3208562ceefea083c0fa57901fa",

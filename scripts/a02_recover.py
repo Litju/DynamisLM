@@ -252,17 +252,13 @@ def adapted_scorer() -> tuple[Any, str]:
         'if not control.get("session_absent_after_stop") or control.get("stop_exit_code") != 0:': (
             'if control.get("stop_exit_code") != 0:'
         ),
-        'remote["runtime"].get(remote_key) != protocol["new_a02_cases"][protocol_key]': (
-            'not _recovery_decoding_equal(remote["runtime"].get(remote_key), '
-            'protocol["new_a02_cases"][protocol_key])'
-        ),
     }
     for before, after in replacements.items():
         if source.count(before) != 1:
             raise ValueError("frozen admission boundary differs from recovery V1")
         source = source.replace(before, after)
     namespace = vars(a02_score).copy()
-    namespace["_recovery_decoding_equal"] = _decoding_equal
+    namespace["_decoding_metadata_equal"] = _decoding_equal
     exec(compile(source, "<RES541_A02_RECOVERY_V1_ADMISSION_ONLY>", "exec"), namespace)
     return namespace["verify_run"], source
 

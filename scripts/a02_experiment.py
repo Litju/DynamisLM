@@ -690,6 +690,7 @@ def build_protocol() -> dict[str, Any]:
         "scripts/a02_prompt.py",
         "scripts/a02_remote.py",
         "scripts/a02_execution.py",
+        "scripts/a02_recover.py",
         "scripts/a02_score.py",
         "scripts/a01_runtime.py",
         "scripts/ci.sh",
@@ -953,6 +954,10 @@ def revise_pre_inference_protocol() -> None:
                 name: previous.get("experiment_files", {}).get(name) for name in prompt_files
             },
             "current": {name: current["experiment_files"][name] for name in prompt_files},
+        },
+        "recovery_verifier_sha256": {
+            "previous": previous.get("experiment_files", {}).get("scripts/a02_recover.py"),
+            "current": current["experiment_files"]["scripts/a02_recover.py"],
         },
         "preserved_bindings": {
             "historical_case_manifest_sha256": previous["historical_a01"]["case_manifest_sha256"],

@@ -118,6 +118,10 @@ def test_protocol_binds_all_scientific_and_runner_source_files() -> None:
     assert prompt_repair["prompt_implementation_sha256"]["previous"]["scripts/a02_remote.py"] == (
         "f4e563a1b832006f15919d6f2c6bc52ccb0df3fe6470e4cc8fddcac649133934"
     )
+    assert revision["recovery_verifier_sha256"] == {
+        "previous": None,
+        "current": protocol["experiment_files"]["scripts/a02_recover.py"],
+    }
     assert (
         revision["preserved_bindings"]["new_case_manifest_sha256"]
         == (protocol["new_a02_cases"]["case_manifest_sha256"])
@@ -605,6 +609,28 @@ def test_cpu_scorer_checks_frozen_decoding_and_latency_metadata() -> None:
         a02_score._verify_generation_settings(
             {**generation, "generation_latency_s": float("nan")}, date, 128
         )
+
+
+def test_cpu_scorer_normalizes_only_zero_padded_template_date_metadata() -> None:
+    expected = {
+        "do_sample": False,
+        "num_beams": 1,
+        "seed": 541,
+        "max_prompt_tokens": 1024,
+        "max_new_tokens": 128,
+        "enable_thinking": False,
+        "template_date": "3 November 2026",
+    }
+    assert a02_score._decoding_metadata_equal(
+        {**expected, "template_date": "03 November 2026"}, expected
+    )
+    for key, value in (
+        ("seed", 542),
+        ("max_new_tokens", 129),
+        ("template_date", "04 November 2026"),
+        ("template_date", "03 November 2026 extra"),
+    ):
+        assert not a02_score._decoding_metadata_equal({**expected, key: value}, expected)
 
 
 def test_semantic_downgrade_rules_count_numeric_substitutions_only() -> None:
