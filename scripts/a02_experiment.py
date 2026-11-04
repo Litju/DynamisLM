@@ -854,6 +854,65 @@ def freeze_protocol() -> None:
     )
 
 
+def revise_pre_inference_protocol() -> None:
+    previous_bytes = PROTOCOL_PATH.read_bytes()
+    previous = json.loads(previous_bytes)
+    current = build_protocol()
+    immutable = (
+        "schema",
+        "status",
+        "prepared_from_main",
+        "population",
+        "protected_data_used",
+        "model",
+        "historical_a01",
+        "new_a02_cases",
+        "scientific_source_sha256",
+        "scientific_source_files",
+        "tokenizer_preflight",
+        "historical_inputs_sha256",
+        "limits",
+        "evaluation_rules",
+        "decision_rules",
+    )
+    if previous.get("status") != "FROZEN_PRE_INFERENCE" or any(
+        previous.get(key) != current.get(key) for key in immutable
+    ):
+        raise ValueError("pre-inference revision would change frozen scientific inputs or rules")
+    if previous.get("experiment_files") == current.get("experiment_files"):
+        raise ValueError("no source binding changed; refusing a no-op protocol revision")
+    runner_files = ("scripts/a02_remote.py", "scripts/a02_execution.py")
+    revision = previous.get("pre_inference_revision", {}).get("revision", 1) + 1
+    revision_history = list(previous.get("pre_inference_revision_history", []))
+    if previous.get("pre_inference_revision"):
+        revision_history.append(previous["pre_inference_revision"])
+    current["pre_inference_revision"] = {
+        "revision": revision,
+        "supersedes_protocol_sha256": sha256(previous_bytes),
+        "previous_runner_sha256": {
+            name: previous["experiment_files"][name] for name in runner_files
+        },
+        "current_runner_sha256": {name: current["experiment_files"][name] for name in runner_files},
+        "change_summary": (
+            "Pre-inference compatibility and persistence repair: remove the unsupported "
+            "huggingface-hub snapshot_download trust_remote_code argument, constrain assets "
+            "to the pinned model manifest, and add owner-verified Colab Drive persistence."
+        ),
+        "preserved_bindings": {
+            "historical_case_manifest_sha256": previous["historical_a01"]["case_manifest_sha256"],
+            "new_case_manifest_sha256": previous["new_a02_cases"]["case_manifest_sha256"],
+            "historical_inputs_sha256": previous["historical_inputs_sha256"],
+            "action_prompt_sha256": previous["new_a02_cases"]["action_prompt_sha256"],
+            "final_prompt_sha256": previous["new_a02_cases"]["final_prompt_sha256"],
+            "model_revision": previous["model"]["model_revision"],
+            "evaluation_rules_sha256": sha256(canonical(previous["evaluation_rules"]).encode()),
+            "decision_rules_sha256": sha256(canonical(previous["decision_rules"]).encode()),
+        },
+    }
+    current["pre_inference_revision_history"] = revision_history
+    PROTOCOL_PATH.write_text(json.dumps(current, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
 def verify_protocol_source_bindings(protocol: dict[str, Any]) -> None:
     for name, expected in protocol["experiment_files"].items():
         if sha256((ROOT / name).read_bytes()) != expected:
@@ -880,7 +939,8 @@ def verify_protocol_source_bindings(protocol: dict[str, Any]) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "command", choices=("freeze", "verify", "freeze-historical", "freeze-protocol")
+        "command",
+        choices=("freeze", "verify", "freeze-historical", "freeze-protocol", "revise-protocol"),
     )
     args = parser.parse_args()
     if args.command == "freeze":
@@ -889,6 +949,8 @@ def main() -> int:
         freeze_historical_inputs()
     elif args.command == "freeze-protocol":
         freeze_protocol()
+    elif args.command == "revise-protocol":
+        revise_pre_inference_protocol()
     if args.command == "verify":
         print(json.dumps(verify_new_cases(), indent=2, sort_keys=True))
     else:

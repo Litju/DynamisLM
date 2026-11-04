@@ -12,6 +12,7 @@ import subprocess
 import sys
 import tarfile
 import time
+import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
@@ -23,7 +24,14 @@ UV_VERSION = "0.12.2"
 SOURCE_ARCHIVE = Path("/content/a02-source.tar")
 BINDING_PATH = Path("/content/a02-binding.json")
 REMOTE_REPORT = Path("/content/a02-report.json")
+REMOTE_DRIVE_RECEIPT = Path("/content/a02-drive-receipt.json")
 WORK = Path("/content/a02")
+DRIVE_FOLDER_ID = "1mibCkKr0cuWPuSKt_OaYiZcI_GkJ-WG6"
+DRIVE_PROJECT_NAME = "DynamisLM"
+DRIVE_EXPERIMENT_NAME = "RES-541-A0.2-Colab"
+DRIVE_MAX_FILE_BYTES = 8 * 1024**2
+DRIVE_MAX_TOTAL_BYTES = 64 * 1024**2
+DRIVE_MAX_CHECKPOINTS = 90
 HISTORICAL_DATE = datetime(2026, 10, 28, tzinfo=UTC)
 A02_DATE = datetime(2026, 11, 3, tzinfo=UTC)
 MAX_PROMPT_TOKENS = 1024
@@ -32,6 +40,10 @@ FINAL_TOKENS = 64
 HISTORICAL_TOKENS = 64
 WEIGHT_LIMIT = 8 * 1024**3
 ENGINE_TIMEOUT = 20
+DRIVE_RUN_DIR: Path | None = None
+DRIVE_CHECKPOINTS: list[dict[str, Any]] = []
+DRIVE_FAILURES: list[dict[str, str]] = []
+DRIVE_TOTAL_BYTES = 0
 
 
 def _sha(data: bytes) -> str:
@@ -44,13 +56,226 @@ def _canonical(value: Any) -> str:
     )
 
 
-def _write_report(report: dict[str, Any]) -> None:
+def _write_report_local(report: dict[str, Any]) -> bytes:
     REMOTE_REPORT.parent.mkdir(parents=True, exist_ok=True)
     temp = REMOTE_REPORT.with_suffix(".tmp")
-    temp.write_text(
-        json.dumps(report, indent=2, sort_keys=True, allow_nan=False) + "\n", encoding="utf-8"
-    )
+    data = (json.dumps(report, indent=2, sort_keys=True, allow_nan=False) + "\n").encode()
+    temp.write_bytes(data)
     temp.replace(REMOTE_REPORT)
+    return data
+
+
+def _drive_mountpoints(mounts_text: str) -> list[str]:
+    roots = []
+    for line in mounts_text.splitlines():
+        fields = line.split()
+        if len(fields) >= 3 and fields[2].startswith("fuse"):
+            roots.append(fields[1].replace("\\040", " "))
+    return roots
+
+
+def _discover_drive_root() -> Path:
+    roots = []
+    for mountpoint in _drive_mountpoints(Path("/proc/mounts").read_text()):
+        path = Path(mountpoint)
+        if path.is_dir() and (path / "MyDrive").is_dir():
+            roots.append(path)
+    if len(roots) != 1:
+        raise RuntimeError("mounted Google Drive root could not be identified uniquely")
+    return roots[0]
+
+
+def _write_drive_immutable(name: str, data: bytes) -> dict[str, Any]:
+    global DRIVE_TOTAL_BYTES
+    if (
+        DRIVE_RUN_DIR is None
+        or Path(name).name != name
+        or name in {".", ".."}
+        or not name
+        or len(data) > DRIVE_MAX_FILE_BYTES
+    ):
+        raise ValueError("Drive artifact path or size exceeds the fixed bound")
+    digest = hashlib.sha256(data).hexdigest()
+    target = DRIVE_RUN_DIR / name
+    if target.exists():
+        actual = target.read_bytes()
+        if actual != data:
+            raise FileExistsError("Drive artifact already exists with different bytes")
+        return {"name": name, "bytes": len(data), "sha256": digest, "path": str(target)}
+    if (
+        len(DRIVE_CHECKPOINTS) >= DRIVE_MAX_CHECKPOINTS
+        or DRIVE_TOTAL_BYTES + len(data) > DRIVE_MAX_TOTAL_BYTES
+    ):
+        raise ValueError("Drive checkpoint count or total-byte bound reached")
+    temp = target.with_name(f".{name}.tmp-{uuid.uuid4().hex}")
+    try:
+        with temp.open("xb") as stream:
+            stream.write(data)
+            stream.flush()
+            os.fsync(stream.fileno())
+        if target.exists():
+            if target.read_bytes() != data:
+                raise FileExistsError("Drive artifact appeared with different bytes")
+            temp.unlink()
+        else:
+            os.replace(temp, target)
+        actual = target.read_bytes()
+        if len(actual) != len(data) or hashlib.sha256(actual).hexdigest() != digest:
+            raise OSError("Drive artifact read-back hash mismatch")
+    finally:
+        temp.unlink(missing_ok=True)
+    DRIVE_TOTAL_BYTES += len(data)
+    record = {"name": name, "bytes": len(data), "sha256": digest, "path": str(target)}
+    DRIVE_CHECKPOINTS.append(record)
+    return record
+
+
+def _mirror_report(data: bytes) -> None:
+    if DRIVE_RUN_DIR is None:
+        return
+    digest = hashlib.sha256(data).hexdigest()
+    _write_drive_immutable(f"remote-checkpoint-{digest}.json", data)
+
+
+def _write_report(report: dict[str, Any]) -> None:
+    data = _write_report_local(report)
+    try:
+        _mirror_report(data)
+    except Exception as exc:
+        failure = {"stage": "REPORT_CHECKPOINT", "error": type(exc).__name__}
+        DRIVE_FAILURES.append(failure)
+        persistence = report.setdefault("drive_persistence", {"status": "UNAVAILABLE"})
+        persistence["status"] = "PARTIAL_SYNC_FAILURE"
+        persistence.setdefault("errors", []).append(failure)
+        _write_report_local(report)
+
+
+def _prepare_drive(report: dict[str, Any], run_id: str) -> None:
+    global DRIVE_RUN_DIR, DRIVE_TOTAL_BYTES
+    if os.environ.get("A02_DRIVE_IDENTITY_CONFIRMED") != "1":
+        report["drive_persistence"] = {"status": "NOT_MOUNTED", "writes_enabled": False}
+        return
+    expected_email = os.environ.get("A02_DRIVE_OWNER_EMAIL", "").lower()
+    folder_id = os.environ.get("A02_DRIVE_FOLDER_ID", "")
+    probe_name = os.environ.get("A02_DRIVE_PROBE_NAME", "")
+    probe_content = os.environ.get("A02_DRIVE_PROBE_CONTENT", "")
+    if (
+        not expected_email
+        or folder_id != DRIVE_FOLDER_ID
+        or not probe_name
+        or Path(probe_name).name != probe_name
+        or not probe_content
+        or len(probe_content.encode()) > 256
+    ):
+        raise ValueError("connected Drive identity binding is incomplete")
+    root = _discover_drive_root()
+    target = root / "MyDrive" / DRIVE_PROJECT_NAME / DRIVE_EXPERIMENT_NAME
+    if not target.is_dir():
+        raise FileNotFoundError("designated owner-only A0.2 Drive folder is not mounted")
+    probe = target / probe_name
+    deadline = time.monotonic() + 20
+    while not probe.is_file() and time.monotonic() < deadline:
+        time.sleep(0.25)
+    if not probe.is_file() or probe.stat().st_size > 256 or probe.read_text() != probe_content:
+        report["drive_persistence"] = {
+            "status": "IDENTITY_MISMATCH",
+            "writes_enabled": False,
+            "folder_id": folder_id,
+            "folder_path": str(target),
+            "probe_sha256": hashlib.sha256(probe_content.encode()).hexdigest(),
+        }
+        return
+    run_dir = target / run_id
+    if run_dir.exists():
+        raise FileExistsError("content-addressed Drive run directory already exists")
+    probe.unlink()
+    if probe.exists():
+        raise OSError("Drive identity marker delete could not be verified")
+    write_probe = target / f".res541-a02-probe-{uuid.uuid4().hex}.tmp"
+    probe_bytes = b"RES541 A0.2 bounded mounted-Drive write/read/delete probe\n"
+    try:
+        with write_probe.open("xb") as stream:
+            stream.write(probe_bytes)
+            stream.flush()
+            os.fsync(stream.fileno())
+        if write_probe.read_bytes() != probe_bytes:
+            raise OSError("Drive write/read probe content mismatch")
+        probe_hash = hashlib.sha256(write_probe.read_bytes()).hexdigest()
+    finally:
+        write_probe.unlink(missing_ok=True)
+    if write_probe.exists():
+        raise OSError("Drive write/read probe delete could not be verified")
+    run_dir.mkdir(exist_ok=False)
+    DRIVE_RUN_DIR = run_dir
+    DRIVE_CHECKPOINTS.clear()
+    DRIVE_FAILURES.clear()
+    DRIVE_TOTAL_BYTES = 0
+    report["drive_persistence"] = {
+        "status": "VERIFIED",
+        "writes_enabled": True,
+        "owner_email": expected_email,
+        "identity_verification": "OWNER_ONLY_MARKER_VISIBLE_AND_HASH_MATCHED",
+        "folder_id": folder_id,
+        "folder_path": str(target),
+        "mounted_root": str(root),
+        "run_directory": str(run_dir),
+        "probe_file_id": os.environ.get("A02_DRIVE_PROBE_FILE_ID"),
+        "probe_name": probe_name,
+        "probe_sha256": hashlib.sha256(probe_content.encode()).hexdigest(),
+        "mounted_write_read_delete_probe_sha256": probe_hash,
+    }
+
+
+def _finalize_drive(report: dict[str, Any], run_id: str) -> None:
+    persistence = report.setdefault("drive_persistence", {"status": "NOT_MOUNTED"})
+    persistence["checkpoint_files"] = DRIVE_CHECKPOINTS.copy()
+    persistence["errors"] = DRIVE_FAILURES.copy()
+    data = _write_report_local(report)
+    drive_files = []
+    if DRIVE_RUN_DIR is not None:
+        for name, content in (
+            ("remote-report.json", data),
+            (
+                "remote-checkpoint-manifest.json",
+                (
+                    json.dumps(
+                        {"run_id": run_id, "files": DRIVE_CHECKPOINTS, "errors": DRIVE_FAILURES},
+                        indent=2,
+                        sort_keys=True,
+                    )
+                    + "\n"
+                ).encode(),
+            ),
+        ):
+            try:
+                drive_files.append(_write_drive_immutable(name, content))
+            except Exception as exc:
+                DRIVE_FAILURES.append({"stage": name, "error": type(exc).__name__})
+                persistence["status"] = "PARTIAL_SYNC_FAILURE"
+    receipt = {
+        "schema": "RES541_A02_REMOTE_DRIVE_RECEIPT_V1",
+        "run_id": run_id,
+        "status": persistence["status"],
+        "folder_id": persistence.get("folder_id", DRIVE_FOLDER_ID),
+        "folder_path": persistence.get("folder_path"),
+        "run_directory": persistence.get("run_directory"),
+        "owner_email": persistence.get("owner_email"),
+        "files": DRIVE_CHECKPOINTS.copy() + drive_files,
+        "errors": DRIVE_FAILURES.copy(),
+    }
+    REMOTE_DRIVE_RECEIPT.write_text(
+        json.dumps(receipt, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    if DRIVE_RUN_DIR is not None:
+        try:
+            _write_drive_immutable(
+                "remote-drive-receipt.json",
+                REMOTE_DRIVE_RECEIPT.read_bytes(),
+            )
+        except Exception as exc:
+            DRIVE_FAILURES.append(
+                {"stage": "remote-drive-receipt.json", "error": type(exc).__name__}
+            )
 
 
 def _run(command: list[str], *, cwd: Path | None = None, timeout: int = 120) -> str:
@@ -231,33 +456,60 @@ def _runtime_gate() -> tuple[Any, dict[str, Any]]:
     return torch, observed
 
 
-def _weights(repo_id: str, revision: str, torch: Any) -> tuple[Path, dict[str, Any]]:
-    from huggingface_hub import HfApi, snapshot_download  # type: ignore[import-not-found]
+def _weights(
+    repo_id: str, revision: str, torch: Any, tokenizer_files: dict[str, str]
+) -> tuple[Path, dict[str, Any]]:
+    from huggingface_hub import HfApi, snapshot_download
 
     model_info = HfApi().model_info(repo_id, revision=revision, files_metadata=True, token=False)
     if model_info.sha != revision:
         raise ValueError("Hugging Face resolved a different model revision")
-    siblings = [item for item in model_info.siblings if item.rfilename.endswith(".safetensors")]
-    total = sum(int(getattr(item, "size", 0) or 0) for item in siblings)
+    if model_info.siblings is None:
+        raise ValueError("pinned model file metadata is unavailable")
+    siblings = {item.rfilename: item for item in model_info.siblings}
+    weights = [item for item in siblings.values() if item.rfilename.endswith(".safetensors")]
+    weight_sizes = {item.rfilename: item.size for item in weights}
+    if any(not isinstance(size, int) or size <= 0 for size in weight_sizes.values()):
+        raise ValueError("pinned model weight metadata has a missing or invalid file size")
+    total = sum(size for size in weight_sizes.values() if isinstance(size, int))
     if not siblings or total <= 0 or total > WEIGHT_LIMIT:
         raise ValueError("pinned model weight metadata exceeds the frozen 8 GiB bound")
+    required = {"config.json", *tokenizer_files}
+    required.update(item.rfilename for item in weights)
+    required.update(name for name in siblings if name.endswith(".safetensors.index.json"))
+    if not required.issubset(siblings):
+        raise ValueError("pinned model configuration or tokenizer file is missing")
+    if any(Path(name).name != name or name in {".", ".."} for name in required):
+        raise ValueError("pinned model asset path is not a root-level filename")
+    support_names = required - {item.rfilename for item in weights}
+    support_sizes = {name: siblings[name].size for name in support_names}
+    if any(not isinstance(size, int) or size <= 0 for size in support_sizes.values()):
+        raise ValueError("pinned model support-file metadata has a missing or invalid size")
+    support_bytes = sum(size for size in support_sizes.values() if isinstance(size, int))
+    if support_bytes <= 0 or support_bytes > 64 * 1024**2:
+        raise ValueError("pinned model support files exceed the 64 MiB bound")
     snapshot = Path(
         snapshot_download(
             repo_id,
             revision=revision,
             cache_dir=str(WORK / "hf-cache"),
             token=False,
-            trust_remote_code=False,
+            allow_patterns=sorted(required),
         )
     )
-    files = []
-    for item in siblings:
+    files: list[dict[str, Any]] = []
+    support_files: dict[str, dict[str, Any]] = {}
+    support_size_total = 0
+    weight_size_total = 0
+    for name in sorted(required):
+        item = siblings[name]
         path = snapshot / item.rfilename
         if not path.is_file():
-            raise ValueError(f"pinned model weight missing: {item.rfilename}")
+            raise ValueError(f"pinned model asset missing: {item.rfilename}")
         size = path.stat().st_size
-        if getattr(item, "size", None) is not None and size != item.size:
-            raise ValueError(f"pinned weight size mismatch: {item.rfilename}")
+        expected_size = weight_sizes.get(name, support_sizes.get(name))
+        if size != expected_size:
+            raise ValueError(f"pinned model asset size mismatch: {item.rfilename}")
         digest = hashlib.sha256()
         with path.open("rb") as stream:
             for chunk in iter(lambda: stream.read(8 * 1024**2), b""):
@@ -265,16 +517,22 @@ def _weights(repo_id: str, revision: str, torch: Any) -> tuple[Path, dict[str, A
         expected_lfs = getattr(getattr(item, "lfs", None), "sha256", None)
         actual = digest.hexdigest()
         if expected_lfs and actual != expected_lfs:
-            raise ValueError(f"pinned weight content hash mismatch: {item.rfilename}")
-        files.append(
-            {
-                "name": item.rfilename,
-                "bytes": size,
-                "sha256": actual,
-                "hub_lfs_sha256": expected_lfs,
-            }
-        )
-    if sum(row["bytes"] for row in files) > WEIGHT_LIMIT:
+            raise ValueError(f"pinned model asset content hash mismatch: {item.rfilename}")
+        record = {
+            "name": item.rfilename,
+            "bytes": size,
+            "sha256": actual,
+            "hub_lfs_sha256": expected_lfs,
+        }
+        if item.rfilename.endswith(".safetensors"):
+            files.append(record)
+            weight_size_total += size
+        else:
+            support_files[item.rfilename] = record
+            support_size_total += size
+    if support_size_total > 64 * 1024**2:
+        raise ValueError("downloaded model support files exceed the 64 MiB bound")
+    if weight_size_total > WEIGHT_LIMIT:
         raise ValueError("downloaded model weights exceed the frozen 8 GiB bound")
     memory = {
         "allocated_before_model_bytes": int(torch.cuda.memory_allocated(0)),
@@ -284,6 +542,7 @@ def _weights(repo_id: str, revision: str, torch: Any) -> tuple[Path, dict[str, A
         "model_revision": model_info.sha,
         "weight_bytes": sum(x["bytes"] for x in files),
         "weight_files": files,
+        "support_files": support_files,
         **memory,
     }
 
@@ -510,6 +769,18 @@ def run() -> int:
         ):
             raise ValueError("scientific source inventory differs from the frozen protocol")
 
+        stage = "DRIVE_SETUP"
+        try:
+            _prepare_drive(report, binding["run_id"])
+        except Exception as exc:
+            DRIVE_FAILURES.append({"stage": "DRIVE_SETUP", "error": type(exc).__name__})
+            report["drive_persistence"] = {
+                "status": "UNAVAILABLE",
+                "writes_enabled": False,
+                "failure_category": type(exc).__name__,
+            }
+        _write_report(report)
+
         stage = "RUNTIME_SETUP"
         torch, inventory = _runtime_gate()
         uv = _install_uv()
@@ -584,14 +855,6 @@ def run() -> int:
             AutoTokenizer,
         )
 
-        weights_path, weight_inventory = _weights(MODEL_ID, MODEL_REVISION, torch)
-        tokenizer = AutoTokenizer.from_pretrained(
-            weights_path,
-            revision=MODEL_REVISION,
-            local_files_only=True,
-            trust_remote_code=False,
-            use_fast=True,
-        )
         tokenizer_manifest = json.loads(
             (source / "experiments/a02/tokenizer-files-v1.json").read_text()
         )
@@ -601,6 +864,14 @@ def run() -> int:
         ):
             raise ValueError("tokenizer manifest model identity differs")
         freeze_files = tokenizer_manifest["files"]
+        weights_path, weight_inventory = _weights(MODEL_ID, MODEL_REVISION, torch, freeze_files)
+        tokenizer = AutoTokenizer.from_pretrained(
+            weights_path,
+            revision=MODEL_REVISION,
+            local_files_only=True,
+            trust_remote_code=False,
+            use_fast=True,
+        )
         tokenizer_files = {
             name: hashlib.sha256((weights_path / name).read_bytes()).hexdigest()
             for name in freeze_files
@@ -813,6 +1084,22 @@ def run() -> int:
             except Exception:
                 engine_process.kill()
                 engine_process.wait(timeout=5)
+        try:
+            _finalize_drive(report, report.get("source", {}).get("run_id", "unknown"))
+        except Exception as exc:
+            REMOTE_DRIVE_RECEIPT.write_text(
+                json.dumps(
+                    {
+                        "schema": "RES541_A02_REMOTE_DRIVE_RECEIPT_V1",
+                        "status": "UNAVAILABLE",
+                        "error": type(exc).__name__,
+                    },
+                    indent=2,
+                    sort_keys=True,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
 
 
 def main() -> int:

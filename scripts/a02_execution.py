@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -21,12 +22,18 @@ E_ROOT = Path("/mnt/e/DynamisLM-A0")
 REPORT_DIR = E_ROOT / "a02"
 ATTEMPT_MARKER = REPORT_DIR / "one-attempt-used.json"
 MAX_SESSION_SECONDS = 900
+MAX_EXEC_SECONDS = 720
 NEW_TIMEOUT_SECONDS = 120
 UPLOAD_TIMEOUT_SECONDS = 120
 DOWNLOAD_TIMEOUT_SECONDS = 120
+DRIVE_RECEIPT_TIMEOUT_SECONDS = 30
 STOP_TIMEOUT_SECONDS = 30
 VERIFY_TIMEOUT_SECONDS = 30
 REMOTE_REPORT = "/content/a02-report.json"
+REMOTE_DRIVE_RECEIPT = "/content/a02-drive-receipt.json"
+DRIVE_OWNER_RECORD = REPORT_DIR / "drive-owner-identity.json"
+DRIVE_FOLDER_ID = "1mibCkKr0cuWPuSKt_OaYiZcI_GkJ-WG6"
+DRIVE_FOLDER_URL = f"https://drive.google.com/drive/folders/{DRIVE_FOLDER_ID}"
 
 
 class RunError(RuntimeError):
@@ -81,6 +88,80 @@ def _parse_balance(text: str) -> float:
     if not match:
         raise RunError("Colab usage output did not contain a compute-unit balance")
     return float(match.group(1))
+
+
+def _parse_colab_email(text: str) -> str:
+    match = re.search(r"^Email:\s*([^\s]+@[^\s]+)\s*$", text, re.MULTILINE)
+    if not match:
+        raise RunError("Colab OAuth identity could not be verified")
+    return match.group(1).lower()
+
+
+def _same_google_account(colab_email: str, drive_email: str) -> bool:
+    return colab_email.strip().lower() == drive_email.strip().lower()
+
+
+def _drive_owner() -> dict[str, Any]:
+    try:
+        value = json.loads(DRIVE_OWNER_RECORD.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RunError("connected Google Drive owner identity record is unavailable") from exc
+    if (
+        not isinstance(value, dict)
+        or value.get("schema") != "RES541_A02_DRIVE_OWNER_V1"
+        or value.get("folder_id") != DRIVE_FOLDER_ID
+        or value.get("owner_only") is not True
+        or not isinstance(value.get("email"), str)
+        or not re.fullmatch(r"[^\s@]+@[^\s@]+", value["email"])
+        or not isinstance(value.get("probe_file_id"), str)
+        or not isinstance(value.get("probe_name"), str)
+        or Path(value["probe_name"]).name != value["probe_name"]
+        or not isinstance(value.get("probe_content"), str)
+        or len(value["probe_content"].encode()) > 256
+        or value.get("probe_sha256") != hashlib.sha256(value["probe_content"].encode()).hexdigest()
+    ):
+        raise RunError("connected Google Drive owner identity record is invalid")
+    return value
+
+
+def _run_id(protocol: dict[str, Any], protocol_sha256: str) -> str:
+    content = "\n".join(
+        (
+            protocol_sha256,
+            protocol["historical_a01"]["case_manifest_sha256"],
+            protocol["new_a02_cases"]["case_manifest_sha256"],
+        )
+    )
+    return f"res541-a02-{hashlib.sha256(content.encode()).hexdigest()[:24]}"
+
+
+def _sanitize_colab_log(raw: str, run_id: str) -> str:
+    records = []
+    for line in raw.splitlines():
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(event, dict):
+            continue
+        safe = {
+            key: event[key]
+            for key in (
+                "type",
+                "event_type",
+                "timestamp",
+                "ts",
+                "status",
+                "exit_code",
+                "duration_ms",
+                "duration_s",
+            )
+            if key in event and isinstance(event[key], str | int | float | bool | type(None))
+        }
+        if safe:
+            safe["session"] = run_id
+            records.append(json.dumps(safe, sort_keys=True, separators=(",", ":")))
+    return "\n".join(records) + ("\n" if records else "")
 
 
 def _zero_sessions(text: str) -> bool:
@@ -161,6 +242,11 @@ def preflight() -> dict[str, Any]:
     cli_version = _run(["colab", "version"], timeout=15)
     if cli_version.returncode or "0.7.5" not in cli_version.stdout:
         raise RunError("the reviewed official google-colab-cli 0.7.5 is required")
+    identity = _run(["colab", "--auth=oauth2", "whoami"], timeout=15)
+    if identity.returncode != 0:
+        raise RunError("Colab OAuth identity check failed")
+    colab_email = _parse_colab_email(identity.stdout)
+    drive_owner = _drive_owner()
     usage = _run(["colab", "--auth=oauth2", "usage"], timeout=30)
     sessions = _run(["colab", "--auth=oauth2", "sessions"], timeout=30)
     if usage.returncode != 0 or sessions.returncode != 0 or not _zero_sessions(sessions.stdout):
@@ -178,6 +264,16 @@ def preflight() -> dict[str, Any]:
         "git_clean": True,
         "colab_cli": cli_version.stdout.strip(),
         "authentication": "OAUTH2_ACCOUNT_SESSION_VERIFIED",
+        "colab_account_email": colab_email,
+        "drive_owner_email": drive_owner["email"].lower(),
+        "drive_folder_id": DRIVE_FOLDER_ID,
+        "drive_folder_url": DRIVE_FOLDER_URL,
+        "drive_folder_owner_only": True,
+        "drive_probe_file_id": drive_owner["probe_file_id"],
+        "drive_probe_name": drive_owner["probe_name"],
+        "drive_probe_sha256": drive_owner["probe_sha256"],
+        "drive_account_matches_colab": _same_google_account(colab_email, drive_owner["email"]),
+        "drive_write_allowed": _same_google_account(colab_email, drive_owner["email"]),
         "usage_output": usage.stdout.strip(),
         "compute_unit_balance": balance,
         "session_list": sessions.stdout.strip(),
@@ -188,7 +284,7 @@ def preflight() -> dict[str, Any]:
         "host_model_weights": "NOT_PRESENT_IN_CHECKED_CACHE",
         "limits": {
             "session_total_seconds": MAX_SESSION_SECONDS,
-            "exec_seconds_max": 720,
+            "exec_seconds_max": MAX_EXEC_SECONDS,
             "download_seconds": DOWNLOAD_TIMEOUT_SECONDS,
             "stop_seconds": STOP_TIMEOUT_SECONDS,
             "verification_seconds": VERIFY_TIMEOUT_SECONDS,
@@ -205,7 +301,8 @@ def _binding(
     preflight_doc: dict[str, Any],
     preflight_path: Path,
 ) -> dict[str, Any]:
-    protocol = a02_experiment.PROTOCOL_PATH.read_bytes()
+    protocol_bytes = a02_experiment.PROTOCOL_PATH.read_bytes()
+    protocol = json.loads(protocol_bytes)
     archive_hash = hashlib.sha256(source_archive.read_bytes()).hexdigest()
     return {
         "schema": "RES541_A02_RUN_BINDING_V1",
@@ -213,7 +310,13 @@ def _binding(
         "source_revision": preflight_doc["source_revision"],
         "source_tree": preflight_doc["source_tree"],
         "source_archive_sha256": archive_hash,
-        "protocol_sha256": hashlib.sha256(protocol).hexdigest(),
+        "protocol_sha256": hashlib.sha256(protocol_bytes).hexdigest(),
+        "historical_case_manifest_sha256": protocol["historical_a01"]["case_manifest_sha256"],
+        "new_case_manifest_sha256": protocol["new_a02_cases"]["case_manifest_sha256"],
+        "action_prompt_sha256": protocol["new_a02_cases"]["action_prompt_sha256"],
+        "final_prompt_sha256": protocol["new_a02_cases"]["final_prompt_sha256"],
+        "model_revision": protocol["model"]["model_revision"],
+        "drive_folder_id": DRIVE_FOLDER_ID,
         "preflight_sha256": hashlib.sha256(preflight_path.read_bytes()).hexdigest(),
         "remote_report": REMOTE_REPORT,
     }
@@ -237,6 +340,8 @@ def _confirmation(doc: dict[str, Any], binding: dict[str, Any]) -> str:
         f" | runtime={profile_id}:{profile_sha}"
         " | suites=16-paired+10-new"
         f" | current-balance={doc['compute_unit_balance']:.2f} CU"
+        f" | drive-account-match={str(doc['drive_account_matches_colab']).lower()}"
+        f" | drive-probe={doc['drive_probe_sha256'][:12]}"
         " | existing balance only"
         " | dtype=fp16, weights<=8GiB, VRAM>=12GiB"
         " | session<=900s, exec<=720s, download<=120s, stop<=30s, verify<=30s"
@@ -256,39 +361,177 @@ def _archive_source(path: Path) -> None:
         raise RunError("A0.2 source bundle exceeds the small source-upload bound")
 
 
+def _copy_frozen_inputs(run_dir: Path) -> list[Path]:
+    sources = (
+        ROOT / "experiments/a02/protocol-v1.json",
+        ROOT / "experiments/a02/cases-v1.json",
+        ROOT / "experiments/a02/historical-cases-v1.json",
+        ROOT / "experiments/a02/historical-inputs-v1.json",
+        ROOT / "experiments/a02/system-action-v1.txt",
+        ROOT / "experiments/a02/system-final-v1.txt",
+        ROOT / "experiments/a01/system-prompt-v1.txt",
+        ROOT / "experiments/a02/tokenizer-files-v1.json",
+        ROOT / "experiments/a0/requirements-colab.txt",
+        ROOT / "experiments/a02/README.md",
+        REPORT_DIR / "preflight-v1.json",
+    )
+    copied = []
+    for source in sources:
+        target = run_dir / (
+            "tokenizer-preflight-v1.json" if source.name == "preflight-v1.json" else source.name
+        )
+        if target.exists():
+            raise RunError(f"A0.2 evidence file would overwrite existing data: {target.name}")
+        target.write_bytes(source.read_bytes())
+        copied.append(target)
+    return copied
+
+
+def _executor_records(remote: dict[str, Any], path: Path) -> None:
+    lines = []
+    for case in remote.get("cases", []):
+        response = case.get("engine_response")
+        if isinstance(response, dict):
+            lines.append(
+                json.dumps(
+                    {
+                        "case_id": case.get("case_id"),
+                        "interaction_id": case.get("interaction_id"),
+                        "engine_response": response,
+                    },
+                    allow_nan=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+            )
+    path.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
+
+
+def _gpu_resource_report(remote: dict[str, Any], run_id: str) -> dict[str, Any]:
+    return {
+        "schema": "RES541_A02_GPU_RESOURCE_REPORT_V1",
+        "run_id": run_id,
+        "model": remote.get("model"),
+        "runtime": remote.get("runtime"),
+        "peak_allocated_vram_bytes": remote.get("peak_allocated_vram_bytes"),
+        "peak_reserved_vram_bytes": remote.get("peak_reserved_vram_bytes"),
+        "runtime_seconds": remote.get("runtime_seconds"),
+    }
+
+
+def _write_artifact_manifest(
+    run_id: str,
+    run_dir: Path,
+    paths: list[Path],
+    terminal_outcome: str,
+) -> tuple[Path, str]:
+    manifest_path = run_dir / "artifact-hashes.json"
+    if manifest_path.exists():
+        raise RunError("A0.2 artifact manifest already exists; refusing overwrite")
+    files = []
+    seen = set()
+    for path in paths:
+        if not path.is_file():
+            continue
+        if path.name in seen:
+            raise RunError(f"A0.2 artifact names are not unique: {path.name}")
+        seen.add(path.name)
+        data = path.read_bytes()
+        files.append(
+            {
+                "name": path.name,
+                "local_path": str(path),
+                "drive_path": f"{run_id}/{path.name}",
+                "drive_file_id": None,
+                "bytes": len(data),
+                "sha256": hashlib.sha256(data).hexdigest(),
+            }
+        )
+    manifest = {
+        "schema": "RES541_A02_ARTIFACT_HASHES_V1",
+        "run_id": run_id,
+        "terminal_outcome": terminal_outcome,
+        "drive": {
+            "folder_id": DRIVE_FOLDER_ID,
+            "folder_url": DRIVE_FOLDER_URL,
+            "run_directory_name": run_id,
+            "sync_status": "PENDING_CONNECTED_DRIVE_VERIFICATION_AND_SYNC",
+        },
+        "files": files,
+    }
+    content = json.dumps(manifest, indent=2, sort_keys=True) + "\n"
+    manifest_path.write_text(content, encoding="utf-8")
+    return manifest_path, content
+
+
 def run() -> int:
     if not sys.stdin.isatty() or not sys.stdout.isatty():
         raise RunError("Colab allocation requires the owner at an interactive WSL terminal")
     doc = preflight()
+    protocol = json.loads(a02_experiment.PROTOCOL_PATH.read_text(encoding="utf-8"))
+    protocol_sha = hashlib.sha256(a02_experiment.PROTOCOL_PATH.read_bytes()).hexdigest()
+    run_id = _run_id(protocol, protocol_sha)
     REPORT_DIR.mkdir(parents=True, exist_ok=True)
-    run_id = f"res541-a02-{datetime.now(UTC):%Y%m%d-%H%M%S%f}"
-    preflight_path = REPORT_DIR / f"{run_id}-preflight.json"
+    run_dir = REPORT_DIR / run_id
+    if run_dir.exists():
+        raise RunError(f"content-addressed A0.2 run already exists; refusing overwrite: {run_dir}")
+    run_dir.mkdir(parents=False, exist_ok=False)
+    preflight_path = run_dir / "preflight.json"
     preflight_path.write_text(json.dumps(doc, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    source_archive = REPORT_DIR / f"{run_id}-source.tar"
-    binding_path = REPORT_DIR / f"{run_id}-binding.json"
+    frozen_inputs = _copy_frozen_inputs(run_dir)
+    source_archive = run_dir / "source.tar"
+    binding_path = run_dir / "binding.json"
     _archive_source(source_archive)
     binding = _binding(run_id, source_archive, doc, preflight_path)
     binding_path.write_text(json.dumps(binding, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
     approval = _confirmation(doc, binding)
     print(
-        "This requests one T4 session from the current Colab balance and stops after "
-        "this 16+10-case inference."
+        "This requests one T4 session from the current Colab balance for this 16+10-case inference."
     )
-    print(f"Evidence staging directory: {REPORT_DIR}")
+    if not doc["drive_account_matches_colab"]:
+        print(
+            "Drive writes are disabled because the Colab OAuth account differs "
+            "from connected Drive."
+        )
+    print(f"Evidence staging directory: {run_dir}")
     print(f"Type exactly: {approval}")
     if input("> ") != approval:
+        shutil.rmtree(run_dir)
         raise RunError("interactive owner confirmation did not match; no Colab session was started")
 
-    # Re-read quota and sessions after confirmation; a prior approval cannot outlive this state.
-    fresh = preflight()
-    if fresh["source_revision"] != doc["source_revision"] or fresh["compute_unit_balance"] <= 0:
-        raise RunError("source or Colab quota changed after confirmation")
-    if fresh["compute_unit_balance"] != doc["compute_unit_balance"]:
-        raise RunError("Colab balance changed after confirmation; obtain a fresh owner decision")
+    try:
+        fresh = preflight()
+        if fresh["source_revision"] != doc["source_revision"] or fresh["compute_unit_balance"] <= 0:
+            raise RunError("source or Colab quota changed after confirmation")
+        if fresh["compute_unit_balance"] != doc["compute_unit_balance"]:
+            raise RunError(
+                "Colab balance changed after confirmation; obtain a fresh owner decision"
+            )
+        if (
+            fresh["drive_owner_email"] != doc["drive_owner_email"]
+            or fresh["drive_probe_sha256"] != doc["drive_probe_sha256"]
+        ):
+            raise RunError(
+                "connected Drive identity or verification probe changed after confirmation"
+            )
+    except Exception:
+        shutil.rmtree(run_dir)
+        raise
 
-    remote_artifact = REPORT_DIR / f"{run_id}-remote.json"
-    control_path = REPORT_DIR / f"{run_id}-control.json"
+    remote_artifact = run_dir / "remote-report.json"
+    control_path = run_dir / "control.json"
+    log_path = run_dir / "colab-execution-log.jsonl"
+    drive_receipt_path = run_dir / "remote-drive-receipt.json"
+    attempt_copy = run_dir / "one-attempt-used.json"
+    base_evidence_paths = [
+        *frozen_inputs,
+        preflight_path,
+        source_archive,
+        binding_path,
+        attempt_copy,
+        control_path,
+    ]
     state: dict[str, Any] = {
         "schema": "RES541_A02_CONTROL_RECEIPT_V1",
         "preflight": doc,
@@ -304,17 +547,23 @@ def run() -> int:
         "upload_binding_exit_code": None,
         "exec_exit_code": None,
         "download_exit_code": None,
+        "drive_mount_exit_code": None,
+        "drive_mount_status": "SKIPPED_ACCOUNT_MISMATCH"
+        if not doc["drive_write_allowed"]
+        else "NOT_ATTEMPTED",
         "stop_exit_code": None,
         "session_absent_after_stop": False,
     }
     started = time.monotonic()
     deadline = started + MAX_SESSION_SECONDS
 
-    def call(command: list[str], timeout: int) -> subprocess.CompletedProcess[str]:
+    def call(
+        command: list[str], timeout: int, *, capture: bool = True
+    ) -> subprocess.CompletedProcess[str]:
         remaining = int(deadline - time.monotonic())
         if remaining <= 0:
             raise subprocess.TimeoutExpired(command, timeout)
-        return _run(command, timeout=min(timeout, remaining))
+        return _run(command, timeout=min(timeout, remaining), capture=capture)
 
     allocation_attempted = False
     created = False
@@ -334,63 +583,104 @@ def run() -> int:
         state["allocation_attempted"] = True
         state["one_attempt_marker"] = str(ATTEMPT_MARKER)
         state["one_attempt_marker_sha256"] = hashlib.sha256(ATTEMPT_MARKER.read_bytes()).hexdigest()
+        attempt_copy.write_bytes(ATTEMPT_MARKER.read_bytes())
         allocation_attempted = True
         new = call(
             ["colab", "--auth=oauth2", "new", "--session", run_id, "--gpu", "T4"],
             NEW_TIMEOUT_SECONDS,
         )
         state["new_exit_code"] = new.returncode
-        state["new_output"] = new.stdout.strip()
         state["allocation_returned_utc"] = datetime.now(UTC).isoformat()
         if new.returncode != 0:
             raise RunError("single requested T4 allocation failed; no GPU fallback or retry")
         created = True
-        state["upload_source_exit_code"] = call(
-            [
-                "colab",
-                "--auth=oauth2",
-                "upload",
-                "--session",
-                run_id,
-                str(source_archive),
-                "/content/a02-source.tar",
-            ],
-            UPLOAD_TIMEOUT_SECONDS,
-        ).returncode
-        if state["upload_source_exit_code"] != 0:
-            raise RunError("A0.2 source archive upload failed")
-        state["upload_binding_exit_code"] = call(
-            [
-                "colab",
-                "--auth=oauth2",
-                "upload",
-                "--session",
-                run_id,
-                str(binding_path),
-                "/content/a02-binding.json",
-            ],
-            UPLOAD_TIMEOUT_SECONDS,
-        ).returncode
-        if state["upload_binding_exit_code"] != 0:
-            raise RunError("A0.2 run-binding upload failed")
-        exec_timeout = min(720, max(1, int(deadline - time.monotonic()) - 180))
-        execute = call(
-            [
-                "colab",
-                "--auth=oauth2",
-                "exec",
-                "--session",
-                run_id,
-                "--file",
-                str(ROOT / "scripts/a02_remote.py"),
-                "--timeout",
-                str(exec_timeout),
-            ],
-            exec_timeout + 30,
+        status = call(
+            ["colab", "--auth=oauth2", "status", "--session", run_id], VERIFY_TIMEOUT_SECONDS
         )
+        state["status_after_allocation_exit_code"] = status.returncode
+        state["status_after_allocation"] = status.stdout.strip()
+        if status.returncode != 0 or not re.search(r"\bT4\b", status.stdout, re.IGNORECASE):
+            state["execution_blocker"] = "REQUESTED_T4_NOT_VERIFIED"
+            raise RunError("Colab status did not verify the requested T4; inference not started")
+
+        if doc["drive_write_allowed"]:
+            try:
+                mounted = call(
+                    ["colab", "--auth=oauth2", "drivemount", "--session", run_id],
+                    120,
+                    capture=False,
+                )
+                state["drive_mount_exit_code"] = mounted.returncode
+                state["drive_mount_status"] = (
+                    "MOUNTED_IDENTITY_PENDING_REMOTE_PROBE"
+                    if mounted.returncode == 0
+                    else "MOUNT_FAILED"
+                )
+            except Exception as exc:
+                state["drive_mount_status"] = "MOUNT_FAILED"
+                state["drive_mount_error"] = type(exc).__name__
+
+        for local_path, remote_path, state_key in (
+            (source_archive, "/content/a02-source.tar", "upload_source_exit_code"),
+            (binding_path, "/content/a02-binding.json", "upload_binding_exit_code"),
+        ):
+            uploaded = call(
+                [
+                    "colab",
+                    "--auth=oauth2",
+                    "upload",
+                    "--session",
+                    run_id,
+                    str(local_path),
+                    remote_path,
+                ],
+                UPLOAD_TIMEOUT_SECONDS,
+            )
+            state[state_key] = uploaded.returncode
+            if uploaded.returncode != 0:
+                raise RunError(f"A0.2 upload failed: {remote_path}")
+
+        reserve = (
+            DOWNLOAD_TIMEOUT_SECONDS
+            + DRIVE_RECEIPT_TIMEOUT_SECONDS
+            + 3 * VERIFY_TIMEOUT_SECONDS
+            + STOP_TIMEOUT_SECONDS
+            + 60
+        )
+        exec_timeout = min(MAX_EXEC_SECONDS, max(1, int(deadline - time.monotonic()) - reserve))
+        state["exec_timeout_seconds"] = exec_timeout
+        command = [
+            "colab",
+            "--auth=oauth2",
+            "exec",
+            "--session",
+            run_id,
+            "--file",
+            str(ROOT / "scripts/a02_remote.py"),
+            "--timeout",
+            str(exec_timeout),
+        ]
+        if state["drive_mount_status"] == "MOUNTED_IDENTITY_PENDING_REMOTE_PROBE":
+            owner = _drive_owner()
+            command.extend(
+                (
+                    "--env",
+                    "A02_DRIVE_IDENTITY_CONFIRMED=1",
+                    "--env",
+                    f"A02_DRIVE_OWNER_EMAIL={owner['email'].lower()}",
+                    "--env",
+                    f"A02_DRIVE_FOLDER_ID={DRIVE_FOLDER_ID}",
+                    "--env",
+                    f"A02_DRIVE_PROBE_NAME={owner['probe_name']}",
+                    "--env",
+                    f"A02_DRIVE_PROBE_CONTENT={owner['probe_content']}",
+                    "--env",
+                    f"A02_DRIVE_PROBE_FILE_ID={owner['probe_file_id']}",
+                )
+            )
+        execute = call(command, exec_timeout + 30)
         state["exec_exit_code"] = execute.returncode
-        state["exec_tail"] = execute.stdout[-4000:]
-        state["exec_stderr_tail"] = execute.stderr[-2000:]
+        state["inference_returned_utc"] = datetime.now(UTC).isoformat()
     except Exception as exc:
         state["control_error"] = type(exc).__name__
         state["control_error_message"] = str(exc)[:2000]
@@ -415,8 +705,51 @@ def run() -> int:
                         state["download_stderr_tail"] = downloaded.stderr[-2000:]
                 except Exception as exc:
                     state["download_error"] = type(exc).__name__
+                try:
+                    receipt_download = call(
+                        [
+                            "colab",
+                            "--auth=oauth2",
+                            "download",
+                            "--session",
+                            run_id,
+                            REMOTE_DRIVE_RECEIPT,
+                            str(drive_receipt_path),
+                        ],
+                        DRIVE_RECEIPT_TIMEOUT_SECONDS,
+                    )
+                    state["drive_receipt_download_exit_code"] = receipt_download.returncode
+                except Exception as exc:
+                    state["drive_receipt_download_error"] = type(exc).__name__
+                try:
+                    raw_log = E_ROOT / "tmp" / f"{run_id}-colab-log.jsonl"
+                    raw_log.parent.mkdir(parents=True, exist_ok=True)
+                    log = _run(
+                        [
+                            "colab",
+                            "--auth=oauth2",
+                            "log",
+                            "--session",
+                            run_id,
+                            "--output",
+                            str(raw_log),
+                        ],
+                        timeout=VERIFY_TIMEOUT_SECONDS,
+                    )
+                    state["colab_log_exit_code"] = log.returncode
+                    if log.returncode == 0 and raw_log.is_file():
+                        sanitized = _sanitize_colab_log(raw_log.read_text(), run_id)
+                        if sanitized:
+                            log_path.write_text(sanitized, encoding="utf-8")
+                            state["sanitized_log_path"] = str(log_path)
+                            state["sanitized_log_sha256"] = hashlib.sha256(
+                                sanitized.encode()
+                            ).hexdigest()
+                    raw_log.unlink(missing_ok=True)
+                except Exception as exc:
+                    state["colab_log_error"] = type(exc).__name__
+                    raw_log.unlink(missing_ok=True) if "raw_log" in locals() else None
             try:
-                # A failed create can still leave a server-side assignment; always attempt stop.
                 stopped = _run(
                     ["colab", "--auth=oauth2", "stop", "--session", run_id],
                     timeout=STOP_TIMEOUT_SECONDS,
@@ -457,16 +790,100 @@ def run() -> int:
 
     if not allocation_attempted:
         raise RunError(f"Colab allocation was not attempted; control receipt: {control_path}")
-    if not state["session_absent_after_stop"]:
-        raise RunError(
-            f"Colab teardown was not verified; preserve receipt {control_path} and stop {run_id}"
+
+    def external_blocker(reason: str, *extra_paths: Path) -> int:
+        state["terminal_outcome"] = "EXTERNAL_BLOCKER"
+        state["external_blocker"] = reason
+        control_path.write_text(
+            json.dumps(state, indent=2, sort_keys=True) + "\n", encoding="utf-8"
         )
+        blocker_path = run_dir / "external-blocker.json"
+        blocker_path.write_text(
+            json.dumps(state, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        )
+        manifest_path, manifest_bytes = _write_artifact_manifest(
+            run_id,
+            run_dir,
+            [
+                *base_evidence_paths,
+                *extra_paths,
+                blocker_path,
+                log_path,
+                drive_receipt_path,
+            ],
+            state["terminal_outcome"],
+        )
+        print(
+            json.dumps(
+                {
+                    "terminal_outcome": state["terminal_outcome"],
+                    "external_blocker": reason,
+                    "control": str(control_path),
+                    "artifact_hash_manifest": str(manifest_path),
+                    "artifact_hash_manifest_sha256": hashlib.sha256(
+                        manifest_bytes.encode()
+                    ).hexdigest(),
+                }
+            )
+        )
+        return 1
+
+    if not state["session_absent_after_stop"]:
+        return external_blocker("ZERO_ACTIVE_SESSIONS_NOT_VERIFIED", remote_artifact)
     if not remote_artifact.is_file() or state.get("download_exit_code") != 0:
-        raise RunError(f"remote report was not recovered; control receipt: {control_path}")
+        return external_blocker(
+            state.get("execution_blocker", "REMOTE_REPORT_NOT_RECOVERED"), remote_artifact
+        )
     if remote_artifact.stat().st_size > 8 * 1024**2:
-        raise RunError("remote A0.2 report exceeds the 8 MiB artifact bound")
-    if state.get("exec_exit_code") != 0:
-        raise RunError(f"Colab inference did not complete; partial report: {remote_artifact}")
+        return external_blocker("REMOTE_REPORT_EXCEEDS_8_MIB_BOUND", remote_artifact)
+    try:
+        remote = json.loads(remote_artifact.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return external_blocker("REMOTE_REPORT_JSON_INVALID", remote_artifact)
+    drive_receipt = drive_receipt_path
+    if drive_receipt.is_file():
+        drive_receipt_doc = json.loads(drive_receipt.read_text(encoding="utf-8"))
+        state["remote_drive_receipt_path"] = str(drive_receipt_path)
+        state["remote_drive_receipt_sha256"] = hashlib.sha256(
+            drive_receipt.read_bytes()
+        ).hexdigest()
+        if state["drive_mount_status"] == "MOUNTED_IDENTITY_PENDING_REMOTE_PROBE":
+            state["drive_mount_status"] = drive_receipt_doc.get("status", "UNAVAILABLE")
+        control_path.write_text(
+            json.dumps(state, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        )
+    remote_drive_status = remote.get("drive_persistence", {}).get("status", "NOT_MOUNTED")
+    if state["drive_mount_status"] == "MOUNTED_IDENTITY_PENDING_REMOTE_PROBE":
+        state["drive_mount_status"] = remote_drive_status
+        control_path.write_text(
+            json.dumps(state, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        )
+    if not drive_receipt.is_file():
+        drive_receipt.write_text(
+            json.dumps(
+                {
+                    "schema": "RES541_A02_DRIVE_PERSISTENCE_RECEIPT_V1",
+                    "run_id": run_id,
+                    "status": remote_drive_status,
+                    "folder_id": DRIVE_FOLDER_ID,
+                    "folder_url": DRIVE_FOLDER_URL,
+                    "persistence": remote.get("drive_persistence", {}),
+                    "remote_report_sha256": hashlib.sha256(
+                        remote_artifact.read_bytes()
+                    ).hexdigest(),
+                },
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+    if remote.get("status") != "COMPLETE" or state.get("exec_exit_code") != 0:
+        return external_blocker(
+            remote.get("failure_message", "REMOTE_INFERENCE_INCOMPLETE"),
+            remote_artifact,
+            drive_receipt_path,
+        )
     tokenizer_site = E_ROOT / "a01/tokenizer-venv/lib/python3.12/site-packages"
     score_env = clean_colab_env()
     score_env.update(
@@ -478,72 +895,93 @@ def run() -> int:
         HF_HUB_OFFLINE="1",
         HF_HOME=str(E_ROOT / "cache/huggingface"),
     )
-    score = subprocess.run(
-        [
-            sys.executable,
-            "-m",
-            "scripts.a02_score",
-            "--remote",
-            str(remote_artifact),
-            "--control",
-            str(control_path),
-            "--preflight",
-            str(REPORT_DIR / "preflight-v1.json"),
-            "--output-dir",
-            str(REPORT_DIR),
-        ],
-        cwd=ROOT,
-        env=score_env,
-        timeout=180,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-    verified_path = REPORT_DIR / "verified.json"
-    markdown_path = REPORT_DIR / "scientific-report.md"
-    if score.returncode not in {0, 1} or not verified_path.is_file() or not markdown_path.is_file():
-        raise RunError(
-            "WSL CPU replay/scoring failed; see remote report and control receipt: "
-            f"{score.stderr[-2000:]}"
+    try:
+        score = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "scripts.a02_score",
+                "--remote",
+                str(remote_artifact),
+                "--control",
+                str(control_path),
+                "--preflight",
+                str(REPORT_DIR / "preflight-v1.json"),
+                "--output-dir",
+                str(run_dir),
+            ],
+            cwd=ROOT,
+            env=score_env,
+            timeout=180,
+            text=True,
+            capture_output=True,
+            check=False,
         )
-    verified = json.loads(verified_path.read_text())
+    except (OSError, subprocess.SubprocessError) as exc:
+        return external_blocker(
+            f"CPU_SCIENTIFIC_REPLAY_FAILED_{type(exc).__name__}", remote_artifact
+        )
+    verified_path = run_dir / "verified.json"
+    markdown_path = run_dir / "scientific-report.md"
+    if score.returncode not in {0, 1} or not verified_path.is_file() or not markdown_path.is_file():
+        return external_blocker(
+            f"CPU_SCIENTIFIC_REPLAY_FAILED_EXIT_{score.returncode}",
+            remote_artifact,
+            verified_path,
+            markdown_path,
+        )
+    try:
+        verified = json.loads(verified_path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return external_blocker(
+            "CPU_VERIFIED_REPORT_JSON_INVALID", remote_artifact, verified_path, markdown_path
+        )
     if verified.get("schema") != "RES541_A02_VERIFIED_REPORT_V1":
-        raise RunError("WSL CPU replay did not produce the expected scientific report")
-    artifact_paths = (
+        return external_blocker(
+            "CPU_VERIFIED_REPORT_SCHEMA_INVALID", remote_artifact, verified_path, markdown_path
+        )
+    executor_path = run_dir / "trusted-executor-records.jsonl"
+    _executor_records(remote, executor_path)
+    resource_path = run_dir / "gpu-resource-report.json"
+    resource_path.write_text(
+        json.dumps(_gpu_resource_report(remote, run_id), indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    artifact_paths = [
+        *frozen_inputs,
         preflight_path,
         source_archive,
         binding_path,
-        ATTEMPT_MARKER,
-        REPORT_DIR / "preflight-v1.json",
+        attempt_copy,
         remote_artifact,
         control_path,
         verified_path,
         markdown_path,
+        executor_path,
+        resource_path,
+    ]
+    if log_path.is_file():
+        artifact_paths.append(log_path)
+    if drive_receipt_path.is_file():
+        artifact_paths.append(drive_receipt_path)
+    drive_sync_status = "PENDING_CONNECTED_DRIVE_VERIFICATION_AND_SYNC"
+    manifest_path, manifest_bytes = _write_artifact_manifest(
+        run_id, run_dir, artifact_paths, verified["terminal_outcome"]
     )
-    manifest = {
-        "schema": "RES541_A02_ARTIFACT_HASHES_V1",
-        "run_id": run_id,
-        "files": {
-            path.name: {
-                "bytes": path.stat().st_size,
-                "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
-            }
-            for path in artifact_paths
-        },
-    }
-    manifest_path = REPORT_DIR / f"{run_id}-artifact-hashes.json"
-    manifest_bytes = json.dumps(manifest, indent=2, sort_keys=True) + "\n"
-    manifest_path.write_text(manifest_bytes, encoding="utf-8")
     print(
         json.dumps(
             {
                 "terminal_outcome": verified["terminal_outcome"],
-                "evidence_package": str(REPORT_DIR),
+                "run_id": run_id,
+                "evidence_package": str(run_dir),
                 "report": str(markdown_path),
                 "artifact_hash_manifest": str(manifest_path),
                 "artifact_hash_manifest_sha256": hashlib.sha256(
                     manifest_bytes.encode()
                 ).hexdigest(),
+                "drive_sync_status": drive_sync_status,
+                "drive_folder_id": DRIVE_FOLDER_ID,
+                "drive_run_directory": run_id,
             },
             indent=2,
         )

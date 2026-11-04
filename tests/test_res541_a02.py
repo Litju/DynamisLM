@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import ast
+import hashlib
+import inspect
 import json
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -13,6 +17,7 @@ from scripts import (
     a02_execution,
     a02_experiment,
     a02_preflight,
+    a02_remote,
     a02_score,
 )
 
@@ -78,7 +83,278 @@ def test_new_authority_records_bind_each_case_to_exact_typed_references() -> Non
 def test_protocol_binds_all_scientific_and_runner_source_files() -> None:
     protocol = json.loads((ROOT / "experiments/a02/protocol-v1.json").read_text())
     assert protocol["status"] == "FROZEN_PRE_INFERENCE"
+    revision = protocol["pre_inference_revision"]
+    origin = (protocol.get("pre_inference_revision_history") or [revision])[0]
+    assert revision["revision"] >= 2
+    assert origin["supersedes_protocol_sha256"] == (
+        "9eba8af2ff79600673bd8bdd0451911f9f9bb2498ec841c33c3d1cdead481122"
+    )
+    assert origin["previous_runner_sha256"] == {
+        "scripts/a02_execution.py": (
+            "e1c3c928aa0b66fd0a2878be68f0ce5fff85d2b2935396a2f47338292c33929e"
+        ),
+        "scripts/a02_remote.py": "60757e9b4d42ca985cf0a348353382e65dcc1791ba546f81806436532dde4c4e",
+    }
+    assert revision["current_runner_sha256"] == {
+        name: protocol["experiment_files"][name]
+        for name in ("scripts/a02_remote.py", "scripts/a02_execution.py")
+    }
+    assert (
+        revision["preserved_bindings"]["new_case_manifest_sha256"]
+        == (protocol["new_a02_cases"]["case_manifest_sha256"])
+    )
+    assert (
+        revision["preserved_bindings"]["action_prompt_sha256"]
+        == (protocol["new_a02_cases"]["action_prompt_sha256"])
+    )
+    assert revision["preserved_bindings"]["model_revision"] == protocol["model"]["model_revision"]
     a02_experiment.verify_protocol_source_bindings(protocol)
+
+
+def test_pinned_huggingface_hub_bootstrap_api_is_compatible_offline() -> None:
+    import huggingface_hub
+    from huggingface_hub import snapshot_download
+
+    assert huggingface_hub.__version__ == "0.33.4"
+    snapshot_parameters = inspect.signature(snapshot_download).parameters
+    model_info_parameters = inspect.signature(huggingface_hub.HfApi.model_info).parameters
+    assert "trust_remote_code" not in snapshot_parameters
+    assert "allow_patterns" in snapshot_parameters
+    assert {"revision", "files_metadata", "token"} <= model_info_parameters.keys()
+
+
+def test_model_and_tokenizer_loaders_explicitly_disable_remote_code() -> None:
+    tree = ast.parse((ROOT / "scripts/a02_remote.py").read_text())
+    loaders = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "from_pretrained"
+    ]
+    assert len(loaders) == 2
+    assert all(
+        any(
+            keyword.arg == "trust_remote_code"
+            and isinstance(keyword.value, ast.Constant)
+            and keyword.value.value is False
+            for keyword in call.keywords
+        )
+        for call in loaders
+    )
+
+
+def test_weights_use_exact_pinned_assets_and_reject_unknown_hub_keywords(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import huggingface_hub
+
+    contents = {
+        "config.json": b'{"model_type":"synthetic"}',
+        "tokenizer.json": b"synthetic-tokenizer",
+        "tokenizer_config.json": b"synthetic-tokenizer-config",
+        "model.safetensors": b"synthetic-weights",
+    }
+    siblings = []
+    for name, data in contents.items():
+        siblings.append(
+            SimpleNamespace(
+                rfilename=name,
+                size=len(data),
+                lfs=SimpleNamespace(sha256=hashlib.sha256(data).hexdigest())
+                if name.endswith(".safetensors")
+                else None,
+            )
+        )
+    model_info = SimpleNamespace(sha="pinned-revision", siblings=siblings)
+    monkeypatch.setattr(
+        huggingface_hub,
+        "HfApi",
+        lambda: SimpleNamespace(model_info=lambda *_args, **_kwargs: model_info),
+    )
+    requested: dict[str, Any] = {}
+
+    def snapshot_download(
+        repo_id: str,
+        *,
+        revision: str,
+        cache_dir: str,
+        token: bool,
+        allow_patterns: list[str],
+    ) -> str:
+        requested.update(
+            repo_id=repo_id,
+            revision=revision,
+            cache_dir=cache_dir,
+            token=token,
+            allow_patterns=allow_patterns,
+        )
+        snapshot = tmp_path / "snapshot"
+        snapshot.mkdir()
+        for name in allow_patterns:
+            (snapshot / name).write_bytes(contents[name])
+        return str(snapshot)
+
+    monkeypatch.setattr(huggingface_hub, "snapshot_download", snapshot_download)
+    torch = SimpleNamespace(
+        cuda=SimpleNamespace(memory_allocated=lambda _device: 0, memory_reserved=lambda _device: 0)
+    )
+    snapshot, inventory = a02_remote._weights(
+        "synthetic/model",
+        "pinned-revision",
+        torch,
+        {"tokenizer.json": "expected-hash", "tokenizer_config.json": "expected-hash"},
+    )
+
+    assert snapshot == tmp_path / "snapshot"
+    assert requested["revision"] == "pinned-revision"
+    assert set(requested["allow_patterns"]) == set(contents)
+    assert inventory["weight_bytes"] == len(contents["model.safetensors"])
+    assert set(inventory["support_files"]) == set(contents) - {"model.safetensors"}
+
+
+def test_colab_drive_identity_mismatch_disables_mount_writes() -> None:
+    assert a02_execution._same_google_account("owner@example.com", "OWNER@example.com")
+    assert not a02_execution._same_google_account("other@example.com", "owner@example.com")
+
+
+def test_content_addressed_run_id_uses_frozen_case_and_protocol_hashes() -> None:
+    protocol = {
+        "historical_a01": {"case_manifest_sha256": "history"},
+        "new_a02_cases": {"case_manifest_sha256": "new"},
+    }
+    run_id = a02_execution._run_id(protocol, "protocol")
+    assert run_id == a02_execution._run_id(protocol, "protocol")
+    assert run_id.startswith("res541-a02-")
+    assert run_id != a02_execution._run_id(
+        {**protocol, "new_a02_cases": {"case_manifest_sha256": "changed"}}, "protocol"
+    )
+
+
+def test_colab_log_export_drops_code_output_tokens_and_paths() -> None:
+    raw = (
+        '{"type":"execution","timestamp":"2026-11-04T00:00:00Z",'
+        '"status":"ok","duration_ms":5,"code":"secret source",'
+        '"output":"raw model output","token":"private","path":"/private"}\n'
+        '{"type":"file_operation","path":"/content/private"}\n'
+    )
+    result = a02_execution._sanitize_colab_log(raw, "run-1")
+    assert '"type":"execution"' in result
+    assert '"session":"run-1"' in result
+    assert all(item not in result for item in ("secret source", "raw model output", "private"))
+
+
+def test_remote_drive_mount_parser_and_identity_mismatch_fail_closed(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    assert a02_remote._drive_mountpoints(
+        "drivefs /content/drive fuse.drivefs rw 0 0\nnone /tmp fuse.foo rw 0 0\n"
+    ) == ["/content/drive", "/tmp"]
+    root = tmp_path / "mounted"
+    folder = root / "MyDrive/DynamisLM/RES-541-A0.2-Colab"
+    folder.mkdir(parents=True)
+    marker = folder / "owner-marker.txt"
+    marker.write_text("owner-account-content")
+    monkeypatch.setattr(a02_remote, "_discover_drive_root", lambda: root)
+    monkeypatch.setattr(a02_remote, "DRIVE_RUN_DIR", None)
+    monkeypatch.setenv("A02_DRIVE_IDENTITY_CONFIRMED", "1")
+    monkeypatch.setenv("A02_DRIVE_OWNER_EMAIL", "owner@example.com")
+    monkeypatch.setenv("A02_DRIVE_FOLDER_ID", a02_remote.DRIVE_FOLDER_ID)
+    monkeypatch.setenv("A02_DRIVE_PROBE_NAME", marker.name)
+    monkeypatch.setenv("A02_DRIVE_PROBE_CONTENT", "different-owner-content")
+    report: dict[str, Any] = {}
+
+    a02_remote._prepare_drive(report, "run-content-id")
+
+    assert report["drive_persistence"]["status"] == "IDENTITY_MISMATCH"
+    assert report["drive_persistence"]["writes_enabled"] is False
+    assert marker.read_text() == "owner-account-content"
+    assert not (folder / "run-content-id").exists()
+
+
+def test_drive_checkpoint_bound_covers_each_case_and_terminal_artifacts() -> None:
+    assert a02_remote.DRIVE_MAX_CHECKPOINTS >= 26 * 3 + 1 + 3
+
+
+def test_remote_drive_probe_and_immutable_publication_verify_readback(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    root = tmp_path / "mounted"
+    folder = root / "MyDrive/DynamisLM/RES-541-A0.2-Colab"
+    folder.mkdir(parents=True)
+    content = "RES541_A02_DRIVE_OWNER_PROBE_V1:test\n"
+    marker = folder / "owner-marker.txt"
+    marker.write_text(content)
+    monkeypatch.setattr(a02_remote, "_discover_drive_root", lambda: root)
+    monkeypatch.setattr(a02_remote, "DRIVE_RUN_DIR", None)
+    monkeypatch.setattr(a02_remote, "DRIVE_CHECKPOINTS", [])
+    monkeypatch.setattr(a02_remote, "DRIVE_FAILURES", [])
+    monkeypatch.setattr(a02_remote, "DRIVE_TOTAL_BYTES", 0)
+    monkeypatch.setenv("A02_DRIVE_IDENTITY_CONFIRMED", "1")
+    monkeypatch.setenv("A02_DRIVE_OWNER_EMAIL", "owner@example.com")
+    monkeypatch.setenv("A02_DRIVE_FOLDER_ID", a02_remote.DRIVE_FOLDER_ID)
+    monkeypatch.setenv("A02_DRIVE_PROBE_NAME", marker.name)
+    monkeypatch.setenv("A02_DRIVE_PROBE_CONTENT", content)
+    monkeypatch.setenv("A02_DRIVE_PROBE_FILE_ID", "drive-file-id")
+    report: dict[str, Any] = {}
+
+    a02_remote._prepare_drive(report, "run-content-id")
+
+    assert report["drive_persistence"]["status"] == "VERIFIED"
+    assert report["drive_persistence"]["probe_file_id"] == "drive-file-id"
+    assert not marker.exists()
+    drive_run = folder / "run-content-id"
+    assert drive_run.is_dir()
+    record = a02_remote._write_drive_immutable("small.json", b'{"value":1}\n')
+    assert record["sha256"] == hashlib.sha256(b'{"value":1}\n').hexdigest()
+    assert (drive_run / "small.json").read_bytes() == b'{"value":1}\n'
+    with pytest.raises(FileExistsError):
+        a02_remote._write_drive_immutable("small.json", b'{"value":2}\n')
+
+
+def test_executor_records_are_retained_as_separate_synthetic_evidence(tmp_path: Path) -> None:
+    output = tmp_path / "executor.jsonl"
+    a02_execution._executor_records(
+        {
+            "cases": [
+                {
+                    "case_id": "synthetic-case",
+                    "interaction_id": "run:synthetic-case",
+                    "engine_response": {"event": {"origin": "trusted_executor_result"}},
+                }
+            ]
+        },
+        output,
+    )
+    row = json.loads(output.read_text().splitlines()[0])
+    assert row["case_id"] == "synthetic-case"
+    assert row["engine_response"]["event"]["origin"] == "trusted_executor_result"
+
+
+def test_artifact_manifest_binds_local_bytes_and_drive_destination(tmp_path: Path) -> None:
+    artifact = tmp_path / "report.json"
+    artifact.write_bytes(b'{"synthetic":true}\n')
+    manifest_path, content = a02_execution._write_artifact_manifest(
+        "res541-a02-content", tmp_path, [artifact], "EXTERNAL_BLOCKER"
+    )
+
+    manifest = json.loads(content)
+    assert manifest_path.is_file()
+    assert manifest["terminal_outcome"] == "EXTERNAL_BLOCKER"
+    assert manifest["files"] == [
+        {
+            "name": "report.json",
+            "local_path": str(artifact),
+            "drive_path": "res541-a02-content/report.json",
+            "drive_file_id": None,
+            "bytes": len(artifact.read_bytes()),
+            "sha256": hashlib.sha256(artifact.read_bytes()).hexdigest(),
+        }
+    ]
+    with pytest.raises(a02_execution.RunError, match="refusing overwrite"):
+        a02_execution._write_artifact_manifest(
+            "res541-a02-content", tmp_path, [artifact], "EXTERNAL_BLOCKER"
+        )
 
 
 def test_typed_authority_routes_refuse_before_operation() -> None:
