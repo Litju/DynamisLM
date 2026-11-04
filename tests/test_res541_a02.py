@@ -893,8 +893,9 @@ def test_replacement_cleanup_faults(
     assert signal.getsignal(signal.SIGTERM) == old_term
 
 
+@pytest.mark.parametrize("unwritable_receipt", [False, True])
 def test_watchdog_stops_only_exact_session_after_controller_disconnect(
-    tmp_path: Path, monkeypatch: Any
+    tmp_path: Path, monkeypatch: Any, unwritable_receipt: bool
 ) -> None:
     import os
     import subprocess
@@ -909,7 +910,7 @@ def test_watchdog_stops_only_exact_session_after_controller_disconnect(
     executable.chmod(0o755)
     monkeypatch.setenv("PATH", str(tmp_path) + os.pathsep + os.environ["PATH"])
     monkeypatch.setenv("A02_TEST_COMMAND_LOG", str(command_log))
-    receipt = tmp_path / "watchdog.json"
+    receipt = tmp_path / ("missing/watchdog.json" if unwritable_receipt else "watchdog.json")
     process = subprocess.Popen(
         [sys.executable, "-m", "scripts.a02_execution", "watchdog", "exact-session", str(receipt)],
         cwd=ROOT,
@@ -927,6 +928,9 @@ def test_watchdog_stops_only_exact_session_after_controller_disconnect(
         "--auth=oauth2 stop --session exact-session",
         "--auth=oauth2 sessions",
     ]
-    state = json.loads(receipt.read_text())
-    assert state["phase"] == "VERIFY_RETURNED"
-    assert state["session_absent"] is True
+    if unwritable_receipt:
+        assert not receipt.exists()
+    else:
+        state = json.loads(receipt.read_text())
+        assert state["phase"] == "VERIFY_RETURNED"
+        assert state["session_absent"] is True

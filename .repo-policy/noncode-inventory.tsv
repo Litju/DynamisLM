@@ -98,7 +98,7 @@ experiments/a02/README.md	documentation	-	Bounded RES-541 A0.2 experiment proced
 experiments/a02/cases-v1.json	authority	f3a56dde310b2d64f2f8db2f9d02a432dd712d7b4a8aba50f836f1b3d6673dd3	Frozen 10-case synthetic development suite with independent typed expectations; no PSE or model training data
 experiments/a02/historical-cases-v1.json	authority	619015ea1df55e8507316ff764e422ce95605549893d0748fb65cc5ad6aa7f38	Exact-byte copy of the historical synthetic A0 paired case manifest; no raw empirical data
 experiments/a02/historical-inputs-v1.json	authority	811cfaa6e8caf67e072c02539d719d9cec0dca02da6260808b22bc4951fa561d	Frozen exact prepared prompts and synthetic evidence for the 16 A0.1 paired cases
-experiments/a02/protocol-v1.json	authority	fcfefc9288e2b7d8efe172a37efaa2f7bfea5ea21d1b7183b143546a3e1fcd50	A0.2 pre-inference protocol, model/runtime limits, scoring rules and source hashes
+experiments/a02/protocol-v1.json	authority	bc4d0ba9bde536d19c06e113c999acd89477f73b9005843f86e29b0ebb42985b	A0.2 pre-inference protocol, model/runtime limits, scoring rules and source hashes
 experiments/a02/system-action-v1.txt	authority	6b57999a00d29a86364b6541844686e25cbc70662c3b93f444c3ce630fc9aeba	Frozen A0.2 model action prompt with explicit untrusted user-result boundary
 experiments/a02/system-final-v1.txt	authority	792de532f47612206786a5235ff4176cee9775dc1f6913754b7ee2e9462a1ca0	Frozen A0.2 final explanation prompt constrained to the executor event
 experiments/a02/tokenizer-files-v1.json	authority	7638726d4723a842a4a969b9bb7bb4a350f4573def6a189a2422fdf19ffcd52b	Pinned four-file SmolLM3 tokenizer and Jinja identities for the fixed model revision

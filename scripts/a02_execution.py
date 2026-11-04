@@ -118,7 +118,14 @@ def _watchdog(run_id: str, receipt: Path) -> None:
     if ready and sys.stdin.read(1) == "D":
         return
     state: dict[str, Any] = {"session": run_id, "phase": "STOP_REQUESTED"}
-    _write_json(receipt, state)
+
+    def record() -> None:
+        try:
+            _write_json(receipt, state)
+        except OSError:
+            pass
+
+    record()
     try:
         stopped = _run(
             ["colab", "--auth=oauth2", "stop", "--session", run_id],
@@ -128,9 +135,9 @@ def _watchdog(run_id: str, receipt: Path) -> None:
     except Exception as exc:
         state["stop_error"] = type(exc).__name__
     state["phase"] = "STOP_RETURNED"
-    _write_json(receipt, state)
+    record()
     state["phase"] = "VERIFY_REQUESTED"
-    _write_json(receipt, state)
+    record()
     try:
         sessions = _run(["colab", "--auth=oauth2", "sessions"], timeout=VERIFY_TIMEOUT_SECONDS)
         state["sessions_exit_code"] = sessions.returncode
@@ -140,7 +147,7 @@ def _watchdog(run_id: str, receipt: Path) -> None:
         state["verification_error"] = type(exc).__name__
         state["session_absent"] = False
     state["phase"] = "VERIFY_RETURNED"
-    _write_json(receipt, state)
+    record()
 
 
 def _parse_balance(text: str) -> float:
