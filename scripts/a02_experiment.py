@@ -52,6 +52,7 @@ CASES_PATH = ROOT / "experiments/a02/cases-v1.json"
 HISTORICAL_CASES_PATH = ROOT / "experiments/a02/historical-cases-v1.json"
 HISTORICAL_INPUTS_PATH = ROOT / "experiments/a02/historical-inputs-v1.json"
 PROTOCOL_PATH = ROOT / "experiments/a02/protocol-v1.json"
+SCORING_RECONCILIATION_V2_PATH = ROOT / "experiments/a02/scoring-reconciliation-v2.json"
 ACTION_PROMPT_PATH = ROOT / "experiments/a02/system-action-v1.txt"
 FINAL_PROMPT_PATH = ROOT / "experiments/a02/system-final-v1.txt"
 SEED = 541
@@ -679,6 +680,7 @@ def build_protocol() -> dict[str, Any]:
         "experiments/a02/system-action-v1.txt",
         "experiments/a02/system-final-v1.txt",
         "experiments/a02/prompt-conformance-v1.json",
+        "experiments/a02/scoring-reconciliation-v2.json",
         "experiments/a02/README.md",
         "experiments/a02/cases-v1.json",
         "experiments/a02/historical-inputs-v1.json",

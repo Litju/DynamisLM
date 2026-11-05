@@ -38,6 +38,9 @@ THIRD_RECOVERY_BUNDLE = REPORT_DIR / "res541-attempt3-recovery-20261104T115459Z"
 THIRD_RECOVERY_BUNDLE_MANIFEST_SHA256 = (
     "91687f525f674ab7e9cf5bd01d5195451aed6b98957af8e273d3552736011682"
 )
+SCORING_RECONCILIATION_V2_SHA256 = (
+    "2e3983d2dd0a862341ef99e7dddf3478426e2038a87056e08236eedf2b7eea23"
+)
 MAX_SESSION_SECONDS = 900
 MAX_EXEC_SECONDS = 720
 NEW_TIMEOUT_SECONDS = 120
@@ -55,6 +58,7 @@ ATTEMPT4_CONTRACT: dict[str, Any] = {
     "schema": "RES541_A02_EXECUTION_CONTRACT_V1",
     "attempt": 4,
     "parent_attempts": [1, 2, 3],
+    "scoring_reconciliation_v2_sha256": SCORING_RECONCILIATION_V2_SHA256,
     "lineage": {
         "attempt_1_marker_sha256": (
             "9c0315b92a307ca92fb3dfb68cc28d9dbee9cada292a35d4aca550b0e4ac1769"
@@ -578,6 +582,7 @@ def _verify_attempt4_lineage() -> dict[str, str]:
         "attempt_3_recovery_source_revision": qualification["recovery_source_revision"],
         "attempt_3_historical_adapted_scorer_sha256": hashlib.sha256(adapted_scorer).hexdigest(),
         "execution_contract_sha256": _contract_sha256(),
+        "scoring_reconciliation_v2_sha256": SCORING_RECONCILIATION_V2_SHA256,
     }
 
 
@@ -761,6 +766,7 @@ def preflight(attempt: int = 1) -> dict[str, Any]:
                 ).encode()
             ).hexdigest(),
             "execution_contract_sha256": _contract_sha256(),
+            "scoring_reconciliation_sha256": SCORING_RECONCILIATION_V2_SHA256,
         }
     else:
         if not _zero_sessions(sessions.stdout):
@@ -848,6 +854,7 @@ def _binding(
             execution_contract_sha256=preflight_doc["execution_contract_sha256"],
             lineage_sha256=preflight_doc["recovery"]["lineage_sha256"],
             quota_snapshot_sha256=preflight_doc["quota_snapshot_sha256"],
+            scoring_reconciliation_sha256=preflight_doc["scoring_reconciliation_sha256"],
         )
     return binding
 
@@ -869,6 +876,7 @@ def _confirmation(doc: dict[str, Any], binding: dict[str, Any]) -> str:
         + (
             f" | attempt=4 | contract={doc['execution_contract_sha256']}"
             f" | lineage={doc['recovery']['lineage_sha256']}"
+            f" | scoring-v2={doc['scoring_reconciliation_sha256']}"
             if doc.get("attempt") == 4
             else ""
         )
@@ -912,6 +920,7 @@ def _archive_source(path: Path) -> None:
 def _copy_frozen_inputs(run_dir: Path) -> list[Path]:
     sources = (
         ROOT / "experiments/a02/protocol-v1.json",
+        a02_experiment.SCORING_RECONCILIATION_V2_PATH,
         ROOT / "experiments/a02/cases-v1.json",
         ROOT / "experiments/a02/historical-cases-v1.json",
         ROOT / "experiments/a02/historical-inputs-v1.json",
@@ -1072,6 +1081,7 @@ def run(attempt: int = 1) -> int:
             )
         if attempt == 4 and (
             fresh["execution_contract_sha256"] != doc["execution_contract_sha256"]
+            or fresh["scoring_reconciliation_sha256"] != doc["scoring_reconciliation_sha256"]
             or fresh["quota_snapshot_sha256"] != doc["quota_snapshot_sha256"]
             or fresh["active_sessions"] != doc["active_sessions"]
             or fresh["active_assignment_count"] != doc["active_assignment_count"]
@@ -1224,6 +1234,7 @@ def run(attempt: int = 1) -> int:
         if attempt == 4:
             attempt_record["execution_contract_sha256"] = _contract_sha256()
             attempt_record["lineage_sha256"] = doc["recovery"]["lineage_sha256"]
+            attempt_record["scoring_reconciliation_sha256"] = SCORING_RECONCILIATION_V2_SHA256
         with marker_path.open("x", encoding="utf-8") as marker:
             marker.write(json.dumps(attempt_record, indent=2, sort_keys=True) + "\n")
             marker.flush()
@@ -1627,6 +1638,35 @@ def run(attempt: int = 1) -> int:
         return external_blocker(
             "CPU_VERIFIED_REPORT_SCHEMA_INVALID", remote_artifact, verified_path, markdown_path
         )
+    v2_verified_path = run_dir / "verified-v2.json"
+    v2_markdown_path = run_dir / "scientific-report-v2.md"
+    v2_verified: dict[str, Any] | None = None
+    if attempt == 4:
+        try:
+            v2_verified = json.loads(v2_verified_path.read_text())
+        except (OSError, json.JSONDecodeError):
+            return external_blocker(
+                "CPU_RECONCILIATION_V2_REPORT_INVALID",
+                remote_artifact,
+                verified_path,
+                v2_verified_path,
+            )
+        if (
+            not v2_markdown_path.is_file()
+            or v2_verified.get("schema") != "RES541_A02_VERIFIED_REPORT_V2"
+            or v2_verified.get("v1_terminal_outcome") != verified.get("terminal_outcome")
+            or v2_verified.get("v1_verified_report_sha256")
+            != hashlib.sha256(verified_path.read_bytes()).hexdigest()
+            or v2_verified.get("scoring_reconciliation", {}).get("sha256")
+            != SCORING_RECONCILIATION_V2_SHA256
+        ):
+            return external_blocker(
+                "CPU_RECONCILIATION_V2_REPORT_BINDING_INVALID",
+                remote_artifact,
+                verified_path,
+                v2_verified_path,
+                v2_markdown_path,
+            )
     executor_path = run_dir / "trusted-executor-records.jsonl"
     _executor_records(remote, executor_path)
     resource_path = run_dir / "gpu-resource-report.json"
@@ -1648,6 +1688,8 @@ def run(attempt: int = 1) -> int:
         executor_path,
         resource_path,
     ]
+    if v2_verified is not None:
+        artifact_paths.extend([v2_verified_path, v2_markdown_path])
     if log_path.is_file():
         artifact_paths.append(log_path)
     if drive_receipt_path.is_file():
@@ -1660,6 +1702,9 @@ def run(attempt: int = 1) -> int:
         json.dumps(
             {
                 "terminal_outcome": verified["terminal_outcome"],
+                "scoring_reconciliation_v2_terminal_outcome": (
+                    v2_verified["terminal_outcome"] if v2_verified is not None else None
+                ),
                 "run_id": run_id,
                 "evidence_package": str(run_dir),
                 "report": str(markdown_path),

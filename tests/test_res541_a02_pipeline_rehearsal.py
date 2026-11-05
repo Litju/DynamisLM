@@ -248,6 +248,142 @@ def _package_inventory() -> dict[str, dict[str, Any]]:
     }
 
 
+def _v2_practical_refusal_row() -> tuple[dict[str, Any], dict[str, Any]]:
+    reconciliation = json.loads(a02_experiment.SCORING_RECONCILIATION_V2_PATH.read_bytes())
+    scope = reconciliation["scope"]
+    expected = reconciliation["scoring"]["v2"]["case_specific_expected"]
+    claim_context = {
+        "measurement_level": expected["claim_level"],
+        "relationship_level": None,
+        "analysis_class": expected["analysis_class"],
+        "statistical_result_present": False,
+        "statistical_authority_hashes": expected["statistical_authority_hashes"],
+        "decision_criterion_reference": expected["decision_criterion_reference"],
+        "comparability_decision_count": expected["comparability_decision_count"],
+    }
+    stage = {
+        "stage": reconciliation["scoring"]["v2"]["case_specific_stage_id"],
+        "refused": True,
+        "reason_codes": expected["reason_codes"],
+        "status": expected["authority_status"],
+        "first_blocking_prerequisite": expected["first_blocking_prerequisite"],
+        "missing_information": expected["missing_information"],
+        "allowed_measurement_levels": ["OBSERVED_VALUE"],
+        "blocked_claims": [
+            "NUMERICAL_CHANGE",
+            "COMPARABLE_CHANGE",
+            "CHANGE_RELATIVE_TO_MEASUREMENT_ERROR",
+            "PRACTICAL_OR_DECISION_MEANINGFULNESS",
+        ],
+        "claim_context": claim_context,
+    }
+    event = {
+        "origin": "trusted_executor_result",
+        "outcome": "REFUSED",
+        "reason_codes": expected["reason_codes"],
+        "metadata": {
+            "claim_status": expected["authority_status"],
+            "reason_codes": expected["reason_codes"],
+            "dispatch_count": 0,
+        },
+    }
+    return (
+        {
+            "protocol": scope["protocol"],
+            "case_id": scope["case_id"],
+            "engine_response": {
+                "model_action_valid": True,
+                "model_intent_correct": True,
+                "scientific_execution_count": 0,
+                "authority_stages": [stage],
+                "event": event,
+            },
+        },
+        reconciliation,
+    )
+
+
+def test_v2_reconciliation_is_case_stage_and_prerequisite_specific() -> None:
+    row, reconciliation = _v2_practical_refusal_row()
+    assert a02_score._v2_stage_reason_match(row, reconciliation)
+
+    wrong_stage = json.loads(json.dumps(row))
+    wrong_stage["engine_response"]["authority_stages"][0]["stage"] = (
+        "post_calculation_claim_authority"
+    )
+    with pytest.raises(ValueError, match="stage attribution"):
+        a02_score._v2_stage_reason_match(wrong_stage, reconciliation)
+
+    wrong_reasons = json.loads(json.dumps(row))
+    wrong_reasons["engine_response"]["event"]["reason_codes"].append(
+        "RES70_COMPARABILITY_AUTHORITY_MISSING"
+    )
+    with pytest.raises(ValueError, match="preflight authority trace"):
+        a02_score._v2_stage_reason_match(wrong_reasons, reconciliation)
+
+    wrong_prerequisite = json.loads(json.dumps(row))
+    wrong_prerequisite["engine_response"]["authority_stages"][0]["missing_information"] = []
+    with pytest.raises(ValueError, match="missing-prerequisite"):
+        a02_score._v2_stage_reason_match(wrong_prerequisite, reconciliation)
+
+    wrong_case = json.loads(json.dumps(row))
+    wrong_case["case_id"] = "a02-practical-decision-meaning"
+    with pytest.raises(ValueError, match="exact case scope"):
+        a02_score._v2_stage_reason_match(wrong_case, reconciliation)
+
+    wrong_intent = json.loads(json.dumps(row))
+    wrong_intent["engine_response"]["model_intent_correct"] = False
+    assert a02_score._v2_stage_reason_match(wrong_intent, reconciliation)
+    assert (
+        a02_score._v2_terminal_outcome(
+            safety_ok=True,
+            numeric_ok=True,
+            reason_ok=True,
+            final_ok=True,
+            critical_ok=False,
+        )
+        == "STAGE_A_SCIENTIFIC_NO_GO"
+    )
+
+    missing_authority = json.loads(json.dumps(row))
+    missing_authority["engine_response"]["authority_stages"][0]["claim_context"][
+        "statistical_result_present"
+    ] = True
+    with pytest.raises(ValueError, match="stage or missing-prerequisite"):
+        a02_score._v2_stage_reason_match(missing_authority, reconciliation)
+
+    unauthorized = json.loads(json.dumps(row))
+    unauthorized["engine_response"]["scientific_execution_count"] = 1
+    assert not a02_score._v2_stage_reason_match(unauthorized, reconciliation)
+
+    guard_refusal = json.loads(json.dumps(row))
+    guard_refusal["engine_response"]["event"]["origin"] = "application_guard_refusal"
+    assert not a02_score._v2_stage_reason_match(guard_refusal, reconciliation)
+
+
+def test_executor_replay_rejects_a_forged_historical_practical_result() -> None:
+    case = next(
+        row
+        for row in a02_experiment.load_historical_cases()
+        if row.case_id == "refuse-practical-meaning"
+    )
+    intent = a0_engine.oracle_intent(a0_engine._build_context(case))
+    raw_action = json.dumps(
+        a0_engine._model_intent_wire(intent), sort_keys=True, separators=(",", ":")
+    )
+    interaction_id = "v2-forged-executor-replay"
+    engine_response = a02_engine.execute_historical(case.case_id, raw_action, interaction_id)
+    forged = json.loads(json.dumps(engine_response))
+    forged["event"]["reason_codes"] = ["RES70_COMPARABILITY_AUTHORITY_MISSING"]
+    row = {
+        "interaction_id": interaction_id,
+        "action_generation": {"raw_text": raw_action, "truncated": False},
+        "engine_response": forged,
+    }
+    with pytest.raises(ValueError, match="replay differs"):
+        a02_score._replay_engine("historical", case.case_id, row)
+
+
 @pytest.mark.skipif(not HAS_LOCAL_EVIDENCE, reason="attempt-3 retained E: evidence required")
 def test_attempt4_lineage_rechecks_attempt3_without_changing_its_disposition() -> None:
     lineage = a02_execution._verify_attempt4_lineage()
@@ -462,6 +598,7 @@ def test_synthetic_worker_report_runs_through_full_cpu_scorer(
             "attempt_3_historical_adapted_scorer_sha256": _sha(
                 b"synthetic historical admission adapter"
             ),
+            "scoring_reconciliation_v2_sha256": (a02_execution.SCORING_RECONCILIATION_V2_SHA256),
             "execution_contract_sha256": a02_execution._contract_sha256(),
         }
         recovery = {
@@ -498,6 +635,7 @@ def test_synthetic_worker_report_runs_through_full_cpu_scorer(
                 ).encode()
             ),
             "execution_contract_sha256": a02_execution._contract_sha256(),
+            "scoring_reconciliation_sha256": (a02_execution.SCORING_RECONCILIATION_V2_SHA256),
             "requested_gpu": "T4",
             "e_mount_source": "E:\\",
             "host_model_weights": "NOT_PRESENT_IN_CHECKED_CACHE",
@@ -531,6 +669,7 @@ def test_synthetic_worker_report_runs_through_full_cpu_scorer(
             "owner_confirmation_sha256": _sha(phrase.encode()),
             "recorded_utc": "2026-11-05T00:00:00+00:00",
             "execution_contract_sha256": a02_execution._contract_sha256(),
+            "scoring_reconciliation_sha256": (a02_execution.SCORING_RECONCILIATION_V2_SHA256),
             "lineage_sha256": recovery["lineage_sha256"],
         }
         marker_path.write_bytes(_json_bytes(marker))
@@ -648,3 +787,27 @@ def test_synthetic_worker_report_runs_through_full_cpu_scorer(
             "RES70_UNSUPPORTED_CLAIM_ESCALATION",
         ]
         assert (output_dir / "scientific-report.md").is_file()
+        v2_verified = json.loads((output_dir / "verified-v2.json").read_bytes())
+        assert v2_verified["schema"] == "RES541_A02_VERIFIED_REPORT_V2"
+        assert v2_verified["v1_terminal_outcome"] == "STAGE_A_SCIENTIFIC_NO_GO"
+        assert v2_verified["terminal_outcome"] == "STAGE_A_DEVELOPMENT_GO"
+        assert v2_verified["v1_metrics"]["refusal_reason_code_agreement"] == {
+            "numerator": 16,
+            "denominator": 17,
+        }
+        assert v2_verified["metrics"]["refusal_reason_code_agreement"] == {
+            "numerator": 17,
+            "denominator": 17,
+        }
+        for key, value in verified["metrics"].items():
+            if key != "refusal_reason_code_agreement":
+                assert v2_verified["metrics"][key] == value
+        v2_practical = next(
+            row
+            for row in v2_verified["case_results"]
+            if row["case_id"] == "refuse-practical-meaning"
+        )
+        assert v2_practical["expected_reason_match"] is False
+        assert v2_practical["v2_reason_match"] is True
+        assert v2_practical["v2_reason_authority_stage"] == "claim_authorization_preflight"
+        assert (output_dir / "scientific-report-v2.md").is_file()

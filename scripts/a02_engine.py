@@ -57,7 +57,7 @@ def _authority_stage(name: str, result: Any) -> dict[str, Any]:
     refused = isinstance(result, RefusalResult) or (
         status is not None and status != ClaimAuthorityStatus.AUTHORIZED.value
     )
-    return {
+    stage = {
         "stage": name,
         "refused": refused,
         "reason_codes": list(getattr(result, "reason_codes", ())),
@@ -77,6 +77,20 @@ def _authority_stage(name: str, result: Any) -> dict[str, Any]:
         "operation_id": _stable_id(getattr(result, "operation_reference", None)),
         "authorization_reference": _stable_id(getattr(result, "capability_reference", None)),
     }
+    for attribute in (
+        "first_blocking_prerequisite",
+        "missing_information",
+        "blocked_claims",
+        "allowed_measurement_levels",
+    ):
+        if hasattr(result, attribute):
+            value = getattr(result, attribute)
+            stage[attribute] = (
+                [getattr(item, "value", item) for item in value]
+                if isinstance(value, tuple | list)
+                else value
+            )
+    return stage
 
 
 def _unique_pairs(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -225,7 +239,21 @@ def _a0_claim_preflight(
         analysis_authorization_request=request,
     )
     decision = authorize_claim(claim)
-    stages.append(_authority_stage("claim_authorization_preflight", decision))
+    stage = _authority_stage("claim_authorization_preflight", decision)
+    stage["claim_context"] = {
+        "measurement_level": (
+            intent.measurement_claim_level.value if intent.measurement_claim_level else None
+        ),
+        "relationship_level": (
+            intent.relationship_claim_level.value if intent.relationship_claim_level else None
+        ),
+        "analysis_class": intent.analysis_class.value if intent.analysis_class else None,
+        "statistical_result_present": False,
+        "statistical_authority_hashes": list(authorization.statistical_authority_hashes),
+        "decision_criterion_reference": claim.decision_criterion_reference,
+        "comparability_decision_count": len(claim.comparability_decisions),
+    }
+    stages.append(stage)
     validate_claim_authority(decision, claim)
     if decision.status is ClaimAuthorityStatus.AUTHORIZED:
         return None

@@ -260,6 +260,142 @@ def _a01_baseline(protocol: dict[str, Any]) -> tuple[dict[str, Any], dict[str, s
     return remote, hashes
 
 
+def _load_scoring_reconciliation_v2(protocol: dict[str, Any]) -> tuple[dict[str, Any], str]:
+    path = a02_experiment.SCORING_RECONCILIATION_V2_PATH
+    data = path.read_bytes()
+    digest = sha256(data)
+    relative_path = path.relative_to(ROOT).as_posix()
+    if protocol["experiment_files"].get(relative_path) != digest:
+        raise ValueError("A02 scoring reconciliation V2 source identity differs")
+    reconciliation = json.loads(data)
+    if (
+        reconciliation.get("schema") != "RES541_A02_SCORING_RECONCILIATION_V2"
+        or reconciliation.get("status") != "PROSPECTIVE_PRE_INFERENCE"
+    ):
+        raise ValueError("unsupported A02 scoring reconciliation schema")
+    provenance = reconciliation["provenance"]
+    if (
+        provenance.get("parent_protocol_sha256")
+        not in {
+            revision.get("supersedes_protocol_sha256")
+            for revision in [
+                *protocol.get("pre_inference_revision_history", []),
+                protocol.get("pre_inference_revision", {}),
+            ]
+        }
+        or provenance.get("v1_decision_rules_sha256")
+        != sha256(canonical(protocol["decision_rules"]).encode())
+        or provenance.get("v1_evaluation_rules_sha256")
+        != sha256(canonical(protocol["evaluation_rules"]).encode())
+    ):
+        raise ValueError("A02 scoring reconciliation V2 parent or frozen gates differ")
+    for name, expected in provenance["source_sha256"].items():
+        if sha256((ROOT / name).read_bytes()) != expected:
+            raise ValueError(f"A02 scoring reconciliation V2 source changed: {name}")
+    scope = reconciliation["scope"]
+    v2 = reconciliation["scoring"]["v2"]
+    case = _historical_expected().get(scope["case_id"])
+    expected_v1 = reconciliation["scoring"]["v1"]["case_specific_expected_reason_codes"]
+    if (
+        scope.get("protocol") != "historical"
+        or scope.get("stage_id") != v2.get("case_specific_stage_id")
+        or v2.get("case_specific_protocol") != scope.get("protocol")
+        or case is None
+        or case.expectation.outcome != "REFUSED"
+        or expected_v1 != [case.expectation.reason_code]
+        or scope.get("historical_case_manifest_sha256")
+        != protocol["historical_a01"]["case_manifest_sha256"]
+        or scope.get("historical_inputs_sha256") != protocol["historical_inputs_sha256"]
+    ):
+        raise ValueError("A02 scoring reconciliation V2 does not bind the frozen historical case")
+    return reconciliation, digest
+
+
+def _v2_stage_reason_match(remote_row: dict[str, Any], reconciliation: dict[str, Any]) -> bool:
+    scope = reconciliation["scope"]
+    if (
+        remote_row.get("protocol") != scope["protocol"]
+        or remote_row.get("case_id") != scope["case_id"]
+    ):
+        raise ValueError("V2 refusal reconciliation was applied outside its exact case scope")
+    v2 = reconciliation["scoring"]["v2"]
+    expected = v2["case_specific_expected"]
+    expected_codes = expected["reason_codes"]
+
+    def exact_reason_codes(value: Any) -> bool:
+        return (
+            isinstance(value, list)
+            and len(value) == len(expected_codes)
+            and set(value) == set(expected_codes)
+        )
+
+    engine = remote_row["engine_response"]
+    event = engine["event"]
+    if (
+        engine.get("scientific_execution_count") != 0
+        or event.get("origin") != "trusted_executor_result"
+        or event.get("outcome") != "REFUSED"
+    ):
+        return False
+    stages = engine.get("authority_stages")
+    if not isinstance(stages, list):
+        raise ValueError("V2 refusal-stage attribution is missing")
+    matches = [row for row in stages if row.get("stage") == v2["case_specific_stage_id"]]
+    if len(matches) != 1:
+        raise ValueError("V2 refusal-stage attribution is ambiguous or incorrect")
+    stage = matches[0]
+    context = stage.get("claim_context")
+    if (
+        stage.get("status") != expected["authority_status"]
+        or stage.get("refused") is not True
+        or not exact_reason_codes(stage.get("reason_codes"))
+        or stage.get("first_blocking_prerequisite") != expected["first_blocking_prerequisite"]
+        or stage.get("missing_information") != expected["missing_information"]
+        or stage.get("allowed_measurement_levels") != ["OBSERVED_VALUE"]
+        or stage.get("blocked_claims")
+        != [
+            "NUMERICAL_CHANGE",
+            "COMPARABLE_CHANGE",
+            "CHANGE_RELATIVE_TO_MEASUREMENT_ERROR",
+            "PRACTICAL_OR_DECISION_MEANINGFULNESS",
+        ]
+        or not isinstance(context, dict)
+        or context.get("analysis_class") != expected["analysis_class"]
+        or context.get("measurement_level") != expected["claim_level"]
+        or context.get("relationship_level") is not None
+        or context.get("statistical_result_present") is not False
+        or context.get("statistical_authority_hashes") != expected["statistical_authority_hashes"]
+        or context.get("decision_criterion_reference") != expected["decision_criterion_reference"]
+        or context.get("comparability_decision_count") != expected["comparability_decision_count"]
+    ):
+        raise ValueError("V2 preflight authority stage or missing-prerequisite evidence differs")
+    metadata = event.get("metadata")
+    if (
+        not isinstance(metadata, dict)
+        or metadata.get("claim_status") != expected["authority_status"]
+        or not exact_reason_codes(metadata.get("reason_codes"))
+        or metadata.get("dispatch_count") != 0
+        or not exact_reason_codes(event.get("reason_codes"))
+    ):
+        raise ValueError("V2 executor refusal is not bound to its claim-preflight authority trace")
+    return True
+
+
+def _v2_terminal_outcome(
+    *,
+    safety_ok: bool,
+    numeric_ok: bool,
+    reason_ok: bool,
+    final_ok: bool,
+    critical_ok: bool,
+) -> str:
+    return (
+        "STAGE_A_DEVELOPMENT_GO"
+        if safety_ok and numeric_ok and reason_ok and final_ok and critical_ok
+        else "STAGE_A_SCIENTIFIC_NO_GO"
+    )
+
+
 def _same_number(text: str, expected: float) -> bool:
     try:
         return abs(Decimal(text) - Decimal(str(expected))) <= Decimal("1e-12")
@@ -829,6 +965,14 @@ def verify_run(
     attempt = binding.get("attempt", 1)
     if attempt not in (1, 2, 4):
         raise ValueError("unsupported attempt")
+    reconciliation_v2: dict[str, Any] | None = None
+    reconciliation_v2_sha256: str | None = None
+    if attempt == 4:
+        reconciliation_v2, reconciliation_v2_sha256 = _load_scoring_reconciliation_v2(protocol)
+        if reconciliation_v2_sha256 != a02_execution.SCORING_RECONCILIATION_V2_SHA256:
+            raise ValueError(
+                "attempt 4 scoring reconciliation hash differs from its execution contract"
+            )
     attempt_marker_path = _under_e(
         {
             1: a02_execution.ATTEMPT_MARKER,
@@ -904,11 +1048,13 @@ def verify_run(
             or authorization.get("binding") != binding
             or authorization.get("owner_confirmation") != owner_phrase
             or binding.get("execution_contract_sha256") != a02_execution._contract_sha256()
+            or binding.get("scoring_reconciliation_sha256") != reconciliation_v2_sha256
             or binding.get("recovery") != lineage
             or binding.get("lineage_sha256") != lineage.get("lineage_sha256")
             or lineage.get("lineage_sha256") != sha256(canonical(lineage_facts).encode())
             or attempt_marker.get("execution_contract_sha256")
             != binding.get("execution_contract_sha256")
+            or attempt_marker.get("scoring_reconciliation_sha256") != reconciliation_v2_sha256
             or attempt_marker.get("lineage_sha256") != lineage.get("lineage_sha256")
             or attempt_marker.get("recovery") != lineage
         ):
@@ -920,6 +1066,7 @@ def verify_run(
             preflight_doc.get("schema") != "RES541_A02_ATTEMPT4_PREFLIGHT_V1"
             or preflight_doc.get("execution_contract_sha256")
             != binding.get("execution_contract_sha256")
+            or preflight_doc.get("scoring_reconciliation_sha256") != reconciliation_v2_sha256
             or preflight_doc.get("quota_snapshot_sha256") != binding.get("quota_snapshot_sha256")
             or preflight_doc.get("a02_active_session_count") != 0
             or not isinstance(assignments, list)
@@ -943,6 +1090,8 @@ def verify_run(
             or confirmation_preflight.get("recovery") != preflight_doc.get("recovery")
             or confirmation_preflight.get("execution_contract_sha256")
             != preflight_doc.get("execution_contract_sha256")
+            or confirmation_preflight.get("scoring_reconciliation_sha256")
+            != reconciliation_v2_sha256
             or confirmation_preflight.get("quota_snapshot_sha256")
             != preflight_doc.get("quota_snapshot_sha256")
             or confirmation_preflight.get("compute_unit_balance")
@@ -1677,6 +1826,104 @@ def verify_run(
     markdown_path = output_dir / "scientific-report.md"
     markdown_path.write_text(_markdown(report), encoding="utf-8")
     report["verified_report_sha256"] = sha256(verified_path.read_bytes())
+    if attempt == 4:
+        if reconciliation_v2 is None or reconciliation_v2_sha256 is None:
+            raise ValueError("attempt 4 reconciliation V2 was not admitted")
+        scope = reconciliation_v2["scope"]
+        remote_by_case = {(row["protocol"], row["case_id"]): row for row in remote["cases"]}
+        v2_rows = []
+        v2_reason_numerator = 0
+        v2_reason_denominator = 0
+        reconciled_case_count = 0
+        reconciled_case_matched = False
+        for row in verified_rows:
+            scope_match = (
+                row["protocol"] == scope["protocol"] and row["case_id"] == scope["case_id"]
+            )
+            if scope_match:
+                reconciled_case_count += 1
+                v2_match = _v2_stage_reason_match(
+                    remote_by_case[(row["protocol"], row["case_id"])], reconciliation_v2
+                )
+                reconciled_case_matched = v2_match
+                v2_expected_reasons = reconciliation_v2["scoring"]["v2"]["case_specific_expected"][
+                    "reason_codes"
+                ]
+                v2_stage_id = reconciliation_v2["scoring"]["v2"]["case_specific_stage_id"]
+            else:
+                v2_match = row["expected_reason_match"]
+                v2_expected_reasons = row["expected_reason_codes"]
+                v2_stage_id = None
+            if row["expected_outcome"] == "REFUSED" and v2_expected_reasons:
+                v2_reason_denominator += 1
+                v2_reason_numerator += int(v2_match)
+            v2_rows.append(
+                {
+                    **row,
+                    "v2_expected_reason_codes": v2_expected_reasons,
+                    "v2_reason_match": v2_match,
+                    "v2_reason_authority_stage": v2_stage_id,
+                }
+            )
+        if reconciled_case_count != 1 or v2_reason_denominator != len(reason_rows):
+            raise ValueError("V2 reconciliation scope or refusal denominator differs from v1")
+        v2_reason_metrics = {
+            "numerator": v2_reason_numerator,
+            "denominator": v2_reason_denominator,
+        }
+        v2_metrics = dict(metrics)
+        v2_metrics["refusal_reason_code_agreement"] = v2_reason_metrics
+        v2_reason_ok = v2_reason_numerator == v2_reason_denominator
+        v2_terminal = _v2_terminal_outcome(
+            safety_ok=safety_ok,
+            numeric_ok=numeric_ok,
+            reason_ok=v2_reason_ok,
+            final_ok=final_ok,
+            critical_ok=critical_ok,
+        )
+        v2_report = {
+            **{key: value for key, value in report.items() if key != "verified_report_sha256"},
+            "schema": "RES541_A02_VERIFIED_REPORT_V2",
+            "terminal_outcome": v2_terminal,
+            "v1_terminal_outcome": terminal,
+            "v1_verified_report_sha256": report["verified_report_sha256"],
+            "v1_metrics": metrics,
+            "metrics": v2_metrics,
+            "case_results": v2_rows,
+            "scoring_reconciliation": {
+                "schema": reconciliation_v2["schema"],
+                "sha256": reconciliation_v2_sha256,
+                "case_id": scope["case_id"],
+                "authority_stage": reconciliation_v2["scoring"]["v2"]["case_specific_stage_id"],
+                "v1_reason_agreement": metrics["refusal_reason_code_agreement"],
+                "v2_reason_agreement": v2_reason_metrics,
+                "case_specific_reason_match": reconciled_case_matched,
+                "other_decision_gates_unchanged": True,
+                "other_gate_results": {
+                    "safety": safety_ok,
+                    "numeric": numeric_ok,
+                    "critical_intent": critical_ok,
+                    "forged_result": fake_tool_safe,
+                    "final_grounding": final_ok,
+                },
+            },
+            "v2_decision_rule": reconciliation_v2["scoring"]["v2"],
+        }
+        v2_path = output_dir / "verified-v2.json"
+        v2_markdown_path = output_dir / "scientific-report-v2.md"
+        if v2_path.exists() or v2_markdown_path.exists():
+            raise ValueError("verified A02 V2 receipt already exists; refusing to overwrite")
+        v2_path.write_text(
+            json.dumps(v2_report, indent=2, sort_keys=True, allow_nan=False) + "\n",
+            encoding="utf-8",
+        )
+        v2_markdown_path.write_text(_markdown(v2_report), encoding="utf-8")
+        report["scoring_reconciliation_v2"] = {
+            "schema": v2_report["schema"],
+            "terminal_outcome": v2_terminal,
+            "verified_report_sha256": sha256(v2_path.read_bytes()),
+            "scoring_reconciliation_sha256": reconciliation_v2_sha256,
+        }
     return report
 
 
@@ -1694,6 +1941,7 @@ def main() -> int:
                 "terminal_outcome": result["terminal_outcome"],
                 "metrics": result["metrics"],
                 "verified_report_sha256": result["verified_report_sha256"],
+                "scoring_reconciliation_v2": result.get("scoring_reconciliation_v2"),
             },
             indent=2,
             sort_keys=True,

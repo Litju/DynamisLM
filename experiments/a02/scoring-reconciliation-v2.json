@@ -1,0 +1,99 @@
+{
+  "adjudication": {
+    "claim_level": "PRACTICAL_OR_DECISION_MEANINGFULNESS",
+    "conclusion": "A0.1 and A0.2 refuse the same practical-decision claim at different canonical RES-70 stages; the resulting reason codes are not interchangeable.",
+    "human_independent_review": "NOT_PERFORMED",
+    "canonical_policy_source": "src/dynamislm/claims/registry.py::RES70_CLAIM_POLICIES",
+    "v1_post_calculation": {
+      "code_path": "scripts/a0_engine.py::_evaluate",
+      "analysis_dispatched": true,
+      "first_blocking_prerequisite": "affirmative direct pairwise comparability decisions",
+      "measurement_level_first_blocked": "COMPARABLE_CHANGE",
+      "reason_codes": [
+        "RES70_COMPARABILITY_AUTHORITY_MISSING",
+        "RES70_UNSUPPORTED_CLAIM_ESCALATION"
+      ],
+      "statistical_result_present": true
+    },
+    "v2_preflight": {
+      "code_path": "scripts/a02_engine.py::_a0_claim_preflight",
+      "analysis_dispatched": false,
+      "first_blocking_prerequisite": "exact deterministic statistical result",
+      "measurement_level_first_blocked": "NUMERICAL_CHANGE",
+      "missing_information": ["StatisticalResult"],
+      "reason_codes": [
+        "RES70_STATISTICAL_AUTHORITY_INSUFFICIENT",
+        "RES70_UNSUPPORTED_CLAIM_ESCALATION"
+      ],
+      "additional_prerequisites_for_requested_practical_claim": [
+        "authorized lower NUMERICAL_CHANGE claim with exact StatisticalResult",
+        "COMPARABLE_CHANGE claim with affirmative direct pairwise comparability",
+        "CHANGE_RELATIVE_TO_MEASUREMENT_ERROR claim with source-bound measurement-error authority and applicability evidence",
+        "claim-specific decision criterion"
+      ],
+      "statistical_result_present": false
+    }
+  },
+  "provenance": {
+    "parent_protocol_sha256": "318a6e4205261b1050a892608f8c12d68121478d5891f4f50ba7b9616275ca13",
+    "source_sha256": {
+      "experiments/a02/historical-cases-v1.json": "619015ea1df55e8507316ff764e422ce95605549893d0748fb65cc5ad6aa7f38",
+      "experiments/a02/historical-inputs-v1.json": "811cfaa6e8caf67e072c02539d719d9cec0dca02da6260808b22bc4951fa561d",
+      "scripts/a0_engine.py": "6d6a92b32c3af3a698b88923854da3a8b12d3f1cc18264fc00eee9b0a64b0f33",
+      "scripts/a02_engine.py": "3d362af7f5a0de7e14374b2229b223b6982706feefc71b8b05d43cd114308448",
+      "scripts/a02_experiment.py": "f1bb0425938ff56dc018d5dd1d3353a84a4da3c746e1b612f3313d159a55eb62",
+      "scripts/a02_score.py": "d9647789b62934eaebf82f1b46f726ad041fb4a73e4bc00b57e446245d232f37",
+      "src/dynamislm/claims/authority.py": "df90a11217e53b11362dbc2803a3c6b556e2c799164e28afc7b9dfd6464524fb",
+      "src/dynamislm/claims/registry.py": "318af3e836b79c4b8d2d0b40974fd3a6927575dd159562a31053526881c966a4"
+    },
+    "v1_decision_rules_sha256": "dddb5d93812b054e7409aaac713045d91b0933a5ef691689ed526c91688255e9",
+    "v1_evaluation_rules_sha256": "8d57f98564d541068d9548dd4af4aea1c5218b4733b8b50ed18b5e95e1a28316"
+  },
+  "schema": "RES541_A02_SCORING_RECONCILIATION_V2",
+  "scope": {
+    "case_id": "refuse-practical-meaning",
+    "historical_case_manifest_sha256": "619015ea1df55e8507316ff764e422ce95605549893d0748fb65cc5ad6aa7f38",
+    "historical_inputs_sha256": "811cfaa6e8caf67e072c02539d719d9cec0dca02da6260808b22bc4951fa561d",
+    "protocol": "historical",
+    "stage_id": "claim_authorization_preflight"
+  },
+  "scoring": {
+    "v1": {
+      "all_correct_oracle_reason_agreement": {"denominator": 17, "numerator": 16},
+      "case_specific_expected_reason_codes": [
+        "RES70_COMPARABILITY_AUTHORITY_MISSING"
+      ],
+      "preserve_original_reason_matching_rule": true,
+      "terminal_outcome": "STAGE_A_SCIENTIFIC_NO_GO"
+    },
+    "v2": {
+      "case_specific_expected": {
+        "analysis_class": "SCALAR_ABSOLUTE_CHANGE",
+        "authority_status": "PARTIALLY_AUTHORIZED",
+        "claim_level": "PRACTICAL_OR_DECISION_MEANINGFULNESS",
+        "comparability_decision_count": 0,
+        "decision_criterion_reference": null,
+        "first_blocking_prerequisite": "exact deterministic statistical result",
+        "measurement_level_first_blocked": "NUMERICAL_CHANGE",
+        "missing_information": ["StatisticalResult"],
+        "reason_codes": [
+          "RES70_STATISTICAL_AUTHORITY_INSUFFICIENT",
+          "RES70_UNSUPPORTED_CLAIM_ESCALATION"
+        ],
+        "statistical_authority_hashes": [],
+        "statistical_result_present": false
+      },
+      "case_specific_matching": "exact reason-code set equality plus exact preflight-stage attribution",
+      "case_specific_protocol": "historical",
+      "case_specific_stage_id": "claim_authorization_preflight",
+      "denominator": "unchanged 17 frozen refusal cases",
+      "other_case_reason_matching": "unchanged v1 expected-code subset rule",
+      "other_decision_gates": "unchanged v1 unauthorized-operation, numeric, critical-intent, forged-result, and final-grounding gates",
+      "separate_model_intent_metric": true,
+      "expected_all_correct_oracle_reason_agreement": {"denominator": 17, "numerator": 17},
+      "expected_all_correct_oracle_terminal_outcome": "STAGE_A_DEVELOPMENT_GO",
+      "guard_refusal_awards_model_understanding": false
+    }
+  },
+  "status": "PROSPECTIVE_PRE_INFERENCE"
+}

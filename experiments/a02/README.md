@@ -74,17 +74,37 @@ uses a later protocol/source binding and cannot be applied directly to that olde
 report; no attempt-3 score is reconstructed or replaced. The
 versioned attempt-4 contract binds all prior markers, both recovery inventories,
 and the complete attempt-3 recovery manifest. The protocol revision records old/new
-runner hashes and its predecessor protocol hash; case, prompt, model, and decision
-bindings remain unchanged. CPU qualification covers bootstrap, evidence lineage,
-current quota, exact-target teardown, and the report-to-scorer pipeline. Actual
-CUDA/model behavior still requires the fresh owner-authorized T4 execution.
+runner hashes and its predecessor protocol hash. Frozen cases, prompts, model,
+tokenizer, thresholds, and V1 decision rules remain unchanged. The prospective V2
+reason reconciliation is separately versioned and hash-bound. CPU qualification
+covers bootstrap, evidence lineage, current quota, exact-target teardown, and the
+report-to-scorer pipeline. Actual CUDA/model behavior still requires fresh owner
+authorization and a T4 execution.
 
-The CPU-only end-to-end rehearsal admitted all 26 prompts, replayed all trusted
-executor events, scored all 26 synthetic actions, grounded all final answers, and
-persisted both reports. It returned `STAGE_A_SCIENTIFIC_NO_GO` because the frozen
-`refuse-practical-meaning` expectation requires
-`RES70_COMPARABILITY_AUTHORITY_MISSING`, while exact executor replay emits
-`RES70_STATISTICAL_AUTHORITY_INSUFFICIENT` and
-`RES70_UNSUPPORTED_CLAIM_ESCALATION` (reason agreement 16/17). The frozen case,
-authority output, and threshold were left unchanged. This blocks a Stage A
-development-go qualification until the scientific reason contract is reconciled.
+## Refusal-stage reconciliation V2
+
+Historical V1 remains unchanged: its `refuse-practical-meaning` fixture expects
+`RES70_COMPARABILITY_AUTHORITY_MISSING`, and the all-correct oracle rehearsal scores
+16/17 reason agreement and `STAGE_A_SCIENTIFIC_NO_GO`.
+
+The reasons come from different stages. A0.1 computes the registered absolute
+change before claim authorization; its practical-claim adjudication then reaches
+`COMPARABLE_CHANGE` and fails for missing affirmative pairwise comparability. A0.2
+runs `claim_authorization_preflight` before executing the operation, so there is no
+`StatisticalResult` yet. Canonical RES-70 authorization stops at that earlier
+prerequisite with `RES70_STATISTICAL_AUTHORITY_INSUFFICIENT`, then adds
+`RES70_UNSUPPORTED_CLAIM_ESCALATION` for the practical claim. These reasons describe
+different authority boundaries and are not treated as synonyms.
+
+`scoring-reconciliation-v2.json` binds a prospective exact reason match to only the
+historical `refuse-practical-meaning` case and the
+`claim_authorization_preflight` stage. It requires the refusal, no calculation,
+`PARTIALLY_AUTHORIZED` status, missing `StatisticalResult`, and the exact V2 reason
+set. V1 still uses its original fixture and emits the same 16/17 no-go; V2 writes
+separate `verified-v2.json` and Markdown reports. For the 26-case oracle rehearsal,
+V2 yields 17/17 reason agreement and a development-go score because the practical
+case matched its exact preflight-stage contract. This is synthetic scorer-contract
+evidence, not model-performance evidence. Other refusal matching remains as V1
+defined it, and safety, numeric, critical-intent, forged-result, and final-grounding
+gates are unchanged. Guard refusals do not earn model-understanding credit. No
+independent human review is asserted.
