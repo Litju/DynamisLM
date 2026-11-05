@@ -7,6 +7,7 @@ import hashlib
 import json
 import math
 import re
+import subprocess
 from collections import Counter
 from dataclasses import asdict
 from datetime import datetime
@@ -826,25 +827,31 @@ def verify_run(
     binding = control.get("binding", {})
     owner_phrase = a02_execution._confirmation(control.get("preflight", {}), binding)
     attempt = binding.get("attempt", 1)
-    if attempt not in (1, 2):
+    if attempt not in (1, 2, 4):
         raise ValueError("unsupported attempt")
     attempt_marker_path = _under_e(
-        a02_execution.ATTEMPT_MARKER if attempt == 1 else a02_execution.REPLACEMENT_MARKER
+        {
+            1: a02_execution.ATTEMPT_MARKER,
+            2: a02_execution.REPLACEMENT_MARKER,
+            4: a02_execution.FOURTH_MARKER,
+        }[attempt]
     )
     attempt_marker_bytes = attempt_marker_path.read_bytes()
     attempt_marker = json.loads(attempt_marker_bytes)
+    marker_schema = (
+        "RES541_A02_ATTEMPT4_USED_V1" if attempt == 4 else "RES541_A02_ONE_ATTEMPT_USED_V1"
+    )
     if (
         control.get("allocation_attempted") is not True
         or control.get("owner_confirmation") is not True
         or control.get("owner_confirmation_text") != owner_phrase
         or control.get("one_attempt_marker") != str(attempt_marker_path)
         or control.get("one_attempt_marker_sha256") != sha256(attempt_marker_bytes)
-        or attempt_marker.get("schema") != "RES541_A02_ONE_ATTEMPT_USED_V1"
+        or attempt_marker.get("schema") != marker_schema
         or attempt_marker.get("run_id") != binding.get("run_id")
         or attempt_marker.get("source_revision") != binding.get("source_revision")
         or attempt_marker.get("binding_sha256") != sha256(canonical(binding).encode())
         or attempt_marker.get("owner_confirmation_sha256") != sha256(owner_phrase.encode())
-        or control.get("preflight", {}).get("active_session_count") != 0
         or control.get("preflight", {}).get("requested_gpu") != "T4"
         or control.get("preflight", {}).get("e_mount_source") != "E:\\"
         or control.get("preflight", {}).get("authentication") != "OAUTH2_ACCOUNT_SESSION_VERIFIED"
@@ -853,6 +860,8 @@ def verify_run(
         or control.get("preflight", {}).get("host_model_weights") != "NOT_PRESENT_IN_CHECKED_CACHE"
     ):
         raise ValueError("interactive owner, T4, or E: preflight binding is incomplete")
+    if attempt != 4 and control.get("preflight", {}).get("active_session_count") != 0:
+        raise ValueError("legacy attempt preflight did not verify zero active sessions")
     if attempt == 2:
         authorization_path = _under_e(control_path.parent / "authorization.json")
         authorization_bytes = authorization_path.read_bytes()
@@ -868,17 +877,160 @@ def verify_run(
             or attempt_marker.get("recovery") != binding.get("recovery")
         ):
             raise ValueError("replacement authorization or original evidence binding is invalid")
+    if attempt == 4:
+        authorization_path = _under_e(control_path.parent / "authorization.json")
+        authorization_bytes = authorization_path.read_bytes()
+        authorization = json.loads(authorization_bytes)
+        lineage = a02_execution._check_attempt(4, allow_used=True)
+        lineage_facts = {
+            key: value
+            for key, value in lineage.items()
+            if key
+            not in {
+                "schema",
+                "previous_run_id",
+                "recovery_inventory_sha256",
+                "lineage_sha256",
+            }
+        }
+        if (
+            control.get("schema") != "RES541_A02_CONTROL_RECEIPT_V2"
+            or binding.get("schema") != "RES541_A02_RUN_BINDING_V2"
+            or attempt_marker.get("attempt") != 4
+            or attempt_marker.get("authorization_sha256") != sha256(authorization_bytes)
+            or authorization.get("schema") != "RES541_A02_AUTHORIZATION_V2"
+            or authorization.get("attempt") != 4
+            or authorization.get("execution_contract") != a02_execution.ATTEMPT4_CONTRACT
+            or authorization.get("binding") != binding
+            or authorization.get("owner_confirmation") != owner_phrase
+            or binding.get("execution_contract_sha256") != a02_execution._contract_sha256()
+            or binding.get("recovery") != lineage
+            or binding.get("lineage_sha256") != lineage.get("lineage_sha256")
+            or lineage.get("lineage_sha256") != sha256(canonical(lineage_facts).encode())
+            or attempt_marker.get("execution_contract_sha256")
+            != binding.get("execution_contract_sha256")
+            or attempt_marker.get("lineage_sha256") != lineage.get("lineage_sha256")
+            or attempt_marker.get("recovery") != lineage
+        ):
+            raise ValueError("attempt 4 contract, owner authorization or lineage is invalid")
+        preflight_doc = control.get("preflight", {})
+        assignments = preflight_doc.get("provider_assignments")
+        active_sessions = preflight_doc.get("active_sessions")
+        if (
+            preflight_doc.get("schema") != "RES541_A02_ATTEMPT4_PREFLIGHT_V1"
+            or preflight_doc.get("execution_contract_sha256")
+            != binding.get("execution_contract_sha256")
+            or preflight_doc.get("quota_snapshot_sha256") != binding.get("quota_snapshot_sha256")
+            or preflight_doc.get("a02_active_session_count") != 0
+            or not isinstance(assignments, list)
+            or not isinstance(active_sessions, list)
+            or preflight_doc.get("active_assignment_count") != len(assignments)
+            or preflight_doc.get("active_session_count") != len(active_sessions)
+            or {row.get("endpoint") for row in active_sessions}
+            != {row.get("endpoint") for row in assignments}
+            or {
+                row.get("name", "")
+                for row in active_sessions
+                if row.get("name", "").startswith("res541-a02-")
+            }
+        ):
+            raise ValueError("attempt 4 current quota or active-session preflight is invalid")
+        confirmation_preflight = control.get("owner_confirmation_preflight", {})
+        if (
+            not isinstance(confirmation_preflight, dict)
+            or confirmation_preflight.get("attempt") != 4
+            or confirmation_preflight.get("source_revision") != preflight_doc.get("source_revision")
+            or confirmation_preflight.get("recovery") != preflight_doc.get("recovery")
+            or confirmation_preflight.get("execution_contract_sha256")
+            != preflight_doc.get("execution_contract_sha256")
+            or confirmation_preflight.get("quota_snapshot_sha256")
+            != preflight_doc.get("quota_snapshot_sha256")
+            or confirmation_preflight.get("compute_unit_balance")
+            != preflight_doc.get("compute_unit_balance")
+            or confirmation_preflight.get("usage_rate_cu_per_hour")
+            != preflight_doc.get("usage_rate_cu_per_hour")
+            or confirmation_preflight.get("active_assignment_count")
+            != preflight_doc.get("active_assignment_count")
+            or confirmation_preflight.get("active_sessions") != preflight_doc.get("active_sessions")
+            or confirmation_preflight.get("drive_owner_email")
+            != preflight_doc.get("drive_owner_email")
+            or confirmation_preflight.get("drive_probe_sha256")
+            != preflight_doc.get("drive_probe_sha256")
+        ):
+            raise ValueError("attempt 4 fresh owner-confirmation quota snapshot differs")
+        try:
+            usage_balance, usage_rate, usage_assignments = a02_execution._parse_current_usage(
+                preflight_doc["usage_output"]
+            )
+            target_rows = [
+                row
+                for row in a02_execution._session_rows(control["status_after_allocation"])
+                if row[0] == binding["run_id"]
+            ]
+            session_observation = subprocess.CompletedProcess(
+                ["colab", "--auth=oauth2", "sessions"],
+                control["sessions_exit_code_after_stop"],
+                control["session_list_after_stop"],
+                control["sessions_stderr_after_stop"],
+            )
+            assignment_observation = subprocess.CompletedProcess(
+                ["provider-assignments"],
+                control["provider_assignment_exit_code"],
+                control["provider_assignment_output_after_stop"],
+                control["provider_assignment_stderr_after_stop"],
+            )
+            target_absent = a02_execution._verify_target_absent(
+                session_observation,
+                binding["run_id"],
+                control["target_endpoint"],
+                assignment_observation,
+            )
+        except (KeyError, TypeError, ValueError, a02_execution.RunError) as exc:
+            raise ValueError("attempt 4 exact-target teardown evidence is invalid") from exc
+        if (
+            len(target_rows) != 1
+            or target_rows[0][1] != control.get("target_endpoint")
+            or target_rows[0][2].upper() != "T4"
+            or control.get("target_absent_after_stop") is not True
+            or not target_absent
+            or control.get("stop_exit_code") != 0
+            or control.get("watchdog_phase") != "DISARMED"
+            or control.get("provider_assignment_output_sha256")
+            != sha256(control["provider_assignment_output_after_stop"].encode())
+            or usage_balance != preflight_doc.get("compute_unit_balance")
+            or usage_rate != preflight_doc.get("usage_rate_cu_per_hour")
+            or usage_assignments != preflight_doc.get("active_assignment_count")
+            or preflight_doc.get("quota_snapshot_sha256")
+            != sha256(
+                canonical(
+                    {
+                        "usage_output": preflight_doc.get("usage_output"),
+                        "session_list": preflight_doc.get("session_list"),
+                        "provider_assignments": assignments,
+                    }
+                ).encode()
+            )
+        ):
+            raise ValueError("attempt 4 exact-target teardown or current quota evidence failed")
     run_preflight_path = _under_e(Path(control["preflight_path"]))
     if sha256(run_preflight_path.read_bytes()) != control.get("binding", {}).get(
         "preflight_sha256"
     ):
         raise ValueError("run preflight hash differs from the owner-confirmed Colab binding")
+    if attempt == 4 and json.loads(run_preflight_path.read_bytes()) != control.get("preflight"):
+        raise ValueError("attempt 4 owner-confirmed preflight bytes differ from control receipt")
     if remote.get("schema") != "RES541_A02_REMOTE_REPORT_V1" or remote.get("status") != "COMPLETE":
         raise ValueError(
             "Colab run did not complete; preserve its partial receipt and report "
             "external/scientific status"
         )
-    if not control.get("session_absent_after_stop") or control.get("stop_exit_code") != 0:
+    if attempt == 4:
+        if (
+            control.get("target_absent_after_stop") is not True
+            or control.get("stop_exit_code") != 0
+        ):
+            raise ValueError("exact attempt 4 Colab target was not verified stopped")
+    elif not control.get("session_absent_after_stop") or control.get("stop_exit_code") != 0:
         raise ValueError("zero active Colab sessions was not verified after stop")
     if (
         control.get("usage_after_exit_code") != 0

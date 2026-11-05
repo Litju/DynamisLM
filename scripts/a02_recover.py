@@ -255,7 +255,7 @@ def adapted_scorer() -> tuple[Any, str]:
     }
     for before, after in replacements.items():
         if source.count(before) != 1:
-            raise ValueError("frozen admission boundary differs from recovery V1")
+            raise ValueError("current scorer is incompatible with the retained attempt-3 adapter")
         source = source.replace(before, after)
     namespace = vars(a02_score).copy()
     namespace["_decoding_metadata_equal"] = _decoding_equal

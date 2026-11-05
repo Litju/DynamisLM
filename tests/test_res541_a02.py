@@ -124,14 +124,13 @@ def test_protocol_binds_all_scientific_and_runner_source_files() -> None:
     assert prompt_repair["prompt_implementation_sha256"]["previous"]["scripts/a02_remote.py"] == (
         "f4e563a1b832006f15919d6f2c6bc52ccb0df3fe6470e4cc8fddcac649133934"
     )
-    recovery_revision = next(
+    recovery_revisions = [
         item
         for item in protocol["pre_inference_revision_history"]
-        if item.get("recovery_verifier_sha256", {}).get("previous") is None
-        and item.get("recovery_verifier_sha256", {}).get("current")
-    )
+        if item.get("recovery_verifier_sha256", {}).get("current")
+    ]
     assert (
-        recovery_revision["recovery_verifier_sha256"]["current"]
+        recovery_revisions[-1]["recovery_verifier_sha256"]["current"]
         == (protocol["experiment_files"]["scripts/a02_recover.py"])
     )
     lineage_summaries = " ".join(
@@ -981,7 +980,7 @@ def test_replacement_inventory_and_attempt_limit(tmp_path: Path, monkeypatch: An
         == hashlib.sha256(before[0]).hexdigest()
     )
     with pytest.raises(a02_execution.RunError, match="only the separately authorized"):
-        a02_execution._check_attempt(4)
+        a02_execution._check_attempt(5)
     (report / "attempt-002-used.json").write_text("used")
     with pytest.raises(a02_execution.RunError, match="already been used"):
         a02_execution._check_attempt(2)
@@ -997,6 +996,54 @@ def test_attempt_identity_includes_attempt_and_source() -> None:
     assert first != a02_execution._run_id(protocol, "protocol", 2, "source")
     assert first != a02_execution._run_id(protocol, "protocol", 1, "other")
     assert first != a02_execution._run_id(protocol, "other", 1, "source")
+
+
+def test_attempt4_quota_parser_requires_current_balance_rate_and_assignment_count() -> None:
+    assert a02_execution._parse_current_usage(
+        "Current balance: 106.64 compute units\nUsage rate: 6.73/hr\nActive assignments: 1"
+    ) == (106.64, 6.73, 1)
+    with pytest.raises(a02_execution.RunError, match="current rate and assignment count"):
+        a02_execution._parse_current_usage("Current balance: 10.00 compute units")
+
+
+def test_attempt4_teardown_checks_exact_target_across_both_inventories() -> None:
+    import subprocess
+
+    endpoint = "gpu-t4-s-target"
+
+    def observations(sessions: str, endpoints: list[str]) -> tuple[Any, Any]:
+        cli = subprocess.CompletedProcess(["colab", "--auth=oauth2", "sessions"], 0, sessions, "")
+        provider = subprocess.CompletedProcess(
+            ["provider-assignments"],
+            0,
+            json.dumps(
+                {
+                    "endpoint": "https://colab.research.google.com/tun/m/assignments",
+                    "assignments": [
+                        {
+                            "endpoint": item,
+                            "accelerator": "Accelerator.T4",
+                            "variant": "AssignmentVariant.GPU",
+                        }
+                        for item in endpoints
+                    ],
+                }
+            ),
+            "",
+        )
+        return cli, provider
+
+    unrelated = "[res338-fits] gpu-a100-s-other | Hardware: A100 | Shape: Standard | Variant: GPU"
+    cli, provider = observations(unrelated, ["gpu-a100-s-other"])
+    assert a02_execution._verify_target_absent(cli, "target", endpoint, provider)
+
+    renamed = f"[renamed-target] {endpoint} | Hardware: T4 | Shape: Standard | Variant: GPU"
+    cli, provider = observations(renamed, [endpoint])
+    assert not a02_execution._verify_target_absent(cli, "target", endpoint, provider)
+
+    cli, provider = observations(unrelated, [endpoint])
+    with pytest.raises(a02_execution.RunError, match="inventories differ"):
+        a02_execution._verify_target_absent(cli, "target", endpoint, provider)
 
 
 @pytest.mark.parametrize(
@@ -1162,9 +1209,14 @@ def test_watchdog_stops_only_exact_session_after_controller_disconnect(
     assert process.wait(timeout=10) == 0
     process.stdout.close()
     assert command_log.read_text().splitlines() == [
+        "--auth=oauth2 sessions",
         "--auth=oauth2 stop --session exact-session",
         "--auth=oauth2 sessions",
     ]
+    if not unwritable_receipt:
+        watchdog = json.loads(receipt.read_bytes())
+        assert watchdog["session_absent"] is True
+        assert watchdog["target_absent"] is False
     if unwritable_receipt:
         assert not receipt.exists()
     else:
@@ -1625,7 +1677,7 @@ def test_third_attempt_requires_closed_immutable_incident_chain(
     assert result["previous_run_id"] == "previous"
     assert before == [path.read_bytes() for path in paths]
     with pytest.raises(a02_execution.RunError, match="only the separately authorized"):
-        a02_execution._check_attempt(4)
+        a02_execution._check_attempt(5)
     a02_execution.THIRD_MARKER.write_text("consumed")
     with pytest.raises(a02_execution.RunError, match="already been used"):
         a02_execution._check_attempt(3)

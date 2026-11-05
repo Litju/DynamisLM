@@ -162,20 +162,11 @@ def test_date_metadata_normalization_does_not_relax_decoding() -> None:
         assert not a02_recover._decoding_equal({**actual, key: value}, expected)
 
 
-def test_frozen_scientific_replay_and_metrics_are_reused_byte_for_byte() -> None:
+def test_historical_attempt3_adapter_rejects_the_later_attempt4_scorer() -> None:
     original = inspect.getsource(a02_score.verify_run)
-    scorer, adapted = a02_recover.adapted_scorer()
-    assert callable(scorer)
-    boundary = "    from transformers import AutoTokenizer"
-    assert "_verify_remote_package_inventory(remote, expected_packages)" in original
-    assert original[original.index(boundary) :] == adapted[adapted.index(boundary) :]
-    assert 'attempt_marker.get("authorization_sha256") != sha256(authorization_bytes)' in adapted
-    assert 'authorization.get("binding") != binding' in adapted
-    assert 'attempt_marker.get("binding_sha256") != sha256(canonical(binding).encode())' in adapted
-    assert 'attempt_marker.get("attempt") != attempt' in adapted
-    assert "a02_execution._check_attempt(attempt, allow_used=True)" in adapted
-    assert "if attempt not in (1, 2):" in original
-    assert 'if not control.get("session_absent_after_stop")' in original
+    assert "if attempt not in (1, 2, 4):" in original
+    with pytest.raises(ValueError, match="incompatible with the retained attempt-3 adapter"):
+        a02_recover.adapted_scorer()
 
 
 def test_prompt_validation_failure_never_becomes_qualified_score(

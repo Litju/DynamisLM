@@ -27,11 +27,11 @@ PYTHONPATH=/mnt/e/DynamisLM-A0/a01/tokenizer-venv/lib/python3.12/site-packages:s
   HF_HOME=/mnt/e/DynamisLM-A0/cache/huggingface \
   USE_TORCH=0 USE_TF=0 USE_FLAX=0 TRANSFORMERS_OFFLINE=1 HF_HUB_OFFLINE=1 \
   .venv/bin/python -m scripts.a02_preflight
-.venv/bin/python -m scripts.a02_execution preflight --attempt 3
-.venv/bin/python -m scripts.a02_execution run --attempt 3
+.venv/bin/python -m scripts.a02_execution preflight --attempt 4
+.venv/bin/python -m scripts.a02_execution run --attempt 4
 ```
 
-`run --attempt 3` displays the exact source revision, protocol/case/prompt hashes, incident inventory, current Colab balance, one-session T4 limit, 900-second cap, and no-retry/no-upgrade policy. It proceeds only after the owner types the displayed phrase in an interactive WSL terminal. The controller preserves the original `one-attempt-used.json` and forensic inventory, writes an exclusive third-attempt authorization and `attempt-003-used.json`, and starts a separate bounded watchdog before allocating. The watchdog attempts to stop only this session if the controller dies or its deadline expires. A stop is considered verified only when the provider session listing independently confirms zero active sessions. Attempt 4 and automatic retries are refused. Attempts 1 and 2 remain consumed and unchanged.
+`run --attempt 4` binds the source revision, protocol/case/prompt hashes, attempt-3 recovery lineage, current Colab balance and rate, active-session inventory, and the 900-second T4 cap. It proceeds only after a fresh exact phrase is typed in an interactive WSL terminal and a second quota/session snapshot still matches. The controller preserves attempts 1–3, writes the separate `attempt-004-used.json` marker, and starts a bounded watchdog before allocation. Teardown verifies the exact target name and endpoint in both the authenticated CLI session list and provider assignments; unrelated sessions remain active and are not treated as the A02 target. Automatic retries and paid upgrades remain disabled.
 
 After CPU scoring, use the connected Google Drive file workflow to upload the small evidence package to the existing owner-only folder. Read each uploaded file back and compare its SHA-256 with `artifact-hashes.json`, recording the file IDs and verification results in a separate local receipt. A Drive failure leaves the E: evidence and scientific result intact; it does not authorize another GPU allocation.
 
@@ -66,9 +66,25 @@ exact pins as wheels without dependency resolution. Full sanitized stderr,
 command, exit status (null on timeout/spawn failure), bootstrap stage, runtime
 inventory, and free disk space remain in the partial report on failure.
 
-The protocol revision records old/new runner hashes and its predecessor protocol
-hash. All scientific bindings remain mechanically compared against both previous
-runs. CPU qualification covers broken ensurepip, supported/missing/old pip,
-wheel tampering, wrong uv/interpreter versions, environment separation, error
-retention without Drive, attempt limits, and controller/watchdog failure paths.
-Actual CUDA/model behavior still requires the owner-approved T4 execution.
+Attempt 3 is consumed and its recovery disposition remains
+`A02_ATTEMPT3_EVIDENCE_VALIDATION_FAILED` with no scientific decision. The
+retained historical admission adapter is pinned to the original recovery bundle
+and rejected `a02-valid-numerical` at frozen prompt admission. The current scorer
+uses a later protocol/source binding and cannot be applied directly to that older
+report; no attempt-3 score is reconstructed or replaced. The
+versioned attempt-4 contract binds all prior markers, both recovery inventories,
+and the complete attempt-3 recovery manifest. The protocol revision records old/new
+runner hashes and its predecessor protocol hash; case, prompt, model, and decision
+bindings remain unchanged. CPU qualification covers bootstrap, evidence lineage,
+current quota, exact-target teardown, and the report-to-scorer pipeline. Actual
+CUDA/model behavior still requires the fresh owner-authorized T4 execution.
+
+The CPU-only end-to-end rehearsal admitted all 26 prompts, replayed all trusted
+executor events, scored all 26 synthetic actions, grounded all final answers, and
+persisted both reports. It returned `STAGE_A_SCIENTIFIC_NO_GO` because the frozen
+`refuse-practical-meaning` expectation requires
+`RES70_COMPARABILITY_AUTHORITY_MISSING`, while exact executor replay emits
+`RES70_STATISTICAL_AUTHORITY_INSUFFICIENT` and
+`RES70_UNSUPPORTED_CLAIM_ESCALATION` (reason agreement 16/17). The frozen case,
+authority output, and threshold were left unchanged. This blocks a Stage A
+development-go qualification until the scientific reason contract is reconciled.
