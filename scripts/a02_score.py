@@ -148,14 +148,33 @@ def _same_number(text: str, expected: float) -> bool:
         return False
 
 
-def _unit_present(text: str, unit: str | None) -> bool:
+UNIT_PATTERNS = {
+    "m": re.compile(r"(?:m|meters?|metres?)", re.IGNORECASE),
+    "cm": re.compile(r"(?:cm|centimeters?|centimetres?)", re.IGNORECASE),
+}
+
+
+def _authorized_unit_bound(text: str, value: float, unit: str | None) -> bool:
     if not unit:
         return False
-    if unit == "m":
-        return re.search(r"\b(?:m|meters?|metres?)\b", text, re.IGNORECASE) is not None
-    if unit == "cm":
-        return re.search(r"\b(?:cm|centimeters?|centimetres?)\b", text, re.IGNORECASE) is not None
-    return unit in text
+    pattern = UNIT_PATTERNS.get(unit)
+    if pattern is None:
+        return False
+    bound = False
+    for match in NUMBER.finditer(text):
+        if not _same_number(match.group(), value):
+            continue
+        bound = True
+        following = re.match(
+            r"\s*(?:=|:)?\s*[\(\[]?\s*-?\s*([A-Za-z]+(?:/[A-Za-z]+)?)",
+            text[match.end() :],
+        )
+        if following is None or pattern.fullmatch(following.group(1)) is None:
+            return False
+        tail = text[match.end() + len(following.group(0)) :]
+        if unit == "m" and re.match(r"\s*(?:/|per\s+)\s*(?:s|sec|seconds?)\b", tail, re.I):
+            return False
+    return bound
 
 
 def _historical_expected() -> dict[str, Any]:
@@ -344,7 +363,7 @@ def _numeric_claims(text: str) -> list[str]:
 
 def _unsupported_claim_markers(text: str) -> list[str]:
     markers = []
-    for sentence in re.split(r"[.!?;,]+|\b(?:but|however|although|yet)\b", text, flags=re.I):
+    for sentence in re.split(r"[.!?;:,]+|\b(?:but|however|although|yet)\b", text, flags=re.I):
         for label, pattern in UNSUPPORTED_CLAIM_PATTERNS.items():
             for match in pattern.finditer(sentence):
                 prefix = sentence[: match.start()].split()[-6:]
@@ -404,7 +423,7 @@ def _final_grounding(
     ]
     if actual_outcome == "RESULT":
         contains_value = any(_same_number(value, event["value"]) for value in numbers)
-        contains_unit = _unit_present(text, event.get("unit"))
+        contains_unit = _authorized_unit_bound(text, event["value"], event.get("unit"))
         grounded = (
             complete and contains_value and contains_unit and not unsupported and not claim_markers
         )
@@ -792,7 +811,7 @@ def verify_run(
         or remote["runtime"].get("free_vram_before_weights_bytes", 0) < 8 * 1024**3
         or remote["runtime"].get("torch") != "2.11.0+cu130"
         or remote["runtime"].get("torch_cuda_runtime") != "13.0"
-        or remote["runtime"].get("weight_dtype") != "float16"
+        or remote["runtime"].get("weight_dtype") != protocol["runtime"].get("weight_dtype")
     ):
         raise ValueError(
             "remote model/scientific runtime differs from the frozen compatibility boundary"

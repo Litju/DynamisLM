@@ -529,6 +529,16 @@ def _package_versions() -> dict[str, str]:
     return {name: importlib.metadata.version(name) for name in names}
 
 
+def _floating_parameter_dtypes(model: Any) -> list[str]:
+    return sorted(
+        {
+            str(parameter.dtype).removeprefix("torch.")
+            for parameter in model.parameters()
+            if parameter.is_floating_point()
+        }
+    )
+
+
 def _runtime_gate() -> tuple[Any, dict[str, Any]]:
     import torch  # type: ignore[import-not-found]
 
@@ -933,7 +943,6 @@ def run() -> int:
             "total_vram_bytes": int(torch.cuda.get_device_properties(0).total_memory),
             "free_vram_before_weights_bytes": int(torch.cuda.mem_get_info(0)[0]),
             "runtime_inventory": inventory,
-            "weight_dtype": "float16",
             "historical_action_decoding": {
                 "do_sample": False,
                 "num_beams": 1,
@@ -1055,6 +1064,11 @@ def run() -> int:
             low_cpu_mem_usage=True,
         )
         model.eval()
+        observed_dtypes = _floating_parameter_dtypes(model)
+        report["runtime"]["weight_dtype"] = ",".join(observed_dtypes)
+        _write_report(report)
+        if observed_dtypes != ["float16"]:
+            raise ValueError("loaded model weight dtype differs from the frozen float16 profile")
         report["model"] = {
             "id": MODEL_ID,
             "revision": MODEL_REVISION,

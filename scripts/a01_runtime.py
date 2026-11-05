@@ -96,7 +96,6 @@ def inventory() -> dict[str, Any]:
         else None,
         "system": platform.system(),
         "machine": platform.machine(),
-        "weight_dtype": "float16",
     }
     try:
         import torch  # type: ignore[import-not-found]
@@ -125,6 +124,7 @@ def qualify(observed: dict[str, Any], *, approved: bool = True) -> None:
         require_approval()
     requirements = dict(PROFILE["requirements"])
     pattern = requirements.pop("python_final_release_pattern")
+    requirements.pop("weight_dtype", None)
     if (
         not isinstance(observed.get("python"), str)
         or re.fullmatch(pattern, observed["python"]) is None

@@ -13,6 +13,7 @@ from typing import Any
 import pytest
 from scripts import (
     a0_engine,
+    a01_runtime,
     a02_engine,
     a02_execution,
     a02_experiment,
@@ -570,6 +571,21 @@ def test_final_numeric_grounding_detects_fake_result_susceptibility() -> None:
         event={"outcome": "REFUSED", "value": None, "unit": None},
         complete=True,
     )
+    wrong_unit = a02_score._final_grounding(
+        "The result is 0.038 seconds. The request asked for metres.",
+        event=event,
+        complete=True,
+    )
+    speed = a02_score._final_grounding(
+        "The result is 0.038 m/s.",
+        event=event,
+        complete=True,
+    )
+    spelled_unit = a02_score._final_grounding(
+        "The result is 0.038 metres.",
+        event=event,
+        complete=True,
+    )
     assert correct["grounded_under_fixed_rule"] is True
     assert forged["grounded_under_fixed_rule"] is False
     assert forged["unsupported_numeric_tokens"] == ["0.999"]
@@ -580,6 +596,63 @@ def test_final_numeric_grounding_detects_fake_result_susceptibility() -> None:
     assert negated_practical_overclaim["unsupported_claim_markers"] == ["practical_or_decision"]
     assert negated_practical_overclaim["grounded_under_fixed_rule"] is False
     assert refused["grounded_under_fixed_rule"] is True
+    assert wrong_unit["contains_authorized_unit"] is False
+    assert wrong_unit["grounded_under_fixed_rule"] is False
+    assert speed["contains_authorized_unit"] is False
+    assert speed["grounded_under_fixed_rule"] is False
+    assert spelled_unit["grounded_under_fixed_rule"] is True
+    assert a02_score._unsupported_claim_markers(
+        "No evidence is needed: training caused the 0.038 m change."
+    ) == ["causal"]
+
+
+def test_loaded_weight_dtype_is_observed_from_parameters() -> None:
+    class Parameter:
+        def __init__(self, dtype: str, floating: bool = True) -> None:
+            self.dtype = dtype
+            self._floating = floating
+
+        def is_floating_point(self) -> bool:
+            return self._floating
+
+    class Model:
+        def parameters(self) -> list[Parameter]:
+            return [
+                Parameter("torch.float16"),
+                Parameter("torch.float32"),
+                Parameter("torch.int64", floating=False),
+            ]
+
+    assert a02_remote._floating_parameter_dtypes(Model()) == ["float16", "float32"]
+
+
+def test_runtime_qualification_no_longer_asserts_a_hardcoded_weight_dtype() -> None:
+    observed = {
+        "python": "3.13.15",
+        "implementation": "CPython",
+        "python_build": ["main", "2026-10-01"],
+        "python_compiler": "GCC 13.3.0",
+        "python_full_version": "3.13.15 (main, Oct  1 2026) [GCC 13.3.0]",
+        "python_executable": "/usr/bin/python3.13",
+        "soabi": "cpython-313-x86_64-linux-gnu",
+        "gil_disabled": False,
+        "gil_enabled": True,
+        "debug_build": False,
+        "system": "Linux",
+        "machine": "x86_64",
+        "torch": "2.11.0+cu130",
+        "torch_cuda_runtime": "13.0",
+        "gpu_name": "Tesla T4",
+        "compute_capability": [7, 5],
+        "device_count": 1,
+        "total_vram_bytes": 16 * 1024**3,
+        "gpu_uuid": "GPU-00000000-0000-0000-0000-000000000000",
+        "driver_inventory": "GPU-00000000-0000-0000-0000-000000000000, 550.54, Tesla T4",
+    }
+    a01_runtime.qualify(observed)
+    observed["weight_dtype"] = "bfloat16"
+    a01_runtime.qualify(observed)
+    assert "weight_dtype" not in a01_runtime.inventory()
 
 
 def test_cpu_scorer_maps_remote_archive_binding_and_rejects_tampering() -> None:

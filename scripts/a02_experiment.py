@@ -948,8 +948,7 @@ def revise_pre_inference_protocol() -> None:
         },
         "current_runner_sha256": {name: current["experiment_files"][name] for name in runner_files},
         "change_summary": (
-            "Use the shared Serialization V3/RES-403 contract and exact 26-case prompt "
-            "conformance checks. Changed source bindings: "
+            "Pre-inference engineering repair. Changed source bindings: "
             f"{', '.join(changed_files)}. Frozen scientific inputs, prompt bytes, model, "
             "and thresholds remain unchanged."
         ),
