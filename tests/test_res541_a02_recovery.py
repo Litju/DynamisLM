@@ -166,7 +166,8 @@ def test_frozen_scientific_replay_and_metrics_are_reused_byte_for_byte() -> None
     original = inspect.getsource(a02_score.verify_run)
     scorer, adapted = a02_recover.adapted_scorer()
     assert callable(scorer)
-    boundary = "    expected_packages = {"
+    boundary = "    from transformers import AutoTokenizer"
+    assert "_verify_remote_package_inventory(remote, expected_packages)" in original
     assert original[original.index(boundary) :] == adapted[adapted.index(boundary) :]
     assert 'attempt_marker.get("authorization_sha256") != sha256(authorization_bytes)' in adapted
     assert 'authorization.get("binding") != binding' in adapted

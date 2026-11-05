@@ -11,9 +11,11 @@ from collections import Counter
 from dataclasses import asdict
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from statistics import mean
 from typing import Any
+
+from packaging.version import InvalidVersion, Version
 
 from dynamislm.longitudinal.statistics import RES69_ABSOLUTE_CHANGE_OPERATION
 from scripts import (
@@ -146,6 +148,84 @@ def _verify_source_binding(remote: dict[str, Any], binding: dict[str, Any]) -> N
         remote_name = remote_names.get(binding_name, binding_name)
         if remote.get(remote_name) != binding.get(binding_name):
             raise ValueError(f"remote source binding mismatch: {binding_name}")
+
+
+def _remote_origin(value: Any, *, package: str, field: str) -> PurePosixPath:
+    if not isinstance(value, str):
+        raise ValueError(f"remote package provenance is missing {package} {field}")
+    path = PurePosixPath(value)
+    if not path.is_absolute() or ".." in path.parts:
+        raise ValueError(f"remote package provenance has invalid {package} {field}: {value!r}")
+    return path
+
+
+def _verify_remote_package_inventory(remote: dict[str, Any], expected: dict[str, str]) -> None:
+    runtime = remote.get("runtime")
+    if not isinstance(runtime, dict):
+        raise ValueError("remote runtime package provenance is missing")
+    packages = runtime.get("packages")
+    if not isinstance(packages, dict) or packages.keys() != expected.keys():
+        raise ValueError("remote inference package set differs from the pinned requirements")
+
+    fields = {"distribution_version", "module_version", "module_origin", "distribution_origin"}
+    roots: set[PurePosixPath] = set()
+    for name, pinned_version in expected.items():
+        record = packages[name]
+        if not isinstance(record, dict) or record.keys() != fields:
+            raise ValueError(f"remote package provenance schema differs: {name}")
+        try:
+            distribution_version = Version(record["distribution_version"])
+            if distribution_version != Version(pinned_version):
+                raise ValueError(
+                    f"remote package distribution version differs from the pin: {name}"
+                )
+            module_version = record["module_version"]
+            if module_version is not None and not isinstance(module_version, str):
+                raise ValueError(f"remote loaded module version has the wrong type: {name}")
+            if module_version is not None and name != "regex":
+                parsed_module_version = Version(module_version)
+                if parsed_module_version != distribution_version:
+                    raise ValueError(f"remote loaded module version differs: {name}")
+        except (InvalidVersion, TypeError) as exc:
+            raise ValueError(f"remote package version is invalid: {name}") from exc
+
+        distribution_origin = _remote_origin(
+            record["distribution_origin"], package=name, field="distribution_origin"
+        )
+        module_origin = _remote_origin(record["module_origin"], package=name, field="module_origin")
+        if module_origin == distribution_origin or not module_origin.is_relative_to(
+            distribution_origin
+        ):
+            raise ValueError(f"remote loaded module is outside its distribution: {name}")
+        roots.add(distribution_origin)
+    if len(roots) != 1:
+        raise ValueError("remote pinned distributions do not share one inference site origin")
+    inference_root = next(iter(roots))
+    if "inference-venv" not in inference_root.parts:
+        raise ValueError("remote pinned distributions are outside the inference venv")
+
+    torch_module = runtime.get("torch_module")
+    torch_fields = {"version", "distribution_version", "origin", "distribution_origin"}
+    if not isinstance(torch_module, dict) or torch_module.keys() != torch_fields:
+        raise ValueError("remote PyTorch provenance schema differs")
+    torch_version = runtime.get("torch")
+    if (
+        not isinstance(torch_version, str)
+        or torch_module["version"] != torch_version
+        or torch_module["distribution_version"] != torch_version
+    ):
+        raise ValueError("remote PyTorch module and distribution versions differ")
+    torch_distribution_origin = _remote_origin(
+        torch_module["distribution_origin"], package="torch", field="distribution_origin"
+    )
+    torch_origin = _remote_origin(torch_module["origin"], package="torch", field="origin")
+    if (
+        torch_distribution_origin in roots
+        or "inference-venv" in torch_distribution_origin.parts
+        or torch_origin == torch_distribution_origin
+        or not torch_origin.is_relative_to(torch_distribution_origin)
+    ):
+        raise ValueError("remote PyTorch provenance is not from the inherited system site")
 
 
 def _a01_baseline(protocol: dict[str, Any]) -> tuple[dict[str, Any], dict[str, str]]:
@@ -888,8 +968,7 @@ def verify_run(
         for line in (ROOT / "experiments/a0/requirements-colab.txt").read_text().splitlines()
         if line and not line.startswith("#")
     }
-    if remote["runtime"].get("packages") != expected_packages:
-        raise ValueError("remote inference packages differ from the pinned requirement file")
+    _verify_remote_package_inventory(remote, expected_packages)
 
     from transformers import AutoTokenizer  # type: ignore[import-not-found]
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import copy
 import hashlib
 import importlib
 import importlib.metadata
@@ -1405,6 +1406,117 @@ def test_torch_inventory_requires_the_inherited_runtime_origin(
     torch.__file__ = str(inference_site / "torch/__init__.py")
     with pytest.raises(ValueError, match="loaded PyTorch package mismatch"):
         a02_remote._torch_module_inventory(torch, inference_site)
+
+
+def test_cpu_scorer_admits_remote_package_provenance_and_rejects_tampering(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    from packaging.version import Version
+
+    inference_site = tmp_path / "content/a02/inference-venv/lib/python3.13/site-packages"
+    system_site = tmp_path / "usr/local/lib/python3.13/site-packages"
+    inference_site.mkdir(parents=True)
+    system_site.mkdir(parents=True)
+    expected = {
+        line.split("==", 1)[0]: line.split("==", 1)[1]
+        for line in (ROOT / "experiments/a0/requirements-colab.txt").read_text().splitlines()
+        if line and not line.startswith("#")
+    }
+    modules = {
+        name: SimpleNamespace(
+            __version__=(
+                None
+                if name == "typing_extensions"
+                else "2.5.148"
+                if name == "regex"
+                else "2025.06.15"
+                if name == "certifi"
+                else version
+            ),
+            __file__=str(inference_site / module_name / "__init__.py"),
+        )
+        for name, module_name in a02_remote.PACKAGE_MODULES.items()
+        for version in (expected[name],)
+    }
+    torch_version = "2.11.0+cu130"
+    torch = SimpleNamespace(
+        __version__=torch_version,
+        __file__=str(system_site / "torch/__init__.py"),
+    )
+
+    def import_loaded_module(name: str) -> Any:
+        if name == "packaging.version":
+            return SimpleNamespace(Version=Version)
+        distribution_name = next(
+            distribution_name
+            for distribution_name, mapped_name in a02_remote.PACKAGE_MODULES.items()
+            if mapped_name == name
+        )
+        return modules[distribution_name]
+
+    def distribution(name: str) -> Any:
+        root = system_site if name == "torch" else inference_site
+        version = torch_version if name == "torch" else expected[name]
+        return SimpleNamespace(version=version, locate_file=lambda _path: root)
+
+    monkeypatch.setattr(importlib, "import_module", import_loaded_module)
+    monkeypatch.setattr(importlib.metadata, "distribution", distribution)
+    monkeypatch.setattr(site, "getsitepackages", lambda: [inference_site, system_site])
+    packages = a02_remote._package_versions(expected, inference_site)
+    torch_module = a02_remote._torch_module_inventory(torch, inference_site)
+    remote_report: dict[str, Any] = {
+        "schema": "RES541_A02_REMOTE_REPORT_V1",
+        "status": "COMPLETE",
+        "runtime": {
+            "torch": torch_version,
+            "torch_module": torch_module,
+            "packages": packages,
+        },
+    }
+
+    a02_score._verify_remote_package_inventory(remote_report, expected)
+    assert packages["typing_extensions"]["module_version"] is None
+    assert packages["regex"]["module_version"] == "2.5.148"
+    assert packages["certifi"]["module_version"] == "2025.06.15"
+
+    malformed = copy.deepcopy(remote_report)
+    del malformed["runtime"]["packages"]["numpy"]
+    with pytest.raises(ValueError, match="package set differs"):
+        a02_score._verify_remote_package_inventory(malformed, expected)
+
+    mismatches = (
+        ("numpy", "distribution_version", "1.0", "distribution version differs"),
+        ("numpy", "module_version", "1.0", "loaded module version differs"),
+        ("numpy", "module_origin", "numpy/__init__.py", "invalid numpy module_origin"),
+        (
+            "numpy",
+            "module_origin",
+            str(system_site / "numpy/__init__.py"),
+            "outside its distribution",
+        ),
+    )
+    for name, field, value, message in mismatches:
+        altered = copy.deepcopy(remote_report)
+        altered["runtime"]["packages"][name][field] = value
+        with pytest.raises(ValueError, match=message):
+            a02_score._verify_remote_package_inventory(altered, expected)
+
+    altered = copy.deepcopy(remote_report)
+    other_site = tmp_path / "other-site"
+    altered["runtime"]["packages"]["numpy"]["distribution_origin"] = str(other_site)
+    altered["runtime"]["packages"]["numpy"]["module_origin"] = str(other_site / "numpy/__init__.py")
+    with pytest.raises(ValueError, match="do not share one inference site origin"):
+        a02_score._verify_remote_package_inventory(altered, expected)
+
+    altered_torch = copy.deepcopy(remote_report)
+    altered_torch["runtime"]["torch_module"]["version"] = "2.10.0+cu128"
+    with pytest.raises(ValueError, match="PyTorch module and distribution versions differ"):
+        a02_score._verify_remote_package_inventory(altered_torch, expected)
+    altered_torch = copy.deepcopy(remote_report)
+    altered_torch["runtime"]["torch_module"]["distribution_origin"] = str(inference_site)
+    altered_torch["runtime"]["torch_module"]["origin"] = str(inference_site / "torch/__init__.py")
+    with pytest.raises(ValueError, match="not from the inherited system site"):
+        a02_score._verify_remote_package_inventory(altered_torch, expected)
 
 
 def test_inference_runs_in_a_clean_pinned_python_process(tmp_path: Path, monkeypatch: Any) -> None:
