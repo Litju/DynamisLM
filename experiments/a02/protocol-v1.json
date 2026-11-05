@@ -32,7 +32,7 @@
   "experiment_files": {
     "experiments/a0/requirements-colab.txt": "e6389e1d37abda2cbbbb69b291f7d9ad8d6cb6ea00f16d3e3aaa81e002abd224",
     "experiments/a01/system-prompt-v1.txt": "3a427cbddec385a60e2843f921d3b8a3e3d0b80af8167f12a71a4d07a5639362",
-    "experiments/a02/README.md": "c8320664262cfb6ac658606e482d1e686776a6976f1f207ddfe3be11ad7f0986",
+    "experiments/a02/README.md": "42c11f767db9492ba6acff438db3c4385b4569a77610be42e2ed3bb33f364844",
     "experiments/a02/cases-v1.json": "f3a56dde310b2d64f2f8db2f9d02a432dd712d7b4a8aba50f836f1b3d6673dd3",
     "experiments/a02/historical-cases-v1.json": "619015ea1df55e8507316ff764e422ce95605549893d0748fb65cc5ad6aa7f38",
     "experiments/a02/historical-inputs-v1.json": "811cfaa6e8caf67e072c02539d719d9cec0dca02da6260808b22bc4951fa561d",
@@ -48,13 +48,13 @@
     "scripts/a02_preflight.py": "4619d6a01701a086ad2543d6e186758d4f91a4583f36f7e3ac137a70ab5b7638",
     "scripts/a02_prompt.py": "2a772b83d5cf99fddd8e63972cd9b6c6fe576889c269c6fd4a6ee256391dd3db",
     "scripts/a02_recover.py": "5fe3b3fd68486955d696cc215927a3c269f925170f3477640d7c18d08470bdd3",
-    "scripts/a02_remote.py": "24d05f354a1fbc337400b80f0dc627e60a046b8153a74fd95ba376f178cb94e5",
-    "scripts/a02_score.py": "d92e7896cf505e0866135e724da9bc4fff979ad90375554289b135fba0012497",
+    "scripts/a02_remote.py": "d5a38b5abaa0769d799a67a8c8d56ac9d8818643c858b6c724293bfb27993470",
+    "scripts/a02_score.py": "149289fd169e6f052063885c9f72519fb35de05cca3ccf8ec54a02c817f7a25b",
     "scripts/a0_engine.py": "6d6a92b32c3af3a698b88923854da3a8b12d3f1cc18264fc00eee9b0a64b0f33",
     "scripts/ci.sh": "dda571f5fe91664ae81ebfa9ffc9da9ad406cf2437214edbda0b4094b4ee9248",
     "scripts/res403_tool_protocol.py": "f8de73f004e647ec2fead275abd0a3eba95fedcdb5a236457573c618caf1e669",
     "tests/test_longitudinal_statistics.py": "e9f7a2eda6e8ae97ebf923fdb28beff879ada827397b5bf31a05d366c4bbcce4",
-    "tests/test_res541_a02.py": "482f8ab25901589264002d1c652724d4c5283fe7d4d308341553345fb5cd6d0f",
+    "tests/test_res541_a02.py": "6b73c1752539c1edf56f49115b8d4be51d8f8780bb29454cf882d3307029d638",
     "tests/test_res541_a02_prompt_conformance.py": "27939908cbfe6a99f714128451d211c45870a967defd946b6d67f8d62ec777e1",
     "uv.lock": "9fc27c03d239a42ce6f0e411cbb9b4e210163139fd7c5b53f3f48fdddfc4eb50"
   },
@@ -165,10 +165,10 @@
   },
   "population": "SYNTHETIC_DEVELOPMENT_ONLY",
   "pre_inference_revision": {
-    "change_summary": "Pre-inference engineering repair. Changed source bindings: scripts/a01_runtime.py, scripts/a02_experiment.py, scripts/a02_remote.py, scripts/a02_score.py, tests/test_res541_a02.py. Frozen scientific inputs, prompt bytes, model, and thresholds remain unchanged.",
+    "change_summary": "Pre-inference engineering repair. Changed source bindings: experiments/a02/README.md, scripts/a02_remote.py, scripts/a02_score.py, tests/test_res541_a02.py. Frozen scientific inputs, prompt bytes, model, and thresholds remain unchanged.",
     "current_runner_sha256": {
       "scripts/a02_execution.py": "1a5a846321f88cc5b8c0cb921789c719988472856560e3ac3d11836889434e16",
-      "scripts/a02_remote.py": "24d05f354a1fbc337400b80f0dc627e60a046b8153a74fd95ba376f178cb94e5"
+      "scripts/a02_remote.py": "d5a38b5abaa0769d799a67a8c8d56ac9d8818643c858b6c724293bfb27993470"
     },
     "preserved_bindings": {
       "action_prompt_sha256": "6b57999a00d29a86364b6541844686e25cbc70662c3b93f444c3ce630fc9aeba",
@@ -183,28 +183,28 @@
     },
     "previous_runner_sha256": {
       "scripts/a02_execution.py": "1a5a846321f88cc5b8c0cb921789c719988472856560e3ac3d11836889434e16",
-      "scripts/a02_remote.py": "866113240c2cf2c27ad42241d65a31308ff546c2b07ce13a787280977de76544"
+      "scripts/a02_remote.py": "24d05f354a1fbc337400b80f0dc627e60a046b8153a74fd95ba376f178cb94e5"
     },
     "prompt_implementation_sha256": {
       "current": {
         "scripts/a02_preflight.py": "4619d6a01701a086ad2543d6e186758d4f91a4583f36f7e3ac137a70ab5b7638",
         "scripts/a02_prompt.py": "2a772b83d5cf99fddd8e63972cd9b6c6fe576889c269c6fd4a6ee256391dd3db",
-        "scripts/a02_remote.py": "24d05f354a1fbc337400b80f0dc627e60a046b8153a74fd95ba376f178cb94e5",
-        "scripts/a02_score.py": "d92e7896cf505e0866135e724da9bc4fff979ad90375554289b135fba0012497"
+        "scripts/a02_remote.py": "d5a38b5abaa0769d799a67a8c8d56ac9d8818643c858b6c724293bfb27993470",
+        "scripts/a02_score.py": "149289fd169e6f052063885c9f72519fb35de05cca3ccf8ec54a02c817f7a25b"
       },
       "previous": {
         "scripts/a02_preflight.py": "4619d6a01701a086ad2543d6e186758d4f91a4583f36f7e3ac137a70ab5b7638",
         "scripts/a02_prompt.py": "2a772b83d5cf99fddd8e63972cd9b6c6fe576889c269c6fd4a6ee256391dd3db",
-        "scripts/a02_remote.py": "866113240c2cf2c27ad42241d65a31308ff546c2b07ce13a787280977de76544",
-        "scripts/a02_score.py": "92dd4043d563b25508ae5d14f2a1b56b3e93738a28eea626189babfce28c14c5"
+        "scripts/a02_remote.py": "24d05f354a1fbc337400b80f0dc627e60a046b8153a74fd95ba376f178cb94e5",
+        "scripts/a02_score.py": "d92e7896cf505e0866135e724da9bc4fff979ad90375554289b135fba0012497"
       }
     },
     "recovery_verifier_sha256": {
       "current": "5fe3b3fd68486955d696cc215927a3c269f925170f3477640d7c18d08470bdd3",
       "previous": "5fe3b3fd68486955d696cc215927a3c269f925170f3477640d7c18d08470bdd3"
     },
-    "revision": 18,
-    "supersedes_protocol_sha256": "e121aaef55aa528cef5b8e845d6ce06c8c4251b819b23a6966687ab53bb1b841"
+    "revision": 19,
+    "supersedes_protocol_sha256": "40562a46bf4c83bf6eee3296008fcb2444466c534ad1893b3da822f5ceea6693"
   },
   "pre_inference_revision_history": [
     {
@@ -732,6 +732,48 @@
       },
       "revision": 17,
       "supersedes_protocol_sha256": "d828b661280add67c49b4db2fcd8add9c8a417037ecf266812a234fe49ffdf35"
+    },
+    {
+      "change_summary": "Pre-inference engineering repair. Changed source bindings: scripts/a01_runtime.py, scripts/a02_experiment.py, scripts/a02_remote.py, scripts/a02_score.py, tests/test_res541_a02.py. Frozen scientific inputs, prompt bytes, model, and thresholds remain unchanged.",
+      "current_runner_sha256": {
+        "scripts/a02_execution.py": "1a5a846321f88cc5b8c0cb921789c719988472856560e3ac3d11836889434e16",
+        "scripts/a02_remote.py": "24d05f354a1fbc337400b80f0dc627e60a046b8153a74fd95ba376f178cb94e5"
+      },
+      "preserved_bindings": {
+        "action_prompt_sha256": "6b57999a00d29a86364b6541844686e25cbc70662c3b93f444c3ce630fc9aeba",
+        "decision_rules_sha256": "dddb5d93812b054e7409aaac713045d91b0933a5ef691689ed526c91688255e9",
+        "evaluation_rules_sha256": "8d57f98564d541068d9548dd4af4aea1c5218b4733b8b50ed18b5e95e1a28316",
+        "final_prompt_sha256": "792de532f47612206786a5235ff4176cee9775dc1f6913754b7ee2e9462a1ca0",
+        "historical_case_manifest_sha256": "619015ea1df55e8507316ff764e422ce95605549893d0748fb65cc5ad6aa7f38",
+        "historical_inputs_sha256": "811cfaa6e8caf67e072c02539d719d9cec0dca02da6260808b22bc4951fa561d",
+        "model_revision": "a07cc9a04f16550a088caea529712d1d335b0ac1",
+        "new_case_manifest_sha256": "f3a56dde310b2d64f2f8db2f9d02a432dd712d7b4a8aba50f836f1b3d6673dd3",
+        "tokenizer_preflight_sha256": "c6237858d84acd7c6350b9e70642d636f11fdbf4d3e87a7eea66bbd2d549b8a7"
+      },
+      "previous_runner_sha256": {
+        "scripts/a02_execution.py": "1a5a846321f88cc5b8c0cb921789c719988472856560e3ac3d11836889434e16",
+        "scripts/a02_remote.py": "866113240c2cf2c27ad42241d65a31308ff546c2b07ce13a787280977de76544"
+      },
+      "prompt_implementation_sha256": {
+        "current": {
+          "scripts/a02_preflight.py": "4619d6a01701a086ad2543d6e186758d4f91a4583f36f7e3ac137a70ab5b7638",
+          "scripts/a02_prompt.py": "2a772b83d5cf99fddd8e63972cd9b6c6fe576889c269c6fd4a6ee256391dd3db",
+          "scripts/a02_remote.py": "24d05f354a1fbc337400b80f0dc627e60a046b8153a74fd95ba376f178cb94e5",
+          "scripts/a02_score.py": "d92e7896cf505e0866135e724da9bc4fff979ad90375554289b135fba0012497"
+        },
+        "previous": {
+          "scripts/a02_preflight.py": "4619d6a01701a086ad2543d6e186758d4f91a4583f36f7e3ac137a70ab5b7638",
+          "scripts/a02_prompt.py": "2a772b83d5cf99fddd8e63972cd9b6c6fe576889c269c6fd4a6ee256391dd3db",
+          "scripts/a02_remote.py": "866113240c2cf2c27ad42241d65a31308ff546c2b07ce13a787280977de76544",
+          "scripts/a02_score.py": "92dd4043d563b25508ae5d14f2a1b56b3e93738a28eea626189babfce28c14c5"
+        }
+      },
+      "recovery_verifier_sha256": {
+        "current": "5fe3b3fd68486955d696cc215927a3c269f925170f3477640d7c18d08470bdd3",
+        "previous": "5fe3b3fd68486955d696cc215927a3c269f925170f3477640d7c18d08470bdd3"
+      },
+      "revision": 18,
+      "supersedes_protocol_sha256": "e121aaef55aa528cef5b8e845d6ce06c8c4251b819b23a6966687ab53bb1b841"
     }
   ],
   "prepared_from_main": "b8510aef00d1e3208562ceefea083c0fa57901fa",

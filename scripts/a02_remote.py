@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import hashlib
+import importlib
 import importlib.metadata
 import json
 import os
 import platform
 import re
 import resource
+import site
 import subprocess
 import sys
 import tarfile
@@ -497,36 +499,110 @@ def _setup_inference(uv: Path, source: Path) -> Path:
     ).strip()
     if site not in sys.path:
         sys.path.insert(0, site)
-    if "transformers" in sys.modules:
-        raise ValueError("Transformers loaded before the pinned inference environment")
     return inference_python
 
 
-def _package_versions() -> dict[str, str]:
-    names = [
-        "accelerate",
-        "certifi",
-        "charset-normalizer",
-        "filelock",
-        "fsspec",
-        "huggingface-hub",
-        "idna",
-        "Jinja2",
-        "MarkupSafe",
-        "numpy",
-        "packaging",
-        "psutil",
-        "PyYAML",
-        "regex",
-        "requests",
-        "tokenizers",
-        "safetensors",
-        "transformers",
-        "tqdm",
-        "typing_extensions",
-        "urllib3",
-    ]
-    return {name: importlib.metadata.version(name) for name in names}
+PACKAGE_MODULES = {
+    "accelerate": "accelerate",
+    "certifi": "certifi",
+    "charset-normalizer": "charset_normalizer",
+    "filelock": "filelock",
+    "fsspec": "fsspec",
+    "huggingface-hub": "huggingface_hub",
+    "idna": "idna",
+    "Jinja2": "jinja2",
+    "MarkupSafe": "markupsafe",
+    "numpy": "numpy",
+    "packaging": "packaging",
+    "psutil": "psutil",
+    "PyYAML": "yaml",
+    "regex": "regex",
+    "requests": "requests",
+    "tokenizers": "tokenizers",
+    "safetensors": "safetensors",
+    "transformers": "transformers",
+    "tqdm": "tqdm",
+    "typing_extensions": "typing_extensions",
+    "urllib3": "urllib3",
+}
+
+
+def _package_versions(
+    expected: dict[str, str], inference_site: Path
+) -> dict[str, dict[str, str | None]]:
+    version_type = importlib.import_module("packaging.version").Version
+    root = inference_site.resolve()
+    records = {}
+    errors = []
+    for name, module_name in PACKAGE_MODULES.items():
+        if name not in expected:
+            errors.append(f"{name}: missing from pinned requirements")
+            continue
+        distribution = importlib.metadata.distribution(name)
+        distribution_root = Path(str(distribution.locate_file(""))).resolve()
+        module = importlib.import_module(module_name)
+        module_file = getattr(module, "__file__", None)
+        module_origin = Path(module_file).resolve() if isinstance(module_file, str) else None
+        module_version = getattr(module, "__version__", None)
+        module_version = module_version if isinstance(module_version, str) else None
+        distribution_version = distribution.version
+        if version_type(distribution_version) != version_type(expected[name]):
+            errors.append(
+                f"{name}: expected {expected[name]}, got distribution {distribution_version}"
+            )
+        if not distribution_root.is_relative_to(root):
+            errors.append(f"{name}: distribution origin {distribution_root} is outside {root}")
+        if module_origin is None or not module_origin.is_relative_to(root):
+            errors.append(f"{name}: loaded module origin {module_origin} is outside {root}")
+        # regex.__version__ is its engine version; its wheel version is distribution.version.
+        if name != "regex" and module_version is not None:
+            try:
+                if version_type(module_version) != version_type(distribution_version):
+                    errors.append(
+                        f"{name}: loaded module version {module_version} differs from "
+                        f"distribution {distribution_version}"
+                    )
+            except Exception:
+                errors.append(f"{name}: invalid loaded module version {module_version!r}")
+        records[name] = {
+            "distribution_version": distribution_version,
+            "module_version": module_version,
+            "module_origin": str(module_origin) if module_origin is not None else None,
+            "distribution_origin": str(distribution_root),
+        }
+    if expected.keys() != PACKAGE_MODULES.keys():
+        errors.extend(sorted(expected.keys() ^ PACKAGE_MODULES.keys()))
+    if errors:
+        raise ValueError("loaded inference package mismatch: " + "; ".join(errors))
+    return records
+
+
+def _torch_module_inventory(torch: Any, inference_site: Path) -> dict[str, str]:
+    origin = Path(torch.__file__).resolve()
+    distribution = importlib.metadata.distribution("torch")
+    distribution_origin = Path(str(distribution.locate_file(""))).resolve()
+    system_sites = {
+        Path(path).resolve()
+        for path in site.getsitepackages()
+        if Path(path).resolve() != inference_site.resolve()
+    }
+    if (
+        distribution.version != str(torch.__version__)
+        or not any(distribution_origin.is_relative_to(path) for path in system_sites)
+        or not origin.is_relative_to(distribution_origin)
+    ):
+        raise ValueError(
+            "loaded PyTorch package mismatch: "
+            f"module={torch.__version__} at {origin}, "
+            f"distribution={distribution.version} at {distribution_origin}, "
+            f"expected inherited system site under {sorted(map(str, system_sites))}"
+        )
+    return {
+        "version": str(torch.__version__),
+        "distribution_version": distribution.version,
+        "origin": str(origin),
+        "distribution_origin": str(distribution_origin),
+    }
 
 
 def _floating_parameter_dtypes(model: Any) -> list[str]:
@@ -828,7 +904,74 @@ def _engine_call(process: subprocess.Popen[str], request: dict[str, Any]) -> dic
     return response
 
 
+def _run_isolated_inference() -> int:
+    report: dict[str, Any] = {
+        "schema": "RES541_A02_REMOTE_REPORT_V1",
+        "status": "RUNNING",
+        "cases": [],
+        "source": {},
+    }
+    stage = "INFERENCE_PROCESS_BOOTSTRAP"
+    try:
+        WORK.mkdir(parents=True, exist_ok=True)
+        if REMOTE_REPORT.exists():
+            raise ValueError("remote A02 report path already exists")
+        binding = json.loads(BINDING_PATH.read_text(encoding="utf-8"))
+        archive_bytes = SOURCE_ARCHIVE.read_bytes()
+        if _sha(archive_bytes) != binding["source_archive_sha256"]:
+            raise ValueError("uploaded source archive hash mismatch")
+        report["source"] = {
+            "run_id": binding["run_id"],
+            "revision": binding["source_revision"],
+            "tree": binding["source_tree"],
+            "source_archive_sha256": binding["source_archive_sha256"],
+            "protocol_sha256": binding["protocol_sha256"],
+            "preflight_sha256": binding["preflight_sha256"],
+        }
+        bootstrap_source = WORK / "bootstrap-source"
+        bootstrap_source.mkdir(exist_ok=False)
+        _safe_extract(SOURCE_ARCHIVE, bootstrap_source)
+        uv = _install_uv()
+        inference_python = _setup_inference(uv, bootstrap_source)
+        environment = os.environ.copy()
+        environment.pop("PYTHONPATH", None)
+        environment.pop("PYTHONHOME", None)
+        environment["PYTHONNOUSERSITE"] = "1"
+        environment["A02_PINNED_INFERENCE_PROCESS"] = "1"
+        result = subprocess.run(
+            [str(inference_python), str(bootstrap_source / "scripts/a02_remote.py")],
+            cwd=bootstrap_source,
+            env=environment,
+            check=False,
+        )
+        if not REMOTE_REPORT.exists():
+            raise RuntimeError(
+                f"isolated inference process exited {result.returncode} without writing its report"
+            )
+        return result.returncode
+    except Exception as exc:
+        if REMOTE_REPORT.exists():
+            return 1
+        if isinstance(exc, CommandError):
+            report["command_failure"] = exc.evidence
+        report.update(
+            status="NO_GO",
+            failure_stage=stage,
+            failure_category=type(exc).__name__,
+            failure_message=_sanitize(str(exc)),
+            partial_case_count=0,
+        )
+        _write_report(report)
+        print(
+            json.dumps({"status": "NO_GO", "stage": stage, "failure": type(exc).__name__}),
+            file=sys.stderr,
+        )
+        return 1
+
+
 def run() -> int:
+    if os.environ.get("A02_PINNED_INFERENCE_PROCESS") != "1":
+        return _run_isolated_inference()
     WORK.mkdir(parents=True, exist_ok=True)
     report: dict[str, Any] = {
         "schema": "RES541_A02_REMOTE_REPORT_V1",
@@ -904,30 +1047,33 @@ def run() -> int:
             }
         _write_report(report)
 
-        stage = "RUNTIME_SETUP"
-        torch, inventory = _runtime_gate()
-        report["runtime_inventory_before_bootstrap"] = inventory
-        _write_report(report)
         stage = "UV_BOOTSTRAP"
         uv = _install_uv()
         stage = "ENGINE_SETUP"
         engine_python = _setup_engine(source, uv)
         stage = "INFERENCE_SETUP"
-        inference_python = _setup_inference(uv, source)
+        inference_python = Path(sys.executable)
+        if Path(sys.prefix).resolve() != (WORK / "inference-venv").resolve():
+            raise ValueError("isolated inference worker is not using the pinned Python environment")
         inference_site = _run(
             [str(inference_python), "-c", "import site; print(site.getsitepackages()[0])"],
             cwd=source,
         ).strip()
         if inference_site not in sys.path:
             sys.path.insert(0, inference_site)
-        packages = _package_versions()
         expected_packages = {
             line.split("==", 1)[0]: line.split("==", 1)[1]
             for line in (source / "experiments/a0/requirements-colab.txt").read_text().splitlines()
             if line and not line.startswith("#")
         }
-        if packages != expected_packages:
-            raise ValueError("pinned inference package inventory differs")
+        packages = _package_versions(expected_packages, Path(inference_site))
+        stage = "RUNTIME_SETUP"
+        torch, inventory = _runtime_gate()
+        if _package_versions(expected_packages, Path(inference_site)) != packages:
+            raise ValueError("loaded inference package inventory changed during PyTorch setup")
+        report["runtime_inventory_before_model"] = inventory
+        _write_report(report)
+        torch_module = _torch_module_inventory(torch, Path(inference_site))
         report["runtime"] = {
             "model_python": sys.version,
             "model_python_version": platform.python_version(),
@@ -936,6 +1082,7 @@ def run() -> int:
                 cwd=source,
             ).strip(),
             "torch": str(torch.__version__),
+            "torch_module": torch_module,
             "torch_cuda_runtime": torch.version.cuda,
             "packages": packages,
             "gpu_name": torch.cuda.get_device_name(0),
@@ -981,6 +1128,9 @@ def run() -> int:
             AutoModelForCausalLM,
             AutoTokenizer,
         )
+
+        if _package_versions(expected_packages, Path(inference_site)) != packages:
+            raise ValueError("loaded inference package inventory changed before model loading")
 
         tokenizer_manifest = json.loads(
             (source / "experiments/a02/tokenizer-files-v1.json").read_text()
@@ -1064,6 +1214,8 @@ def run() -> int:
             low_cpu_mem_usage=True,
         )
         model.eval()
+        if _package_versions(expected_packages, Path(inference_site)) != packages:
+            raise ValueError("loaded inference package inventory changed during model loading")
         observed_dtypes = _floating_parameter_dtypes(model)
         report["runtime"]["weight_dtype"] = ",".join(observed_dtypes)
         _write_report(report)

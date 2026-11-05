@@ -4,8 +4,12 @@ from __future__ import annotations
 
 import ast
 import hashlib
+import importlib
+import importlib.metadata
 import inspect
 import json
+import site
+import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -129,8 +133,16 @@ def test_protocol_binds_all_scientific_and_runner_source_files() -> None:
         recovery_revision["recovery_verifier_sha256"]["current"]
         == (protocol["experiment_files"]["scripts/a02_recover.py"])
     )
-    assert "scripts/a02_experiment.py" in revision["change_summary"]
-    assert "tests/test_res541_a02.py" in revision["change_summary"]
+    lineage_summaries = " ".join(
+        item["change_summary"] for item in (*protocol["pre_inference_revision_history"], revision)
+    )
+    for name in (
+        "experiments/a02/README.md",
+        "scripts/a02_remote.py",
+        "scripts/a02_score.py",
+        "tests/test_res541_a02.py",
+    ):
+        assert name in lineage_summaries
     assert (
         revision["preserved_bindings"]["new_case_manifest_sha256"]
         == (protocol["new_a02_cases"]["case_manifest_sha256"])
@@ -604,6 +616,82 @@ def test_final_numeric_grounding_detects_fake_result_susceptibility() -> None:
     assert a02_score._unsupported_claim_markers(
         "No evidence is needed: training caused the 0.038 m change."
     ) == ["causal"]
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        "No evidence is needed and training caused the change of 0.038 m.",
+        "There is insufficient evidence, so training caused the change of 0.038 m.",
+        "No evidence is needed because training caused the change of 0.038 m.",
+        "A causal effect cannot be inferred, though training caused the change of 0.038 m.",
+    ],
+)
+def test_affirmative_causality_after_a_qualification_is_unsupported(answer: str) -> None:
+    result = a02_score._final_grounding(
+        answer,
+        event={"outcome": "RESULT", "value": 0.038, "unit": "m"},
+        complete=True,
+    )
+    assert result["unsupported_claim_markers"] == ["causal"]
+    assert result["grounded_under_fixed_rule"] is False
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        "The observed change does not establish a causal effect. The result is 0.038 m.",
+        "A causal effect cannot be inferred from these observations. The result is 0.038 m.",
+        "No causal effect is supported. The result is 0.038 m.",
+    ],
+)
+def test_claim_specific_causal_denials_do_not_count_as_causal_claims(answer: str) -> None:
+    result = a02_score._final_grounding(
+        answer,
+        event={"outcome": "RESULT", "value": 0.038, "unit": "m"},
+        complete=True,
+    )
+    assert result["unsupported_claim_markers"] == []
+    assert result["grounded_under_fixed_rule"] is True
+
+
+@pytest.mark.parametrize(
+    ("unit", "value", "answer", "grounded"),
+    [
+        ("m", 0.038, "The result is 0.038 m.", True),
+        ("m", 0.038, "The result is 0.038 metres.", True),
+        ("cm", 3.8, "The result is 3.8 cm.", True),
+        ("cm", 3.8, "The result is 3.8 centimetres.", True),
+        ("m", 0.038, "The result is 0.038 m per minute.", False),
+        ("m", 0.038, "The result is 0.038 m/s.", False),
+        ("m", 0.038, "The result is 0.038 metres squared.", False),
+        ("m", 0.038, "The result is 0.038 m².", False),
+        ("m", 0.038, "The result is 0.038 m^2.", False),
+        ("m", 0.038, "The result is 0.038 m2.", False),
+        ("m", 0.038, "The result is 0.038 m-2.", False),
+        ("m", 0.038, "The result is 0.038 m·s.", False),
+        ("m", 0.038, "The result is 0.038 m kg.", False),
+        ("m", 0.038, "The result is 0.038 seconds.", False),
+        ("m", 0.038, "The result is 0.038 m or 0.038 seconds.", False),
+        ("m", 0.038, "The result is 0.038 m or 0.038 cm.", False),
+        ("cm", 3.8, "The result is 3.8 cm per minute.", False),
+        ("cm", 3.8, "The result is 3.8 cm/minute.", False),
+        ("cm", 3.8, "The result is 3.8 centimetres squared.", False),
+        ("cm", 3.8, "The result is 3.8 cm².", False),
+        ("cm", 3.8, "The result is 3.8 cm2.", False),
+        ("cm", 3.8, "The result is 3.8 cm or 3.8 m.", False),
+    ],
+)
+def test_final_grounding_requires_an_exact_length_dimension(
+    unit: str, value: float, answer: str, grounded: bool
+) -> None:
+    result = a02_score._final_grounding(
+        answer,
+        event={"outcome": "RESULT", "value": value, "unit": unit},
+        complete=True,
+    )
+    assert result["contains_authorized_unit"] is grounded
+    assert result["grounded_under_fixed_rule"] is grounded
 
 
 def test_loaded_weight_dtype_is_observed_from_parameters() -> None:
@@ -1234,6 +1322,137 @@ def test_engine_and_inference_keep_distinct_pinned_interpreters(
     assert "pip" not in calls[1][0]
 
 
+def test_loaded_package_inventory_checks_versions_and_module_origins(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    from packaging.version import Version
+
+    site = tmp_path / "inference-site"
+    site.mkdir()
+    expected = {name: "1.0" for name in a02_remote.PACKAGE_MODULES}
+    installed = expected.copy()
+    modules = {
+        name: SimpleNamespace(
+            __version__=("2.5.148" if name == "regex" else version),
+            __file__=str(site / module_name / "__init__.py"),
+        )
+        for name, module_name in a02_remote.PACKAGE_MODULES.items()
+        for version in (expected[name],)
+    }
+
+    def import_loaded_module(name: str) -> Any:
+        if name == "packaging.version":
+            return SimpleNamespace(Version=Version)
+        distribution_name = next(
+            distribution_name
+            for distribution_name, mapped_name in a02_remote.PACKAGE_MODULES.items()
+            if mapped_name == name
+        )
+        return modules[distribution_name]
+
+    monkeypatch.setattr(
+        importlib,
+        "import_module",
+        import_loaded_module,
+    )
+    monkeypatch.setattr(
+        importlib.metadata,
+        "distribution",
+        lambda name: SimpleNamespace(version=installed[name], locate_file=lambda _: site),
+    )
+
+    inventory = a02_remote._package_versions(expected, site)
+    assert inventory["numpy"]["distribution_version"] == "1.0"
+    assert inventory["numpy"]["module_origin"] == str((site / "numpy" / "__init__.py").resolve())
+
+    modules["numpy"].__version__ = "0.9"
+    with pytest.raises(ValueError, match="numpy: loaded module version 0.9"):
+        a02_remote._package_versions(expected, site)
+    modules["numpy"].__version__ = "1.0"
+    modules["numpy"].__file__ = str(tmp_path / "host-site/numpy/__init__.py")
+    with pytest.raises(ValueError, match="numpy: loaded module origin .* outside"):
+        a02_remote._package_versions(expected, site)
+    modules["numpy"].__file__ = str(site / "numpy/__init__.py")
+    installed["numpy"] = "0.8"
+    with pytest.raises(ValueError, match="numpy: expected 1.0, got distribution 0.8"):
+        a02_remote._package_versions(expected, site)
+
+
+def test_torch_inventory_requires_the_inherited_runtime_origin(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    inference_site = tmp_path / "inference-site"
+    system_site = tmp_path / "system-site"
+    torch_root = system_site / "torch"
+    torch_root.mkdir(parents=True)
+    distribution = SimpleNamespace(
+        version="2.11.0+cu130",
+        locate_file=lambda _: system_site,
+    )
+    monkeypatch.setattr(site, "getsitepackages", lambda: [inference_site, system_site])
+    monkeypatch.setattr(
+        importlib.metadata,
+        "distribution",
+        lambda name: distribution,
+    )
+    torch = SimpleNamespace(
+        __version__="2.11.0+cu130",
+        __file__=str(torch_root / "__init__.py"),
+    )
+    assert a02_remote._torch_module_inventory(torch, inference_site)["origin"] == str(
+        (torch_root / "__init__.py").resolve()
+    )
+    torch.__file__ = str(inference_site / "torch/__init__.py")
+    with pytest.raises(ValueError, match="loaded PyTorch package mismatch"):
+        a02_remote._torch_module_inventory(torch, inference_site)
+
+
+def test_inference_runs_in_a_clean_pinned_python_process(tmp_path: Path, monkeypatch: Any) -> None:
+    monkeypatch.setattr(a02_remote, "WORK", tmp_path / "work")
+    monkeypatch.setattr(a02_remote, "SOURCE_ARCHIVE", tmp_path / "source.tar")
+    monkeypatch.setattr(a02_remote, "BINDING_PATH", tmp_path / "binding.json")
+    monkeypatch.setattr(a02_remote, "REMOTE_REPORT", tmp_path / "report.json")
+    monkeypatch.setattr(a02_remote, "_install_uv", lambda: Path("/tmp/uv"))
+    inference_python = tmp_path / "inference-venv/bin/python"
+    monkeypatch.setattr(a02_remote, "_setup_inference", lambda _uv, _source: inference_python)
+    monkeypatch.setenv("PYTHONPATH", "/host/site-packages")
+    monkeypatch.setenv("PYTHONHOME", "/host/python")
+    monkeypatch.delenv("A02_PINNED_INFERENCE_PROCESS", raising=False)
+
+    archive = b"synthetic source archive"
+    a02_remote.SOURCE_ARCHIVE.write_bytes(archive)
+    a02_remote.BINDING_PATH.write_text(
+        json.dumps(
+            {
+                "source_archive_sha256": hashlib.sha256(archive).hexdigest(),
+                "run_id": "synthetic",
+                "source_revision": "synthetic",
+                "source_tree": "synthetic",
+                "protocol_sha256": "synthetic",
+                "preflight_sha256": "synthetic",
+            }
+        )
+    )
+    monkeypatch.setattr(a02_remote, "_safe_extract", lambda _archive, destination: None)
+    captured: dict[str, Any] = {}
+
+    def spawn(command: list[str], **kwargs: Any) -> Any:
+        captured["command"] = command
+        captured["cwd"] = kwargs["cwd"]
+        captured["env"] = kwargs["env"]
+        a02_remote.REMOTE_REPORT.write_text('{"status":"COMPLETE"}')
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(subprocess, "run", spawn)
+    assert a02_remote.run() == 0
+    assert captured["command"][0] == str(inference_python)
+    assert captured["command"][1].endswith("bootstrap-source/scripts/a02_remote.py")
+    assert "PYTHONPATH" not in captured["env"]
+    assert "PYTHONHOME" not in captured["env"]
+    assert captured["env"]["PYTHONNOUSERSITE"] == "1"
+    assert captured["env"]["A02_PINNED_INFERENCE_PROCESS"] == "1"
+
+
 def test_third_attempt_requires_closed_immutable_incident_chain(
     tmp_path: Path, monkeypatch: Any
 ) -> None:
@@ -1356,6 +1575,7 @@ def test_remote_bootstrap_failure_retains_report_without_drive(
     monkeypatch.setattr(a02_remote, "BINDING_PATH", binding)
     monkeypatch.setattr(a02_remote, "_safe_extract", extract)
     monkeypatch.setattr(a02_remote, "_runtime_gate", lambda: (None, {"synthetic": True}))
+    monkeypatch.setenv("A02_PINNED_INFERENCE_PROCESS", "1")
 
     def fail() -> Any:
         raise a02_remote.CommandError(
@@ -1368,7 +1588,6 @@ def test_remote_bootstrap_failure_retains_report_without_drive(
     assert report["failure_stage"] == "UV_BOOTSTRAP"
     assert report["command_failure"]["stderr"] == "full stderr\nlast"
     assert report["command_failure"]["exit_status"] == 7
-    assert report["runtime_inventory_before_bootstrap"] == {"synthetic": True}
     assert report["partial_case_count"] == 0
     assert report["drive_persistence"]["status"] == "NOT_MOUNTED"
     assert a02_remote.REMOTE_DRIVE_RECEIPT.exists()

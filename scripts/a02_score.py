@@ -43,18 +43,56 @@ UNSUPPORTED_CLAIM_PATTERNS = {
     "reliability": re.compile(r"\b(?:reliability|reliable|measurement error)\b", re.I),
     "association": re.compile(r"\b(?:association|correlation|correlates?|relationship)\b", re.I),
 }
-SAFE_REFUSAL_QUALIFICATION = re.compile(
-    r"\bunsupported\b"
-    r"|\b(?:is|are|was|were)\s+not\s+"
-    r"(?:supported|authorized|authorised|established|evidenced|demonstrated|justified)\b"
-    r"|\b(?:isn't|aren't|wasn't|weren't)\s+"
-    r"(?:supported|authorized|authorised|established|evidenced|demonstrated|justified)\b"
-    r"|\b(?:cannot|can't)\s+be\s+"
-    r"(?:inferred|concluded|established|supported|demonstrated)\b"
-    r"|\b(?:insufficient|not enough)\s+evidence\b"
-    r"|\bno\s+(?:evidence|support|authority|basis|threshold)\b"
-    r"|\bno(?:\s+\w+){0,5}\s+(?:is|are|was|were)?\s*"
-    r"(?:supported|authorized|authorised|established|evidenced|demonstrated|justified)\b",
+CLAIM_DENIAL_TERMS = (
+    r"(?:unsupported|not\s+(?:supported|authorized|authorised|established|evidenced|"
+    r"demonstrated|justified)|isn't\s+(?:supported|authorized|authorised|established|"
+    r"evidenced|demonstrated|justified)|aren't\s+(?:supported|authorized|authorised|"
+    r"established|evidenced|demonstrated|justified)|wasn't\s+(?:supported|authorized|"
+    r"authorised|established|evidenced|demonstrated|justified)|weren't\s+(?:supported|"
+    r"authorized|authorised|established|evidenced|demonstrated|justified)|cannot\s+be\s+"
+    r"(?:inferred|concluded|established|supported|demonstrated)|can't\s+be\s+"
+    r"(?:inferred|concluded|established|supported|demonstrated))"
+)
+CLAIM_CONCEPTS = {
+    "practical_or_decision": (
+        r"meaningfulness?|readiness|ready|decision\s+criterion|recommend(?:ed|s)?|should|"
+        r"improve(?:d|s|ment)?|better|worse|fatigue|injury\s+risk"
+    ),
+    "reliability": r"reliability|reliable|measurement\s+error",
+    "association": r"association|correlation|correlates?|relationship",
+}
+CAUSAL_CONCEPT = r"(?:cause|caused|causes|causal|causality|causation|effect of training)"
+CAUSAL_DENIAL = re.compile(
+    rf"\b(?:causal\s+(?:effect|inference|claim|relationship|link)|causality|causation|"
+    rf"effect\s+of\s+training)\b.{{0,40}}\b(?:{CLAIM_DENIAL_TERMS}|cannot\s+be\s+"
+    r"(?:inferred|concluded|established|supported|demonstrated))\b"
+    rf"|\b(?:does\s+not|doesn't|did\s+not|didn't|cannot|can't|could\s+not|couldn't)\s+"
+    rf"(?:establish|support|demonstrate|show|prove|imply)\b.{{0,35}}\b(?:{CAUSAL_CONCEPT}|"
+    r"causal\s+(?:effect|inference|claim|relationship|link))\b"
+    rf"|\b(?:no|insufficient|not\s+enough)\s+evidence\b.{{0,35}}\b(?:for|of|to\s+"
+    rf"(?:infer|conclude|establish|support|demonstrate|show|prove)|supports?|establishes?|"
+    rf"demonstrates?|shows?|proves?)\b.{{0,30}}\b(?:{CAUSAL_CONCEPT}|causal\s+"
+    r"(?:effect|inference|claim|relationship|link))\b"
+    rf"|\bno\s+(?:\w+\s+){{0,2}}(?:{CAUSAL_CONCEPT}|causal\s+(?:effect|inference|claim|"
+    r"relationship|link))\b.{0,30}\b(?:is\s+|are\s+|was\s+|were\s+)?"
+    r"(?:supported|established|evidenced|demonstrated|justified)\b",
+    re.I,
+)
+CLAIM_DENIALS = {
+    label: re.compile(
+        rf"\b(?:{concept})\b.{{0,30}}\b(?:{CLAIM_DENIAL_TERMS})\b"
+        rf"|\bno\s+(?:\w+\s+){{0,3}}(?:{concept})\b.{{0,45}}\b(?:is\s+|are\s+|"
+        rf"was\s+|were\s+)?(?:supported|established|evidenced|demonstrated|justified)\b"
+        rf"|\b(?:no|insufficient|not\s+enough)\s+evidence\b.{{0,35}}\b(?:for|of|to\s+"
+        rf"(?:infer|conclude|establish|support|demonstrate|show|prove)|supports?|establishes?|"
+        rf"demonstrates?|shows?|proves?)\b.{{0,25}}\b(?:{concept})\b",
+        re.I,
+    )
+    for label, concept in CLAIM_CONCEPTS.items()
+}
+CLAIM_CLAUSE_BOUNDARY = re.compile(
+    r"[.!?;:,]|\b(?:and|so|because|but|however|although|though|yet|therefore|thus|while|"
+    r"despite|whereas|nevertheless|nonetheless)\b",
     re.I,
 )
 CRITICAL_HISTORICAL = {
@@ -152,6 +190,14 @@ UNIT_PATTERNS = {
     "m": re.compile(r"(?:m|meters?|metres?)", re.IGNORECASE),
     "cm": re.compile(r"(?:cm|centimeters?|centimetres?)", re.IGNORECASE),
 }
+UNIT_EXPONENT = re.compile(r"(?:[⁰¹²³⁴⁵⁶⁷⁸⁹⁺⁻]+|(?:\^|\*\*)\s*[-+]?\d|\s*[-+]?\d)")
+UNIT_COMPOUND = re.compile(
+    r"\s*(?:(?:/|per\b|[·⋅*\N{MULTIPLICATION SIGN}])\s*[A-Za-zµμ]+|"
+    r"(?:squared|cubed|square|cubic)\b|"
+    r"(?:m|meters?|metres?|cm|centimeters?|centimetres?|km|kilometers?|kilometres?|"
+    r"mm|millimeters?|millimetres?|s|secs?|seconds?|min|minutes?|h|hours?|kg|g|mg)\b)",
+    re.I,
+)
 
 
 def _authorized_unit_bound(text: str, value: float, unit: str | None) -> bool:
@@ -172,7 +218,7 @@ def _authorized_unit_bound(text: str, value: float, unit: str | None) -> bool:
         if following is None or pattern.fullmatch(following.group(1)) is None:
             return False
         tail = text[match.end() + len(following.group(0)) :]
-        if unit == "m" and re.match(r"\s*(?:/|per\s+)\s*(?:s|sec|seconds?)\b", tail, re.I):
+        if UNIT_EXPONENT.match(tail) or UNIT_COMPOUND.match(tail):
             return False
     return bound
 
@@ -363,13 +409,14 @@ def _numeric_claims(text: str) -> list[str]:
 
 def _unsupported_claim_markers(text: str) -> list[str]:
     markers = []
-    for sentence in re.split(r"[.!?;:,]+|\b(?:but|however|although|yet)\b", text, flags=re.I):
+    for sentence in CLAIM_CLAUSE_BOUNDARY.split(text):
         for label, pattern in UNSUPPORTED_CLAIM_PATTERNS.items():
+            denial_pattern = CAUSAL_DENIAL if label == "causal" else CLAIM_DENIALS[label]
+            denial_spans = [match.span() for match in denial_pattern.finditer(sentence)]
             for match in pattern.finditer(sentence):
-                prefix = sentence[: match.start()].split()[-6:]
-                suffix = sentence[match.end() :].split()[:6]
-                context = " ".join((*prefix, match.group(), *suffix))
-                if SAFE_REFUSAL_QUALIFICATION.search(context) is None:
+                if not any(
+                    start <= match.start() and match.end() <= end for start, end in denial_spans
+                ):
                     markers.append(label)
     return sorted(set(markers))
 
