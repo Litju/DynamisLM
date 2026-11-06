@@ -7,21 +7,39 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from scripts import a02_dev_execution, a02_execution
+from scripts import a02_dev_execution, a02_dev_protocol, a02_execution
 
 
 def test_run_refuses_missing_one_time_authorization_before_colab_calls(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(a02_dev_execution, "AUTHORIZATION_PATH", tmp_path / "authorization.json")
+    monkeypatch.setattr(
+        a02_dev_execution, "AUTHORIZATION_PATH", tmp_path / "campaign-authorization-v2.json"
+    )
+    monkeypatch.setattr(
+        a02_dev_execution, "LEGACY_AUTHORIZATION_PATH", tmp_path / "authorization.json"
+    )
     monkeypatch.setattr(
         a02_dev_execution,
         "_run_colab",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("Colab must not be called")),
     )
 
-    with pytest.raises(a02_dev_execution.DevelopmentRunError, match="one-time V2 campaign"):
+    with pytest.raises(a02_dev_execution.DevelopmentRunError, match="campaign-level V2"):
         a02_dev_execution.run_campaign_session()
+
+
+def test_legacy_source_bound_approval_cannot_authorize_modified_code(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        a02_dev_execution, "AUTHORIZATION_PATH", tmp_path / "campaign-authorization-v2.json"
+    )
+    legacy_path = tmp_path / "authorization.json"
+    legacy_path.write_text("{}")
+    monkeypatch.setattr(a02_dev_execution, "LEGACY_AUTHORIZATION_PATH", legacy_path)
+    with pytest.raises(a02_dev_execution.DevelopmentRunError, match="legacy source-bound"):
+        a02_dev_execution._load_authorization()
 
 
 @pytest.mark.parametrize(
@@ -56,12 +74,200 @@ def test_remote_stage_budget_too_small_fails_closed() -> None:
         a02_dev_execution._split_stage_timeouts(209)
 
 
-def test_v2_profile_cannot_be_retried_after_a_session_marker() -> None:
-    with pytest.raises(a02_dev_execution.DevelopmentRunError, match="single-use"):
-        a02_dev_execution._next_session_index([{"run_id": "prior-v2-session"}])
+def test_campaign_budget_counts_original_usage_and_rejects_topups_or_exhaustion() -> None:
+    authorization = {
+        "initial_compute_unit_balance": 87.49,
+        "account_balance_at_authorization": 87.32,
+        "remaining_cu_at_authorization": 1.83,
+    }
+    prior, remaining = a02_dev_execution._campaign_budget(authorization, 87.32)
+    assert prior == pytest.approx(0.17)
+    assert remaining == pytest.approx(1.83)
+    with pytest.raises(a02_dev_execution.DevelopmentRunError, match="ambiguous"):
+        a02_dev_execution._campaign_budget(authorization, 87.40)
+    with pytest.raises(a02_dev_execution.DevelopmentRunError, match="exhausted"):
+        a02_dev_execution._campaign_budget(authorization, 85.39)
+
+
+def _prior_session(
+    runs: Path,
+    *,
+    index: int,
+    source_revision: str,
+    source_tree: str,
+    profile_sha256: str,
+    preflight_sha256: str,
+    outcome: str,
+) -> dict[str, Any]:
+    run_id = f"prior-{index}"
+    directory = runs / run_id
+    directory.mkdir(parents=True)
+    binding = {
+        "run_id": run_id,
+        "session_index": index,
+        "source_revision": source_revision,
+        "source_tree": source_tree,
+        "development_profile_sha256": profile_sha256,
+        "development_preflight_sha256": preflight_sha256,
+    }
+    binding_bytes = json.dumps(binding, sort_keys=True).encode()
+    (directory / "binding.json").write_bytes(binding_bytes)
+    (directory / "control.json").write_text(
+        json.dumps(
+            {
+                "run_id": run_id,
+                "session_index": index,
+                "status": "CONTROL_FINISHED",
+                "terminal_outcome": outcome,
+            }
+        )
+    )
+    marker = {
+        "schema": "RES541_A02_DEVELOPMENT_SESSION_USED_V1",
+        "run_id": run_id,
+        "session_index": index,
+        "source_revision": source_revision,
+        "source_tree": source_tree,
+        "development_profile_sha256": profile_sha256,
+        "development_preflight_sha256": preflight_sha256,
+        "binding_sha256": hashlib.sha256(binding_bytes).hexdigest(),
+    }
+    marker_bytes = json.dumps(marker, sort_keys=True).encode()
+    (directory / "session-used.json").write_bytes(marker_bytes)
+    manifest_files = []
+    for name in ("binding.json", "control.json", "session-used.json"):
+        data = (directory / name).read_bytes()
+        manifest_files.append(
+            {"name": name, "bytes": len(data), "sha256": hashlib.sha256(data).hexdigest()}
+        )
+    (directory / "artifact-hashes.json").write_text(
+        json.dumps(
+            {
+                "run_id": run_id,
+                "terminal_outcome": outcome,
+                "files": manifest_files,
+            }
+        )
+    )
+    return marker
+
+
+def test_external_failure_allows_only_a_new_source_bound_session(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runs = tmp_path / "runs"
+    runs.mkdir()
+    monkeypatch.setattr(a02_dev_execution, "RUNS_DIR", runs)
+    markers = [
+        _prior_session(
+            runs,
+            index=1,
+            source_revision="a" * 40,
+            source_tree="b" * 40,
+            profile_sha256="c" * 64,
+            preflight_sha256="d" * 64,
+            outcome="EXTERNAL_BLOCKER",
+        )
+    ]
+    current = {
+        "source_revision": "e" * 40,
+        "source_tree": "f" * 40,
+        "profile_sha256": "c" * 64,
+        "preflight_sha256": "0" * 64,
+    }
+    assert a02_dev_execution._next_session_index(markers, current) == 2
+    failed = {
+        **current,
+        "source_revision": "a" * 40,
+        "source_tree": "b" * 40,
+        "preflight_sha256": "d" * 64,
+    }
+    with pytest.raises(a02_dev_execution.DevelopmentRunError, match="cannot be replayed"):
+        a02_dev_execution._next_session_index(markers, failed)
+
+
+def test_completed_experiment_blocks_another_session(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runs = tmp_path / "runs"
+    runs.mkdir()
+    monkeypatch.setattr(a02_dev_execution, "RUNS_DIR", runs)
+    markers = [
+        _prior_session(
+            runs,
+            index=1,
+            source_revision="a" * 40,
+            source_tree="b" * 40,
+            profile_sha256="c" * 64,
+            preflight_sha256="d" * 64,
+            outcome="STAGE_A_SCIENTIFIC_NO_GO",
+        )
+    ]
+    current = {
+        "source_revision": "e" * 40,
+        "source_tree": "f" * 40,
+        "profile_sha256": "c" * 64,
+        "preflight_sha256": "0" * 64,
+    }
+    with pytest.raises(a02_dev_execution.DevelopmentRunError, match="completed V2 experiment"):
+        a02_dev_execution._next_session_index(markers, current)
+
+
+def test_two_consumed_markers_exhaust_campaign_session_cap() -> None:
+    with pytest.raises(a02_dev_execution.DevelopmentRunError, match="exhausted"):
+        a02_dev_execution._next_session_index([{}, {}], {})
 
 
 def test_campaign_authorization_record_is_hash_bound(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "campaign-authorization-v2.json"
+    profile_sha256 = hashlib.sha256(a02_dev_protocol.PROFILE_PATH.read_bytes()).hexdigest()
+    remaining_cu = 1.83
+    remaining_sessions = 1
+    confirmation = a02_dev_execution._campaign_authorization_phrase(
+        profile_sha256, remaining_cu, remaining_sessions
+    )
+    document: dict[str, Any] = {
+        "schema": "RES541_A02_DEVELOPMENT_CAMPAIGN_AUTHORIZATION_V2",
+        "status": "OWNER_AUTHORIZED",
+        "branch": "work/res-541-a02-colab-recovery",
+        "development_profile_sha256": profile_sha256,
+        "campaign_cap_cu": 2.0,
+        "max_t4_sessions": 2,
+        "max_session_seconds": 900,
+        "max_exec_seconds": 720,
+        "no_upgrade": True,
+        "no_training": True,
+        "approval_scope": "CAMPAIGN_PROFILE_WITH_PER_SESSION_SOURCE_BINDING",
+        "initial_compute_unit_balance": 87.49,
+        "account_balance_at_authorization": 87.32,
+        "account_spend_before_authorization_cu": 0.17,
+        "remaining_cu_at_authorization": remaining_cu,
+        "remaining_sessions_at_authorization": remaining_sessions,
+        "legacy_source_authorization_sha256": None,
+        "quota_snapshot_sha256": "1" * 64,
+        "owner_confirmation": confirmation,
+        "owner_confirmation_sha256": hashlib.sha256(confirmation.encode()).hexdigest(),
+    }
+    document["authorization_sha256"] = hashlib.sha256(
+        json.dumps(document, allow_nan=False, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    path.write_text(json.dumps(document))
+    monkeypatch.setattr(a02_dev_execution, "AUTHORIZATION_PATH", path)
+    monkeypatch.setattr(
+        a02_dev_execution, "LEGACY_AUTHORIZATION_PATH", tmp_path / "authorization.json"
+    )
+
+    assert a02_dev_execution._load_authorization()["status"] == "OWNER_AUTHORIZED"
+    assert "source=" not in confirmation and "preflight" not in confirmation
+    document["campaign_cap_cu"] = 200.0
+    path.write_text(json.dumps(document))
+    with pytest.raises(a02_dev_execution.DevelopmentRunError, match="integrity"):
+        a02_dev_execution._load_authorization()
+
+
+def test_legacy_approval_is_read_only_and_retains_its_original_budget_baseline(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     path = tmp_path / "authorization.json"
@@ -70,8 +276,8 @@ def test_campaign_authorization_record_is_hash_bound(
         "profile_sha256": "a" * 64,
         "preflight_sha256": "b" * 64,
     }
-    balance = {"balance": 10.0}
-    confirmation = a02_dev_execution._authorization_phrase(source, balance)
+    balance = {"balance": 87.49}
+    confirmation = a02_dev_execution._legacy_authorization_phrase(source, balance)
     document: dict[str, Any] = {
         "schema": "RES541_A02_DEVELOPMENT_CAMPAIGN_AUTHORIZATION_V1",
         "status": "OWNER_AUTHORIZED",
@@ -93,14 +299,12 @@ def test_campaign_authorization_record_is_hash_bound(
     document["authorization_sha256"] = hashlib.sha256(
         json.dumps(document, allow_nan=False, sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()
-    path.write_text(json.dumps(document))
-    monkeypatch.setattr(a02_dev_execution, "AUTHORIZATION_PATH", path)
-
-    assert a02_dev_execution._load_authorization()["status"] == "OWNER_AUTHORIZED"
-    document["campaign_cap_cu"] = 200.0
-    path.write_text(json.dumps(document))
-    with pytest.raises(a02_dev_execution.DevelopmentRunError, match="integrity"):
-        a02_dev_execution._load_authorization()
+    original = json.dumps(document)
+    path.write_text(original)
+    monkeypatch.setattr(a02_dev_execution, "LEGACY_AUTHORIZATION_PATH", path)
+    loaded = a02_dev_execution._load_legacy_authorization()
+    assert loaded["initial_compute_unit_balance"] == 87.49
+    assert path.read_text() == original
 
 
 def test_colab_timeout_preserves_sanitized_partial_streams(

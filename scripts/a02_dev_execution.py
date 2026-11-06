@@ -23,7 +23,8 @@ from scripts import a02_dev_protocol, a02_dev_remote, a02_dev_score, a02_executi
 ROOT = a02_execution.ROOT
 E_ROOT = a02_execution.E_ROOT
 CAMPAIGN_DIR = E_ROOT / "a02/development-v2"
-AUTHORIZATION_PATH = CAMPAIGN_DIR / "authorization.json"
+LEGACY_AUTHORIZATION_PATH = CAMPAIGN_DIR / "authorization.json"
+AUTHORIZATION_PATH = CAMPAIGN_DIR / "campaign-authorization-v2.json"
 RUNS_DIR = CAMPAIGN_DIR / "runs"
 REMOTE_SOURCE = "/content/a02-source.tar"
 REMOTE_BINDING = "/content/a02-binding.json"
@@ -378,7 +379,7 @@ def _colab_snapshot() -> dict[str, Any]:
     }
 
 
-def _authorization_phrase(source: dict[str, Any], quota: dict[str, Any]) -> str:
+def _legacy_authorization_phrase(source: dict[str, Any], quota: dict[str, Any]) -> str:
     return (
         "AUTHORIZE RES-541 V2 DEVELOPMENT CAMPAIGN"
         f" | source={source['source_revision']}"
@@ -393,12 +394,27 @@ def _authorization_phrase(source: dict[str, Any], quota: dict[str, Any]) -> str:
     )
 
 
+def _campaign_authorization_phrase(
+    profile_sha256: str, remaining_cu: float, remaining_sessions: int
+) -> str:
+    return (
+        "AUTHORIZE RES-541 V2 DEVELOPMENT CAMPAIGN"
+        f" | profile={profile_sha256}"
+        f" | total-cap={CAMPAIGN_CU_CAP:.2f} CU"
+        f" | remaining={remaining_cu:.2f} CU"
+        f" | sessions={remaining_sessions} T4"
+        f" | session-limit={SESSION_SECONDS}s"
+        " | no-upgrade"
+        " | no-training"
+    )
+
+
 def authorize_campaign() -> dict[str, Any]:
     if not sys.stdin.isatty() or not sys.stdout.isatty():
         raise DevelopmentRunError("one-time campaign approval requires an interactive WSL terminal")
     a02_execution._check_e_mount()
     if AUTHORIZATION_PATH.exists():
-        raise DevelopmentRunError("V2 campaign already has an immutable owner authorization")
+        raise DevelopmentRunError("campaign-level V2 authorization is immutable")
     source = _source_state()
     profile = a02_dev_protocol.load_profile()
     cap = profile["campaign_cap"]
@@ -413,9 +429,29 @@ def authorize_campaign() -> dict[str, Any]:
     quota = _colab_snapshot()
     if quota["balance"] <= 0:
         raise DevelopmentRunError("Colab reports no existing compute-unit balance")
-    phrase = _authorization_phrase(source, quota)
+    legacy = _load_legacy_authorization() if LEGACY_AUTHORIZATION_PATH.is_file() else None
+    if legacy and (
+        legacy.get("branch") != source["branch"]
+        or legacy.get("development_profile_sha256") != source["profile_sha256"]
+    ):
+        raise DevelopmentRunError("legacy approval belongs to a different campaign profile")
+    markers = _used_session_markers()
+    if markers and legacy is None:
+        raise DevelopmentRunError("prior sessions require the original campaign budget baseline")
+    initial_balance = float(legacy["initial_compute_unit_balance"]) if legacy else quota["balance"]
+    if quota["balance"] > initial_balance:
+        raise DevelopmentRunError("Colab balance increased; cumulative campaign spend is ambiguous")
+    prior_spend = max(0.0, initial_balance - quota["balance"])
+    remaining_cu = round(CAMPAIGN_CU_CAP - prior_spend, 2)
+    _next_session_index(markers, source)
+    remaining_sessions = CAMPAIGN_SESSION_CAP - len(markers)
+    if remaining_cu <= COST_BUFFER_CU or remaining_sessions <= 0:
+        raise DevelopmentRunError("the previously approved campaign scope is exhausted")
+    phrase = _campaign_authorization_phrase(
+        source["profile_sha256"], remaining_cu, remaining_sessions
+    )
     print(
-        "This records one owner approval for the entire bounded V2 campaign. It allocates no GPU."
+        "This records one campaign-level approval for the remaining V2 scope. It allocates no GPU."
     )
     print(f"Type exactly: {phrase}")
     if input("> ") != phrase:
@@ -424,16 +460,7 @@ def authorize_campaign() -> dict[str, Any]:
         )
     fresh_source = _source_state()
     fresh_quota = _colab_snapshot()
-    if any(
-        fresh_source[key] != source[key]
-        for key in (
-            "branch",
-            "source_revision",
-            "source_tree",
-            "preflight_sha256",
-            "profile_sha256",
-        )
-    ) or any(
+    if any(fresh_source[key] != source[key] for key in ("branch", "profile_sha256")) or any(
         fresh_quota[key] != quota[key]
         for key in (
             "balance",
@@ -445,20 +472,23 @@ def authorize_campaign() -> dict[str, Any]:
     ):
         raise DevelopmentRunError("source or quota changed during one-time campaign approval")
     authorization: dict[str, Any] = {
-        "schema": "RES541_A02_DEVELOPMENT_CAMPAIGN_AUTHORIZATION_V1",
+        "schema": "RES541_A02_DEVELOPMENT_CAMPAIGN_AUTHORIZATION_V2",
         "status": "OWNER_AUTHORIZED",
         "branch": source["branch"],
-        "source_revision": source["source_revision"],
-        "source_tree": source["source_tree"],
         "development_profile_sha256": source["profile_sha256"],
-        "development_preflight_sha256": source["preflight_sha256"],
         "campaign_cap_cu": CAMPAIGN_CU_CAP,
         "max_t4_sessions": CAMPAIGN_SESSION_CAP,
         "max_session_seconds": SESSION_SECONDS,
         "max_exec_seconds": EXEC_SECONDS,
         "no_upgrade": True,
         "no_training": True,
-        "initial_compute_unit_balance": quota["balance"],
+        "approval_scope": "CAMPAIGN_PROFILE_WITH_PER_SESSION_SOURCE_BINDING",
+        "initial_compute_unit_balance": initial_balance,
+        "account_balance_at_authorization": quota["balance"],
+        "account_spend_before_authorization_cu": prior_spend,
+        "remaining_cu_at_authorization": remaining_cu,
+        "remaining_sessions_at_authorization": remaining_sessions,
+        "legacy_source_authorization_sha256": (legacy["authorization_sha256"] if legacy else None),
         "quota_snapshot_sha256": quota["snapshot_sha256"],
         "active_sessions_at_authorization": quota["active_sessions"],
         "provider_assignments_at_authorization": quota["provider_assignments"],
@@ -477,12 +507,10 @@ def authorize_campaign() -> dict[str, Any]:
     }
 
 
-def _load_authorization() -> dict[str, Any]:
-    if not AUTHORIZATION_PATH.is_file():
-        raise DevelopmentRunError("one-time V2 campaign budget authorization is required")
-    value = json.loads(AUTHORIZATION_PATH.read_bytes())
+def _load_legacy_authorization() -> dict[str, Any]:
+    value = json.loads(LEGACY_AUTHORIZATION_PATH.read_bytes())
     if not isinstance(value, dict):
-        raise DevelopmentRunError("V2 campaign authorization record is invalid")
+        raise DevelopmentRunError("legacy source-bound authorization record is invalid")
     digest = value.pop("authorization_sha256", None)
     source = {
         "source_revision": value.get("source_revision"),
@@ -506,10 +534,92 @@ def _load_authorization() -> dict[str, Any]:
         or not math.isfinite(quota["balance"])
         or quota["balance"] <= 0
         or not isinstance(confirmation, str)
-        or confirmation != _authorization_phrase(source, quota)
+        or confirmation != _legacy_authorization_phrase(source, quota)
         or value.get("owner_confirmation_sha256") != _sha(confirmation.encode())
     ):
-        raise DevelopmentRunError("V2 campaign authorization record failed integrity checks")
+        raise DevelopmentRunError("legacy source-bound authorization failed integrity checks")
+    value["authorization_sha256"] = digest
+    return value
+
+
+def _load_authorization() -> dict[str, Any]:
+    if not AUTHORIZATION_PATH.is_file():
+        if LEGACY_AUTHORIZATION_PATH.is_file():
+            raise DevelopmentRunError(
+                "legacy source-bound approval cannot authorize modified code; "
+                "a fresh campaign-level authorization is required"
+            )
+        raise DevelopmentRunError("one-time campaign-level V2 budget authorization is required")
+    value = json.loads(AUTHORIZATION_PATH.read_bytes())
+    if not isinstance(value, dict):
+        raise DevelopmentRunError("campaign-level V2 authorization record is invalid")
+    digest = value.pop("authorization_sha256", None)
+    profile_sha256 = value.get("development_profile_sha256")
+    balance = value.get("initial_compute_unit_balance")
+    account_balance = value.get("account_balance_at_authorization")
+    spend_before = value.get("account_spend_before_authorization_cu")
+    remaining_cu = value.get("remaining_cu_at_authorization")
+    remaining_sessions = value.get("remaining_sessions_at_authorization")
+    confirmation = value.get("owner_confirmation")
+    legacy_sha256 = value.get("legacy_source_authorization_sha256")
+    quota_sha256 = value.get("quota_snapshot_sha256")
+    if not isinstance(profile_sha256, str):
+        raise DevelopmentRunError("campaign-level V2 authorization profile is invalid")
+    profile_matches = profile_sha256 == _sha(a02_dev_protocol.PROFILE_PATH.read_bytes())
+    legacy_matches = (
+        not LEGACY_AUTHORIZATION_PATH.exists()
+        if legacy_sha256 is None
+        else (
+            LEGACY_AUTHORIZATION_PATH.is_file()
+            and _load_legacy_authorization()["authorization_sha256"] == legacy_sha256
+        )
+    )
+    if (
+        value.get("schema") != "RES541_A02_DEVELOPMENT_CAMPAIGN_AUTHORIZATION_V2"
+        or value.get("status") != "OWNER_AUTHORIZED"
+        or digest != _sha(_canonical(value).encode())
+        or value.get("branch") != "work/res-541-a02-colab-recovery"
+        or value.get("approval_scope") != "CAMPAIGN_PROFILE_WITH_PER_SESSION_SOURCE_BINDING"
+        or not profile_matches
+        or not legacy_matches
+        or value.get("campaign_cap_cu") != CAMPAIGN_CU_CAP
+        or value.get("max_t4_sessions") != CAMPAIGN_SESSION_CAP
+        or value.get("max_session_seconds") != SESSION_SECONDS
+        or value.get("max_exec_seconds") != EXEC_SECONDS
+        or value.get("no_upgrade") is not True
+        or value.get("no_training") is not True
+        or isinstance(balance, bool)
+        or not isinstance(balance, int | float)
+        or not math.isfinite(balance)
+        or balance <= 0
+        or isinstance(account_balance, bool)
+        or not isinstance(account_balance, int | float)
+        or not math.isfinite(account_balance)
+        or account_balance <= 0
+        or account_balance > balance
+        or isinstance(spend_before, bool)
+        or not isinstance(spend_before, int | float)
+        or not math.isfinite(spend_before)
+        or spend_before < 0
+        or abs(account_balance - (balance - spend_before)) > 0.005000001
+        or not isinstance(quota_sha256, str)
+        or len(quota_sha256) != 64
+        or any(char not in "0123456789abcdef" for char in quota_sha256)
+        or (legacy_sha256 is not None and not isinstance(legacy_sha256, str))
+        or isinstance(remaining_cu, bool)
+        or not isinstance(remaining_cu, int | float)
+        or not math.isfinite(remaining_cu)
+        or not 0 <= remaining_cu <= CAMPAIGN_CU_CAP
+        or remaining_cu != round(CAMPAIGN_CU_CAP - spend_before, 2)
+        or isinstance(remaining_sessions, bool)
+        or not isinstance(remaining_sessions, int)
+        or not 0 <= remaining_sessions <= CAMPAIGN_SESSION_CAP
+        or not isinstance(confirmation, str)
+        or confirmation
+        != _campaign_authorization_phrase(profile_sha256, remaining_cu, remaining_sessions)
+        or value.get("owner_confirmation_sha256") != _sha(confirmation.encode())
+    ):
+        raise DevelopmentRunError("campaign-level V2 authorization failed integrity checks")
     value["authorization_sha256"] = digest
     return value
 
@@ -529,12 +639,116 @@ def _used_session_markers() -> list[dict[str, Any]]:
     return markers
 
 
-def _next_session_index(markers: list[dict[str, Any]]) -> int:
+def _prior_session_config(marker: dict[str, Any]) -> tuple[tuple[str, str, str, str], str]:
+    run_id = marker["run_id"]
+    directory = RUNS_DIR / run_id
+    binding_path = directory / "binding.json"
+    control_path = directory / "control.json"
+    try:
+        binding_bytes = binding_path.read_bytes()
+        binding = json.loads(binding_bytes)
+        control = json.loads(control_path.read_bytes())
+        manifest = json.loads((directory / "artifact-hashes.json").read_bytes())
+    except (OSError, json.JSONDecodeError) as exc:
+        raise DevelopmentRunError("prior V2 session evidence is incomplete") from exc
+    if (
+        not isinstance(binding, dict)
+        or not isinstance(control, dict)
+        or not isinstance(manifest, dict)
+    ):
+        raise DevelopmentRunError("prior V2 session receipts are invalid")
+    rows = manifest.get("files")
+    if not isinstance(rows, list):
+        raise DevelopmentRunError("prior V2 artifact manifest is invalid")
+    manifest_files = {
+        row.get("name"): row
+        for row in rows
+        if isinstance(row, dict) and isinstance(row.get("name"), str)
+    }
+    control_bytes = control_path.read_bytes()
+    binding_manifest = manifest_files.get("binding.json", {})
+    control_manifest = manifest_files.get("control.json", {})
+    marker_path = directory / "session-used.json"
+    try:
+        marker_bytes = marker_path.read_bytes()
+    except OSError as exc:
+        raise DevelopmentRunError("prior V2 session marker is missing") from exc
+    marker_manifest = manifest_files.get("session-used.json", {})
+    if (
+        manifest.get("run_id") != run_id
+        or manifest.get("terminal_outcome") != control.get("terminal_outcome")
+        or binding_manifest.get("sha256") != _sha(binding_bytes)
+        or binding_manifest.get("bytes") != len(binding_bytes)
+        or control_manifest.get("sha256") != _sha(control_bytes)
+        or control_manifest.get("bytes") != len(control_bytes)
+        or marker_manifest.get("sha256") != _sha(marker_bytes)
+        or marker_manifest.get("bytes") != len(marker_bytes)
+        or _sha(binding_bytes) != marker.get("binding_sha256")
+        or binding.get("run_id") != run_id
+        or binding.get("source_revision") != marker.get("source_revision")
+        or (
+            marker.get("source_tree") is not None
+            and binding.get("source_tree") != marker.get("source_tree")
+        )
+        or binding.get("development_profile_sha256") != marker.get("development_profile_sha256")
+        or (
+            marker.get("development_preflight_sha256") is not None
+            and binding.get("development_preflight_sha256")
+            != marker.get("development_preflight_sha256")
+        )
+        or control.get("run_id") != run_id
+        or control.get("status") != "CONTROL_FINISHED"
+        or control.get("session_index") != marker.get("session_index")
+        or not isinstance(control.get("terminal_outcome"), str)
+    ):
+        raise DevelopmentRunError("prior V2 session binding or disposition is invalid")
+    config = (
+        binding["source_revision"],
+        binding["source_tree"],
+        binding["development_profile_sha256"],
+        binding["development_preflight_sha256"],
+    )
+    return config, control["terminal_outcome"]
+
+
+def _next_session_index(markers: list[dict[str, Any]], source: dict[str, Any]) -> int:
     if len(markers) >= CAMPAIGN_SESSION_CAP:
         raise DevelopmentRunError("V2 campaign has exhausted its T4 session cap")
-    if markers:
-        raise DevelopmentRunError("the V2 ten-case profile is single-use; no repeat after a run")
-    return 1
+    indices = [marker.get("session_index") for marker in markers]
+    if any(isinstance(index, bool) or not isinstance(index, int) for index in indices):
+        raise DevelopmentRunError("V2 campaign session index is invalid")
+    valid_indices = [
+        index for index in indices if isinstance(index, int) and not isinstance(index, bool)
+    ]
+    if sorted(valid_indices) != list(range(1, len(markers) + 1)):
+        raise DevelopmentRunError("V2 campaign session markers are not contiguous")
+    current = (
+        source["source_revision"],
+        source["source_tree"],
+        source["profile_sha256"],
+        source["preflight_sha256"],
+    )
+    for marker in markers:
+        previous, outcome = _prior_session_config(marker)
+        if outcome != "EXTERNAL_BLOCKER":
+            raise DevelopmentRunError("a completed V2 experiment cannot be repeated")
+        if previous == current:
+            raise DevelopmentRunError("the failed V2 configuration cannot be replayed")
+    return len(markers) + 1
+
+
+def _campaign_budget(authorization: dict[str, Any], current_balance: float) -> tuple[float, float]:
+    initial = float(authorization["initial_compute_unit_balance"])
+    if current_balance <= 0 or current_balance > authorization["account_balance_at_authorization"]:
+        raise DevelopmentRunError("Colab balance is ambiguous against campaign authorization")
+    prior_spend = max(0.0, initial - current_balance)
+    remaining = CAMPAIGN_CU_CAP - prior_spend
+    if (
+        remaining <= COST_BUFFER_CU
+        or remaining > authorization["remaining_cu_at_authorization"] + 0.005000001
+    ):
+        raise DevelopmentRunError("authorized V2 campaign budget is exhausted or ambiguous")
+    return prior_spend, remaining
 
 
 def _safe_exec_seconds(remaining_cu: float, usage_rate_cu_per_hour: float) -> int:
@@ -583,6 +797,10 @@ def _cost_guard(
             if usage.returncode != 0:
                 raise DevelopmentRunError("live Colab budget monitor failed")
             balance, rate, _ = a02_execution._parse_current_usage(usage.stdout)
+            if balance > balance_before_allocation:
+                raise DevelopmentRunError(
+                    "Colab balance increased during session; budget is ambiguous"
+                )
             if rate <= 0:
                 raise DevelopmentRunError("live Colab usage rate became unknown")
             maximum_rate = max(maximum_rate, rate)
@@ -621,27 +839,20 @@ def _cost_guard(
 def run_campaign_session() -> dict[str, Any]:
     authorization = _load_authorization()
     source = _source_state()
-    if any(
-        authorization.get(key) != source[auth_key]
-        for key, auth_key in (
-            ("branch", "branch"),
-            ("source_revision", "source_revision"),
-            ("source_tree", "source_tree"),
-            ("development_profile_sha256", "profile_sha256"),
-            ("development_preflight_sha256", "preflight_sha256"),
-        )
+    if (
+        authorization.get("branch") != source["branch"]
+        or authorization.get("development_profile_sha256") != source["profile_sha256"]
     ):
         raise DevelopmentRunError(
-            "V2 campaign authorization does not bind the clean current source"
+            "campaign-level authorization does not bind the current development profile"
         )
     quota_before = _colab_snapshot()
     initial_balance = float(authorization["initial_compute_unit_balance"])
-    prior_spend = max(0.0, initial_balance - quota_before["balance"])
-    remaining_before = CAMPAIGN_CU_CAP - prior_spend
-    if remaining_before <= COST_BUFFER_CU or quota_before["balance"] <= 0:
-        raise DevelopmentRunError("authorized V2 campaign budget is exhausted or ambiguous")
+    prior_spend, remaining_before = _campaign_budget(authorization, quota_before["balance"])
     markers = _used_session_markers()
-    session_index = _next_session_index(markers)
+    session_index = _next_session_index(markers, source)
+    if CAMPAIGN_SESSION_CAP - len(markers) > authorization["remaining_sessions_at_authorization"]:
+        raise DevelopmentRunError("session count exceeds the approved campaign continuation scope")
     run_id = (
         f"res541-a02-dev-v2-{session_index:03d}-"
         f"{source['profile_sha256'][:8]}-{uuid.uuid4().hex[:8]}"
@@ -694,12 +905,14 @@ def run_campaign_session() -> dict[str, Any]:
     binding_bytes = (json.dumps(binding, indent=2, sort_keys=True) + "\n").encode()
     binding_path.write_bytes(binding_bytes)
     marker = {
-        "schema": "RES541_A02_DEVELOPMENT_SESSION_USED_V1",
+        "schema": "RES541_A02_DEVELOPMENT_SESSION_USED_V2",
         "campaign_authorization_sha256": authorization["authorization_sha256"],
         "development_profile_sha256": source["profile_sha256"],
         "session_index": session_index,
         "run_id": run_id,
         "source_revision": source["source_revision"],
+        "source_tree": source["source_tree"],
+        "development_preflight_sha256": source["preflight_sha256"],
         "binding_sha256": _sha(binding_bytes),
         "recorded_at_utc": datetime.now(UTC).isoformat(),
     }
@@ -791,6 +1004,10 @@ def run_campaign_session() -> dict[str, Any]:
         state["target_endpoint"] = target_endpoint
         state["target_status"] = status.stdout.strip()
         after_allocation = _colab_snapshot()
+        if after_allocation["balance"] > quota_before["balance"]:
+            raise DevelopmentRunError(
+                "Colab balance increased during allocation; budget is ambiguous"
+            )
         before_sessions = {row["endpoint"] for row in quota_before["active_sessions"]}
         after_unrelated = {
             row["endpoint"]
@@ -970,7 +1187,12 @@ def run_campaign_session() -> dict[str, Any]:
                     state["compute_unit_balance_after"] = after_balance
                     state["usage_rate_after_cu_per_hour"] = after_rate
                     state["active_assignment_count_after"] = after_assignments
-                    state["campaign_compute_unit_spend"] = max(0.0, initial_balance - after_balance)
+                    if after_balance > quota_before["balance"]:
+                        state["usage_accounting_error"] = True
+                    else:
+                        state["campaign_compute_unit_spend"] = max(
+                            0.0, initial_balance - after_balance
+                        )
                 else:
                     state["usage_accounting_error"] = True
             except ColabCommandError as exc:
