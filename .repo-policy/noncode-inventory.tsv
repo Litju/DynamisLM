@@ -97,6 +97,7 @@ experiments/a01/system-prompt-v1.txt	authority	3a427cbddec385a60e2843f921d3b8a3e
 experiments/a02/README.md	documentation	-	Bounded RES-541 A0.2 experiment procedure; operational guidance, not scientific authority
 experiments/a02/cases-v1.json	authority	f3a56dde310b2d64f2f8db2f9d02a432dd712d7b4a8aba50f836f1b3d6673dd3	Frozen 10-case synthetic development suite with independent typed expectations; no PSE or model training data
 experiments/a02/development-profile-v2.json	authority	5382015034c2087b60fbcd0dde5c1043a1501de476e63bc7dd1bc1eead39b796	Prospective A0.2 V2 ten-case intent and scoring profile; pins the existing model/tokenizer, preserves V1, and records campaign approval as pending
+experiments/a02/development-v2.md	documentation	cc80aef76931fd5cf6b9f8839e796ee5611fa57945020997dcf5e5f41bee412f	Operator steps for V2 intent preservation and CPU preflight, plus the owner-authorized bounded campaign; no empirical data
 experiments/a02/historical-cases-v1.json	authority	619015ea1df55e8507316ff764e422ce95605549893d0748fb65cc5ad6aa7f38	Exact-byte copy of the historical synthetic A0 paired case manifest; no raw empirical data
 experiments/a02/historical-inputs-v1.json	authority	811cfaa6e8caf67e072c02539d719d9cec0dca02da6260808b22bc4951fa561d	Frozen exact prepared prompts and synthetic evidence for the 16 A0.1 paired cases
 experiments/a02/protocol-v1.json	authority	ffcb82cd6431b76d9b770a7a71ffe0d0d07597367839ff448b5d028d487703cf	Versioned A0.2 pre-inference source lineage and preserved frozen scientific inputs
