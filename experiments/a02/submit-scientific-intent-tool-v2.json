@@ -1,0 +1,102 @@
+{
+  "name": "submit_scientific_intent",
+  "description": "Submit one typed analysis and claim-intent proposal for trusted Python authorization. This tool does not authorize or calculate.",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "schema": {
+        "type": "string",
+        "enum": ["RES541-A02-INTENT-2"]
+      },
+      "objective": {
+        "type": "string",
+        "description": "The exact requested scientific objective."
+      },
+      "analysis_class": {
+        "type": ["string", "null"],
+        "enum": [
+          "SCALAR_ABSOLUTE_CHANGE",
+          "SCALAR_RELATIVE_CHANGE",
+          "SCALAR_LOG_CHANGE",
+          "BASELINE_REFERENCE_WINDOW_DEVIATION",
+          "RELIABILITY_RANDOM_ERROR_COMPARISON",
+          "METHOD_AGREEMENT_SUMMARY",
+          "WITHIN_ATHLETE_ASSOCIATION",
+          "BETWEEN_ATHLETE_ASSOCIATION",
+          "REPEATED_MEASURES_ANALYSIS",
+          "MIXED_EFFECTS_ANALYSIS",
+          "CROSS_TEST_ASSOCIATION",
+          null
+        ]
+      },
+      "operation": {
+        "type": ["string", "null"],
+        "enum": [
+          "dynamislm:registered-operation:unit-normalization@1.0.0",
+          "dynamislm:registered-operation:duration-normalized-distance@1.0.0",
+          "dynamislm:registered-operation:longitudinal-absolute-change-v1@1.0.0",
+          "dynamislm:registered-operation:longitudinal-within-athlete-sample-sd-v1@1.0.0",
+          null
+        ]
+      },
+      "observations": {
+        "type": "array",
+        "maxItems": 16,
+        "items": {
+          "type": "object",
+          "properties": {
+            "reference": {"type": "string"},
+            "unit": {"type": "string"}
+          },
+          "required": ["reference", "unit"],
+          "additionalProperties": false
+        }
+      },
+      "requested_claims": {
+        "type": "object",
+        "properties": {
+          "measurement_levels": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "enum": [
+                "OBSERVED_VALUE",
+                "NUMERICAL_CHANGE",
+                "COMPARABLE_CHANGE",
+                "CHANGE_RELATIVE_TO_MEASUREMENT_ERROR",
+                "PRACTICAL_OR_DECISION_MEANINGFULNESS"
+              ]
+            }
+          },
+          "relationship_levels": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "enum": [
+                "OBSERVATION",
+                "DESCRIPTIVE_CHANGE",
+                "ASSOCIATION",
+                "TEMPORAL_ASSOCIATION",
+                "MECHANISTIC_HYPOTHESIS",
+                "CAUSAL_EVIDENCE"
+              ]
+            }
+          }
+        },
+        "required": ["measurement_levels", "relationship_levels"],
+        "additionalProperties": false
+      }
+    },
+    "required": [
+      "schema",
+      "objective",
+      "analysis_class",
+      "operation",
+      "observations",
+      "requested_claims"
+    ],
+    "additionalProperties": false
+  }
+}
