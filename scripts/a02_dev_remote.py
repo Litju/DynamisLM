@@ -266,8 +266,9 @@ def _record_failure(report: dict[str, Any], stage: str, exc: BaseException) -> N
         failure_message=_safe_excerpt(str(exc), 1000),
         partial_case_count=len(report.get("cases", [])),
     )
-    if isinstance(getattr(exc, "evidence", None), dict):
-        report["command_failure"] = exc.evidence
+    evidence = getattr(exc, "evidence", None)
+    if isinstance(evidence, dict):
+        report["command_failure"] = evidence
     timeout = exc if isinstance(exc, subprocess.TimeoutExpired) else exc.__cause__
     if isinstance(timeout, subprocess.TimeoutExpired):
         report["command_output"] = {

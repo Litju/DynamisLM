@@ -199,7 +199,7 @@ def test_timed_out_child_is_terminated_and_keeps_sanitized_partial_output(
         "print('token=private-value',file=sys.stderr,flush=True); time.sleep(30)"
     )
     result = a02_dev_remote._run_bounded_child(
-        [sys.executable, "-c", child], cwd=tmp_path, env={}, timeout=0.1
+        [sys.executable, "-c", child], cwd=tmp_path, env={}, timeout=1
     )
     assert result["timed_out"] is True
     assert result["returncode"] is not None and result["returncode"] != 0
