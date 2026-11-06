@@ -278,6 +278,22 @@ def _record_failure(report: dict[str, Any], stage: str, exc: BaseException) -> N
     _mark_stage(report, stage, "FAILED")
 
 
+def _stage_timeout(binding: dict[str, Any], stage: str) -> int:
+    ceiling = binding.get("remote_stage_timeouts_seconds", {}).get(stage)
+    if type(ceiling) is not int or not 30 <= ceiling <= 720:
+        raise ValueError("V2 remote stage timeout is invalid")
+    requested = os.environ.get("A02_DEV_REMOTE_STAGE_TIMEOUT")
+    if requested is None:
+        return ceiling
+    try:
+        timeout = int(requested)
+    except ValueError as exc:
+        raise ValueError("V2 requested remote stage timeout is invalid") from exc
+    if not 30 <= timeout <= ceiling:
+        raise ValueError("V2 requested remote stage timeout exceeds its bound")
+    return timeout
+
+
 def _run_isolated_inference(stage: str) -> int:
     binding = json.loads(BINDING_PATH.read_bytes())
     if not isinstance(binding, dict) or binding.get("execution_mode") != "development_v2":
@@ -299,10 +315,7 @@ def _run_isolated_inference(stage: str) -> int:
         report["status"] = "RUNNING"
         _mark_stage(report, "REMOTE_INFERENCE_ENTRY", "STARTED")
     try:
-        stage_timeouts = binding.get("remote_stage_timeouts_seconds", {})
-        stage_timeout = stage_timeouts.get(stage)
-        if type(stage_timeout) is not int or not 30 <= stage_timeout <= 720:
-            raise ValueError("V2 remote stage timeout is invalid")
+        stage_timeout = _stage_timeout(binding, stage)
         WORK.mkdir(parents=True, exist_ok=True)
         _mark_stage(report, "SOURCE_ARCHIVE_VERIFY", "STARTED")
         archive_bytes = SOURCE_ARCHIVE.read_bytes()

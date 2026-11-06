@@ -7,6 +7,7 @@ import hashlib
 import json
 import math
 import os
+import re
 import select
 import subprocess
 import sys
@@ -17,7 +18,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from scripts import a02_dev_protocol, a02_dev_score, a02_execution
+from scripts import a02_dev_protocol, a02_dev_remote, a02_dev_score, a02_execution
 
 ROOT = a02_execution.ROOT
 E_ROOT = a02_execution.E_ROOT
@@ -35,10 +36,32 @@ EXEC_SECONDS = 720
 COST_BUFFER_CU = 0.05
 COST_POLL_SECONDS = 10
 CLEANUP_RESERVE_SECONDS = 90
+REMOTE_PREPARE_MAX_SECONDS = 420
+REMOTE_INFERENCE_MAX_SECONDS = 360
+_URL = re.compile(r"https?://[^\s<>\"']+")
 
 
 class DevelopmentRunError(RuntimeError):
     pass
+
+
+class ColabCommandError(DevelopmentRunError):
+    def __init__(
+        self,
+        command: list[str],
+        *,
+        timeout: int,
+        stdout: str | bytes | None,
+        stderr: str | bytes | None,
+        timed_out: bool = True,
+    ) -> None:
+        self.command_name = command[2] if len(command) > 2 else command[0]
+        self.timeout_seconds = timeout
+        self.stdout_tail = _safe_command_excerpt(stdout)
+        self.stderr_tail = _safe_command_excerpt(stderr)
+        self.timed_out = timed_out
+        suffix = "timed out" if timed_out else "could not start"
+        super().__init__(f"Colab command {suffix}: {self.command_name}")
 
 
 def _sha(data: bytes) -> str:
@@ -62,6 +85,203 @@ def _write_exclusive(path: Path, value: dict[str, Any]) -> None:
 
 def _write_state(path: Path, value: dict[str, Any]) -> None:
     a02_execution._write_json(path, value)
+
+
+def _safe_command_excerpt(value: str | bytes | None) -> str:
+    return _URL.sub("[URL_REDACTED]", a02_dev_remote._safe_excerpt(value, 4000))
+
+
+def _run_colab(command: list[str], *, timeout: int) -> subprocess.CompletedProcess[str]:
+    # a02_execution._run is hash-pinned by the frozen V1 protocol and drops timeout streams.
+    try:
+        return subprocess.run(
+            command,
+            cwd=ROOT,
+            env=a02_execution.clean_colab_env(),
+            timeout=timeout,
+            check=False,
+            text=True,
+            capture_output=True,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise ColabCommandError(
+            command,
+            timeout=timeout,
+            stdout=exc.stdout,
+            stderr=exc.stderr,
+        ) from exc
+    except OSError as exc:
+        raise ColabCommandError(
+            command,
+            timeout=timeout,
+            stdout=None,
+            stderr=str(exc),
+            timed_out=False,
+        ) from exc
+
+
+def _record_command_failure(state: dict[str, Any], stage: str, exc: ColabCommandError) -> None:
+    state["command_failure"] = {
+        "stage": stage,
+        "command": exc.command_name,
+        "timed_out": exc.timed_out,
+        "timeout_seconds": exc.timeout_seconds,
+        "stdout_tail": exc.stdout_tail,
+        "stderr_tail": exc.stderr_tail,
+    }
+
+
+def _stop_exact_session(run_id: str) -> subprocess.CompletedProcess[str]:
+    return _run_colab(
+        ["colab", "--auth=oauth2", "stop", "--session", run_id],
+        timeout=a02_execution.STOP_TIMEOUT_SECONDS,
+    )
+
+
+def _remote_report_matches(report: object, run_id: str, source: dict[str, Any]) -> bool:
+    if not isinstance(report, dict):
+        return False
+    bound = report.get("source")
+    return (
+        isinstance(bound, dict)
+        and bound.get("run_id") == run_id
+        and bound.get("revision") == source["source_revision"]
+        and bound.get("tree") == source["source_tree"]
+        and bound.get("development_profile_sha256") == source["profile_sha256"]
+        and bound.get("development_preflight_sha256") == source["preflight_sha256"]
+    )
+
+
+def _remote_report_is_complete(report: object, run_id: str, source: dict[str, Any]) -> bool:
+    return bool(
+        isinstance(report, dict)
+        and _remote_report_matches(report, run_id, source)
+        and report.get("status") == "COMPLETE"
+    )
+
+
+def _download_stage_report(
+    *,
+    run_id: str,
+    stage: str,
+    local_path: Path,
+    source: dict[str, Any],
+    control_path: Path,
+    state: dict[str, Any],
+) -> dict[str, Any] | None:
+    entry = state.setdefault("remote_stages", {}).setdefault(stage, {})
+    try:
+        downloaded = _run_colab(
+            [
+                "colab",
+                "--auth=oauth2",
+                "download",
+                "--session",
+                run_id,
+                REMOTE_REPORT,
+                str(local_path),
+            ],
+            timeout=a02_execution.DOWNLOAD_TIMEOUT_SECONDS,
+        )
+    except ColabCommandError as exc:
+        _record_command_failure(state, f"{stage}_REPORT_RECOVERY", exc)
+        entry["report_download_error"] = str(exc)
+        _write_state(control_path, state)
+        return None
+    entry["report_download_returncode"] = downloaded.returncode
+    entry["report_download_stdout_tail"] = _safe_command_excerpt(downloaded.stdout)
+    if downloaded.returncode != 0:
+        entry["report_download_stderr_tail"] = _safe_command_excerpt(downloaded.stderr)
+    if not local_path.is_file():
+        entry["report_recovered"] = False
+        _write_state(control_path, state)
+        return None
+    try:
+        report = json.loads(local_path.read_bytes())
+    except (OSError, json.JSONDecodeError):
+        entry["report_recovered"] = False
+        entry["report_parse_error"] = True
+        _write_state(control_path, state)
+        return None
+    entry["report_recovered"] = True
+    entry["report_sha256"] = _sha(local_path.read_bytes())
+    if not isinstance(report, dict) or not _remote_report_matches(report, run_id, source):
+        entry["report_binding_valid"] = False
+        _write_state(control_path, state)
+        return None
+    entry["report_binding_valid"] = True
+    entry["report_status"] = report.get("status")
+    _write_state(control_path, state)
+    return report
+
+
+def _run_remote_stage(
+    *,
+    run_id: str,
+    stage: str,
+    timeout: int,
+    report_path: Path,
+    source: dict[str, Any],
+    control_path: Path,
+    state: dict[str, Any],
+) -> bool:
+    entry = state.setdefault("remote_stages", {}).setdefault(stage, {})
+    entry["status"] = "REQUESTED"
+    entry["timeout_seconds"] = timeout
+    state["active_remote_stage"] = stage
+    _write_state(control_path, state)
+    command = [
+        "colab",
+        "--auth=oauth2",
+        "exec",
+        "--session",
+        run_id,
+        "--env",
+        f"A02_DEV_REMOTE_STAGE={stage}",
+        "--env",
+        f"A02_DEV_REMOTE_STAGE_TIMEOUT={timeout}",
+        "--file",
+        str(ROOT / "scripts/a02_dev_remote.py"),
+        "--timeout",
+        str(timeout),
+    ]
+    try:
+        execution = _run_colab(command, timeout=timeout + 30)
+    except ColabCommandError as exc:
+        entry["status"] = "TIMEOUT" if exc.timed_out else "COMMAND_ERROR"
+        _record_command_failure(state, stage, exc)
+        _write_state(control_path, state)
+        _download_stage_report(
+            run_id=run_id,
+            stage=stage,
+            local_path=report_path,
+            source=source,
+            control_path=control_path,
+            state=state,
+        )
+        raise
+    entry.update(
+        status="EXEC_RETURNED",
+        exec_returncode=execution.returncode,
+        stdout_tail=_safe_command_excerpt(execution.stdout),
+        stderr_tail=_safe_command_excerpt(execution.stderr),
+    )
+    _write_state(control_path, state)
+    report = _download_stage_report(
+        run_id=run_id,
+        stage=stage,
+        local_path=report_path,
+        source=source,
+        control_path=control_path,
+        state=state,
+    )
+    expected = "READY_FOR_INFERENCE" if stage == "prepare" else "COMPLETE"
+    return bool(
+        execution.returncode == 0
+        and report is not None
+        and report.get("status") == expected
+        and entry.get("report_download_returncode") == 0
+    )
 
 
 def _source_state() -> dict[str, Any]:
@@ -116,10 +336,10 @@ def _source_state() -> dict[str, Any]:
 
 
 def _colab_snapshot() -> dict[str, Any]:
-    version = a02_execution._run(["colab", "version"], timeout=15)
-    identity = a02_execution._run(["colab", "--auth=oauth2", "whoami"], timeout=15)
-    usage = a02_execution._run(["colab", "--auth=oauth2", "usage"], timeout=30)
-    sessions = a02_execution._run(["colab", "--auth=oauth2", "sessions"], timeout=30)
+    version = _run_colab(["colab", "version"], timeout=15)
+    identity = _run_colab(["colab", "--auth=oauth2", "whoami"], timeout=15)
+    usage = _run_colab(["colab", "--auth=oauth2", "usage"], timeout=30)
+    sessions = _run_colab(["colab", "--auth=oauth2", "sessions"], timeout=30)
     if (
         version.returncode != 0
         or "0.7.5" not in version.stdout
@@ -335,6 +555,14 @@ def _safe_exec_seconds(remaining_cu: float, usage_rate_cu_per_hour: float) -> in
     )
 
 
+def _split_stage_timeouts(exec_seconds: int) -> dict[str, int]:
+    prepare = min(REMOTE_PREPARE_MAX_SECONDS, exec_seconds - 180)
+    inference = exec_seconds - prepare
+    if prepare < 30 or inference < 30 or inference > REMOTE_INFERENCE_MAX_SECONDS:
+        raise DevelopmentRunError("remaining CU budget cannot safely bound both V2 stages")
+    return {"prepare": prepare, "infer": inference}
+
+
 def _cost_guard(
     *,
     run_id: str,
@@ -349,7 +577,7 @@ def _cost_guard(
     maximum_rate = initial_rate
     while not halt.wait(COST_POLL_SECONDS):
         try:
-            usage = a02_execution._run(
+            usage = _run_colab(
                 ["colab", "--auth=oauth2", "usage"], timeout=a02_execution.VERIFY_TIMEOUT_SECONDS
             )
             if usage.returncode != 0:
@@ -372,14 +600,21 @@ def _cost_guard(
                     estimated_campaign_spend_upper_bound=total_upper_bound,
                 )
         except Exception as exc:
-            stop = a02_execution._run(
-                ["colab", "--auth=oauth2", "stop", "--session", run_id],
-                timeout=a02_execution.STOP_TIMEOUT_SECONDS,
-            )
+            stop_error: str | None = None
+            try:
+                stop = _stop_exact_session(run_id)
+                stop_code = stop.returncode
+                stop_failed = False
+            except ColabCommandError as stop_exc:
+                stop_code = None
+                stop_failed = True
+                stop_error = str(stop_exc)
             with lock:
                 result["stop_reason"] = str(exc)
-                result["monitor_stop_exit_code"] = stop.returncode
-                result["monitor_stopped_target"] = True
+                result["monitor_stop_exit_code"] = stop_code
+                result["monitor_stopped_target"] = not stop_failed
+                if stop_error:
+                    result["monitor_stop_error"] = stop_error
             return
 
 
@@ -446,6 +681,10 @@ def run_campaign_session() -> dict[str, Any]:
         "requested_gpu": "T4",
         "max_session_seconds": SESSION_SECONDS,
         "max_exec_seconds": EXEC_SECONDS,
+        "remote_stage_timeouts_seconds": {
+            "prepare": REMOTE_PREPARE_MAX_SECONDS,
+            "infer": REMOTE_INFERENCE_MAX_SECONDS,
+        },
         "no_retry": True,
         "no_upgrade": True,
         "training": False,
@@ -530,14 +769,14 @@ def run_campaign_session() -> dict[str, Any]:
         _write_state(control_path, state)
         allocation_attempted = True
         allocated_at = time.monotonic()
-        created = a02_execution._run(
+        created = _run_colab(
             ["colab", "--auth=oauth2", "new", "--session", run_id, "--gpu", "T4"],
             timeout=a02_execution.NEW_TIMEOUT_SECONDS,
         )
         state["allocation_returncode"] = created.returncode
         if created.returncode != 0:
             raise DevelopmentRunError("single V2 T4 allocation failed; no retry or upgrade")
-        status = a02_execution._run(
+        status = _run_colab(
             ["colab", "--auth=oauth2", "status", "--session", run_id],
             timeout=a02_execution.VERIFY_TIMEOUT_SECONDS,
         )
@@ -571,12 +810,12 @@ def run_campaign_session() -> dict[str, Any]:
             safe_exec_seconds - math.ceil(elapsed) - CLEANUP_RESERVE_SECONDS,
             EXEC_SECONDS,
         )
-        if exec_timeout < 30:
-            raise DevelopmentRunError("remaining CU budget cannot safely bound V2 inference")
+        stage_timeouts = _split_stage_timeouts(exec_timeout)
         state.update(
             usage_after_allocation=after_allocation,
             current_account_usage_rate_cu_per_hour=current_rate,
             estimated_safe_exec_seconds=exec_timeout,
+            remote_stage_timeouts_seconds=stage_timeouts,
         )
         _write_state(control_path, state)
         monitor = threading.Thread(
@@ -601,7 +840,7 @@ def run_campaign_session() -> dict[str, Any]:
             (binding_path, REMOTE_BINDING),
             (preflight_copy, REMOTE_PREFLIGHT),
         ):
-            uploaded = a02_execution._run(
+            uploaded = _run_colab(
                 [
                     "colab",
                     "--auth=oauth2",
@@ -615,43 +854,43 @@ def run_campaign_session() -> dict[str, Any]:
             )
             if uploaded.returncode != 0:
                 raise DevelopmentRunError(f"V2 upload failed: {remote_path}")
-        state["status"] = "INFERENCE_REQUESTED"
+        state["status"] = "REMOTE_PREPARE_REQUESTED"
         state["exec_timeout_seconds"] = exec_timeout
         _write_state(control_path, state)
-        execution = a02_execution._run(
-            [
-                "colab",
-                "--auth=oauth2",
-                "exec",
-                "--session",
-                run_id,
-                "--file",
-                str(ROOT / "scripts/a02_dev_remote.py"),
-                "--timeout",
-                str(exec_timeout),
-            ],
-            timeout=exec_timeout + 30,
+        prepare_report = run_dir / "remote-prepare-report.json"
+        prepared = _run_remote_stage(
+            run_id=run_id,
+            stage="prepare",
+            timeout=stage_timeouts["prepare"],
+            report_path=prepare_report,
+            source=source,
+            control_path=control_path,
+            state=state,
         )
-        state["exec_returncode"] = execution.returncode
-        state["exec_stderr_tail"] = execution.stderr[-1000:]
-        downloaded = a02_execution._run(
-            [
-                "colab",
-                "--auth=oauth2",
-                "download",
-                "--session",
-                run_id,
-                REMOTE_REPORT,
-                str(remote_artifact),
-            ],
-            timeout=a02_execution.DOWNLOAD_TIMEOUT_SECONDS,
-        )
-        state["download_returncode"] = downloaded.returncode
-        if downloaded.returncode != 0:
-            state["download_stderr_tail"] = downloaded.stderr[-1000:]
+        if prepared:
+            state["status"] = "REMOTE_INFERENCE_REQUESTED"
+            _write_state(control_path, state)
+            inferred = _run_remote_stage(
+                run_id=run_id,
+                stage="infer",
+                timeout=stage_timeouts["infer"],
+                report_path=remote_artifact,
+                source=source,
+                control_path=control_path,
+                state=state,
+            )
+            state["remote_inference_verified"] = inferred
+            if not inferred:
+                state["status"] = "REMOTE_INFERENCE_INCOMPLETE"
+                _write_state(control_path, state)
+        else:
+            state["status"] = "REMOTE_PREPARE_INCOMPLETE"
+            _write_state(control_path, state)
     except Exception as exc:
         state["control_error_category"] = type(exc).__name__
         state["control_error"] = str(exc)[:1000]
+        if isinstance(exc, ColabCommandError):
+            _record_command_failure(state, state.get("active_remote_stage", "CONTROL"), exc)
     finally:
         monitor_halt.set()
         if monitor is not None:
@@ -660,24 +899,30 @@ def run_campaign_session() -> dict[str, Any]:
             state["budget_monitor"] = dict(monitor_state)
         if allocation_attempted:
             if not remote_artifact.is_file():
+                _download_stage_report(
+                    run_id=run_id,
+                    stage="final_recovery",
+                    local_path=remote_artifact,
+                    source=source,
+                    control_path=control_path,
+                    state=state,
+                )
+            complete_report = False
+            if remote_artifact.is_file():
                 try:
-                    downloaded = a02_execution._run(
-                        [
-                            "colab",
-                            "--auth=oauth2",
-                            "download",
-                            "--session",
-                            run_id,
-                            REMOTE_REPORT,
-                            str(remote_artifact),
-                        ],
-                        timeout=a02_execution.DOWNLOAD_TIMEOUT_SECONDS,
-                    )
-                    state["final_download_returncode"] = downloaded.returncode
-                    if downloaded.returncode != 0:
-                        state["final_download_stderr_tail"] = downloaded.stderr[-1000:]
-                except Exception as exc:
-                    state["final_download_error"] = type(exc).__name__
+                    current_report = json.loads(remote_artifact.read_bytes())
+                    complete_report = _remote_report_is_complete(current_report, run_id, source)
+                except (OSError, json.JSONDecodeError):
+                    pass
+            if not complete_report:
+                _download_stage_report(
+                    run_id=run_id,
+                    stage="final_latest_recovery",
+                    local_path=run_dir / "remote-latest-report.json",
+                    source=source,
+                    control_path=control_path,
+                    state=state,
+                )
             monitor_stopped = (
                 monitor_state.get("monitor_stopped_target") is True
                 and monitor_state.get("monitor_stop_exit_code") == 0
@@ -686,45 +931,51 @@ def run_campaign_session() -> dict[str, Any]:
                 state["stop_returncode"] = monitor_state.get("monitor_stop_exit_code")
                 state["stop_by_budget_guard"] = True
             else:
-                stopped = a02_execution._run(
-                    ["colab", "--auth=oauth2", "stop", "--session", run_id],
-                    timeout=a02_execution.STOP_TIMEOUT_SECONDS,
-                )
-                state["stop_returncode"] = stopped.returncode
+                try:
+                    stopped = _stop_exact_session(run_id)
+                    state["stop_returncode"] = stopped.returncode
+                except ColabCommandError as exc:
+                    state["stop_returncode"] = None
+                    _record_command_failure(state, "STOP_EXACT_TARGET", exc)
                 state["stop_by_budget_guard"] = False
             state["stop_requested_at_utc"] = datetime.now(UTC).isoformat()
-            sessions_after = a02_execution._run(
-                ["colab", "--auth=oauth2", "sessions"],
-                timeout=a02_execution.VERIFY_TIMEOUT_SECONDS,
-            )
-            assignments_after = a02_execution._run(
-                a02_execution._assignment_command(),
-                timeout=a02_execution.VERIFY_TIMEOUT_SECONDS,
-            )
             try:
+                sessions_after = _run_colab(
+                    ["colab", "--auth=oauth2", "sessions"],
+                    timeout=a02_execution.VERIFY_TIMEOUT_SECONDS,
+                )
+                assignments_after = _run_colab(
+                    a02_execution._assignment_command(),
+                    timeout=a02_execution.VERIFY_TIMEOUT_SECONDS,
+                )
                 state["target_absent_after_stop"] = a02_execution._verify_target_absent(
                     sessions_after, run_id, target_endpoint, assignments_after
                 )
+                state["sessions_after_stop"] = sessions_after.stdout.strip()
+                state["assignments_after_stop_sha256"] = _sha(assignments_after.stdout.encode())
             except Exception as exc:
                 state["target_absent_after_stop"] = False
                 state["teardown_error"] = type(exc).__name__
-            state["sessions_after_stop"] = sessions_after.stdout.strip()
-            state["assignments_after_stop_sha256"] = _sha(assignments_after.stdout.encode())
-            usage_after = a02_execution._run(
-                ["colab", "--auth=oauth2", "usage"],
-                timeout=a02_execution.VERIFY_TIMEOUT_SECONDS,
-            )
-            state["usage_after_returncode"] = usage_after.returncode
-            if usage_after.returncode == 0:
-                after_balance, after_rate, after_assignments = a02_execution._parse_current_usage(
-                    usage_after.stdout
-                )
-                state["compute_unit_balance_after"] = after_balance
-                state["usage_rate_after_cu_per_hour"] = after_rate
-                state["active_assignment_count_after"] = after_assignments
-                state["campaign_compute_unit_spend"] = max(0.0, initial_balance - after_balance)
-            else:
                 state["usage_accounting_error"] = True
+            try:
+                usage_after = _run_colab(
+                    ["colab", "--auth=oauth2", "usage"],
+                    timeout=a02_execution.VERIFY_TIMEOUT_SECONDS,
+                )
+                state["usage_after_returncode"] = usage_after.returncode
+                if usage_after.returncode == 0:
+                    after_balance, after_rate, after_assignments = (
+                        a02_execution._parse_current_usage(usage_after.stdout)
+                    )
+                    state["compute_unit_balance_after"] = after_balance
+                    state["usage_rate_after_cu_per_hour"] = after_rate
+                    state["active_assignment_count_after"] = after_assignments
+                    state["campaign_compute_unit_spend"] = max(0.0, initial_balance - after_balance)
+                else:
+                    state["usage_accounting_error"] = True
+            except ColabCommandError as exc:
+                state["usage_accounting_error"] = True
+                _record_command_failure(state, "POST_RUN_USAGE", exc)
         state["finished_at_utc"] = datetime.now(UTC).isoformat()
         state["status"] = "CONTROL_FINISHED"
         _write_state(control_path, state)
@@ -767,8 +1018,14 @@ def run_campaign_session() -> dict[str, Any]:
     elif not remote_artifact.is_file():
         state["terminal_outcome"] = "EXTERNAL_BLOCKER"
         state["external_blocker"] = "REMOTE_REPORT_NOT_DOWNLOADED"
+    elif state.get("remote_inference_verified") is not True:
+        state["terminal_outcome"] = "EXTERNAL_BLOCKER"
+        state["external_blocker"] = "REMOTE_INFERENCE_COMPLETION_NOT_VERIFIED"
     else:
         try:
+            report = json.loads(remote_artifact.read_bytes())
+            if not _remote_report_is_complete(report, run_id, source):
+                raise DevelopmentRunError("remote report is partial, unbound, or incomplete")
             verification = a02_dev_score.verify_files(
                 remote_artifact,
                 preflight_copy,
@@ -777,7 +1034,8 @@ def run_campaign_session() -> dict[str, Any]:
             state["verification"] = verification
             state["terminal_outcome"] = verification["terminal_outcome"]
         except Exception as exc:
-            state["terminal_outcome"] = "SCIENTIFIC_NO_GO"
+            state["terminal_outcome"] = "EXTERNAL_BLOCKER"
+            state["external_blocker"] = "REMOTE_REPORT_NOT_VERIFIED_AS_COMPLETE"
             state["verification_error_category"] = type(exc).__name__
             state["verification_error"] = str(exc)[:1000]
     _write_state(control_path, state)

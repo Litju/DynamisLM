@@ -222,3 +222,14 @@ def test_initial_report_uses_campaign_binding_preflight_field() -> None:
         }
     )
     assert report["source"]["preflight_sha256"] == "e" * 64
+
+
+def test_remote_stage_timeout_override_only_reduces_its_bound(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    binding = {"remote_stage_timeouts_seconds": {"prepare": 120, "infer": 90}}
+    monkeypatch.setenv("A02_DEV_REMOTE_STAGE_TIMEOUT", "80")
+    assert a02_dev_remote._stage_timeout(binding, "prepare") == 80
+    monkeypatch.setenv("A02_DEV_REMOTE_STAGE_TIMEOUT", "121")
+    with pytest.raises(ValueError, match="exceeds its bound"):
+        a02_dev_remote._stage_timeout(binding, "prepare")
