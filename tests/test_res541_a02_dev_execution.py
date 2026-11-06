@@ -42,6 +42,11 @@ def test_exec_bound_fails_closed_on_unknown_usage_rate() -> None:
         a02_dev_execution._safe_exec_seconds(1.0, 0.0)
 
 
+def test_v2_profile_cannot_be_retried_after_a_session_marker() -> None:
+    with pytest.raises(a02_dev_execution.DevelopmentRunError, match="single-use"):
+        a02_dev_execution._next_session_index([{"run_id": "prior-v2-session"}])
+
+
 def test_campaign_authorization_record_is_hash_bound(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

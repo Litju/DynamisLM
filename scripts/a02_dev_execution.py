@@ -309,6 +309,14 @@ def _used_session_markers() -> list[dict[str, Any]]:
     return markers
 
 
+def _next_session_index(markers: list[dict[str, Any]]) -> int:
+    if len(markers) >= CAMPAIGN_SESSION_CAP:
+        raise DevelopmentRunError("V2 campaign has exhausted its T4 session cap")
+    if markers:
+        raise DevelopmentRunError("the V2 ten-case profile is single-use; no repeat after a run")
+    return 1
+
+
 def _safe_exec_seconds(remaining_cu: float, usage_rate_cu_per_hour: float) -> int:
     if (
         not math.isfinite(remaining_cu)
@@ -398,9 +406,7 @@ def run_campaign_session() -> dict[str, Any]:
     if remaining_before <= COST_BUFFER_CU or quota_before["balance"] <= 0:
         raise DevelopmentRunError("authorized V2 campaign budget is exhausted or ambiguous")
     markers = _used_session_markers()
-    if len(markers) >= CAMPAIGN_SESSION_CAP:
-        raise DevelopmentRunError("V2 campaign has already consumed both T4 session slots")
-    session_index = len(markers) + 1
+    session_index = _next_session_index(markers)
     run_id = (
         f"res541-a02-dev-v2-{session_index:03d}-"
         f"{source['profile_sha256'][:8]}-{uuid.uuid4().hex[:8]}"
