@@ -6,27 +6,31 @@ import hashlib
 import json
 import os
 import platform
+import re
+import signal
 import subprocess
 import sys
+import tarfile
+import tempfile
 import time
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-SOURCE_DIR = Path(__file__).resolve().parents[1]
-if str(SOURCE_DIR) not in sys.path:
-    sys.path.insert(0, str(SOURCE_DIR))
-
-from scripts import a02_remote  # noqa: E402
-
-WORK = a02_remote.WORK
-SOURCE_ARCHIVE = a02_remote.SOURCE_ARCHIVE
-BINDING_PATH = a02_remote.BINDING_PATH
-REMOTE_REPORT = a02_remote.REMOTE_REPORT
+WORK = Path("/content/a02")
+SOURCE_ARCHIVE = Path("/content/a02-source.tar")
+BINDING_PATH = Path("/content/a02-binding.json")
+REMOTE_REPORT = Path("/content/a02-report.json")
 DEVELOPMENT_PREFLIGHT_PATH = Path("/content/a02-development-preflight-v2.json")
-MODEL_ID = a02_remote.MODEL_ID
-MODEL_REVISION = a02_remote.MODEL_REVISION
-ENGINE_PYTHON = a02_remote.ENGINE_PYTHON
+MODEL_ID = "HuggingFaceTB/SmolLM3-3B"
+MODEL_REVISION = "a07cc9a04f16550a088caea529712d1d335b0ac1"
+ENGINE_PYTHON = "3.12.13"
+_ANSI = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
+_SECRET = re.compile(
+    r"(?i)(authorization\s*:\s*bearer\s+|(?:token|secret|password|api[_-]?key)\s*[:=]\s*)\S+"
+)
+_GITHUB_SECRET = re.compile(r"\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{40,})\b")
+_AWS_SECRET = re.compile(r"\bAKIA[0-9A-Z]{16}\b")
 MAX_PROMPT_TOKENS = 1024
 
 
@@ -42,6 +46,8 @@ def _generate(
     xml_tools: list[dict[str, Any]] | None = None,
     frozen_prompt: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    from scripts import a02_remote
+
     kwargs: dict[str, Any] = {
         "enable_thinking": False,
         "strftime_now": template_date.strftime,
@@ -133,13 +139,17 @@ def _initial_report(binding: dict[str, Any]) -> dict[str, Any]:
         "schema": "RES541_A02_DEVELOPMENT_REPORT_V2",
         "status": "RUNNING",
         "cases": [],
+        "stage_history": [],
+        "current_stage": "REMOTE_ENTRYPOINT",
+        "last_completed_stage": None,
+        "partial_case_count": 0,
         "source": {
             "run_id": binding["run_id"],
             "revision": binding["source_revision"],
             "tree": binding["source_tree"],
             "archive_sha256": binding["source_archive_sha256"],
             "protocol_sha256": binding["protocol_sha256"],
-            "preflight_sha256": binding["preflight_sha256"],
+            "preflight_sha256": binding["development_preflight_sha256"],
             "development_profile_sha256": binding["development_profile_sha256"],
             "development_preflight_sha256": binding["development_preflight_sha256"],
             "baseline_remote_report_sha256": binding["baseline_remote_report_sha256"],
@@ -147,70 +157,278 @@ def _initial_report(binding: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _run_isolated_inference() -> int:
+def _write_report(report: dict[str, Any]) -> None:
+    REMOTE_REPORT.parent.mkdir(parents=True, exist_ok=True)
+    temporary = REMOTE_REPORT.with_suffix(".tmp")
+    with temporary.open("w", encoding="utf-8") as stream:
+        json.dump(report, stream, indent=2, sort_keys=True, allow_nan=False)
+        stream.write("\n")
+        stream.flush()
+        os.fsync(stream.fileno())
+    os.replace(temporary, REMOTE_REPORT)
+    directory_fd = os.open(REMOTE_REPORT.parent, os.O_RDONLY)
+    try:
+        os.fsync(directory_fd)
+    finally:
+        os.close(directory_fd)
+
+
+def _mark_stage(report: dict[str, Any], stage: str, status: str, **fields: Any) -> None:
+    report["current_stage"] = stage
+    report.setdefault("stage_history", []).append(
+        {"stage": stage, "status": status, "recorded_at_utc": datetime.now(UTC).isoformat()}
+    )
+    if status == "COMPLETE":
+        report["last_completed_stage"] = stage
+    report.update(fields)
+    _write_report(report)
+
+
+def _safe_excerpt(value: str | bytes | None, limit: int = 4000) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, bytes):
+        value = value.decode("utf-8", errors="replace")
+    value = _ANSI.sub("", value).replace("\x00", "")
+    value = _SECRET.sub(r"\1[REDACTED]", value)
+    value = _GITHUB_SECRET.sub("[REDACTED_GITHUB_TOKEN]", value)
+    value = _AWS_SECRET.sub("[REDACTED_AWS_KEY]", value)
+    return value[-limit:]
+
+
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(8 * 1024**2), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _safe_extract(archive: Path, destination: Path) -> None:
+    with tarfile.open(archive, "r:") as source:
+        members = source.getmembers()
+        if not members or any(
+            Path(member.name).is_absolute() or ".." in Path(member.name).parts for member in members
+        ):
+            raise ValueError("V2 source archive contains an unsafe path")
+        source.extractall(destination, members=members, filter="data")
+
+
+def _run_bounded_child(
+    command: list[str], *, cwd: Path, env: dict[str, str], timeout: int
+) -> dict[str, Any]:
+    with tempfile.TemporaryFile() as stdout, tempfile.TemporaryFile() as stderr:
+        process = subprocess.Popen(
+            command,
+            cwd=cwd,
+            env=env,
+            stdin=subprocess.DEVNULL,
+            stdout=stdout,
+            stderr=stderr,
+            start_new_session=True,
+        )
+        timed_out = False
+        try:
+            process.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            timed_out = True
+            try:
+                os.killpg(process.pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                process.wait()
+
+        def tail(stream: Any) -> str:
+            stream.seek(0, os.SEEK_END)
+            stream.seek(max(0, stream.tell() - 16_384))
+            return _safe_excerpt(stream.read())
+
+        return {
+            "returncode": process.returncode,
+            "timed_out": timed_out,
+            "stdout_tail": tail(stdout),
+            "stderr_tail": tail(stderr),
+        }
+
+
+def _record_failure(report: dict[str, Any], stage: str, exc: BaseException) -> None:
+    report.update(
+        status="EXTERNAL_BLOCKER",
+        failure_stage=stage,
+        failure_category=type(exc).__name__,
+        failure_message=_safe_excerpt(str(exc), 1000),
+        partial_case_count=len(report.get("cases", [])),
+    )
+    if isinstance(getattr(exc, "evidence", None), dict):
+        report["command_failure"] = exc.evidence
+    timeout = exc if isinstance(exc, subprocess.TimeoutExpired) else exc.__cause__
+    if isinstance(timeout, subprocess.TimeoutExpired):
+        report["command_output"] = {
+            "stdout_tail": _safe_excerpt(timeout.output),
+            "stderr_tail": _safe_excerpt(timeout.stderr),
+        }
+    _mark_stage(report, stage, "FAILED")
+
+
+def _run_isolated_inference(stage: str) -> int:
     binding = json.loads(BINDING_PATH.read_bytes())
     if not isinstance(binding, dict) or binding.get("execution_mode") != "development_v2":
         raise ValueError("A0.2 V2 run binding is invalid")
-    report = _initial_report(binding)
-    stage = "INFERENCE_PROCESS_BOOTSTRAP"
-    try:
-        WORK.mkdir(parents=True, exist_ok=True)
+    if stage not in {"prepare", "infer"}:
+        raise ValueError("V2 remote stage must be prepare or infer")
+    if stage == "prepare":
         if REMOTE_REPORT.exists():
-            raise ValueError("remote A0.2 V2 report path already exists")
+            raise ValueError("remote V2 report already exists; refusing to overwrite it")
+        report = _initial_report(binding)
+        _mark_stage(report, "REMOTE_PREPARE_ENTRY", "STARTED")
+    else:
+        report = json.loads(REMOTE_REPORT.read_bytes())
+        if (
+            report.get("source", {}).get("run_id") != binding.get("run_id")
+            or report.get("status") != "READY_FOR_INFERENCE"
+        ):
+            raise ValueError("V2 inference stage is not bound to a completed prepare stage")
+        report["status"] = "RUNNING"
+        _mark_stage(report, "REMOTE_INFERENCE_ENTRY", "STARTED")
+    try:
+        stage_timeouts = binding.get("remote_stage_timeouts_seconds", {})
+        stage_timeout = stage_timeouts.get(stage)
+        if type(stage_timeout) is not int or not 30 <= stage_timeout <= 720:
+            raise ValueError("V2 remote stage timeout is invalid")
+        WORK.mkdir(parents=True, exist_ok=True)
+        _mark_stage(report, "SOURCE_ARCHIVE_VERIFY", "STARTED")
         archive_bytes = SOURCE_ARCHIVE.read_bytes()
         if hashlib.sha256(archive_bytes).hexdigest() != binding["source_archive_sha256"]:
             raise ValueError("uploaded V2 source archive hash mismatch")
-        bootstrap = WORK / "development-bootstrap-source"
-        bootstrap.mkdir(exist_ok=False)
-        a02_remote._safe_extract(SOURCE_ARCHIVE, bootstrap)
-        uv = a02_remote._install_uv()
-        inference_python = a02_remote._setup_inference(uv, bootstrap)
+        _mark_stage(report, "SOURCE_ARCHIVE_VERIFY", "COMPLETE")
+        source = WORK / f"development-source-{binding['run_id']}"
+        if stage == "prepare":
+            _mark_stage(report, "SOURCE_EXTRACTION", "STARTED")
+            source.mkdir(exist_ok=False)
+            _safe_extract(SOURCE_ARCHIVE, source)
+            _mark_stage(report, "SOURCE_EXTRACTION", "COMPLETE")
+        elif not source.is_dir():
+            raise ValueError("V2 prepared source directory is missing")
+        for path in (source, source / "src"):
+            if str(path) not in sys.path:
+                sys.path.insert(0, str(path))
+        from scripts import a02_remote
+
+        if stage == "prepare":
+            _mark_stage(report, "UV_SETUP", "STARTED")
+            uv = a02_remote._install_uv()
+            _mark_stage(report, "UV_SETUP", "COMPLETE")
+            _mark_stage(report, "SCIENTIFIC_ENGINE_DEPENDENCIES", "STARTED")
+            a02_remote._setup_engine(source, uv)
+            _mark_stage(report, "SCIENTIFIC_ENGINE_DEPENDENCIES", "COMPLETE")
+            _mark_stage(report, "INFERENCE_DEPENDENCIES", "STARTED")
+            a02_remote._setup_inference(uv, source)
+            _mark_stage(report, "INFERENCE_DEPENDENCIES", "COMPLETE")
+        else:
+            for required in (
+                WORK / "uv-venv/bin/uv",
+                source / ".venv/bin/python",
+                WORK / "inference-venv/bin/python",
+            ):
+                if not required.is_file():
+                    raise ValueError("V2 prepare artifact or pinned environment is missing")
         environment = os.environ.copy()
         environment.pop("PYTHONPATH", None)
         environment.pop("PYTHONHOME", None)
         environment["PYTHONNOUSERSITE"] = "1"
+        environment["PYTHONPATH"] = f"{source}:{source / 'src'}"
         environment["A02_DEV_V2_PINNED_PROCESS"] = "1"
-        result = subprocess.run(
-            [str(inference_python), str(bootstrap / "scripts/a02_dev_remote.py")],
-            cwd=bootstrap,
+        environment["A02_DEV_WORKER_STAGE"] = stage
+        _mark_stage(report, f"WORKER_{stage.upper()}", "STARTED")
+        child = _run_bounded_child(
+            [
+                str(WORK / "inference-venv/bin/python"),
+                str(source / "scripts/a02_dev_remote.py"),
+            ],
+            cwd=source,
             env=environment,
-            check=False,
+            timeout=max(10, stage_timeout - 30),
         )
-        if not REMOTE_REPORT.exists():
-            raise RuntimeError(f"V2 inference process exited {result.returncode} without a report")
-        return result.returncode
-    except Exception as exc:
-        if REMOTE_REPORT.exists():
+        latest = json.loads(REMOTE_REPORT.read_bytes()) if REMOTE_REPORT.is_file() else report
+        latest.setdefault("remote_stage_commands", []).append(
+            {
+                "stage": stage,
+                "returncode": child["returncode"],
+                "timed_out": child["timed_out"],
+                "stdout_tail": child["stdout_tail"],
+                "stderr_tail": child["stderr_tail"],
+                "timeout_seconds": stage_timeout - 30,
+            }
+        )
+        if child["timed_out"] or child["returncode"] != 0:
+            latest["status"] = "EXTERNAL_BLOCKER"
+            latest["failure_category"] = (
+                "TimeoutExpired" if child["timed_out"] else "RemoteWorkerExit"
+            )
+            latest["failure_message"] = f"V2 {stage} worker did not complete its bounded stage."
+            _mark_stage(
+                latest,
+                latest.get("current_stage", f"WORKER_{stage.upper()}"),
+                "TIMEOUT" if child["timed_out"] else "FAILED",
+                failure_stage=latest.get("current_stage", f"WORKER_{stage.upper()}"),
+                worker_stdout_tail=child["stdout_tail"],
+                worker_stderr_tail=child["stderr_tail"],
+            )
             return 1
-        report.update(
-            status="NO_GO",
-            failure_stage=stage,
-            failure_category=type(exc).__name__,
-            failure_message=a02_remote._sanitize(str(exc)),
-            partial_case_count=0,
-        )
-        a02_remote._write_report(report)
+        expected = "READY_FOR_INFERENCE" if stage == "prepare" else "COMPLETE"
+        if latest.get("status") != expected:
+            failure_stage = latest.get("current_stage", f"WORKER_{stage.upper()}")
+            _record_failure(
+                latest, failure_stage, RuntimeError(f"worker returned without {expected}")
+            )
+            return 1
+        report = latest
+        _mark_stage(report, f"REMOTE_{stage.upper()}", "COMPLETE")
+        return 0
+    except Exception as exc:
+        if REMOTE_REPORT.is_file():
+            try:
+                latest = json.loads(REMOTE_REPORT.read_bytes())
+                if latest.get("source", {}).get("run_id") == binding.get("run_id"):
+                    report = latest
+            except (OSError, json.JSONDecodeError):
+                pass
+        _record_failure(report, report.get("current_stage", stage.upper()), exc)
         return 1
 
 
-def _run_inference_process() -> int:
+def _run_inference_process(stage: str) -> int:
     binding = json.loads(BINDING_PATH.read_bytes())
-    report = _initial_report(binding)
+    if stage not in {"prepare", "infer"}:
+        raise ValueError("V2 worker stage must be prepare or infer")
+    report = json.loads(REMOTE_REPORT.read_bytes())
+    if report.get("source", {}).get("run_id") != binding.get("run_id"):
+        raise ValueError("V2 progress report does not match the run binding")
+    if stage == "infer" and report.get("status") != "RUNNING":
+        raise ValueError("V2 inference worker did not receive an active stage report")
+    if stage == "prepare" and report.get("status") != "RUNNING":
+        raise ValueError("V2 prepare worker did not receive an active stage report")
     engine_process: subprocess.Popen[str] | None = None
-    stage = "BINDING"
+    current_stage = "SOURCE_AND_PREFLIGHT_VALIDATION"
     try:
-        if REMOTE_REPORT.exists():
-            raise ValueError("remote A0.2 V2 report path already exists")
+        _mark_stage(report, current_stage, "STARTED")
         archive_bytes = SOURCE_ARCHIVE.read_bytes()
         if hashlib.sha256(archive_bytes).hexdigest() != binding["source_archive_sha256"]:
             raise ValueError("uploaded V2 source archive hash mismatch")
         source = WORK / f"development-source-{binding['run_id']}"
-        source.mkdir(parents=True, exist_ok=False)
-        a02_remote._safe_extract(SOURCE_ARCHIVE, source)
+        if not source.is_dir():
+            raise ValueError("V2 source extraction is missing")
         for path in (source, source / "src"):
             if str(path) not in sys.path:
                 sys.path.insert(0, str(path))
-        from scripts import a02_dev_protocol, a02_experiment
+        from scripts import a02_dev_protocol, a02_experiment, a02_remote
 
         profile_bytes = (source / "experiments/a02/development-profile-v2.json").read_bytes()
         if hashlib.sha256(profile_bytes).hexdigest() != binding["development_profile_sha256"]:
@@ -252,14 +470,15 @@ def _run_inference_process() -> int:
             raise ValueError("V2 cases or preflight do not match the frozen ten-case profile")
         if preflight.get("action_case_count") != len(case_map):
             raise ValueError("V2 preflight case count differs")
-
-        stage = "ENGINE_SETUP"
-        uv = a02_remote._install_uv()
-        engine_python = a02_remote._setup_engine(source, uv)
-        stage = "INFERENCE_SETUP"
+        _mark_stage(report, current_stage, "COMPLETE")
+        engine_python = source / ".venv/bin/python"
         inference_python = Path(sys.executable)
         if inference_python.parent.parent.resolve() != (WORK / "inference-venv").resolve():
             raise ValueError("V2 worker is not using the pinned inference environment")
+        if not engine_python.is_file():
+            raise ValueError("V2 scientific engine environment is missing")
+        current_stage = "INFERENCE_RUNTIME_DEPENDENCY_CHECK"
+        _mark_stage(report, current_stage, "STARTED")
         inference_site = a02_remote._run(
             [str(inference_python), "-c", "import site; print(site.getsitepackages()[0])"],
             cwd=source,
@@ -272,7 +491,9 @@ def _run_inference_process() -> int:
             if line and not line.startswith("#")
         }
         packages = a02_remote._package_versions(expected_packages, Path(inference_site))
-        stage = "RUNTIME_SETUP"
+        _mark_stage(report, current_stage, "COMPLETE")
+        current_stage = "GPU_RUNTIME_VALIDATION"
+        _mark_stage(report, current_stage, "STARTED")
         torch, inventory = a02_remote._runtime_gate()
         a02_remote._package_versions(expected_packages, Path(inference_site))
         torch_module = a02_remote._torch_module_inventory(torch, Path(inference_site))
@@ -294,9 +515,8 @@ def _run_inference_process() -> int:
             "runtime_inventory": inventory,
             "development_action_decoding": profile["decoding"],
         }
-        a02_remote._write_report(report)
+        _mark_stage(report, current_stage, "COMPLETE")
 
-        stage = "TOKENIZER_AND_MODEL_DOWNLOAD"
         os.environ["HF_HOME"] = str(WORK / "hf-cache")
         os.environ["HF_HUB_CACHE"] = str(WORK / "hf-cache/hub")
         os.environ["HF_HUB_DISABLE_TELEMETRY"] = "1"
@@ -312,7 +532,32 @@ def _run_inference_process() -> int:
         freeze_files = tokenizer_manifest["files"]
         if freeze_files != profile["tokenizer"]["files"]:
             raise ValueError("V2 tokenizer identity differs from the frozen V1 tokenizer")
-        weights_path, weights = a02_remote._weights(MODEL_ID, MODEL_REVISION, torch, freeze_files)
+        if stage == "prepare":
+            current_stage = "MODEL_ASSET_DOWNLOAD"
+            _mark_stage(report, current_stage, "STARTED")
+            weights_path, weights = a02_remote._weights(
+                MODEL_ID, MODEL_REVISION, torch, freeze_files
+            )
+            _mark_stage(report, current_stage, "COMPLETE")
+        else:
+            current_stage = "MODEL_ASSET_REUSE"
+            _mark_stage(report, current_stage, "STARTED")
+            assets = report.get("model_assets")
+            if not isinstance(assets, dict) or assets.get("model_revision") != MODEL_REVISION:
+                raise ValueError("V2 prepared model assets are missing or have the wrong revision")
+            weights_path = Path(assets["snapshot_path"])
+            weights = assets["weights"]
+            for item in [*weights["weight_files"], *weights["support_files"].values()]:
+                path = weights_path / item["name"]
+                if (
+                    not path.is_file()
+                    or path.stat().st_size != item["bytes"]
+                    or _file_sha256(path) != item["sha256"]
+                ):
+                    raise ValueError(f"V2 prepared model asset changed: {item['name']}")
+            _mark_stage(report, current_stage, "COMPLETE")
+        current_stage = "TOKENIZER_VERIFICATION"
+        _mark_stage(report, current_stage, "STARTED")
         tokenizer = AutoTokenizer.from_pretrained(
             weights_path,
             revision=MODEL_REVISION,
@@ -328,6 +573,24 @@ def _run_inference_process() -> int:
             raise ValueError("remote V2 tokenizer assets differ from their frozen hashes")
         if tokenizer.chat_template != (weights_path / "chat_template.jinja").read_text():
             raise ValueError("loaded SmolLM3 template differs from its frozen bytes")
+        _mark_stage(report, current_stage, "COMPLETE")
+        tokenizer_record = {
+            "tokenizer_files": tokenizer_files,
+            "chat_template_sha256": hashlib.sha256(tokenizer.chat_template.encode()).hexdigest(),
+        }
+        if stage == "prepare":
+            report["model_assets"] = {
+                "model_revision": MODEL_REVISION,
+                "snapshot_path": str(weights_path),
+                "weights": weights,
+                **tokenizer_record,
+                "model_loaded": False,
+            }
+            report["status"] = "READY_FOR_INFERENCE"
+            _mark_stage(report, "MODEL_ASSETS_VERIFIED", "COMPLETE", model_loaded=False)
+            print(json.dumps({"status": "READY_FOR_INFERENCE", "weights_verified": True}))
+            return 0
+        _mark_stage(report, current_stage, "COMPLETE")
         action_inputs = {}
         for case_id in profile["case_ids"]:
             case = case_map[case_id]
@@ -341,6 +604,8 @@ def _run_inference_process() -> int:
             )
             action_inputs[case_id] = (prompt["messages"], frozen_prompt)
 
+        current_stage = "MODEL_LOADING"
+        _mark_stage(report, current_stage, "STARTED", model_loaded=False)
         torch.cuda.reset_peak_memory_stats(0)
         model_start = time.perf_counter()
         model = AutoModelForCausalLM.from_pretrained(
@@ -365,9 +630,11 @@ def _run_inference_process() -> int:
             **weights,
         }
         report["runtime"]["weight_dtype"] = ",".join(dtypes)
-        a02_remote._write_report(report)
+        report["model_loaded"] = True
+        _mark_stage(report, current_stage, "COMPLETE", model_loaded=True)
 
-        stage = "ENGINE_PROCESS_START"
+        current_stage = "ENGINE_PROCESS_START"
+        _mark_stage(report, current_stage, "STARTED")
         engine_env = os.environ.copy()
         engine_env.pop("PYTHONHOME", None)
         engine_env["PYTHONPATH"] = f"{source}:{source / 'src'}"
@@ -382,10 +649,13 @@ def _run_inference_process() -> int:
             bufsize=1,
             env=engine_env,
         )
-        stage = "INFERENCE"
+        current_stage = "MODEL_INFERENCE"
+        _mark_stage(report, current_stage, "STARTED")
         start = time.perf_counter()
         tool = a02_dev_protocol.tool_schema()
         for case_id in profile["case_ids"]:
+            current_stage = f"GENERATION:{case_id}"
+            _mark_stage(report, current_stage, "STARTED", current_case_id=case_id)
             case = case_map[case_id]
             interaction_id = f"{binding['run_id']}:{case_id}"
             request_text = a02_remote._canonical(case["request"])
@@ -415,7 +685,7 @@ def _run_inference_process() -> int:
             }
             report["cases"].append(row)
             report["partial_case_count"] = len(report["cases"])
-            a02_remote._write_report(report)
+            _write_report(report)
             engine_response = a02_remote._engine_call(
                 engine_process,
                 {
@@ -456,10 +726,11 @@ def _run_inference_process() -> int:
             )
             row["case_status"] = "COMPLETE"
             report["partial_case_count"] = len(report["cases"])
-            a02_remote._write_report(report)
+            _mark_stage(report, current_stage, "COMPLETE", current_case_id=None)
 
         report.update(
             status="COMPLETE",
+            current_case_id=None,
             runtime_seconds=time.perf_counter() - start,
             total_prompt_tokens=sum(
                 row["action_generation"]["prompt_tokens"] + row["final_generation"]["prompt_tokens"]
@@ -473,20 +744,26 @@ def _run_inference_process() -> int:
             peak_allocated_vram_bytes=int(torch.cuda.max_memory_allocated(0)),
             peak_reserved_vram_bytes=int(torch.cuda.max_memory_reserved(0)),
         )
-        a02_remote._write_report(report)
+        _mark_stage(report, "DEVELOPMENT_RUN_COMPLETE", "COMPLETE")
         print(json.dumps({"status": "COMPLETE", "case_count": len(report["cases"])}))
         return 0
     except Exception as exc:
         report.update(
-            status="NO_GO",
-            failure_stage=stage,
+            status="EXTERNAL_BLOCKER",
+            failure_stage=current_stage,
             failure_category=type(exc).__name__,
-            failure_message=a02_remote._sanitize(str(exc)),
-            partial_case_count=len(report["cases"]),
+            failure_message=_safe_excerpt(a02_remote._sanitize(str(exc)), 1000),
+            partial_case_count=len(report.get("cases", [])),
         )
-        a02_remote._write_report(report)
+        _mark_stage(report, current_stage, "FAILED")
         print(
-            json.dumps({"status": "NO_GO", "stage": stage, "failure": type(exc).__name__}),
+            json.dumps(
+                {
+                    "status": "EXTERNAL_BLOCKER",
+                    "stage": current_stage,
+                    "failure": type(exc).__name__,
+                }
+            ),
             file=sys.stderr,
         )
         return 1
@@ -502,9 +779,12 @@ def _run_inference_process() -> int:
 
 
 def run() -> int:
-    if os.environ.get("A02_DEV_V2_PINNED_PROCESS") != "1":
-        return _run_isolated_inference()
-    return _run_inference_process()
+    stage = os.environ.get("A02_DEV_WORKER_STAGE")
+    if os.environ.get("A02_DEV_V2_PINNED_PROCESS") == "1":
+        if stage not in {"prepare", "infer"}:
+            raise ValueError("V2 worker stage is missing")
+        return _run_inference_process(stage)
+    return _run_isolated_inference(os.environ.get("A02_DEV_REMOTE_STAGE", ""))
 
 
 if __name__ == "__main__":
