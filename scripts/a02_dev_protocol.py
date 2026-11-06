@@ -281,15 +281,11 @@ def build_action_messages(request: dict[str, Any]) -> list[dict[str, str]]:
     )
 
 
-def _template_date(value: datetime):
-    return value.strftime
-
-
 def build_action_prompt(tokenizer: Any, request: dict[str, Any]) -> dict[str, Any]:
     messages = build_action_messages(request)
     kwargs = {
         "enable_thinking": False,
-        "strftime_now": _template_date(ACTION_TEMPLATE_DATE),
+        "strftime_now": ACTION_TEMPLATE_DATE.strftime,
         "xml_tools": [tool_schema()],
     }
     token_ids = tokenizer.apply_chat_template(
