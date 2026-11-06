@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import builtins
 import hashlib
+import io
 import json
 import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -305,6 +308,95 @@ def test_legacy_approval_is_read_only_and_retains_its_original_budget_baseline(
     loaded = a02_dev_execution._load_legacy_authorization()
     assert loaded["initial_compute_unit_balance"] == 87.49
     assert path.read_text() == original
+
+
+def test_campaign_approval_migrates_only_remaining_scope_without_source_binding(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    profile_sha256 = hashlib.sha256(a02_dev_protocol.PROFILE_PATH.read_bytes()).hexdigest()
+    source = {
+        "branch": "work/res-541-a02-colab-recovery",
+        "source_revision": "f" * 40,
+        "source_tree": "0" * 40,
+        "profile_sha256": profile_sha256,
+        "preflight_sha256": "1" * 64,
+        "preflight_path": tmp_path / "preflight.json",
+    }
+    runs = tmp_path / "runs"
+    runs.mkdir()
+    monkeypatch.setattr(a02_dev_execution, "RUNS_DIR", runs)
+    _prior_session(
+        runs,
+        index=1,
+        source_revision="9" * 40,
+        source_tree="8" * 40,
+        profile_sha256=profile_sha256,
+        preflight_sha256="7" * 64,
+        outcome="EXTERNAL_BLOCKER",
+    )
+    legacy_path = tmp_path / "authorization.json"
+    legacy_source = {
+        "source_revision": "9" * 40,
+        "profile_sha256": profile_sha256,
+        "preflight_sha256": "7" * 64,
+    }
+    legacy_phrase = a02_dev_execution._legacy_authorization_phrase(
+        legacy_source, {"balance": 87.49}
+    )
+    legacy: dict[str, Any] = {
+        "schema": "RES541_A02_DEVELOPMENT_CAMPAIGN_AUTHORIZATION_V1",
+        "status": "OWNER_AUTHORIZED",
+        "branch": source["branch"],
+        "source_revision": legacy_source["source_revision"],
+        "source_tree": "8" * 40,
+        "development_profile_sha256": profile_sha256,
+        "development_preflight_sha256": legacy_source["preflight_sha256"],
+        "campaign_cap_cu": 2.0,
+        "max_t4_sessions": 2,
+        "max_session_seconds": 900,
+        "max_exec_seconds": 720,
+        "no_upgrade": True,
+        "no_training": True,
+        "initial_compute_unit_balance": 87.49,
+        "owner_confirmation": legacy_phrase,
+        "owner_confirmation_sha256": hashlib.sha256(legacy_phrase.encode()).hexdigest(),
+    }
+    legacy["authorization_sha256"] = hashlib.sha256(
+        json.dumps(legacy, allow_nan=False, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    legacy_path.write_text(json.dumps(legacy))
+    auth_path = tmp_path / "campaign-authorization-v2.json"
+    quota = {
+        "balance": 87.32,
+        "usage_rate_cu_per_hour": 0.0,
+        "active_assignment_count": 0,
+        "active_sessions": [],
+        "provider_assignments": [],
+        "snapshot_sha256": "2" * 64,
+    }
+    phrase = a02_dev_execution._campaign_authorization_phrase(profile_sha256, 1.83, 1)
+    monkeypatch.setattr(a02_dev_execution, "AUTHORIZATION_PATH", auth_path)
+    monkeypatch.setattr(a02_dev_execution, "LEGACY_AUTHORIZATION_PATH", legacy_path)
+    monkeypatch.setattr(a02_dev_execution, "_source_state", lambda: source)
+    monkeypatch.setattr(a02_dev_execution, "_colab_snapshot", lambda: quota)
+    monkeypatch.setattr(a02_execution, "_check_e_mount", lambda: None)
+    monkeypatch.setattr(builtins, "input", lambda _prompt: phrase)
+
+    class Terminal(io.StringIO):
+        def isatty(self) -> bool:
+            return True
+
+    monkeypatch.setattr(sys, "stdin", Terminal())
+    monkeypatch.setattr(sys, "stdout", Terminal())
+    result = a02_dev_execution.authorize_campaign()
+    saved = json.loads(auth_path.read_bytes())
+    assert result["gpu_allocated"] is False
+    assert saved["initial_compute_unit_balance"] == 87.49
+    assert saved["remaining_cu_at_authorization"] == 1.83
+    assert saved["remaining_sessions_at_authorization"] == 1
+    assert saved["legacy_source_authorization_sha256"] == legacy["authorization_sha256"]
+    assert "source_revision" not in saved
+    assert "development_preflight_sha256" not in saved
 
 
 def test_colab_timeout_preserves_sanitized_partial_streams(
