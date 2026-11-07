@@ -1,11 +1,9 @@
 from __future__ import annotations
 
 import pytest
+from scripts.res426_verifier import generate_verifier_cases
 
-from dynamislm.qualification import (
-    RES71_SEALED_REFERENCE_DIGEST,
-    generate_verifier_cases,
-)
+from dynamislm.qualification.references import RES71_SEALED_REFERENCE_DIGEST
 
 
 def test_verifier_generator_is_reproducible_and_keeps_reference_provenance() -> None:

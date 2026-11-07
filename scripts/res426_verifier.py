@@ -1,4 +1,4 @@
-"""Deterministic RES-426 verifier-case generation from sealed synthetic references."""
+"""Deterministic RES-426 verifier utilities over the sealed RES-71 reference set."""
 
 from __future__ import annotations
 
