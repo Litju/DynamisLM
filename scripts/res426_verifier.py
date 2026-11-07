@@ -106,11 +106,20 @@ class ReferenceOutcome:
 
 @dataclass(frozen=True, slots=True)
 class VerificationResult:
+    """Outcome acceptance does not imply complete provenance identity verification.
+
+    Only listed value-verified fields have an independent expected value. Presence-only
+    fields carry no identity guarantee, even when the bounded outcome is verified.
+    """
+
     case_id: str
     verified: bool
     failure_codes: tuple[str, ...]
     reference_digest: str
     outcome_digest: str
+    provenance_value_verified_fields: tuple[str, ...] = ()
+    provenance_presence_only_fields: tuple[str, ...] = ()
+    required_provenance_values_verified: bool = False
 
 
 def _outcome_payload(outcome: ReferenceOutcome) -> dict[str, Any]:
@@ -246,12 +255,25 @@ def verify_reference_outcome(
         for field, value in observed_provenance.items()
         if field in expected_provenance and value != expected_provenance[field]
     )
+    value_verified = tuple(
+        sorted(
+            field
+            for field, value in observed_provenance.items()
+            if field in expected_provenance and value == expected_provenance[field]
+        )
+    )
     return VerificationResult(
         case_id=case.case_id,
         verified=not failures,
         failure_codes=tuple(failures),
         reference_digest=digest,
         outcome_digest=outcome_digest,
+        provenance_value_verified_fields=value_verified,
+        provenance_presence_only_fields=tuple(
+            sorted(observed_provenance.keys() - expected_provenance.keys())
+        ),
+        required_provenance_values_verified=not failures
+        and set(case.required_provenance_fields).issubset(value_verified),
     )
 
 

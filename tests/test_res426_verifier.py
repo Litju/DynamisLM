@@ -199,3 +199,61 @@ def test_tampered_provenance_values_fail_even_when_typed_output_is_correct(
     result = verify_reference_outcome(generated, tampered)
     assert result.verified is False
     assert result.failure_codes == (f"PROVENANCE_VALUE_MISMATCH:{field}",)
+
+
+def test_complete_expected_provenance_is_distinct_from_presence_only_fields() -> None:
+    generated = generate_verifier_cases(("res71-external-unit-km-to-m",))[0]
+    result = verify_reference_outcome(generated, _outcome(generated.case))
+    assert result.required_provenance_values_verified is True
+    assert result.provenance_value_verified_fields == (
+        "method_registry_version",
+        "operation_id",
+        "unit",
+    )
+    assert result.provenance_presence_only_fields == ()
+
+
+@pytest.mark.parametrize("value", ["synthetic:support", "sha256:" + "0" * 64, "forged-nonempty"])
+def test_unknown_support_identity_is_never_claimed_verified(value: str) -> None:
+    generated = generate_verifier_cases(("res71-longitudinal-absolute-change",))[0]
+    outcome = _outcome(generated.case)
+    outcome = replace(
+        outcome,
+        provenance=tuple(
+            (name, value if name == "support_hash" else original)
+            for name, original in outcome.provenance
+        ),
+    )
+    result = verify_reference_outcome(generated, outcome)
+    assert result.verified is True  # The sealed outcome matches; no support-hash oracle exists.
+    assert result.required_provenance_values_verified is False
+    assert result.provenance_value_verified_fields == ("operation_id",)
+    assert result.provenance_presence_only_fields == ("source_observation_ids", "support_hash")
+
+
+def test_missing_and_wrong_known_provenance_never_earn_identity_credit() -> None:
+    generated = generate_verifier_cases(("res71-external-unit-km-to-m",))[0]
+    for provenance in ((), (("operation_id", "forged"),)):
+        result = verify_reference_outcome(
+            generated, _outcome(generated.case, provenance=provenance)
+        )
+        assert result.verified is False
+        assert result.required_provenance_values_verified is False
+        assert result.provenance_value_verified_fields == ()
+
+
+def test_extra_provenance_does_not_gain_an_invented_oracle() -> None:
+    generated = generate_verifier_cases(("res71-external-unit-km-to-m",))[0]
+    outcome = _outcome(generated.case)
+    result = verify_reference_outcome(
+        generated, replace(outcome, provenance=(*outcome.provenance, ("source_hash", "forged")))
+    )
+    assert result.provenance_presence_only_fields == ("source_hash",)
+    assert "source_hash" not in result.provenance_value_verified_fields
+
+
+def test_duplicate_provenance_cannot_hide_a_tampered_identity() -> None:
+    generated = generate_verifier_cases(("res71-external-unit-km-to-m",))[0]
+    outcome = _outcome(generated.case)
+    with pytest.raises(ValueError, match="must be unique"):
+        replace(outcome, provenance=(*outcome.provenance, ("operation_id", "forged")))
