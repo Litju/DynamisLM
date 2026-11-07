@@ -382,11 +382,22 @@ def _run_isolated_inference(stage: str) -> int:
             }
         )
         if child["timed_out"] or child["returncode"] != 0:
-            latest["status"] = "EXTERNAL_BLOCKER"
-            latest["failure_category"] = (
+            worker_failure_category = latest.get("failure_category")
+            worker_failure_message = latest.get("failure_message")
+            controller_failure_category = (
                 "TimeoutExpired" if child["timed_out"] else "RemoteWorkerExit"
             )
-            latest["failure_message"] = f"V2 {stage} worker did not complete its bounded stage."
+            latest["controller_failure_category"] = controller_failure_category
+            latest["controller_failure_message"] = (
+                f"V2 {stage} worker did not complete its bounded stage."
+            )
+            if isinstance(worker_failure_category, str):
+                latest["worker_failure_category"] = worker_failure_category
+            if isinstance(worker_failure_message, str):
+                latest["worker_failure_message"] = worker_failure_message
+            latest["status"] = "EXTERNAL_BLOCKER"
+            latest["failure_category"] = controller_failure_category
+            latest["failure_message"] = latest["controller_failure_message"]
             _mark_stage(
                 latest,
                 latest.get("current_stage", f"WORKER_{stage.upper()}"),

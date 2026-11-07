@@ -166,6 +166,38 @@ def test_interrupted_model_download_is_retained_without_scoring(
     assert "37%" in report["remote_stage_commands"][0]["stdout_tail"]
 
 
+def test_remote_wrapper_preserves_worker_failure_detail(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    paths = _remote_fixture(tmp_path, monkeypatch)
+
+    def failed_runtime(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
+        report = json.loads(paths["report"].read_text())
+        report.update(
+            status="EXTERNAL_BLOCKER",
+            current_stage="GPU_RUNTIME_VALIDATION",
+            failure_stage="GPU_RUNTIME_VALIDATION",
+            failure_category="ValueError",
+            failure_message="RUNTIME_INCOMPATIBLE",
+        )
+        a02_dev_remote._write_report(report)
+        return {
+            "returncode": 1,
+            "timed_out": False,
+            "stdout_tail": "",
+            "stderr_tail": '{"failure":"ValueError"}',
+        }
+
+    monkeypatch.setattr(a02_dev_remote, "_run_bounded_child", failed_runtime)
+    assert a02_dev_remote._run_isolated_inference("prepare") == 1
+    report = json.loads(paths["report"].read_text())
+    assert report["failure_category"] == "RemoteWorkerExit"
+    assert report["failure_message"] == "V2 prepare worker did not complete its bounded stage."
+    assert report["worker_failure_category"] == "ValueError"
+    assert report["worker_failure_message"] == "RUNTIME_INCOMPATIBLE"
+    assert report["controller_failure_category"] == "RemoteWorkerExit"
+
+
 @pytest.mark.parametrize("partial", [False, True])
 def test_missing_or_partial_worker_report_cannot_become_ready(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, partial: bool
