@@ -17,6 +17,11 @@ from dynamislm.qualification.gate import (
     build_gate_runtime_evidence,
     validate_gate_receipt,
 )
+from dynamislm.qualification.generator import (
+    VERIFIER_GENERATOR_SCHEMA,
+    GeneratedVerifierCase,
+    generate_verifier_cases,
+)
 from dynamislm.qualification.inventory import (
     RES71_REGISTRY_VERSION,
     build_coverage_matrix,
@@ -43,9 +48,11 @@ __all__ = [
     "RES71_REFERENCE_INTERFACE_VERSION",
     "RES71_REGISTRY_VERSION",
     "RES71_SEALED_REFERENCE_DIGEST",
+    "VERIFIER_GENERATOR_SCHEMA",
     "CoverageRow",
     "CoverageStatus",
     "GateComponentStatus",
+    "GeneratedVerifierCase",
     "OperationDisposition",
     "ReferenceCase",
     "ReferenceCaseStatus",
@@ -57,6 +64,7 @@ __all__ = [
     "build_registered_operation_inventory",
     "build_unresolved_computation_inventory",
     "discovered_registered_operation_ids",
+    "generate_verifier_cases",
     "get_reference_case",
     "get_reference_cases",
     "reference_case_digest",
