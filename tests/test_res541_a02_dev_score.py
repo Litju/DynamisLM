@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import sys
+from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -15,6 +18,47 @@ from scripts import (
     a02_prompt,
     a02_remote,
 )
+
+
+def _inventory() -> dict[str, Any]:
+    return {
+        "python": {
+            "version": "3.13.18",
+            "implementation": "CPython",
+            "full_version": "CPython 3.13.18",
+            "system": "Linux",
+            "machine": "x86_64",
+            "soabi": "cpython-313-x86_64-linux-gnu",
+            "extension_suffix": ".cpython-313-x86_64-linux-gnu.so",
+        },
+        "torch": {
+            "module_imported": True,
+            "version": "2.11.0+cu130",
+            "distribution_version": "2.11.0+cu130",
+            "cuda_runtime": "13.0",
+            "transformers_requirements": ["torch>=2.1"],
+            "transformers_requirements_satisfied": True,
+            "module_origin": "/system/torch/__init__.py",
+            "distribution_origin": "/system",
+            "extension_origin": "/system/torch/_C.cpython-313-x86_64-linux-gnu.so",
+            "inference_site": "/inference",
+            "inherited_system_sites": ["/system"],
+            "cxx11_abi": True,
+        },
+        "cuda": {
+            "available": True,
+            "device_count": 1,
+            "name": "Tesla T4",
+            "uuid": "GPU-synthetic",
+            "compute_capability": [7, 5],
+            "total_vram_bytes": 16 * 1024**3,
+            "free_vram_bytes": 10 * 1024**3,
+            "allocated_vram_bytes": 0,
+            "reserved_vram_bytes": 0,
+        },
+        "driver_inventory": "GPU-synthetic, driver 999.1, Tesla T4",
+        "inventory_errors": {},
+    }
 
 
 def _generation(
@@ -167,6 +211,12 @@ def _synthetic_report(
             "tokenizer_revision": profile["tokenizer"]["revision"],
             "tokenizer_files": profile["tokenizer"]["files"],
         },
+        "runtime": {
+            "runtime_inventory": _inventory(),
+            "runtime_qualification": a02_dev_runtime.qualify(
+                _inventory(), {"attempted": True, "passed": True, "observed": "synthetic smoke"}
+            ),
+        },
         "partial_case_count": len(cases),
         "cases": cases,
     }
@@ -190,6 +240,25 @@ def test_standalone_score_rejects_missing_or_changed_runtime_policy(
             remote_report_sha256="synthetic",
             preflight_sha256="synthetic",
         )
+
+
+def test_file_replay_rejects_unqualified_report_without_writing_score(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(a02_dev_score, "E_ROOT", tmp_path)
+    monkeypatch.setitem(
+        sys.modules,
+        "transformers",
+        SimpleNamespace(AutoTokenizer=SimpleNamespace(from_pretrained=lambda *a, **k: None)),
+    )
+    remote = tmp_path / "remote.json"
+    preflight = tmp_path / "preflight.json"
+    output = tmp_path / "score.json"
+    remote.write_text(json.dumps({"source": a02_dev_runtime.policy_binding()}))
+    preflight.write_text("{}")
+    with pytest.raises(ValueError, match="runtime evidence is missing"):
+        a02_dev_score.verify_files(remote, preflight, output)
+    assert not output.exists()
 
 
 @pytest.mark.skipif(

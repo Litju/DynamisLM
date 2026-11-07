@@ -130,6 +130,27 @@ def _verify_generation(
     }
 
 
+def _verify_runtime(remote: dict[str, Any]) -> dict[str, Any]:
+    a02_dev_runtime.validate_binding(remote.get("source", {}))
+    runtime = remote.get("runtime")
+    if not isinstance(runtime, dict):
+        raise ValueError("V2 runtime evidence is missing")
+    qualification = runtime.get("runtime_qualification")
+    inventory = runtime.get("runtime_inventory")
+    if not isinstance(qualification, dict) or qualification.get("qualified") is not True:
+        raise ValueError("V2 runtime qualification must explicitly pass")
+    a02_dev_runtime.validate_binding(qualification)
+    if not isinstance(inventory, dict) or not isinstance(qualification.get("cuda_smoke"), dict):
+        raise ValueError("V2 runtime inventory or CUDA smoke is missing")
+    try:
+        replay = a02_dev_runtime.qualify(inventory, qualification["cuda_smoke"])
+    except (KeyError, TypeError, AttributeError) as exc:
+        raise ValueError("V2 runtime qualification evidence is malformed") from exc
+    if replay["qualified"] is not True or canonical(replay) != canonical(qualification):
+        raise ValueError("V2 runtime qualification differs from CPU replay")
+    return replay
+
+
 def score_report(
     remote: dict[str, Any],
     preflight: dict[str, Any],
@@ -138,7 +159,7 @@ def score_report(
     remote_report_sha256: str,
     preflight_sha256: str,
 ) -> dict[str, Any]:
-    a02_dev_runtime.validate_binding(remote.get("source", {}))
+    qualification = _verify_runtime(remote)
     profile = a02_dev_protocol.load_profile()
     profile_sha = sha256(a02_dev_protocol.PROFILE_PATH.read_bytes())
     if (
@@ -450,6 +471,7 @@ def score_report(
         "preflight_sha256": preflight_sha256,
         "source_revision": remote["source"]["revision"],
         "source_tree": remote["source"]["tree"],
+        "runtime_qualification": qualification,
         "model_id": model["id"],
         "model_revision": model["revision"],
         "metrics": {
@@ -512,6 +534,7 @@ def score_report(
         "limitations": [
             "Ten exposed synthetic development cases only; no benchmark or generalization claim.",
             "Raw model final quality is reported separately from deterministic rendering.",
+            "CPU runtime replay checks evidence consistency; it cannot attest GPU execution.",
             "The prospective campaign has not run until its one-time budget is owner-authorized.",
         ],
         "case_results": results,

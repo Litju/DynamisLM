@@ -8,7 +8,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
-from scripts import a02_dev_runtime
+from scripts import a02_dev_runtime, a02_dev_score
 
 
 def _inventory() -> dict[str, Any]:
@@ -288,3 +288,48 @@ def test_inventory_records_python_torch_cuda_driver_and_memory(
     assert observed["cuda"]["free_vram_bytes"] == 10 * 1024**3
     assert observed["cuda"]["allocated_vram_bytes"] == 64
     assert observed["driver_inventory"].startswith("GPU-synthetic")
+
+
+def _runtime_report() -> dict[str, Any]:
+    inventory = _inventory()
+    return {
+        "source": a02_dev_runtime.policy_binding(),
+        "runtime": {
+            "runtime_inventory": inventory,
+            "runtime_qualification": a02_dev_runtime.qualify(
+                inventory, {"attempted": True, "passed": True, "observed": "ok"}
+            ),
+        },
+    }
+
+
+def test_cpu_scorer_replays_complete_runtime_qualification() -> None:
+    report = _runtime_report()
+    assert a02_dev_score._verify_runtime(report) == report["runtime"]["runtime_qualification"]
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        lambda r: r.pop("runtime"),
+        lambda r: r["runtime"].pop("runtime_inventory"),
+        lambda r: r["runtime"].pop("runtime_qualification"),
+        lambda r: r["runtime"]["runtime_qualification"].pop("qualified"),
+        lambda r: r["runtime"]["runtime_qualification"].update(qualified=False),
+        lambda r: r["runtime"]["runtime_qualification"].update(qualified=1),
+        lambda r: r["runtime"]["runtime_qualification"].update(runtime_policy_sha256="forged"),
+        lambda r: r["runtime"]["runtime_qualification"].update(runtime_policy_id="forged"),
+        lambda r: r["runtime"]["runtime_qualification"].update(requirements=[]),
+        lambda r: r["runtime"]["runtime_qualification"].update(failed_requirements=["forged"]),
+        lambda r: r["runtime"]["runtime_qualification"]["cuda_smoke"].update(passed=False),
+        lambda r: r["runtime"]["runtime_inventory"]["cuda"].update(name="A100"),
+        lambda r: r["runtime"]["runtime_inventory"].pop("python"),
+    ],
+)
+def test_cpu_scorer_rejects_tampered_or_missing_qualification(change: Any) -> None:
+    report = _runtime_report()
+    change(report)
+    with pytest.raises(ValueError, match="V2 runtime"):
+        a02_dev_score.score_report(
+            report, {}, None, remote_report_sha256="synthetic", preflight_sha256="synthetic"
+        )
