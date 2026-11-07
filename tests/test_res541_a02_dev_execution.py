@@ -451,7 +451,14 @@ def test_followup_authorization_rejects_a_rebudgeted_receipt(
         a02_dev_execution._load_followup_authorization(base, source, quota, markers)
 
 
-def test_followup_does_not_authorize_a_fourth_session() -> None:
+def test_followup_does_not_authorize_a_fourth_session(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        a02_dev_execution,
+        "NEXT_AUTHORIZATION_PATH",
+        tmp_path / "session-004-authorization-v1.json",
+    )
     authorization = {
         "initial_compute_unit_balance": 87.49,
         "account_balance_at_authorization": 87.32,
