@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from scripts import a02_dev_execution, a02_dev_protocol, a02_execution
+from scripts import a02_dev_execution, a02_dev_protocol, a02_dev_runtime, a02_execution
 
 
 def test_run_refuses_missing_one_time_authorization_before_colab_calls(
@@ -90,6 +90,31 @@ def test_campaign_budget_counts_original_usage_and_rejects_topups_or_exhaustion(
         a02_dev_execution._campaign_budget(authorization, 87.40)
     with pytest.raises(a02_dev_execution.DevelopmentRunError, match="exhausted"):
         a02_dev_execution._campaign_budget(authorization, 85.39)
+
+
+def test_recovered_remote_report_must_match_runtime_policy_binding() -> None:
+    policy = a02_dev_runtime.policy_binding()
+    source = {
+        "source_revision": "a" * 40,
+        "source_tree": "b" * 40,
+        "profile_sha256": "c" * 64,
+        "preflight_sha256": "d" * 64,
+        **policy,
+    }
+    report = {
+        "source": {
+            "run_id": "run",
+            "revision": source["source_revision"],
+            "tree": source["source_tree"],
+            "development_profile_sha256": source["profile_sha256"],
+            "development_preflight_sha256": source["preflight_sha256"],
+            **policy,
+        }
+    }
+
+    assert a02_dev_execution._remote_report_matches(report, "run", source)
+    report["source"]["runtime_policy_sha256"] = "0" * 64
+    assert not a02_dev_execution._remote_report_matches(report, "run", source)
 
 
 def _prior_session(

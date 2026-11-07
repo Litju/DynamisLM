@@ -23,9 +23,12 @@ def _inventory() -> dict[str, Any]:
             "extension_suffix": ".cpython-313-x86_64-linux-gnu.so",
         },
         "torch": {
+            "module_imported": True,
             "version": "2.11.0+cu130",
             "distribution_version": "2.11.0+cu130",
             "cuda_runtime": "13.0",
+            "transformers_requirements": ["torch>=2.1"],
+            "transformers_requirements_satisfied": True,
             "module_origin": "/system/torch/__init__.py",
             "distribution_origin": "/system",
             "extension_origin": "/system/torch/_C.cpython-313-x86_64-linux-gnu.so",
@@ -55,6 +58,15 @@ def test_runtime_policy_is_versioned_and_bound() -> None:
     assert a02_dev_runtime.POLICY["schema"] == "RES541_A02_RUNTIME_POLICY_V1"
     assert binding["runtime_policy_id"] == a02_dev_runtime.POLICY["id"]
     assert len(binding["runtime_policy_sha256"]) == 64
+
+
+@pytest.mark.parametrize("key", ["runtime_policy_id", "runtime_policy_sha256"])
+def test_runtime_binding_rejects_policy_drift(key: str) -> None:
+    binding = a02_dev_runtime.policy_binding()
+    binding[key] = "unreviewed"
+
+    with pytest.raises(ValueError, match=f"binding mismatch for {key}"):
+        a02_dev_runtime.validate_binding(binding)
 
 
 def test_qualification_accepts_capability_checks_and_records_unchecked_versions() -> None:
@@ -107,6 +119,11 @@ def test_qualification_accepts_capability_checks_and_records_unchecked_versions(
             "torch_distribution_version",
             lambda row: row["torch"].update(distribution_version="2.10.0+cu130"),
         ),
+        (
+            "torch_framework_requirements",
+            lambda row: row["torch"].update(transformers_requirements_satisfied=False),
+        ),
+        ("torch_import", lambda row: row["torch"].update(module_imported=False)),
         (
             "torch_module_origin",
             lambda row: row["torch"].update(module_origin="/other/torch.py"),
@@ -225,9 +242,10 @@ def test_runtime_qualification_error_preserves_field_level_diagnostics() -> None
 def test_inventory_records_python_torch_cuda_driver_and_memory(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    distribution = SimpleNamespace(
+    torch_distribution = SimpleNamespace(
         version="2.11.0+cu130", locate_file=lambda _name: Path("/system")
     )
+    transformers_distribution = SimpleNamespace(requires=['torch>=2.1; extra == "torch"'])
     props = SimpleNamespace(name="Tesla T4", uuid="GPU-synthetic")
     torch = SimpleNamespace(
         __version__="2.11.0+cu130",
@@ -247,7 +265,11 @@ def test_inventory_records_python_torch_cuda_driver_and_memory(
             memory_reserved=lambda _index: 128,
         ),
     )
-    monkeypatch.setattr(importlib.metadata, "distribution", lambda _name: distribution)
+    monkeypatch.setattr(
+        importlib.metadata,
+        "distribution",
+        lambda name: torch_distribution if name == "torch" else transformers_distribution,
+    )
     monkeypatch.setattr(site, "getsitepackages", lambda: ["/system", "/inference"])
     monkeypatch.setattr(
         subprocess,
@@ -261,6 +283,8 @@ def test_inventory_records_python_torch_cuda_driver_and_memory(
     assert observed["torch"]["module_origin"] == "/system/torch/__init__.py"
     assert observed["torch"]["extension_origin"].endswith(".cpython-313-x86_64-linux-gnu.so")
     assert observed["torch"]["cxx11_abi"] is True
+    assert observed["torch"]["transformers_requirements"] == ['torch>=2.1; extra == "torch"']
+    assert observed["torch"]["transformers_requirements_satisfied"] is True
     assert observed["cuda"]["free_vram_bytes"] == 10 * 1024**3
     assert observed["cuda"]["allocated_vram_bytes"] == 64
     assert observed["driver_inventory"].startswith("GPU-synthetic")

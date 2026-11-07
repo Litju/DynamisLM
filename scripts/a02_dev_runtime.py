@@ -44,6 +44,16 @@ def policy_binding() -> dict[str, str]:
     }
 
 
+def validate_binding(binding: dict[str, Any]) -> None:
+    for key, expected in policy_binding().items():
+        observed = binding.get(key)
+        if observed != expected:
+            raise ValueError(
+                f"V2 runtime policy binding mismatch for {key}: "
+                f"expected {expected!r}, observed {observed!r}"
+            )
+
+
 def _path(value: Any) -> str | None:
     try:
         return str(Path(value).resolve()) if isinstance(value, str) else None
@@ -56,9 +66,37 @@ def inventory(torch: Any | None, inference_site: Path) -> dict[str, Any]:
     distribution_error: str | None = None
     try:
         distribution = importlib.metadata.distribution("torch")
-    except importlib.metadata.PackageNotFoundError as exc:
+    except Exception as exc:
         distribution = None
-        distribution_error = type(exc).__name__
+        distribution_error = f"{type(exc).__name__}: {str(exc)[:500]}"
+    framework_requirements: list[str] = []
+    framework_requirements_satisfied = False
+    framework_requirement_error: str | None = None
+    try:
+        from packaging.requirements import Requirement
+        from packaging.version import Version
+
+        framework = importlib.metadata.distribution("transformers")
+        # V2 uses the PyTorch backend explicitly, so evaluate Transformers' torch extra.
+        framework_requirements = [
+            raw
+            for raw in framework.requires or []
+            if (requirement := Requirement(raw)).name.casefold() == "torch"
+            and (requirement.marker is None or requirement.marker.evaluate({"extra": "torch"}))
+        ]
+        framework_requirements_satisfied = (
+            bool(framework_requirements)
+            and all(
+                Requirement(raw).specifier.contains(Version(distribution.version), prereleases=True)
+                for raw in framework_requirements
+            )
+            if distribution is not None
+            else False
+        )
+        if not framework_requirements:
+            framework_requirement_error = "Transformers declares no active PyTorch requirement"
+    except Exception as exc:
+        framework_requirement_error = f"{type(exc).__name__}: {str(exc)[:500]}"
     torch_module = getattr(torch, "_C", None)
     cuda: dict[str, Any] = {
         "available": None,
@@ -134,9 +172,12 @@ def inventory(torch: Any | None, inference_site: Path) -> dict[str, Any]:
             "debug_build": sysconfig.get_config_var("Py_DEBUG"),
         },
         "torch": {
+            "module_imported": torch is not None,
             "version": str(torch.__version__) if torch is not None else None,
             "distribution_version": distribution.version if distribution is not None else None,
             "cuda_runtime": getattr(getattr(torch, "version", None), "cuda", None),
+            "transformers_requirements": framework_requirements,
+            "transformers_requirements_satisfied": framework_requirements_satisfied,
             "module_origin": origin,
             "distribution_origin": distribution_origin,
             "extension_origin": extension_origin,
@@ -148,7 +189,13 @@ def inventory(torch: Any | None, inference_site: Path) -> dict[str, Any]:
         "driver_inventory": driver_inventory,
         "inventory_errors": {
             **inventory_errors,
+            **({"torch_import": "PyTorch import failed"} if torch is None else {}),
             **({"torch_distribution": distribution_error} if distribution_error else {}),
+            **(
+                {"transformers_torch_requirements": framework_requirement_error}
+                if framework_requirement_error
+                else {}
+            ),
         },
     }
 
@@ -236,12 +283,22 @@ def qualify(observed: dict[str, Any], smoke: dict[str, Any]) -> dict[str, Any]:
     )
     torch_version = torch.get("version")
     distribution_version = torch.get("distribution_version")
+    imported = torch.get("module_imported")
+    check("torch_import", True, imported, imported is True)
     check(
         "torch_distribution_version",
         "same as loaded PyTorch module",
         distribution_version,
         isinstance(torch_version, str) and torch_version == distribution_version,
         "integrity",
+    )
+    framework_requirements = torch.get("transformers_requirements")
+    framework_ok = torch.get("transformers_requirements_satisfied")
+    check(
+        "torch_framework_requirements",
+        f"PyTorch satisfies {framework_requirements}",
+        torch_version,
+        framework_ok is True,
     )
     check(
         "torch_module_origin",
@@ -312,8 +369,8 @@ def qualify(observed: dict[str, Any], smoke: dict[str, Any]) -> dict[str, Any]:
     )
     check("cuda_smoke", required["cuda_smoke"], smoke.get("observed"), smoke.get("passed") is True)
     failures = [check for check in outcomes if not check["passed"]]
-    failures = [check for check in outcomes if not check["passed"]]
     provenance = {
+        "python_version": python_version,
         "python_full_version": python.get("full_version"),
         "python_build": python.get("build"),
         "python_compiler": python.get("compiler"),
@@ -323,6 +380,7 @@ def qualify(observed: dict[str, Any], smoke: dict[str, Any]) -> dict[str, Any]:
         "debug_build": python.get("debug_build"),
         "torch_version": torch.get("version"),
         "torch_cuda_runtime": torch.get("cuda_runtime"),
+        "transformers_torch_requirements": framework_requirements,
         "torch_module_origin": module_origin,
         "torch_distribution_origin": distribution_origin,
         "torch_extension_origin": extension_origin,

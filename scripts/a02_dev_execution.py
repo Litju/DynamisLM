@@ -18,7 +18,13 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from scripts import a02_dev_protocol, a02_dev_remote, a02_dev_score, a02_execution
+from scripts import (
+    a02_dev_protocol,
+    a02_dev_remote,
+    a02_dev_runtime,
+    a02_dev_score,
+    a02_execution,
+)
 
 ROOT = a02_execution.ROOT
 E_ROOT = a02_execution.E_ROOT
@@ -151,6 +157,13 @@ def _remote_report_matches(report: object, run_id: str, source: dict[str, Any]) 
         and bound.get("tree") == source["source_tree"]
         and bound.get("development_profile_sha256") == source["profile_sha256"]
         and bound.get("development_preflight_sha256") == source["preflight_sha256"]
+        and (
+            "runtime_policy_sha256" not in source
+            or (
+                bound.get("runtime_policy_id") == source["runtime_policy_id"]
+                and bound.get("runtime_policy_sha256") == source["runtime_policy_sha256"]
+            )
+        )
     )
 
 
@@ -334,6 +347,7 @@ def _source_state() -> dict[str, Any]:
         "preflight": preflight,
         "preflight_sha256": _sha(preflight_bytes),
         "profile_sha256": _sha(a02_dev_protocol.PROFILE_PATH.read_bytes()),
+        **a02_dev_runtime.policy_binding(),
     }
 
 
@@ -1117,6 +1131,8 @@ def run_campaign_session() -> dict[str, Any]:
         "protocol_sha256": _sha(protocol_bytes),
         "development_profile_sha256": source["profile_sha256"],
         "development_preflight_sha256": source["preflight_sha256"],
+        "runtime_policy_id": source["runtime_policy_id"],
+        "runtime_policy_sha256": source["runtime_policy_sha256"],
         "baseline_remote_report_sha256": a02_dev_protocol.load_profile()["baseline"][
             "remote_report_sha256"
         ],

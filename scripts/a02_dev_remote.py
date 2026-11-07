@@ -5,7 +5,6 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import platform
 import re
 import signal
 import subprocess
@@ -152,6 +151,8 @@ def _initial_report(binding: dict[str, Any]) -> dict[str, Any]:
             "preflight_sha256": binding["development_preflight_sha256"],
             "development_profile_sha256": binding["development_profile_sha256"],
             "development_preflight_sha256": binding["development_preflight_sha256"],
+            "runtime_policy_id": binding["runtime_policy_id"],
+            "runtime_policy_sha256": binding["runtime_policy_sha256"],
             "baseline_remote_report_sha256": binding["baseline_remote_report_sha256"],
         },
     }
@@ -306,12 +307,27 @@ def _run_isolated_inference(stage: str) -> int:
         report = _initial_report(binding)
         _mark_stage(report, "REMOTE_PREPARE_ENTRY", "STARTED")
     else:
+        if not REMOTE_REPORT.exists():
+            report = _initial_report(binding)
+            _record_failure(
+                report,
+                "INFERENCE_PREPARE_VALIDATION",
+                ValueError("V2 inference stage has no completed prepare report"),
+            )
+            return 1
         report = json.loads(REMOTE_REPORT.read_bytes())
-        if (
-            report.get("source", {}).get("run_id") != binding.get("run_id")
-            or report.get("status") != "READY_FOR_INFERENCE"
-        ):
-            raise ValueError("V2 inference stage is not bound to a completed prepare stage")
+        if not isinstance(report, dict) or not isinstance(report.get("source"), dict):
+            raise ValueError("V2 inference prepare report is invalid")
+        if report["source"].get("run_id") != binding.get("run_id"):
+            raise ValueError("V2 inference prepare report does not match the run binding")
+        if report.get("status") != "READY_FOR_INFERENCE":
+            if report.get("status") not in {"EXTERNAL_BLOCKER", "COMPLETE"}:
+                _record_failure(
+                    report,
+                    "INFERENCE_PREPARE_VALIDATION",
+                    ValueError("V2 inference stage is not bound to a completed prepare stage"),
+                )
+            return 1
         report["status"] = "RUNNING"
         _mark_stage(report, "REMOTE_INFERENCE_ENTRY", "STARTED")
     try:
@@ -453,7 +469,9 @@ def _run_inference_process(stage: str) -> int:
         for path in (source, source / "src"):
             if str(path) not in sys.path:
                 sys.path.insert(0, str(path))
-        from scripts import a02_dev_protocol, a02_experiment, a02_remote
+        from scripts import a02_dev_protocol, a02_dev_runtime, a02_experiment, a02_remote
+
+        a02_dev_runtime.validate_binding(binding)
 
         profile_bytes = (source / "experiments/a02/development-profile-v2.json").read_bytes()
         if hashlib.sha256(profile_bytes).hexdigest() != binding["development_profile_sha256"]:
@@ -516,30 +534,50 @@ def _run_inference_process(stage: str) -> int:
             if line and not line.startswith("#")
         }
         packages = a02_remote._package_versions(expected_packages, Path(inference_site))
+        scientific_engine_python = a02_remote._run(
+            [str(engine_python), "-c", "import platform; print(platform.python_version())"],
+            cwd=source,
+        ).strip()
         _mark_stage(report, current_stage, "COMPLETE")
         current_stage = "GPU_RUNTIME_VALIDATION"
         _mark_stage(report, current_stage, "STARTED")
-        torch, inventory = a02_remote._runtime_gate()
-        a02_remote._package_versions(expected_packages, Path(inference_site))
-        torch_module = a02_remote._torch_module_inventory(torch, Path(inference_site))
+        torch_import_error: str | None = None
+        try:
+            import torch  # type: ignore[import-not-found]
+        except Exception as exc:
+            torch = None
+            torch_import_error = f"{type(exc).__name__}: {str(exc)[:500]}"
+        inventory = a02_dev_runtime.inventory(torch, Path(inference_site))
+        if torch_import_error is not None:
+            inventory["inventory_errors"]["torch_import"] = torch_import_error
+        smoke = a02_dev_runtime.cuda_smoke(torch, inventory)
+        qualification = a02_dev_runtime.qualify(inventory, smoke)
+        torch_record = inventory["torch"]
+        cuda_record = inventory["cuda"]
         report["runtime"] = {
             "model_python": sys.version,
-            "model_python_version": platform.python_version(),
-            "scientific_engine_python": a02_remote._run(
-                [str(engine_python), "-c", "import platform; print(platform.python_version())"],
-                cwd=source,
-            ).strip(),
-            "torch": str(torch.__version__),
-            "torch_module": torch_module,
-            "torch_cuda_runtime": torch.version.cuda,
+            "model_python_version": inventory["python"]["version"],
+            "scientific_engine_python": scientific_engine_python,
+            "torch": torch_record["version"],
+            "torch_module": {
+                "version": torch_record["version"],
+                "distribution_version": torch_record["distribution_version"],
+                "origin": torch_record["module_origin"],
+                "distribution_origin": torch_record["distribution_origin"],
+            },
+            "torch_cuda_runtime": torch_record["cuda_runtime"],
             "packages": packages,
-            "gpu_name": torch.cuda.get_device_name(0),
-            "compute_capability": list(torch.cuda.get_device_capability(0)),
-            "total_vram_bytes": int(torch.cuda.get_device_properties(0).total_memory),
-            "free_vram_before_weights_bytes": int(torch.cuda.mem_get_info(0)[0]),
+            "gpu_name": cuda_record["name"],
+            "compute_capability": cuda_record["compute_capability"],
+            "total_vram_bytes": cuda_record["total_vram_bytes"],
+            "free_vram_before_weights_bytes": cuda_record["free_vram_bytes"],
             "runtime_inventory": inventory,
+            "runtime_qualification": qualification,
             "development_action_decoding": profile["decoding"],
         }
+        _write_report(report)
+        if not qualification["qualified"]:
+            raise a02_dev_runtime.RuntimeQualificationError(qualification)
         _mark_stage(report, current_stage, "COMPLETE")
 
         os.environ["HF_HOME"] = str(WORK / "hf-cache")

@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from scripts import a02_dev_protocol, a02_dev_remote, a02_remote
+from scripts import a02_dev_protocol, a02_dev_remote, a02_dev_runtime, a02_remote
 
 
 def test_remote_generator_passes_native_tool_schema_and_enforces_profile_prompt_limit() -> None:
@@ -71,6 +71,7 @@ def _remote_fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str
         "development_profile_sha256": "d" * 64,
         "development_preflight_sha256": "e" * 64,
         "baseline_remote_report_sha256": "f" * 64,
+        **a02_dev_runtime.policy_binding(),
         "remote_stage_timeouts_seconds": {"prepare": 120, "infer": 90},
     }
     binding_path.write_text(json.dumps(binding))
@@ -91,6 +92,79 @@ def _remote_fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str
     inference_python.touch()
     monkeypatch.setattr(a02_remote, "_setup_inference", lambda *_args: inference_python)
     return {"work": work, "archive": archive, "report": report, "binding": binding}
+
+
+def _ready_prepare_report(paths: dict[str, Any]) -> dict[str, Any]:
+    report = a02_dev_remote._initial_report(paths["binding"])
+    report["status"] = "READY_FOR_INFERENCE"
+    a02_dev_remote._write_report(report)
+    return report
+
+
+def test_inference_without_prepare_report_checkpoints_a_specific_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    paths = _remote_fixture(tmp_path, monkeypatch)
+
+    assert a02_dev_remote._run_isolated_inference("infer") == 1
+    report = json.loads(paths["report"].read_text())
+
+    assert report["status"] == "EXTERNAL_BLOCKER"
+    assert report["failure_stage"] == "INFERENCE_PREPARE_VALIDATION"
+    assert report["failure_message"] == "V2 inference stage has no completed prepare report"
+
+
+@pytest.mark.parametrize("prepared_status", ["RUNNING", "EXTERNAL_BLOCKER"])
+def test_inference_rejects_incomplete_prepare_without_losing_existing_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, prepared_status: str
+) -> None:
+    paths = _remote_fixture(tmp_path, monkeypatch)
+    report = a02_dev_remote._initial_report(paths["binding"])
+    report["status"] = prepared_status
+    if prepared_status == "EXTERNAL_BLOCKER":
+        report.update(
+            failure_stage="GPU_RUNTIME_VALIDATION", failure_message="specific runtime fault"
+        )
+    a02_dev_remote._write_report(report)
+
+    assert a02_dev_remote._run_isolated_inference("infer") == 1
+    recovered = json.loads(paths["report"].read_text())
+
+    assert recovered["status"] == "EXTERNAL_BLOCKER"
+    if prepared_status == "RUNNING":
+        assert recovered["failure_stage"] == "INFERENCE_PREPARE_VALIDATION"
+        assert "completed prepare" in recovered["failure_message"]
+    else:
+        assert recovered["failure_stage"] == "GPU_RUNTIME_VALIDATION"
+        assert recovered["failure_message"] == "specific runtime fault"
+
+
+def test_completed_prepare_can_enter_inference_stage_without_gpu_in_cpu_rehearsal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    paths = _remote_fixture(tmp_path, monkeypatch)
+    _ready_prepare_report(paths)
+    source = paths["work"] / f"development-source-{paths['binding']['run_id']}"
+    for path in (
+        source / ".venv/bin/python",
+        paths["work"] / "uv-venv/bin/uv",
+        paths["work"] / "inference-venv/bin/python",
+    ):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.touch()
+
+    def complete_inference(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
+        current = json.loads(paths["report"].read_text())
+        current["status"] = "COMPLETE"
+        a02_dev_remote._write_report(current)
+        return {"returncode": 0, "timed_out": False, "stdout_tail": "", "stderr_tail": ""}
+
+    monkeypatch.setattr(a02_dev_remote, "_run_bounded_child", complete_inference)
+
+    assert a02_dev_remote._run_isolated_inference("infer") == 0
+    completed = json.loads(paths["report"].read_text())
+    assert completed["status"] == "COMPLETE"
+    assert completed["last_completed_stage"] == "REMOTE_INFER"
 
 
 def test_remote_prepare_timeout_retains_bootstrap_stage(
@@ -177,15 +251,29 @@ def test_remote_wrapper_preserves_worker_failure_detail(
             status="EXTERNAL_BLOCKER",
             current_stage="GPU_RUNTIME_VALIDATION",
             failure_stage="GPU_RUNTIME_VALIDATION",
-            failure_category="ValueError",
-            failure_message="RUNTIME_INCOMPATIBLE",
+            failure_category="RuntimeQualificationError",
+            failure_message=(
+                "V2 runtime qualification failed: free_vram_bytes: "
+                "expected '>= 8589934592', observed 1048576"
+            ),
+            runtime_qualification={
+                "schema": "RES541_A02_RUNTIME_QUALIFICATION_V1",
+                "qualified": False,
+                "failed_requirements": [
+                    {
+                        "name": "free_vram_bytes",
+                        "expected": ">= 8589934592",
+                        "observed": 1048576,
+                    }
+                ],
+            },
         )
         a02_dev_remote._write_report(report)
         return {
             "returncode": 1,
             "timed_out": False,
             "stdout_tail": "",
-            "stderr_tail": '{"failure":"ValueError"}',
+            "stderr_tail": '{"failure":"RuntimeQualificationError"}',
         }
 
     monkeypatch.setattr(a02_dev_remote, "_run_bounded_child", failed_runtime)
@@ -193,9 +281,33 @@ def test_remote_wrapper_preserves_worker_failure_detail(
     report = json.loads(paths["report"].read_text())
     assert report["failure_category"] == "RemoteWorkerExit"
     assert report["failure_message"] == "V2 prepare worker did not complete its bounded stage."
-    assert report["worker_failure_category"] == "ValueError"
-    assert report["worker_failure_message"] == "RUNTIME_INCOMPATIBLE"
+    assert report["worker_failure_category"] == "RuntimeQualificationError"
+    assert "free_vram_bytes" in report["worker_failure_message"]
     assert report["controller_failure_category"] == "RemoteWorkerExit"
+    assert report["runtime_qualification"]["failed_requirements"][0]["observed"] == 1048576
+
+
+def test_generic_worker_exit_is_reported_without_inventing_worker_details(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    paths = _remote_fixture(tmp_path, monkeypatch)
+
+    def generic_exit(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
+        return {
+            "returncode": 1,
+            "timed_out": False,
+            "stdout_tail": "",
+            "stderr_tail": "",
+        }
+
+    monkeypatch.setattr(a02_dev_remote, "_run_bounded_child", generic_exit)
+    assert a02_dev_remote._run_isolated_inference("prepare") == 1
+    report = json.loads(paths["report"].read_text())
+
+    assert report["failure_category"] == "RemoteWorkerExit"
+    assert report["failure_message"] == "V2 prepare worker did not complete its bounded stage."
+    assert "worker_failure_category" not in report
+    assert "worker_failure_message" not in report
 
 
 @pytest.mark.parametrize("partial", [False, True])
@@ -251,6 +363,7 @@ def test_initial_report_uses_campaign_binding_preflight_field() -> None:
             "development_preflight_sha256": "e" * 64,
             "development_profile_sha256": "f" * 64,
             "baseline_remote_report_sha256": "0" * 64,
+            **a02_dev_runtime.policy_binding(),
         }
     )
     assert report["source"]["preflight_sha256"] == "e" * 64
