@@ -221,6 +221,159 @@ def test_two_consumed_markers_exhaust_campaign_session_cap() -> None:
         a02_dev_execution._next_session_index([{}, {}], {})
 
 
+def test_followup_authorization_preserves_original_cu_cap_and_allows_one_new_head(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    profile_sha = hashlib.sha256(a02_dev_protocol.PROFILE_PATH.read_bytes()).hexdigest()
+    runs = tmp_path / "runs"
+    runs.mkdir()
+    monkeypatch.setattr(a02_dev_execution, "RUNS_DIR", runs)
+    markers = [
+        _prior_session(
+            runs,
+            index=1,
+            source_revision="a" * 40,
+            source_tree="b" * 40,
+            profile_sha256=profile_sha,
+            preflight_sha256="c" * 64,
+            outcome="EXTERNAL_BLOCKER",
+        ),
+        _prior_session(
+            runs,
+            index=2,
+            source_revision="d" * 40,
+            source_tree="e" * 40,
+            profile_sha256=profile_sha,
+            preflight_sha256="f" * 64,
+            outcome="EXTERNAL_BLOCKER",
+        ),
+    ]
+    source = {
+        "branch": "work/res-541-a02-colab-recovery",
+        "source_revision": "1" * 40,
+        "source_tree": "2" * 40,
+        "profile_sha256": profile_sha,
+        "preflight_sha256": "3" * 64,
+    }
+    quota = {
+        "balance": 87.19,
+        "usage_rate_cu_per_hour": 0.0,
+        "active_assignment_count": 0,
+        "active_sessions": [],
+        "provider_assignments": [],
+        "snapshot_sha256": "4" * 64,
+    }
+    base_authorization = {
+        "authorization_sha256": "5" * 64,
+        "initial_compute_unit_balance": 87.49,
+        "account_balance_at_authorization": 87.32,
+        "remaining_cu_at_authorization": 1.83,
+        "remaining_sessions_at_authorization": 1,
+    }
+    path = tmp_path / "followup-authorization-v1.json"
+    monkeypatch.setattr(a02_dev_execution, "FOLLOWUP_AUTHORIZATION_PATH", path)
+    monkeypatch.setattr(a02_dev_execution, "_load_authorization", lambda: base_authorization)
+    monkeypatch.setattr(a02_dev_execution, "_source_state", lambda: source)
+    monkeypatch.setattr(a02_dev_execution, "_colab_snapshot", lambda: quota)
+
+    with pytest.raises(a02_dev_execution.DevelopmentRunError, match="one additional"):
+        a02_dev_execution._resolve_session_scope(base_authorization, source, quota, markers)
+    receipt = a02_dev_execution.authorize_followup_session("okay retry")
+    scope = a02_dev_execution._resolve_session_scope(base_authorization, source, quota, markers)
+    saved = json.loads(path.read_bytes())
+
+    assert receipt["gpu_allocated"] is False
+    assert saved["campaign_cap_cu"] == 2.0
+    assert saved["remaining_cu_at_authorization"] == pytest.approx(1.70)
+    assert saved["additional_t4_sessions"] == 1
+    assert saved["previous_session_marker_sha256s"] == [
+        hashlib.sha256((runs / marker["run_id"] / "session-used.json").read_bytes()).hexdigest()
+        for marker in markers
+    ]
+    assert scope[0] is not None
+    assert scope[0]["authorization_sha256"] == receipt["authorization_sha256"]
+    assert scope[1] == 3
+    assert scope[2] == pytest.approx(0.30)
+    assert scope[3] == pytest.approx(1.70)
+
+
+def test_followup_authorization_rejects_a_rebudgeted_receipt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    profile_sha = hashlib.sha256(a02_dev_protocol.PROFILE_PATH.read_bytes()).hexdigest()
+    runs = tmp_path / "runs"
+    runs.mkdir()
+    monkeypatch.setattr(a02_dev_execution, "RUNS_DIR", runs)
+    markers = [
+        _prior_session(
+            runs,
+            index=index,
+            source_revision=revision,
+            source_tree=tree,
+            profile_sha256=profile_sha,
+            preflight_sha256=preflight,
+            outcome="EXTERNAL_BLOCKER",
+        )
+        for index, revision, tree, preflight in (
+            (1, "a" * 40, "b" * 40, "c" * 64),
+            (2, "d" * 40, "e" * 40, "f" * 64),
+        )
+    ]
+    source = {
+        "branch": "work/res-541-a02-colab-recovery",
+        "source_revision": "1" * 40,
+        "source_tree": "2" * 40,
+        "profile_sha256": profile_sha,
+        "preflight_sha256": "3" * 64,
+    }
+    quota = {
+        "balance": 87.19,
+        "usage_rate_cu_per_hour": 0.0,
+        "active_assignment_count": 0,
+        "active_sessions": [],
+        "provider_assignments": [],
+        "snapshot_sha256": "4" * 64,
+    }
+    base = {
+        "authorization_sha256": "5" * 64,
+        "initial_compute_unit_balance": 87.49,
+        "account_balance_at_authorization": 87.32,
+        "remaining_cu_at_authorization": 1.83,
+    }
+    path = tmp_path / "followup-authorization-v1.json"
+    monkeypatch.setattr(a02_dev_execution, "FOLLOWUP_AUTHORIZATION_PATH", path)
+    monkeypatch.setattr(a02_dev_execution, "_load_authorization", lambda: base)
+    monkeypatch.setattr(a02_dev_execution, "_source_state", lambda: source)
+    monkeypatch.setattr(a02_dev_execution, "_colab_snapshot", lambda: quota)
+    a02_dev_execution.authorize_followup_session("okay retry")
+
+    saved = json.loads(path.read_text())
+    saved["remaining_cu_at_authorization"] = 2.0
+    saved["authorization_sha256"] = a02_dev_execution._sha(
+        a02_dev_execution._canonical(
+            {k: v for k, v in saved.items() if k != "authorization_sha256"}
+        ).encode()
+    )
+    path.write_text(json.dumps(saved))
+    with pytest.raises(a02_dev_execution.DevelopmentRunError, match="scope or integrity"):
+        a02_dev_execution._load_followup_authorization(base, source, quota, markers)
+
+
+def test_followup_does_not_authorize_a_fourth_session() -> None:
+    authorization = {
+        "initial_compute_unit_balance": 87.49,
+        "account_balance_at_authorization": 87.32,
+        "remaining_cu_at_authorization": 1.83,
+    }
+    with pytest.raises(a02_dev_execution.DevelopmentRunError, match="exhausted"):
+        a02_dev_execution._resolve_session_scope(
+            authorization,
+            {},
+            {"balance": 87.19},
+            [{}, {}, {}],
+        )
+
+
 def test_campaign_authorization_record_is_hash_bound(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

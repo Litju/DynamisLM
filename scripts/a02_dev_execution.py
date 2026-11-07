@@ -25,6 +25,7 @@ E_ROOT = a02_execution.E_ROOT
 CAMPAIGN_DIR = E_ROOT / "a02/development-v2"
 LEGACY_AUTHORIZATION_PATH = CAMPAIGN_DIR / "authorization.json"
 AUTHORIZATION_PATH = CAMPAIGN_DIR / "campaign-authorization-v2.json"
+FOLLOWUP_AUTHORIZATION_PATH = CAMPAIGN_DIR / "followup-authorization-v1.json"
 RUNS_DIR = CAMPAIGN_DIR / "runs"
 REMOTE_SOURCE = "/content/a02-source.tar"
 REMOTE_BINDING = "/content/a02-binding.json"
@@ -624,6 +625,169 @@ def _load_authorization() -> dict[str, Any]:
     return value
 
 
+def authorize_followup_session(approval_text: str) -> dict[str, Any]:
+    if FOLLOWUP_AUTHORIZATION_PATH.exists():
+        raise DevelopmentRunError("the one-session follow-up authorization is immutable")
+    if not isinstance(approval_text, str) or not approval_text.strip() or len(approval_text) > 500:
+        raise DevelopmentRunError("the follow-up owner approval reference is invalid")
+    authorization = _load_authorization()
+    source = _source_state()
+    quota = _colab_snapshot()
+    markers = _used_session_markers()
+    if len(markers) != CAMPAIGN_SESSION_CAP:
+        raise DevelopmentRunError("follow-up authorization requires the original session cap")
+    if (
+        quota["active_assignment_count"] != 0
+        or quota["active_sessions"]
+        or quota["provider_assignments"]
+    ):
+        raise DevelopmentRunError("active Colab assignments prevent a follow-up authorization")
+    session_index = _next_session_index(markers, source, max_sessions=CAMPAIGN_SESSION_CAP + 1)
+    if session_index != CAMPAIGN_SESSION_CAP + 1:
+        raise DevelopmentRunError("follow-up session index is invalid")
+    prior_spend, remaining_cu = _campaign_budget(authorization, quota["balance"])
+    if remaining_cu > authorization["remaining_cu_at_authorization"] + 0.005000001:
+        raise DevelopmentRunError("follow-up budget exceeds the original authorized remainder")
+    prior_spend = round(prior_spend, 2)
+    remaining_cu = round(remaining_cu, 2)
+    marker_hashes = [
+        _sha((RUNS_DIR / marker["run_id"] / "session-used.json").read_bytes()) for marker in markers
+    ]
+    fresh_source = _source_state()
+    fresh_quota = _colab_snapshot()
+    if any(
+        fresh_source[key] != source[key]
+        for key in (
+            "branch",
+            "source_revision",
+            "source_tree",
+            "profile_sha256",
+            "preflight_sha256",
+        )
+    ) or any(
+        fresh_quota[key] != quota[key]
+        for key in (
+            "balance",
+            "usage_rate_cu_per_hour",
+            "active_assignment_count",
+            "active_sessions",
+            "provider_assignments",
+        )
+    ):
+        raise DevelopmentRunError("source or quota changed during follow-up authorization")
+    followup: dict[str, Any] = {
+        "schema": "RES541_A02_DEVELOPMENT_FOLLOWUP_AUTHORIZATION_V1",
+        "status": "OWNER_AUTHORIZED",
+        "approval_scope": "ONE_ADDITIONAL_SESSION_WITHIN_ORIGINAL_CAMPAIGN_CAP",
+        "owner_approval_text": approval_text,
+        "owner_approval_sha256": _sha(approval_text.encode()),
+        "base_campaign_authorization_sha256": authorization["authorization_sha256"],
+        "branch": source["branch"],
+        "source_revision": source["source_revision"],
+        "source_tree": source["source_tree"],
+        "development_profile_sha256": source["profile_sha256"],
+        "development_preflight_sha256": source["preflight_sha256"],
+        "campaign_cap_cu": CAMPAIGN_CU_CAP,
+        "initial_compute_unit_balance": authorization["initial_compute_unit_balance"],
+        "account_balance_at_authorization": quota["balance"],
+        "account_spend_before_authorization_cu": prior_spend,
+        "remaining_cu_at_authorization": remaining_cu,
+        "additional_t4_sessions": 1,
+        "authorized_session_index": session_index,
+        "max_session_seconds": SESSION_SECONDS,
+        "max_exec_seconds": EXEC_SECONDS,
+        "no_upgrade": True,
+        "no_training": True,
+        "previous_session_marker_sha256s": marker_hashes,
+        "quota_snapshot_sha256": quota["snapshot_sha256"],
+        "active_sessions_at_authorization": quota["active_sessions"],
+        "provider_assignments_at_authorization": quota["provider_assignments"],
+        "authorized_at_utc": datetime.now(UTC).isoformat(),
+    }
+    followup["authorization_sha256"] = _sha(_canonical(followup).encode())
+    _write_exclusive(FOLLOWUP_AUTHORIZATION_PATH, followup)
+    return {
+        "path": str(FOLLOWUP_AUTHORIZATION_PATH),
+        "authorization_sha256": followup["authorization_sha256"],
+        "remaining_cu": remaining_cu,
+        "additional_t4_sessions": 1,
+        "gpu_allocated": False,
+    }
+
+
+def _load_followup_authorization(
+    authorization: dict[str, Any],
+    source: dict[str, Any],
+    quota: dict[str, Any],
+    markers: list[dict[str, Any]],
+) -> dict[str, Any]:
+    if not FOLLOWUP_AUTHORIZATION_PATH.is_file():
+        raise DevelopmentRunError("one additional source-bound T4 authorization is required")
+    value = json.loads(FOLLOWUP_AUTHORIZATION_PATH.read_bytes())
+    if not isinstance(value, dict):
+        raise DevelopmentRunError("follow-up authorization record is invalid")
+    digest = value.pop("authorization_sha256", None)
+    approval_text = value.get("owner_approval_text")
+    balance_at_authorization = value.get("account_balance_at_authorization")
+    spend_before = value.get("account_spend_before_authorization_cu")
+    remaining_cu = value.get("remaining_cu_at_authorization")
+    quota_sha256 = value.get("quota_snapshot_sha256")
+    marker_hashes = [
+        _sha((RUNS_DIR / marker["run_id"] / "session-used.json").read_bytes()) for marker in markers
+    ]
+    _, remaining_now = _campaign_budget(authorization, quota["balance"])
+    if (
+        value.get("schema") != "RES541_A02_DEVELOPMENT_FOLLOWUP_AUTHORIZATION_V1"
+        or value.get("status") != "OWNER_AUTHORIZED"
+        or digest != _sha(_canonical(value).encode())
+        or value.get("approval_scope") != "ONE_ADDITIONAL_SESSION_WITHIN_ORIGINAL_CAMPAIGN_CAP"
+        or not isinstance(approval_text, str)
+        or not approval_text.strip()
+        or value.get("owner_approval_sha256") != _sha(approval_text.encode())
+        or value.get("base_campaign_authorization_sha256") != authorization["authorization_sha256"]
+        or value.get("branch") != source["branch"]
+        or value.get("source_revision") != source["source_revision"]
+        or value.get("source_tree") != source["source_tree"]
+        or value.get("development_profile_sha256") != source["profile_sha256"]
+        or value.get("development_preflight_sha256") != source["preflight_sha256"]
+        or value.get("campaign_cap_cu") != CAMPAIGN_CU_CAP
+        or value.get("initial_compute_unit_balance")
+        != authorization["initial_compute_unit_balance"]
+        or isinstance(balance_at_authorization, bool)
+        or not isinstance(balance_at_authorization, int | float)
+        or not math.isfinite(balance_at_authorization)
+        or balance_at_authorization > authorization["account_balance_at_authorization"]
+        or isinstance(spend_before, bool)
+        or not isinstance(spend_before, int | float)
+        or spend_before
+        != round(authorization["initial_compute_unit_balance"] - balance_at_authorization, 2)
+        or isinstance(remaining_cu, bool)
+        or not isinstance(remaining_cu, int | float)
+        or remaining_cu != round(CAMPAIGN_CU_CAP - spend_before, 2)
+        or not 0 < remaining_cu <= authorization["remaining_cu_at_authorization"]
+        or remaining_now > remaining_cu + 0.005000001
+        or type(value.get("additional_t4_sessions")) is not int
+        or value.get("additional_t4_sessions") != 1
+        or value.get("authorized_session_index") != CAMPAIGN_SESSION_CAP + 1
+        or value.get("max_session_seconds") != SESSION_SECONDS
+        or value.get("max_exec_seconds") != EXEC_SECONDS
+        or value.get("no_upgrade") is not True
+        or value.get("no_training") is not True
+        or value.get("previous_session_marker_sha256s") != marker_hashes
+        or len(markers) != CAMPAIGN_SESSION_CAP
+        or quota["active_assignment_count"] != 0
+        or quota["active_sessions"]
+        or quota["provider_assignments"]
+        or quota["balance"] > balance_at_authorization
+        or not isinstance(quota_sha256, str)
+        or len(quota_sha256) != 64
+        or any(char not in "0123456789abcdef" for char in quota_sha256)
+    ):
+        raise DevelopmentRunError("follow-up authorization failed scope or integrity checks")
+    value["authorization_sha256"] = digest
+    return value
+
+
 def _used_session_markers() -> list[dict[str, Any]]:
     if not RUNS_DIR.exists():
         return []
@@ -674,6 +838,25 @@ def _prior_session_config(marker: dict[str, Any]) -> tuple[tuple[str, str, str, 
     except OSError as exc:
         raise DevelopmentRunError("prior V2 session marker is missing") from exc
     marker_manifest = manifest_files.get("session-used.json", {})
+    followup_sha256 = marker.get("followup_authorization_sha256")
+    if followup_sha256 is not None:
+        followup_path = directory / "followup-authorization.json"
+        try:
+            followup_bytes = followup_path.read_bytes()
+            followup = json.loads(followup_bytes)
+        except (OSError, json.JSONDecodeError) as exc:
+            raise DevelopmentRunError("prior V2 follow-up authorization is incomplete") from exc
+        if not isinstance(followup, dict):
+            raise DevelopmentRunError("prior V2 follow-up authorization is invalid")
+        followup_manifest = manifest_files.get("followup-authorization.json", {})
+        followup_digest = followup.pop("authorization_sha256", None)
+        if (
+            followup_digest != followup_sha256
+            or followup_manifest.get("sha256") != _sha(followup_bytes)
+            or followup_manifest.get("bytes") != len(followup_bytes)
+            or followup_digest != _sha(_canonical(followup).encode())
+        ):
+            raise DevelopmentRunError("prior V2 follow-up authorization failed integrity checks")
     if (
         manifest.get("run_id") != run_id
         or manifest.get("terminal_outcome") != control.get("terminal_outcome")
@@ -696,6 +879,7 @@ def _prior_session_config(marker: dict[str, Any]) -> tuple[tuple[str, str, str, 
             and binding.get("development_preflight_sha256")
             != marker.get("development_preflight_sha256")
         )
+        or binding.get("campaign_followup_authorization_sha256") != followup_sha256
         or control.get("run_id") != run_id
         or control.get("status") != "CONTROL_FINISHED"
         or control.get("session_index") != marker.get("session_index")
@@ -711,8 +895,13 @@ def _prior_session_config(marker: dict[str, Any]) -> tuple[tuple[str, str, str, 
     return config, control["terminal_outcome"]
 
 
-def _next_session_index(markers: list[dict[str, Any]], source: dict[str, Any]) -> int:
-    if len(markers) >= CAMPAIGN_SESSION_CAP:
+def _next_session_index(
+    markers: list[dict[str, Any]],
+    source: dict[str, Any],
+    *,
+    max_sessions: int = CAMPAIGN_SESSION_CAP,
+) -> int:
+    if len(markers) >= max_sessions:
         raise DevelopmentRunError("V2 campaign has exhausted its T4 session cap")
     indices = [marker.get("session_index") for marker in markers]
     if any(isinstance(index, bool) or not isinstance(index, int) for index in indices):
@@ -749,6 +938,43 @@ def _campaign_budget(authorization: dict[str, Any], current_balance: float) -> t
     ):
         raise DevelopmentRunError("authorized V2 campaign budget is exhausted or ambiguous")
     return prior_spend, remaining
+
+
+def _resolve_session_scope(
+    authorization: dict[str, Any],
+    source: dict[str, Any],
+    quota: dict[str, Any],
+    markers: list[dict[str, Any]],
+) -> tuple[dict[str, Any] | None, int, float, float]:
+    prior_spend, remaining_cu = _campaign_budget(authorization, quota["balance"])
+    if len(markers) < CAMPAIGN_SESSION_CAP:
+        if FOLLOWUP_AUTHORIZATION_PATH.exists():
+            raise DevelopmentRunError(
+                "follow-up authorization cannot precede the original sessions"
+            )
+        session_index = _next_session_index(markers, source)
+        if (
+            CAMPAIGN_SESSION_CAP - len(markers)
+            > authorization["remaining_sessions_at_authorization"]
+        ):
+            raise DevelopmentRunError(
+                "session count exceeds the approved campaign continuation scope"
+            )
+        return None, session_index, prior_spend, remaining_cu
+    if len(markers) != CAMPAIGN_SESSION_CAP:
+        raise DevelopmentRunError("V2 campaign has exhausted its T4 session cap")
+    followup = _load_followup_authorization(authorization, source, quota, markers)
+    session_index = _next_session_index(
+        markers, source, max_sessions=CAMPAIGN_SESSION_CAP + followup["additional_t4_sessions"]
+    )
+    if session_index != followup["authorized_session_index"]:
+        raise DevelopmentRunError("follow-up authorization does not bind the next session")
+    return (
+        followup,
+        session_index,
+        prior_spend,
+        min(remaining_cu, followup["remaining_cu_at_authorization"]),
+    )
 
 
 def _safe_exec_seconds(remaining_cu: float, usage_rate_cu_per_hour: float) -> int:
@@ -848,11 +1074,10 @@ def run_campaign_session() -> dict[str, Any]:
         )
     quota_before = _colab_snapshot()
     initial_balance = float(authorization["initial_compute_unit_balance"])
-    prior_spend, remaining_before = _campaign_budget(authorization, quota_before["balance"])
     markers = _used_session_markers()
-    session_index = _next_session_index(markers, source)
-    if CAMPAIGN_SESSION_CAP - len(markers) > authorization["remaining_sessions_at_authorization"]:
-        raise DevelopmentRunError("session count exceeds the approved campaign continuation scope")
+    followup, session_index, prior_spend, remaining_before = _resolve_session_scope(
+        authorization, source, quota_before, markers
+    )
     run_id = (
         f"res541-a02-dev-v2-{session_index:03d}-"
         f"{source['profile_sha256'][:8]}-{uuid.uuid4().hex[:8]}"
@@ -861,6 +1086,10 @@ def run_campaign_session() -> dict[str, Any]:
     run_dir.mkdir(parents=True, exist_ok=False)
     preflight_copy = run_dir / "development-preflight-v2.json"
     preflight_copy.write_bytes(source["preflight_path"].read_bytes())
+    if followup is not None:
+        (run_dir / "followup-authorization.json").write_bytes(
+            FOLLOWUP_AUTHORIZATION_PATH.read_bytes()
+        )
     source_archive = run_dir / "source.tar"
     with source_archive.open("xb") as archive:
         subprocess.run(
@@ -878,6 +1107,9 @@ def run_campaign_session() -> dict[str, Any]:
         "run_id": run_id,
         "session_index": session_index,
         "campaign_authorization_sha256": authorization["authorization_sha256"],
+        "campaign_followup_authorization_sha256": (
+            followup["authorization_sha256"] if followup is not None else None
+        ),
         "branch": source["branch"],
         "source_revision": source["source_revision"],
         "source_tree": source["source_tree"],
@@ -907,6 +1139,9 @@ def run_campaign_session() -> dict[str, Any]:
     marker = {
         "schema": "RES541_A02_DEVELOPMENT_SESSION_USED_V2",
         "campaign_authorization_sha256": authorization["authorization_sha256"],
+        "followup_authorization_sha256": (
+            followup["authorization_sha256"] if followup is not None else None
+        ),
         "development_profile_sha256": source["profile_sha256"],
         "session_index": session_index,
         "run_id": run_id,
@@ -924,6 +1159,9 @@ def run_campaign_session() -> dict[str, Any]:
         "run_id": run_id,
         "session_index": session_index,
         "campaign_authorization_sha256": authorization["authorization_sha256"],
+        "campaign_followup_authorization_sha256": (
+            followup["authorization_sha256"] if followup is not None else None
+        ),
         "source_revision": source["source_revision"],
         "development_profile_sha256": source["profile_sha256"],
         "development_preflight_sha256": source["preflight_sha256"],
@@ -1292,10 +1530,20 @@ def run_campaign_session() -> dict[str, Any]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=("authorize", "run"))
+    parser.add_argument("command", choices=("authorize", "authorize-retry", "run"))
+    parser.add_argument("--approval-text")
     args = parser.parse_args()
     try:
-        result = authorize_campaign() if args.command == "authorize" else run_campaign_session()
+        if args.command == "authorize":
+            result = authorize_campaign()
+        elif args.command == "authorize-retry":
+            if args.approval_text is None:
+                raise DevelopmentRunError("the follow-up owner approval reference is required")
+            result = authorize_followup_session(args.approval_text)
+        else:
+            if args.approval_text is not None:
+                raise DevelopmentRunError("approval text applies only to authorization commands")
+            result = run_campaign_session()
     except (DevelopmentRunError, a02_execution.RunError, OSError, ValueError) as exc:
         print(json.dumps({"status": "BLOCKED", "reason": str(exc)}, indent=2))
         return 1
