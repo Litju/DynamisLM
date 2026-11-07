@@ -6,6 +6,7 @@ import math
 from dataclasses import dataclass
 from typing import Any
 
+from dynamislm.external_load.registry import EXTERNAL_LOAD_REGISTRY_VERSION
 from dynamislm.qualification.contracts import (
     ReferenceCase,
     ReferenceCaseStatus,
@@ -13,7 +14,7 @@ from dynamislm.qualification.contracts import (
 )
 from dynamislm.qualification.inventory import discovered_registered_operation_ids
 from dynamislm.qualification.references import get_reference_cases, reference_case_digest
-from dynamislm.serialization import canonical_hash
+from dynamislm.serialization import canonical_hash, canonical_json
 
 VERIFIER_GENERATOR_SCHEMA = "RES426_VERIFIER_CASES_V1"
 
@@ -150,10 +151,32 @@ def _value_matches(
         return False
 
 
+def _expected_provenance(case: ReferenceCase) -> dict[str, str]:
+    """Only identities supplied by sealed references or their registered method authority."""
+    expected: dict[str, str] = {}
+    if case.operation_id is not None:
+        expected["operation_id"] = case.operation_id
+    units = {value.unit for value in case.expected_values}
+    if len(units) == 1 and None not in units:
+        expected["unit"] = next(unit for unit in units if unit is not None)
+    if case.family == "external-load":
+        expected["method_registry_version"] = EXTERNAL_LOAD_REGISTRY_VERSION
+    if case.expected_reason_codes:
+        expected["reason_codes"] = canonical_json(case.expected_reason_codes)
+        expected["refusal_reasons"] = canonical_json(case.expected_reason_codes)
+    if case.expected_claim_level is not None:
+        expected["resolved_level"] = case.expected_claim_level
+    return expected
+
+
 def verify_reference_outcome(
     generated: GeneratedVerifierCase, outcome: ReferenceOutcome
 ) -> VerificationResult:
-    """Compare an outcome to its sealed case; never infer or repair missing authority."""
+    """Check sealed expectations; other provenance values are checked for presence only.
+
+    Provenance reason tuples use canonical JSON. No source/support/request hash or
+    instance identity is inferred where the reference supplies no expected value.
+    """
     if not isinstance(generated, GeneratedVerifierCase) or not isinstance(
         outcome, ReferenceOutcome
     ):
@@ -211,11 +234,17 @@ def verify_reference_outcome(
     if outcome.claim_level != case.expected_claim_level:
         failures.append("CLAIM_LEVEL_MISMATCH")
 
-    observed_provenance = {name for name, _ in outcome.provenance}
+    observed_provenance = dict(outcome.provenance)
     failures.extend(
         f"MISSING_PROVENANCE:{field}"
         for field in case.required_provenance_fields
         if field not in observed_provenance
+    )
+    expected_provenance = _expected_provenance(case)
+    failures.extend(
+        f"PROVENANCE_VALUE_MISMATCH:{field}"
+        for field, value in observed_provenance.items()
+        if field in expected_provenance and value != expected_provenance[field]
     )
     return VerificationResult(
         case_id=case.case_id,

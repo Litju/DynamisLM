@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import replace
 from typing import Any
 
+import pytest
 from scripts.res426_verifier import (
     ReferenceOutcome,
     generate_verifier_cases,
@@ -17,11 +18,21 @@ from dynamislm.external_load.registry import (
     EXTERNAL_LOAD_KILOMETER,
     EXTERNAL_LOAD_METER,
     EXTERNAL_LOAD_MINUTE,
+    EXTERNAL_LOAD_REGISTRY_VERSION,
 )
 from dynamislm.qualification.contracts import ReferenceCase, ReferenceValue
+from dynamislm.serialization import canonical_json
 
 
 def _outcome(case: ReferenceCase, **changes: object) -> ReferenceOutcome:
+    known = {
+        "operation_id": case.operation_id,
+        "unit": case.expected_values[0].unit if case.expected_values else None,
+        "method_registry_version": EXTERNAL_LOAD_REGISTRY_VERSION,
+        "reason_codes": canonical_json(case.expected_reason_codes),
+        "refusal_reasons": canonical_json(case.expected_reason_codes),
+        "resolved_level": case.expected_claim_level,
+    }
     fields: dict[str, Any] = {
         "status": case.status,
         "operation_id": case.operation_id,
@@ -31,7 +42,8 @@ def _outcome(case: ReferenceCase, **changes: object) -> ReferenceOutcome:
         "comparability_state": case.expected_comparability_state,
         "claim_level": case.expected_claim_level,
         "provenance": tuple(
-            (name, f"synthetic:{name}") for name in case.required_provenance_fields
+            (name, known.get(name) or f"synthetic:{name}")
+            for name in case.required_provenance_fields
         ),
     }
     fields.update(changes)
@@ -153,3 +165,37 @@ def test_unregistered_operations_missing_provenance_and_stale_cases_fail_closed(
         "REFERENCE_CASE_MISMATCH"
         in verify_reference_outcome(changed_case, _outcome(generated.case)).failure_codes
     )
+
+
+@pytest.mark.parametrize("generated", generate_verifier_cases(), ids=lambda task: task.case.case_id)
+def test_all_sealed_outcomes_verify_with_authoritative_provenance(generated: Any) -> None:
+    assert verify_reference_outcome(generated, _outcome(generated.case)).verified
+
+
+@pytest.mark.parametrize(
+    ("case_id", "field"),
+    [
+        ("res71-external-unit-km-to-m", "operation_id"),
+        ("res71-external-unit-km-to-m", "unit"),
+        ("res71-external-unit-km-to-m", "method_registry_version"),
+        ("res71-longitudinal-absolute-change", "operation_id"),
+        ("res71-cmj-flight-time-v2-gold", "operation_id"),
+        ("res71-nonfinite-unit-refusal", "reason_codes"),
+        ("res71-between-to-within-refusal", "resolved_level"),
+        ("res71-between-to-within-refusal", "refusal_reasons"),
+    ],
+)
+def test_tampered_provenance_values_fail_even_when_typed_output_is_correct(
+    case_id: str, field: str
+) -> None:
+    generated = generate_verifier_cases((case_id,))[0]
+    correct = _outcome(generated.case)
+    tampered = replace(
+        correct,
+        provenance=tuple(
+            (name, "forged" if name == field else value) for name, value in correct.provenance
+        ),
+    )
+    result = verify_reference_outcome(generated, tampered)
+    assert result.verified is False
+    assert result.failure_codes == (f"PROVENANCE_VALUE_MISMATCH:{field}",)
