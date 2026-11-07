@@ -32,6 +32,7 @@ CAMPAIGN_DIR = E_ROOT / "a02/development-v2"
 LEGACY_AUTHORIZATION_PATH = CAMPAIGN_DIR / "authorization.json"
 AUTHORIZATION_PATH = CAMPAIGN_DIR / "campaign-authorization-v2.json"
 FOLLOWUP_AUTHORIZATION_PATH = CAMPAIGN_DIR / "followup-authorization-v1.json"
+NEXT_AUTHORIZATION_PATH = CAMPAIGN_DIR / "session-004-authorization-v1.json"
 RUNS_DIR = CAMPAIGN_DIR / "runs"
 REMOTE_SOURCE = "/content/a02-source.tar"
 REMOTE_BINDING = "/content/a02-binding.json"
@@ -639,8 +640,19 @@ def _load_authorization() -> dict[str, Any]:
     return value
 
 
-def authorize_followup_session(approval_text: str) -> dict[str, Any]:
-    if FOLLOWUP_AUTHORIZATION_PATH.exists():
+def _followup_authorization_path(session_index: int) -> Path:
+    if type(session_index) is int and session_index == CAMPAIGN_SESSION_CAP + 1:
+        return FOLLOWUP_AUTHORIZATION_PATH
+    if type(session_index) is int and session_index == CAMPAIGN_SESSION_CAP + 2:
+        return NEXT_AUTHORIZATION_PATH
+    raise DevelopmentRunError("no further T4 session authorization scope is implemented")
+
+
+def authorize_followup_session(
+    approval_text: str, *, session_index: int = CAMPAIGN_SESSION_CAP + 1
+) -> dict[str, Any]:
+    authorization_path = _followup_authorization_path(session_index)
+    if authorization_path.exists():
         raise DevelopmentRunError("the one-session follow-up authorization is immutable")
     if not isinstance(approval_text, str) or not approval_text.strip() or len(approval_text) > 500:
         raise DevelopmentRunError("the follow-up owner approval reference is invalid")
@@ -648,16 +660,16 @@ def authorize_followup_session(approval_text: str) -> dict[str, Any]:
     source = _source_state()
     quota = _colab_snapshot()
     markers = _used_session_markers()
-    if len(markers) != CAMPAIGN_SESSION_CAP:
-        raise DevelopmentRunError("follow-up authorization requires the original session cap")
+    if len(markers) != session_index - 1:
+        raise DevelopmentRunError("follow-up authorization requires all preceding sessions")
     if (
         quota["active_assignment_count"] != 0
         or quota["active_sessions"]
         or quota["provider_assignments"]
     ):
         raise DevelopmentRunError("active Colab assignments prevent a follow-up authorization")
-    session_index = _next_session_index(markers, source, max_sessions=CAMPAIGN_SESSION_CAP + 1)
-    if session_index != CAMPAIGN_SESSION_CAP + 1:
+    next_index = _next_session_index(markers, source, max_sessions=session_index)
+    if next_index != session_index:
         raise DevelopmentRunError("follow-up session index is invalid")
     prior_spend, remaining_cu = _campaign_budget(authorization, quota["balance"])
     if remaining_cu > authorization["remaining_cu_at_authorization"] + 0.005000001:
@@ -719,9 +731,9 @@ def authorize_followup_session(approval_text: str) -> dict[str, Any]:
         "authorized_at_utc": datetime.now(UTC).isoformat(),
     }
     followup["authorization_sha256"] = _sha(_canonical(followup).encode())
-    _write_exclusive(FOLLOWUP_AUTHORIZATION_PATH, followup)
+    _write_exclusive(authorization_path, followup)
     return {
-        "path": str(FOLLOWUP_AUTHORIZATION_PATH),
+        "path": str(authorization_path),
         "authorization_sha256": followup["authorization_sha256"],
         "remaining_cu": remaining_cu,
         "additional_t4_sessions": 1,
@@ -735,9 +747,11 @@ def _load_followup_authorization(
     quota: dict[str, Any],
     markers: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    if not FOLLOWUP_AUTHORIZATION_PATH.is_file():
+    session_index = len(markers) + 1
+    authorization_path = _followup_authorization_path(session_index)
+    if not authorization_path.is_file():
         raise DevelopmentRunError("one additional source-bound T4 authorization is required")
-    value = json.loads(FOLLOWUP_AUTHORIZATION_PATH.read_bytes())
+    value = json.loads(authorization_path.read_bytes())
     if not isinstance(value, dict):
         raise DevelopmentRunError("follow-up authorization record is invalid")
     digest = value.pop("authorization_sha256", None)
@@ -782,13 +796,12 @@ def _load_followup_authorization(
         or remaining_now > remaining_cu + 0.005000001
         or type(value.get("additional_t4_sessions")) is not int
         or value.get("additional_t4_sessions") != 1
-        or value.get("authorized_session_index") != CAMPAIGN_SESSION_CAP + 1
+        or value.get("authorized_session_index") != session_index
         or value.get("max_session_seconds") != SESSION_SECONDS
         or value.get("max_exec_seconds") != EXEC_SECONDS
         or value.get("no_upgrade") is not True
         or value.get("no_training") is not True
         or value.get("previous_session_marker_sha256s") != marker_hashes
-        or len(markers) != CAMPAIGN_SESSION_CAP
         or quota["active_assignment_count"] != 0
         or quota["active_sessions"]
         or quota["provider_assignments"]
@@ -975,11 +988,13 @@ def _resolve_session_scope(
                 "session count exceeds the approved campaign continuation scope"
             )
         return None, session_index, prior_spend, remaining_cu
-    if len(markers) != CAMPAIGN_SESSION_CAP:
+    if len(markers) not in (CAMPAIGN_SESSION_CAP, CAMPAIGN_SESSION_CAP + 1) or (
+        len(markers) == CAMPAIGN_SESSION_CAP + 1 and not NEXT_AUTHORIZATION_PATH.is_file()
+    ):
         raise DevelopmentRunError("V2 campaign has exhausted its T4 session cap")
     followup = _load_followup_authorization(authorization, source, quota, markers)
     session_index = _next_session_index(
-        markers, source, max_sessions=CAMPAIGN_SESSION_CAP + followup["additional_t4_sessions"]
+        markers, source, max_sessions=len(markers) + followup["additional_t4_sessions"]
     )
     if session_index != followup["authorized_session_index"]:
         raise DevelopmentRunError("follow-up authorization does not bind the next session")
@@ -1102,7 +1117,7 @@ def run_campaign_session() -> dict[str, Any]:
     preflight_copy.write_bytes(source["preflight_path"].read_bytes())
     if followup is not None:
         (run_dir / "followup-authorization.json").write_bytes(
-            FOLLOWUP_AUTHORIZATION_PATH.read_bytes()
+            _followup_authorization_path(session_index).read_bytes()
         )
     source_archive = run_dir / "source.tar"
     with source_archive.open("xb") as archive:
@@ -1546,16 +1561,21 @@ def run_campaign_session() -> dict[str, Any]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=("authorize", "authorize-retry", "run"))
+    parser.add_argument(
+        "command", choices=("authorize", "authorize-retry", "authorize-next", "run")
+    )
     parser.add_argument("--approval-text")
     args = parser.parse_args()
     try:
         if args.command == "authorize":
             result = authorize_campaign()
-        elif args.command == "authorize-retry":
+        elif args.command in ("authorize-retry", "authorize-next"):
             if args.approval_text is None:
                 raise DevelopmentRunError("the follow-up owner approval reference is required")
-            result = authorize_followup_session(args.approval_text)
+            result = authorize_followup_session(
+                args.approval_text,
+                session_index=CAMPAIGN_SESSION_CAP + (2 if args.command == "authorize-next" else 1),
+            )
         else:
             if args.approval_text is not None:
                 raise DevelopmentRunError("approval text applies only to authorization commands")

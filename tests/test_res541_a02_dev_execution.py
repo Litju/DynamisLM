@@ -246,8 +246,9 @@ def test_two_consumed_markers_exhaust_campaign_session_cap() -> None:
         a02_dev_execution._next_session_index([{}, {}], {})
 
 
+@pytest.mark.parametrize("session_index", [3, 4])
 def test_followup_authorization_preserves_original_cu_cap_and_allows_one_new_head(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, session_index: int
 ) -> None:
     profile_sha = hashlib.sha256(a02_dev_protocol.PROFILE_PATH.read_bytes()).hexdigest()
     runs = tmp_path / "runs"
@@ -273,7 +274,19 @@ def test_followup_authorization_preserves_original_cu_cap_and_allows_one_new_hea
             outcome="EXTERNAL_BLOCKER",
         ),
     ]
-    source = {
+    if session_index == 4:
+        markers.append(
+            _prior_session(
+                runs,
+                index=3,
+                source_revision="6" * 40,
+                source_tree="7" * 40,
+                profile_sha256=profile_sha,
+                preflight_sha256="8" * 64,
+                outcome="EXTERNAL_BLOCKER",
+            )
+        )
+    source: dict[str, Any] = {
         "branch": "work/res-541-a02-colab-recovery",
         "source_revision": "1" * 40,
         "source_tree": "2" * 40,
@@ -289,6 +302,8 @@ def test_followup_authorization_preserves_original_cu_cap_and_allows_one_new_hea
         "snapshot_sha256": "4" * 64,
     }
     base_authorization = {
+        "branch": source["branch"],
+        "development_profile_sha256": profile_sha,
         "authorization_sha256": "5" * 64,
         "initial_compute_unit_balance": 87.49,
         "account_balance_at_authorization": 87.32,
@@ -297,13 +312,21 @@ def test_followup_authorization_preserves_original_cu_cap_and_allows_one_new_hea
     }
     path = tmp_path / "followup-authorization-v1.json"
     monkeypatch.setattr(a02_dev_execution, "FOLLOWUP_AUTHORIZATION_PATH", path)
+    if session_index == 4:
+        path.write_text("immutable consumed session-003 approval")
+        path = tmp_path / "session-004-authorization-v1.json"
+    monkeypatch.setattr(
+        a02_dev_execution, "NEXT_AUTHORIZATION_PATH", tmp_path / "session-004-authorization-v1.json"
+    )
     monkeypatch.setattr(a02_dev_execution, "_load_authorization", lambda: base_authorization)
     monkeypatch.setattr(a02_dev_execution, "_source_state", lambda: source)
     monkeypatch.setattr(a02_dev_execution, "_colab_snapshot", lambda: quota)
 
-    with pytest.raises(a02_dev_execution.DevelopmentRunError, match="one additional"):
+    with pytest.raises(a02_dev_execution.DevelopmentRunError, match="one additional|exhausted"):
         a02_dev_execution._resolve_session_scope(base_authorization, source, quota, markers)
-    receipt = a02_dev_execution.authorize_followup_session("okay retry")
+    receipt = a02_dev_execution.authorize_followup_session(
+        "okay retry", session_index=session_index
+    )
     scope = a02_dev_execution._resolve_session_scope(base_authorization, source, quota, markers)
     saved = json.loads(path.read_bytes())
 
@@ -317,13 +340,39 @@ def test_followup_authorization_preserves_original_cu_cap_and_allows_one_new_hea
     ]
     assert scope[0] is not None
     assert scope[0]["authorization_sha256"] == receipt["authorization_sha256"]
-    assert scope[1] == 3
+    assert scope[1] == session_index
+    if session_index == 4:
+        assert (
+            tmp_path / "followup-authorization-v1.json"
+        ).read_text() == "immutable consumed session-003 approval"
+    with pytest.raises(a02_dev_execution.DevelopmentRunError, match="immutable"):
+        a02_dev_execution.authorize_followup_session("second approval", session_index=session_index)
+    with pytest.raises(a02_dev_execution.DevelopmentRunError, match="scope or integrity"):
+        a02_dev_execution._resolve_session_scope(
+            base_authorization, {**source, "source_revision": "9" * 40}, quota, markers
+        )
     assert scope[2] == pytest.approx(0.30)
     assert scope[3] == pytest.approx(1.70)
 
+    preflight_path = tmp_path / "preflight.json"
+    preflight_path.write_text("{}")
+    source["preflight_path"] = preflight_path
 
+    def stop_before_archive(*args: Any, **kwargs: Any) -> None:
+        raise RuntimeError("CPU test stopped before archive upload or allocation")
+
+    monkeypatch.setattr(subprocess, "run", stop_before_archive)
+    with pytest.raises(RuntimeError, match="CPU test stopped"):
+        a02_dev_execution.run_campaign_session()
+    prepared_runs = list(runs.glob("res541-a02-dev-v2-*"))
+    assert len(prepared_runs) == 1
+    assert (prepared_runs[0] / "followup-authorization.json").read_bytes() == path.read_bytes()
+    assert not (prepared_runs[0] / "session-used.json").exists()
+
+
+@pytest.mark.parametrize("session_index", [3, 4])
 def test_followup_authorization_rejects_a_rebudgeted_receipt(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, session_index: int
 ) -> None:
     profile_sha = hashlib.sha256(a02_dev_protocol.PROFILE_PATH.read_bytes()).hexdigest()
     runs = tmp_path / "runs"
@@ -344,6 +393,18 @@ def test_followup_authorization_rejects_a_rebudgeted_receipt(
             (2, "d" * 40, "e" * 40, "f" * 64),
         )
     ]
+    if session_index == 4:
+        markers.append(
+            _prior_session(
+                runs,
+                index=3,
+                source_revision="6" * 40,
+                source_tree="7" * 40,
+                profile_sha256=profile_sha,
+                preflight_sha256="8" * 64,
+                outcome="EXTERNAL_BLOCKER",
+            )
+        )
     source = {
         "branch": "work/res-541-a02-colab-recovery",
         "source_revision": "1" * 40,
@@ -367,10 +428,16 @@ def test_followup_authorization_rejects_a_rebudgeted_receipt(
     }
     path = tmp_path / "followup-authorization-v1.json"
     monkeypatch.setattr(a02_dev_execution, "FOLLOWUP_AUTHORIZATION_PATH", path)
+    if session_index == 4:
+        path.write_text("immutable consumed session-003 approval")
+        path = tmp_path / "session-004-authorization-v1.json"
+    monkeypatch.setattr(
+        a02_dev_execution, "NEXT_AUTHORIZATION_PATH", tmp_path / "session-004-authorization-v1.json"
+    )
     monkeypatch.setattr(a02_dev_execution, "_load_authorization", lambda: base)
     monkeypatch.setattr(a02_dev_execution, "_source_state", lambda: source)
     monkeypatch.setattr(a02_dev_execution, "_colab_snapshot", lambda: quota)
-    a02_dev_execution.authorize_followup_session("okay retry")
+    a02_dev_execution.authorize_followup_session("okay retry", session_index=session_index)
 
     saved = json.loads(path.read_text())
     saved["remaining_cu_at_authorization"] = 2.0
@@ -790,3 +857,21 @@ def test_exact_target_absence_allows_an_unrelated_session_to_remain() -> None:
     assert a02_execution._verify_target_absent(
         cli, "allocated-target", "gpu-t4-s-target", assignments
     )
+
+
+@pytest.mark.parametrize("session_index", [2, 5, True, 4.0])
+def test_no_implicit_additional_session_scope(session_index: Any) -> None:
+    with pytest.raises(a02_dev_execution.DevelopmentRunError, match="no further"):
+        a02_dev_execution._followup_authorization_path(session_index)
+
+
+def test_session_004_authorization_never_admits_a_fifth_session() -> None:
+    authorization = {
+        "initial_compute_unit_balance": 87.49,
+        "account_balance_at_authorization": 87.32,
+        "remaining_cu_at_authorization": 1.83,
+    }
+    with pytest.raises(a02_dev_execution.DevelopmentRunError, match="exhausted"):
+        a02_dev_execution._resolve_session_scope(
+            authorization, {}, {"balance": 87.19}, [{}, {}, {}, {}]
+        )
