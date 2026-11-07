@@ -9,6 +9,7 @@ from scripts import (
     a02_dev_engine,
     a02_dev_preflight,
     a02_dev_protocol,
+    a02_dev_runtime,
     a02_dev_score,
     a02_experiment,
     a02_prompt,
@@ -149,6 +150,7 @@ def _synthetic_report(
         "schema": "RES541_A02_DEVELOPMENT_REPORT_V2",
         "status": "COMPLETE",
         "source": {
+            **a02_dev_runtime.policy_binding(),
             "run_id": "synthetic-v2-run",
             "revision": preflight["source_revision"],
             "tree": preflight["source_tree"],
@@ -168,6 +170,26 @@ def _synthetic_report(
         "partial_case_count": len(cases),
         "cases": cases,
     }
+
+
+@pytest.mark.parametrize("key", ["runtime_policy_id", "runtime_policy_sha256"])
+@pytest.mark.parametrize("value", [None, "unreviewed"])
+def test_standalone_score_rejects_missing_or_changed_runtime_policy(
+    key: str, value: str | None
+) -> None:
+    source: dict[str, Any] = a02_dev_runtime.policy_binding()
+    if value is None:
+        del source[key]
+    else:
+        source[key] = value
+    with pytest.raises(ValueError, match=f"binding mismatch for {key}"):
+        a02_dev_score.score_report(
+            {"source": source},
+            {},
+            None,
+            remote_report_sha256="synthetic",
+            preflight_sha256="synthetic",
+        )
 
 
 @pytest.mark.skipif(

@@ -14,6 +14,7 @@ from scripts import (
     a02_dev_engine,
     a02_dev_preflight,
     a02_dev_protocol,
+    a02_dev_runtime,
     a02_engine,
     a02_experiment,
     a02_prompt,
@@ -137,6 +138,7 @@ def score_report(
     remote_report_sha256: str,
     preflight_sha256: str,
 ) -> dict[str, Any]:
+    a02_dev_runtime.validate_binding(remote.get("source", {}))
     profile = a02_dev_protocol.load_profile()
     profile_sha = sha256(a02_dev_protocol.PROFILE_PATH.read_bytes())
     if (
