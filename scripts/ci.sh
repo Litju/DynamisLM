@@ -20,7 +20,7 @@ uv sync --frozen
 ./scripts/qa-fast.sh
 uv run mypy .
 uv run python scripts/repository_policy.py
-uv run pytest
+uv run --group tokenizer-check pytest
 
 snapshot_tracked_state "$state_dir/after"
 if ! cmp -s "$state_dir/before/index.diff" "$state_dir/after/index.diff" \
