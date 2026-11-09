@@ -1,4 +1,11 @@
-"""CPU-only V2 development intent gate and frozen A02 executor adapter."""
+"""CPU-only V2 development intent gate and frozen A02 executor adapter.
+
+This gate is a development test-oracle firewall: it accepts only the ten frozen case IDs and
+requires equality with the frozen expected intent before any scientific execution. It is not a
+general scientific-request authorization system, a model-facing planner, or a safety guarantee
+for arbitrary inputs. Its refusals demonstrate containment, never model competence
+(see docs/decisions/RES541-DR-001-session-004-diagnosis-and-architecture.md).
+"""
 
 from __future__ import annotations
 
