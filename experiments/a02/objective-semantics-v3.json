@@ -1,0 +1,70 @@
+{
+  "schema": "RES541_A02_OBJECTIVE_SEMANTICS_V3",
+  "status": "PROSPECTIVE_GOLD_DERIVATION_AUTHORITY",
+  "scope": "Maps closed objective phrases in the model-visible request to requested analysis class and target claim levels. Used only to derive gold for scoring; never scored as model reasoning and never used as a runtime planner.",
+  "match": "case-insensitive substring of request.objective; each matched phrase must occur exactly once",
+  "composition": {
+    "claims": "union of target levels contributed by all matched rules, per axis",
+    "analysis_class": "the single contributed class; NONE when a composite marker matches, more than one class is contributed, or more than one target level is requested on one axis",
+    "unmatched": "derivation fails closed; no gold exists"
+  },
+  "rules": [
+    {
+      "id": "ABSOLUTE_CHANGE_DESCRIPTION",
+      "phrase": "absolute longitudinal jump-height change",
+      "analysis_class": "SCALAR_ABSOLUTE_CHANGE",
+      "measurement": ["NUMERICAL_CHANGE"],
+      "relationship": ["DESCRIPTIVE_CHANGE"],
+      "justification": "An absolute longitudinal change between two observations is the RES-69 absolute-change estimand; describing it requests the numerical change and a descriptive-change relationship, nothing higher."
+    },
+    {
+      "id": "DESCRIPTIVE_CHANGE",
+      "phrase": "descriptive change",
+      "analysis_class": null,
+      "measurement": ["NUMERICAL_CHANGE"],
+      "relationship": ["DESCRIPTIVE_CHANGE"],
+      "justification": "A descriptive change explicitly requests the RES-70 DESCRIPTIVE_CHANGE relationship level over a numerical change."
+    },
+    {
+      "id": "CAUSAL_EFFECT",
+      "phrase": "causal effect",
+      "analysis_class": "SCALAR_ABSOLUTE_CHANGE",
+      "measurement": ["NUMERICAL_CHANGE"],
+      "relationship": ["CAUSAL_EVIDENCE"],
+      "justification": "A causal effect on a measured outcome attributes a numerical change between the supplied observations to a cause; the relationship target is RES-70 CAUSAL_EVIDENCE."
+    },
+    {
+      "id": "RANDOM_MEASUREMENT_ERROR",
+      "phrase": "random measurement error",
+      "analysis_class": "RELIABILITY_RANDOM_ERROR_COMPARISON",
+      "measurement": [],
+      "relationship": [],
+      "justification": "Inferring random measurement error requests a reliability estimate of the measurement process, not a claim about change or about a relationship between observations."
+    },
+    {
+      "id": "WITHIN_ATHLETE_ASSOCIATION",
+      "phrase": "within-athlete association",
+      "analysis_class": "WITHIN_ATHLETE_ASSOCIATION",
+      "measurement": [],
+      "relationship": ["ASSOCIATION"],
+      "justification": "A within-athlete association is the RES-70 WITHIN_ATHLETE_ASSOCIATION analysis and requests the ASSOCIATION relationship level only."
+    },
+    {
+      "id": "PRACTICAL_MEANINGFULNESS",
+      "phrase": "practical or decision meaningfulness of the jump-height change",
+      "analysis_class": "SCALAR_ABSOLUTE_CHANGE",
+      "measurement": ["PRACTICAL_OR_DECISION_MEANINGFULNESS"],
+      "relationship": [],
+      "justification": "Judging whether the change between the supplied observations matters for a decision requests the RES-70 PRACTICAL_OR_DECISION_MEANINGFULNESS measurement level about that absolute change."
+    },
+    {
+      "id": "SINGLE_ESTIMAND_COMPOSITE",
+      "phrase": "as one estimand",
+      "analysis_class": null,
+      "measurement": [],
+      "relationship": [],
+      "composite_marker": true,
+      "justification": "Forcing distinct claims into one estimand has no single registered analysis class."
+    }
+  ]
+}
