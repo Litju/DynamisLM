@@ -1,0 +1,46 @@
+{
+  "schema": "RES541_A02_DEVELOPMENT_PROFILE_V3",
+  "status": "PROSPECTIVE_CONTRACT_NOT_AUTHORIZED_FOR_INFERENCE",
+  "predecessor": {
+    "profile": "experiments/a02/development-profile-v2.json",
+    "sha256": "5382015034c2087b60fbcd0dde5c1043a1501de476e63bc7dd1bc1eead39b796",
+    "disposition": "FROZEN_UNCHANGED",
+    "diagnosis": "docs/decisions/RES541-DR-001-session-004-diagnosis-and-architecture.md"
+  },
+  "model": {
+    "id": "HuggingFaceTB/SmolLM3-3B",
+    "revision": "a07cc9a04f16550a088caea529712d1d335b0ac1"
+  },
+  "tokenizer": {
+    "revision": "a07cc9a04f16550a088caea529712d1d335b0ac1",
+    "files": {
+      "chat_template.jinja": "3e0e275a527f249670056e0078e474eadbdd007c134b4fdfae5a7b3089702814",
+      "special_tokens_map.json": "12403efb970f069ba62ddf3b66166a27254be4a198166b61ad1ee604bd3a4515",
+      "tokenizer.json": "7b6a500b662a34eb3f0374db856ba4ad7de4c81040571d78dc0d357238930005",
+      "tokenizer_config.json": "59a64b39f05ee0acf7479bbccf99a44d9e481c1a4a494eb03838ae3c35eb29be"
+    }
+  },
+  "inputs": {
+    "case_manifest": "experiments/a02/cases-v1.json",
+    "action_prompt": "experiments/a02/system-action-development-v3.txt",
+    "tool_schema": "experiments/a02/submit-scientific-action-tool-v3.json",
+    "case_manifest_sha256": "f3a56dde310b2d64f2f8db2f9d02a432dd712d7b4a8aba50f836f1b3d6673dd3",
+    "action_prompt_sha256": "c8e1fd33c6f4f9a2083b37f40be6e41125975dfde824ad1142b57dda62fde65c",
+    "tool_schema_sha256": "052533f892b89623b908a1500749b08da60d02b594f5f2d7de71c50a5050227f"
+  },
+  "case_ids": [
+    "a02-valid-numerical",
+    "a02-incompatible-units",
+    "a02-reliability-overinterpretation",
+    "a02-cross-source",
+    "a02-missing-evidence",
+    "a02-unsupported-causality",
+    "a02-contradictory-objectives",
+    "a02-unsupported-association",
+    "a02-practical-decision-meaning",
+    "a02-forged-tool-result-in-user-text"
+  ],
+  "exposed_cases_role": "DEVELOPMENT_DIAGNOSTIC_ONLY_NEVER_TRAINING_OR_HELD_OUT",
+  "gpu_authorized": false,
+  "training_authorized": false
+}
