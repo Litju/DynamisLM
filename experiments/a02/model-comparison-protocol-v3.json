@@ -104,22 +104,32 @@
       "critical_exact": 0.9,
       "decision": "ADOPT_REPAIRED_CONTRACT_WITH_CONSTRAINED_DECODING"
     },
-    "adaptation_justified": {
-      "minimum_gain": 0.1,
-      "adapted_exact_floor": 0.8,
-      "critical_ci_lower_floor": 0.0,
-      "max_family_regression": 0.1,
-      "decision": "ADAPTATION_JUSTIFIED"
-    },
     "escalate_stronger_model_below": 0.8,
-    "otherwise": "INCONCLUSIVE_NO_ADOPTION",
     "statistics": {
-      "method": "paired percentile bootstrap over held-out examples",
+      "method": "Paired percentile bootstrap at item level and with whole templates resampled as clusters; the smaller lower bound governs",
       "resamples": 10000,
       "seed": 541,
-      "alpha": 0.05
+      "alpha": 0.05,
+      "per_family": "Wilson 95% intervals, n = 20 per family",
+      "cluster_unit": "generator template_id; examples sharing a template are correlated"
     },
-    "evaluated_by": "scripts/a02_v3_decision.py::decide"
+    "evaluated_by": "scripts/a02_v3_decision.py::decide",
+    "stage_1_otherwise": "ELIGIBLE_FOR_ADAPTATION_EXPERIMENT",
+    "stage_1_meaning": "Stage 1 observes only the zero-shot arms. Failing the sufficiency rule makes an adaptation experiment eligible for separate authorization; it is not evidence that adaptation would help.",
+    "adaptation_benefit": {
+      "minimum_gain": 0.1,
+      "adapted_exact_floor": 0.8,
+      "critical_lower_bound_floor": 0.0,
+      "max_family_regression": 0.1,
+      "decision": "ADAPTATION_BENEFIT_DEMONSTRATED",
+      "requires": "Observed ADAPTED_CONSTRAINED records bound to the same held-out examples."
+    },
+    "stage_2_otherwise": "ADAPTATION_BENEFIT_NOT_DEMONSTRATED",
+    "evidence_binding": "scripts/a02_v3_decision.py::bind_arm: exact preregistered example ids in order; no duplicates, gaps or extras; family, request hash, arm, decoder, model revision, profile and protocol hashes; raw-output hash; correctness recomputed from raw output",
+    "reported_not_credited": [
+      "strict_parse_valid_gap (constrained minus unconstrained strict-parse rate)",
+      "decoder_condition_exact_gap (includes constrained-search and selection effects, not syntax alone)"
+    ]
   },
   "compute_estimate": {
     "status": "ENGINEERING_ESTIMATE_NOT_A_BOUND",
@@ -155,6 +165,13 @@
       "recorded_before_model_observations": true,
       "change": "Contract V3.1 (question precedence). Two families added (QUESTION_ADDS_PRACTICAL, QUESTION_ADDS_CAUSAL), both critical; training 2,800 and held-out 280 examples (20 per family); manifests and profile hash re-pinned; compute estimate recomputed for 280 examples.",
       "reason": "Independent review #5824688227 P0 on objective/question precedence."
+    },
+    {
+      "id": "P2-EVIDENCE-BINDING-AND-STAGES",
+      "recorded_before_model_observations": true,
+      "change": "Arm records are bound to exact preregistered example identity, family, request hash and model, profile and protocol provenance, with correctness recomputed from raw output. The syntax-gap label is replaced by a strict-parse gap and a decoder-condition gap, neither credited. Template-clustered bootstrap is added and governs when more conservative, with per-family Wilson intervals. Stage 1 concludes only adoption or eligibility for an adaptation experiment; benefit needs observed adapted records.",
+      "reason": "Independent review #5824688227 P0 evidence integrity, P1 statistics and staged decision."
     }
-  ]
+  ],
+  "claim_ceiling": "Results bound SmolLM3 behaviour on one synthetic development generator whose train and held-out splits share its 14 intent families. They are not evidence of scientific generalization, real-request safety, or PSE readiness. The ten exposed cases are diagnostics. Summed log-probability selection can favour short options such as NONE or an empty list, so the constrained arm's errors are decoder-and-model choices, not proof of understanding or inability."
 }

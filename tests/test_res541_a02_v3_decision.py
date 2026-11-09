@@ -2,48 +2,256 @@ from __future__ import annotations
 
 import copy
 import json
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 import pytest
+from scripts import a02_v3_contract as v3
 from scripts import a02_v3_decision as decision
-from scripts import a02_v3_synthetic as synthetic
 
 PROTOCOL = decision.load_protocol()
-HELDOUT = synthetic.generate(
-    "HELDOUT",
-    PROTOCOL["data"]["heldout_evaluation"]["seed"],
-    PROTOCOL["data"]["heldout_evaluation"]["count"],
-)
+FAST = copy.deepcopy(PROTOCOL)
+FAST["decision_rule"]["statistics"]["resamples"] = 600
+HELDOUT = decision.heldout_examples(PROTOCOL)
 CRITICAL = set(PROTOCOL["decision_rule"]["critical_families"])
+MODEL = PROTOCOL["candidate_model"]
 
 
-def _rows(
-    rate: float, *, critical_rate: float | None = None, offset: int = 0
-) -> list[dict[str, Any]]:
-    """Deterministic rows: example i is exact when its rank falls under the rate."""
-    rows = []
-    for i, example in enumerate(HELDOUT):
+def _wrong(example: dict[str, Any]) -> str:
+    action = copy.deepcopy(example["gold_action"])
+    action["analysis_class"] = (
+        "SCALAR_ABSOLUTE_CHANGE"
+        if action["analysis_class"] != "SCALAR_ABSOLUTE_CHANGE"
+        else "RELIABILITY_RANDOM_ERROR_COMPARISON"
+    )
+    return v3.format_action(action)
+
+
+def _records(arm: str, correct: Callable[[int, dict[str, Any]], bool]) -> list[dict[str, Any]]:
+    return [
+        decision.make_record(
+            protocol=PROTOCOL,
+            arm=arm,
+            example=example,
+            raw_output=example["target_text"] if correct(i, example) else _wrong(example),
+            truncated=False,
+            model=MODEL,
+        )
+        for i, example in enumerate(HELDOUT)
+    ]
+
+
+def _rate(rate: float, critical_rate: float | None = None, offset: int = 0) -> Any:
+    def correct(i: int, example: dict[str, Any]) -> bool:
         target = (
             critical_rate if critical_rate is not None and example["family"] in CRITICAL else rate
         )
-        rank = ((i + offset) * 37) % 100
-        rows.append(
-            {
-                "example": f"{example['split']}:{example['seed']}:{example['index']}",
-                "family": example["family"],
-                "exact": rank < target * 100,
-            }
-        )
-    return rows
+        return ((i + offset) * 37) % 100 < target * 100
+
+    return correct
 
 
-def test_protocol_is_preregistered_unauthorized_and_bound_to_regenerated_splits() -> None:
+def _zero(zc: float, zu: float = 0.3, **kw: Any) -> dict[str, list[dict[str, Any]]]:
+    return {
+        "ZERO_SHOT_CONSTRAINED": _records("ZERO_SHOT_CONSTRAINED", _rate(zc, **kw)),
+        "ZERO_SHOT_UNCONSTRAINED": _records("ZERO_SHOT_UNCONSTRAINED", _rate(zu)),
+    }
+
+
+# ---- evidence binding ---------------------------------------------------------------
+
+
+def test_correctness_is_recomputed_from_raw_output_not_reported_fields() -> None:
+    records = _records("ZERO_SHOT_CONSTRAINED", lambda i, e: True)
+    records[0]["exact"] = False  # an unbound field is ignored
+    rows = decision.bind_arm(PROTOCOL, "ZERO_SHOT_CONSTRAINED", records)
+    assert all(row["exact"] for row in rows)
+
+
+@pytest.mark.parametrize(
+    ("mutate", "message"),
+    [
+        (lambda r: r.pop(), "example set differs"),
+        (lambda r: r.append(copy.deepcopy(r[0])), "duplicated"),
+        (lambda r: r.__setitem__(slice(0, 2), [r[1], r[0]]), "preregistered order"),
+        (lambda r: r[3].update(example_id="HELDOUT:5410:9999"), "example set differs"),
+        (lambda r: r[3].update(family="RELIABILITY"), "family label differs"),
+        (lambda r: r[3].update(request_sha256="0" * 64), "request differs"),
+        (lambda r: r[3].update(raw_output=r[3]["raw_output"] + " "), "raw output hash differs"),
+        (lambda r: r[3].update(model_revision="main"), "model_revision differs"),
+        (lambda r: r[3].update(protocol_sha256="0" * 64), "protocol_sha256 differs"),
+        (lambda r: r[3].update(contract_profile_sha256="0" * 64), "contract_profile_sha256"),
+        (lambda r: r[3].update(arm="ZERO_SHOT_UNCONSTRAINED"), "arm differs"),
+        (lambda r: r[3].update(decoder="native"), "decoder differs"),
+        (lambda r: r[3].update(schema="X"), "schema differs"),
+    ],
+)
+def test_substituted_mislabelled_duplicated_or_missing_evidence_is_rejected(
+    mutate: Callable[[list[dict[str, Any]]], Any], message: str
+) -> None:
+    records = _records("ZERO_SHOT_CONSTRAINED", lambda i, e: True)
+    mutate(records)
+    with pytest.raises(decision.EvidenceError, match=message):
+        decision.bind_arm(PROTOCOL, "ZERO_SHOT_CONSTRAINED", records)
+
+
+def test_substituting_another_examples_request_and_output_is_rejected() -> None:
+    records = _records("ZERO_SHOT_CONSTRAINED", lambda i, e: True)
+    other = records[1]
+    records[0] = {**other, "example_id": records[0]["example_id"], "family": records[0]["family"]}
+    with pytest.raises(decision.EvidenceError, match="request differs"):
+        decision.bind_arm(PROTOCOL, "ZERO_SHOT_CONSTRAINED", records)
+
+
+def test_switched_arm_evidence_is_rejected() -> None:
+    evidence = _zero(0.5)
+    swapped = {
+        "ZERO_SHOT_CONSTRAINED": evidence["ZERO_SHOT_UNCONSTRAINED"],
+        "ZERO_SHOT_UNCONSTRAINED": evidence["ZERO_SHOT_CONSTRAINED"],
+    }
+    with pytest.raises(decision.EvidenceError, match="arm differs"):
+        decision.decide(swapped, FAST)
+
+
+def test_invalid_constrained_output_is_a_decoder_fault_not_a_miss() -> None:
+    records = _records("ZERO_SHOT_CONSTRAINED", lambda i, e: True)
+    raw = "not a tool call"
+    records[0].update(raw_output=raw, raw_output_sha256=v3.sha256(raw.encode()))
+    with pytest.raises(decision.EvidenceError, match="constrained output is invalid"):
+        decision.bind_arm(PROTOCOL, "ZERO_SHOT_CONSTRAINED", records)
+
+
+def test_invalid_and_truncated_native_outputs_count_as_misses() -> None:
+    records = _records("ZERO_SHOT_UNCONSTRAINED", lambda i, e: True)
+    raw = json.dumps({"name": v3.TOOL_NAME, "arguments": HELDOUT[0]["gold_action"]})
+    records[0].update(raw_output=raw, raw_output_sha256=v3.sha256(raw.encode()))
+    records[1]["truncated"] = True
+    rows = decision.bind_arm(PROTOCOL, "ZERO_SHOT_UNCONSTRAINED", records)
+    assert rows[0]["strict_valid"] is False and rows[0]["exact"] is False
+    assert rows[1]["strict_valid"] is False and rows[1]["exact"] is False
+    assert all(row["exact"] for row in rows[2:])
+
+
+def test_both_zero_shot_arms_are_required() -> None:
+    with pytest.raises(decision.EvidenceError, match="both zero-shot arms"):
+        decision.decide({"ZERO_SHOT_CONSTRAINED": _zero(0.9)["ZERO_SHOT_CONSTRAINED"]}, FAST)
+
+
+# ---- two-stage rule -------------------------------------------------------------------
+
+
+def test_stage_1_adopts_repaired_contract_and_reports_uncredited_gaps() -> None:
+    result = decision.decide(_zero(0.95, zu=0.40), FAST)
+    assert result["stage"] == 1
+    assert result["decision"] == "ADOPT_REPAIRED_CONTRACT_WITH_CONSTRAINED_DECODING"
+    assert result["strict_parse_valid_gap"] == 0.0  # both arms emitted valid syntax here
+    assert result["decoder_condition_exact_gap"]["value"] > 0.5
+    assert "not syntax alone" in result["decoder_condition_exact_gap"]["interpretation"]
+    assert "syntax_attributable_gap_not_credited" not in result
+    assert result["claim_ceiling"] == PROTOCOL["claim_ceiling"]
+
+
+def test_stage_1_failure_is_only_eligibility_never_benefit() -> None:
+    result = decision.decide(_zero(0.5), FAST)
+    assert result["stage"] == 1
+    assert result["decision"] == "ELIGIBLE_FOR_ADAPTATION_EXPERIMENT"
+    assert "adaptation_checks" not in result
+
+
+def test_weak_critical_families_block_stage_1_adoption() -> None:
+    result = decision.decide(_zero(0.99, critical_rate=0.6), FAST)
+    assert result["decision"] == "ELIGIBLE_FOR_ADAPTATION_EXPERIMENT"
+
+
+def test_stage_2_requires_the_constrained_adapted_arm() -> None:
+    evidence = {
+        **_zero(0.5),
+        "ADAPTED_UNCONSTRAINED": _records("ADAPTED_UNCONSTRAINED", _rate(0.9)),
+    }
+    with pytest.raises(decision.EvidenceError, match="constrained adapted arm"):
+        decision.decide(evidence, FAST)
+
+
+def test_stage_2_demonstrates_benefit_only_with_observed_adapted_gain() -> None:
+    evidence = {**_zero(0.5), "ADAPTED_CONSTRAINED": _records("ADAPTED_CONSTRAINED", _rate(0.92))}
+    result = decision.decide(evidence, FAST)
+    assert result["stage"] == 2
+    assert result["decision"] == "ADAPTATION_BENEFIT_DEMONSTRATED"
+    bounds = result["gain_lower_bounds"]
+    assert bounds["governing"] == min(bounds["item"], bounds["template_clustered"]) > 0
+
+
+def test_small_gain_is_not_demonstrated() -> None:
+    evidence = {**_zero(0.8), "ADAPTED_CONSTRAINED": _records("ADAPTED_CONSTRAINED", _rate(0.85))}
+    result = decision.decide(evidence, FAST)
+    assert result["adaptation_checks"]["minimum_gain"] is False
+    assert result["decision"] == "ADAPTATION_BENEFIT_NOT_DEMONSTRATED"
+
+
+def test_gain_bought_with_critical_regression_is_rejected() -> None:
+    evidence = {
+        **_zero(0.5, critical_rate=0.7),
+        "ADAPTED_CONSTRAINED": _records("ADAPTED_CONSTRAINED", _rate(0.99, critical_rate=0.4)),
+    }
+    result = decision.decide(evidence, FAST)
+    assert result["adaptation_checks"]["critical_not_worse"] is False
+    assert result["family_regressions"]
+    assert result["decision"] != "ADAPTATION_BENEFIT_DEMONSTRATED"
+
+
+def test_both_arms_weak_escalates_to_stronger_model_comparison() -> None:
+    evidence = {**_zero(0.3), "ADAPTED_CONSTRAINED": _records("ADAPTED_CONSTRAINED", _rate(0.45))}
+    assert decision.decide(evidence, FAST)["decision"] == "ESCALATE_TO_STRONGER_MODEL_COMPARISON"
+
+
+# ---- statistics -----------------------------------------------------------------------
+
+
+def test_template_clustered_bound_is_more_conservative_under_template_correlation() -> None:
+    clusters = [f"t{i // 20}" for i in range(280)]
+    # The adapted arm wins only on whole templates: strongly template-correlated outcomes.
+    adapted = [int(c[1:]) % 2 == 0 for c in clusters]
+    base = [False] * 280
+    item = decision.paired_bootstrap_lower(adapted, base, resamples=2000, seed=1, alpha=0.05)
+    clustered = decision.clustered_bootstrap_lower(
+        adapted, base, clusters, resamples=2000, seed=1, alpha=0.05
+    )
+    assert clustered < item
+
+
+def test_bootstrap_bounds_are_deterministic() -> None:
+    a = [True] * 60 + [False] * 40
+    b = [True] * 40 + [False] * 60
+    clusters = [f"c{i % 10}" for i in range(100)]
+    one = decision.clustered_bootstrap_lower(a, b, clusters, resamples=500, seed=3, alpha=0.05)
+    assert one == decision.clustered_bootstrap_lower(
+        a, b, clusters, resamples=500, seed=3, alpha=0.05
+    )
+    assert decision.paired_bootstrap_lower(a, a, resamples=300, seed=1, alpha=0.05) == 0
+
+
+def test_wilson_interval_matches_reference_values() -> None:
+    low, high = decision.wilson(18, 20)
+    assert low == pytest.approx(0.6990, abs=1e-3) and high == pytest.approx(0.9721, abs=1e-3)
+    assert decision.wilson(0, 0) == (0.0, 1.0)
+
+
+def test_report_discloses_template_cluster_count_and_per_family_intervals() -> None:
+    result = decision.decide(_zero(0.5), FAST)
+    assert result["template_clusters"] < len(HELDOUT)
+    family = result["ZERO_SHOT_CONSTRAINED"]["family"]
+    assert len(family) == 14 and all(v["n"] == 20 for v in family.values())
+
+
+# ---- protocol -------------------------------------------------------------------------
+
+
+def test_protocol_is_preregistered_unauthorized_and_amended_before_observations() -> None:
     assert PROTOCOL["status"] == "PREREGISTERED_NOT_AUTHORIZED"
     assert not any(PROTOCOL["authorization"][k] for k in ("gpu", "training", "session_005"))
-    assert PROTOCOL["data"]["exposed_development_cases"]["role"].startswith(
-        "DEVELOPMENT_DIAGNOSTIC_ONLY"
-    )
+    assert all(a["recorded_before_model_observations"] for a in PROTOCOL["amendments"])
+    assert PROTOCOL["decision_rule"]["statistics"]["resamples"] == 10000
 
 
 @pytest.mark.parametrize(
@@ -68,82 +276,6 @@ def test_protocol_tampering_is_detected(
     monkeypatch.setattr(decision, "PROTOCOL_PATH", altered)
     with pytest.raises(ValueError, match=message):
         decision.load_protocol()
-
-
-def test_strong_zero_shot_adopts_repaired_contract_without_training() -> None:
-    result = decision.decide(
-        {"ZERO_SHOT_CONSTRAINED": _rows(0.95), "ZERO_SHOT_UNCONSTRAINED": _rows(0.40)}, PROTOCOL
-    )
-    assert result["decision"] == "ADOPT_REPAIRED_CONTRACT_WITH_CONSTRAINED_DECODING"
-    assert result["syntax_attributable_gap_not_credited"] > 0.5
-
-
-def test_weak_zero_shot_requires_the_adaptation_arm_before_any_choice() -> None:
-    result = decision.decide({"ZERO_SHOT_CONSTRAINED": _rows(0.50)}, PROTOCOL)
-    assert result["decision"] == "ADAPTATION_ARM_REQUIRED"
-
-
-def test_strong_zero_shot_with_weak_critical_families_is_not_sufficient() -> None:
-    result = decision.decide({"ZERO_SHOT_CONSTRAINED": _rows(0.99, critical_rate=0.60)}, PROTOCOL)
-    assert result["decision"] == "ADAPTATION_ARM_REQUIRED"
-
-
-def test_clear_adapted_gain_is_justified() -> None:
-    result = decision.decide(
-        {"ZERO_SHOT_CONSTRAINED": _rows(0.50), "ADAPTED_CONSTRAINED": _rows(0.92)}, PROTOCOL
-    )
-    assert result["decision"] == "ADAPTATION_JUSTIFIED"
-    assert all(result["adaptation_checks"].values())
-    assert result["gain_ci_lower"] > 0
-
-
-def test_small_gain_is_not_justified() -> None:
-    result = decision.decide(
-        {"ZERO_SHOT_CONSTRAINED": _rows(0.80), "ADAPTED_CONSTRAINED": _rows(0.85)}, PROTOCOL
-    )
-    assert result["adaptation_checks"]["minimum_gain"] is False
-    assert result["decision"] == "INCONCLUSIVE_NO_ADOPTION"
-
-
-def test_gain_bought_with_a_critical_regression_is_rejected() -> None:
-    result = decision.decide(
-        {
-            "ZERO_SHOT_CONSTRAINED": _rows(0.50, critical_rate=0.70),
-            "ADAPTED_CONSTRAINED": _rows(0.99, critical_rate=0.40),
-        },
-        PROTOCOL,
-    )
-    assert result["adaptation_checks"]["critical_not_worse"] is False
-    assert result["family_regressions"]
-    assert result["decision"] != "ADAPTATION_JUSTIFIED"
-
-
-def test_both_arms_weak_escalates_to_stronger_model_comparison() -> None:
-    result = decision.decide(
-        {"ZERO_SHOT_CONSTRAINED": _rows(0.30), "ADAPTED_CONSTRAINED": _rows(0.45)}, PROTOCOL
-    )
-    assert result["decision"] == "ESCALATE_TO_STRONGER_MODEL_COMPARISON"
-
-
-def test_decision_requires_identical_complete_held_out_examples() -> None:
-    rows = _rows(0.5)
-    with pytest.raises(ValueError, match="identical held-out examples"):
-        decision.decide(
-            {"ZERO_SHOT_CONSTRAINED": rows, "ADAPTED_CONSTRAINED": list(reversed(rows))}, PROTOCOL
-        )
-    with pytest.raises(ValueError, match="complete preregistered"):
-        decision.decide({"ZERO_SHOT_CONSTRAINED": rows[:-1]}, PROTOCOL)
-    with pytest.raises(ValueError, match="identical held-out examples"):
-        decision.decide({"ZERO_SHOT_CONSTRAINED": rows, "EXPOSED_TEN": rows}, PROTOCOL)
-
-
-def test_bootstrap_lower_bound_is_deterministic_and_ordered() -> None:
-    a = [True] * 60 + [False] * 40
-    b = [True] * 40 + [False] * 60
-    lower = decision._paired_bootstrap_lower(a, b, resamples=2000, seed=1, alpha=0.05)
-    assert lower == decision._paired_bootstrap_lower(a, b, resamples=2000, seed=1, alpha=0.05)
-    assert 0 < lower < 0.2
-    assert decision._paired_bootstrap_lower(a, a, resamples=500, seed=1, alpha=0.05) == 0
 
 
 def test_compute_estimate_matches_its_preregistered_inputs() -> None:
