@@ -227,8 +227,12 @@ class CachedSequenceLogprob:
         return float(sum(values[start - 1 - common :]))
 
 
-class HFIncrementalBackend:  # pragma: no cover - GPU binding, qualified in-run
-    """transformers DynamicCache backend; requires torch."""
+class HFIncrementalBackend:
+    """transformers DynamicCache backend; requires torch.
+
+    CPU-qualified against full re-scoring with a tiny real SmolLM3ForCausalLM (RoPE and NoPE
+    layers) in tests/test_res541_a02_v3_real_decoder.py; the pinned model is re-checked in-run.
+    """
 
     def __init__(self, model: Any):
         self.model = model
@@ -250,7 +254,7 @@ class HFIncrementalBackend:  # pragma: no cover - GPU binding, qualified in-run
         return [float(v) for v in logp.gather(1, index).squeeze(1).tolist()]
 
 
-def hf_sequence_logprob(model: Any) -> SequenceLogprob:  # pragma: no cover - GPU binding
+def hf_sequence_logprob(model: Any) -> SequenceLogprob:
     """Uncached reference binding: full re-scoring per option. Used in-run only to verify
     the cached binding on a sample before any arm result counts."""
     import torch
