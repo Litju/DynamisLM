@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import builtins
+import copy
 import hashlib
 import io
 import json
@@ -64,17 +65,60 @@ def test_exec_bound_fails_closed_on_unknown_usage_rate() -> None:
         a02_dev_execution._safe_exec_seconds(1.0, 0.0)
 
 
-@pytest.mark.parametrize("seconds", [210, 618, 720])
+@pytest.mark.parametrize("seconds", [506, 618, 720])
 def test_remote_stage_timeouts_stay_within_campaign_exec_budget(seconds: int) -> None:
     stages = a02_dev_execution._split_stage_timeouts(seconds)
     assert sum(stages.values()) == seconds
-    assert 30 <= stages["prepare"] <= a02_dev_execution.REMOTE_PREPARE_MAX_SECONDS
-    assert 30 <= stages["infer"] <= a02_dev_execution.REMOTE_INFERENCE_MAX_SECONDS
+    assert (
+        a02_dev_execution.REMOTE_PREPARE_MIN_SECONDS
+        <= stages["prepare"]
+        <= a02_dev_execution.REMOTE_PREPARE_MAX_SECONDS
+    )
+    assert (
+        a02_dev_execution.required_inference_stage_seconds()
+        <= stages["infer"]
+        <= a02_dev_execution.REMOTE_INFERENCE_MAX_SECONDS
+    )
 
 
 def test_remote_stage_budget_too_small_fails_closed() -> None:
-    with pytest.raises(a02_dev_execution.DevelopmentRunError, match="both V2 stages"):
-        a02_dev_execution._split_stage_timeouts(209)
+    with pytest.raises(a02_dev_execution.DevelopmentRunError, match="worst-case inference"):
+        a02_dev_execution._split_stage_timeouts(505)
+
+
+def test_inference_requirement_is_derived_from_profile_token_caps() -> None:
+    profile = a02_dev_protocol.load_profile()
+    decoding = profile["decoding"]
+    tokens = len(profile["case_ids"]) * (
+        decoding["action_max_new_tokens"] + decoding["final_max_new_tokens"]
+    )
+    assert a02_dev_execution.required_inference_stage_seconds(profile) == (
+        a02_dev_execution.INFERENCE_FIXED_OVERHEAD_SECONDS
+        + a02_dev_execution.INFERENCE_WARMUP_SECONDS
+        + 2 * len(profile["case_ids"]) * a02_dev_execution.INFERENCE_PER_GENERATION_OVERHEAD_SECONDS
+        + -(-tokens // a02_dev_execution.INFERENCE_MIN_DECODE_TOKENS_PER_SECOND)
+        + a02_dev_execution.REMOTE_WORKER_MARGIN_SECONDS
+    )
+
+
+def test_session_004_split_would_now_be_rejected_and_rebalanced() -> None:
+    # Session 004 received prepare=420/infer=198 from a 618 s exec budget and timed out
+    # during the ninth case. That inference stage is below the worst-case requirement.
+    assert a02_dev_execution.required_inference_stage_seconds() > 198
+    stages = a02_dev_execution._split_stage_timeouts(618)
+    assert stages["infer"] > 198
+    assert stages["prepare"] < 420
+
+
+def test_profile_exceeding_inference_ceiling_fails_closed_at_any_budget() -> None:
+    profile = copy.deepcopy(a02_dev_protocol.load_profile())
+    profile["decoding"]["action_max_new_tokens"] = 512
+    with pytest.raises(a02_dev_execution.DevelopmentRunError, match="inference stage ceiling"):
+        a02_dev_execution._split_stage_timeouts(720, profile)
+
+
+def test_campaign_exec_ceiling_can_cover_the_frozen_profile() -> None:
+    a02_dev_execution._split_stage_timeouts(a02_dev_execution.EXEC_SECONDS)
 
 
 def test_campaign_budget_counts_original_usage_and_rejects_topups_or_exhaustion() -> None:

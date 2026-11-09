@@ -47,6 +47,18 @@ COST_POLL_SECONDS = 10
 CLEANUP_RESERVE_SECONDS = 90
 REMOTE_PREPARE_MAX_SECONDS = 420
 REMOTE_INFERENCE_MAX_SECONDS = 360
+# Inference-stage sizing. Session 004 (run res541-a02-dev-v2-004-53820150-fd19bc72) spent
+# 77.7 s before its first token (runtime checks, 33.2 s asset re-verification, 35.6 s model
+# load), needed 7.3 s for the first warm-up token, and decoded at >= 23.05 tokens/s on a T4.
+# Its 198 s inference stage (168 s worker) could not cover 20 bounded generations while
+# prepare used 108 s of a 420 s allowance. Each bound below is more conservative than the
+# observation; the worst-case token count comes from the profile, never from observed lengths.
+REMOTE_WORKER_MARGIN_SECONDS = 30
+INFERENCE_FIXED_OVERHEAD_SECONDS = 90
+INFERENCE_WARMUP_SECONDS = 10
+INFERENCE_PER_GENERATION_OVERHEAD_SECONDS = 1
+INFERENCE_MIN_DECODE_TOKENS_PER_SECOND = 20
+REMOTE_PREPARE_MIN_SECONDS = 180
 _URL = re.compile(r"https?://[^\s<>\"']+")
 
 
@@ -1024,11 +1036,37 @@ def _safe_exec_seconds(remaining_cu: float, usage_rate_cu_per_hour: float) -> in
     )
 
 
-def _split_stage_timeouts(exec_seconds: int) -> dict[str, int]:
-    prepare = min(REMOTE_PREPARE_MAX_SECONDS, exec_seconds - 180)
-    inference = exec_seconds - prepare
-    if prepare < 30 or inference < 30 or inference > REMOTE_INFERENCE_MAX_SECONDS:
-        raise DevelopmentRunError("remaining CU budget cannot safely bound both V2 stages")
+def required_inference_stage_seconds(profile: dict[str, Any] | None = None) -> int:
+    """Worst-case inference-stage seconds for every planned generation at its token cap."""
+    profile = a02_dev_protocol.load_profile() if profile is None else profile
+    decoding = profile["decoding"]
+    cases = len(profile["case_ids"])
+    generations = 2 * cases
+    tokens = cases * (
+        int(decoding["action_max_new_tokens"]) + int(decoding["final_max_new_tokens"])
+    )
+    return (
+        INFERENCE_FIXED_OVERHEAD_SECONDS
+        + INFERENCE_WARMUP_SECONDS
+        + generations * INFERENCE_PER_GENERATION_OVERHEAD_SECONDS
+        + math.ceil(tokens / INFERENCE_MIN_DECODE_TOKENS_PER_SECOND)
+        + REMOTE_WORKER_MARGIN_SECONDS
+    )
+
+
+def _split_stage_timeouts(
+    exec_seconds: int, profile: dict[str, Any] | None = None
+) -> dict[str, int]:
+    """Reserve worst-case inference first; slack goes to inference, then to prepare."""
+    required = required_inference_stage_seconds(profile)
+    if required > REMOTE_INFERENCE_MAX_SECONDS:
+        raise DevelopmentRunError("V2 profile cannot complete within the inference stage ceiling")
+    inference = min(REMOTE_INFERENCE_MAX_SECONDS, exec_seconds - REMOTE_PREPARE_MIN_SECONDS)
+    prepare = min(REMOTE_PREPARE_MAX_SECONDS, exec_seconds - inference)
+    if prepare < REMOTE_PREPARE_MIN_SECONDS or inference < required:
+        raise DevelopmentRunError(
+            "remaining CU budget cannot cover V2 prepare and worst-case inference"
+        )
     return {"prepare": prepare, "infer": inference}
 
 
