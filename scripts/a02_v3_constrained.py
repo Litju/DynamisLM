@@ -21,7 +21,7 @@ from __future__ import annotations
 import json
 import math
 from collections.abc import Callable, Sequence
-from typing import Any
+from typing import Any, Protocol
 
 from scripts import a02_v3_contract as v3
 
@@ -191,9 +191,69 @@ def max_scorer_calls(request: dict[str, Any]) -> int:
     )
 
 
+class IncrementalBackend(Protocol):
+    def logprobs(self, keep: int, new_ids: Sequence[int], targets: Sequence[int]) -> list[float]:
+        """Crop the cache to ``keep`` tokens, feed ``new_ids``, and return log p(targets[j])
+        at each fed position j. The cache then holds ``keep + len(new_ids)`` tokens."""
+        ...
+
+
+class CachedSequenceLogprob:
+    """KV-cache-reusing SequenceLogprob with identical values to full re-scoring.
+
+    Consecutive calls share the prompt and action prefix, so only the tokens after the
+    longest cached common prefix are fed. ``fed_tokens`` counts the backend's work.
+    """
+
+    def __init__(self, backend: IncrementalBackend):
+        self.backend = backend
+        self.cached: list[int] = []
+        self.fed_tokens = 0
+
+    def __call__(self, ids: Sequence[int], start: int) -> float:
+        ids = list(ids)
+        if not 0 < start < len(ids):
+            raise ValueError("scored span must be non-empty and follow at least one token")
+        common = 0
+        limit = min(len(self.cached), start - 1)
+        while common < limit and self.cached[common] == ids[common]:
+            common += 1
+        feed, targets = ids[common:-1], ids[common + 1 :]
+        values = self.backend.logprobs(common, feed, targets)
+        if len(values) != len(feed):
+            raise ValueError("backend returned a misaligned log-probability vector")
+        self.fed_tokens += len(feed)
+        self.cached = ids[:-1]
+        return float(sum(values[start - 1 - common :]))
+
+
+class HFIncrementalBackend:  # pragma: no cover - GPU binding, qualified in-run
+    """transformers DynamicCache backend; requires torch."""
+
+    def __init__(self, model: Any):
+        self.model = model
+        self.cache: Any = None
+
+    def logprobs(self, keep: int, new_ids: Sequence[int], targets: Sequence[int]) -> list[float]:
+        import torch  # type: ignore[import-not-found]
+
+        if keep == 0:
+            self.cache = None
+        elif self.cache is not None:
+            self.cache.crop(keep)
+        tensor = torch.tensor([list(new_ids)], device=self.model.device)
+        with torch.inference_mode():
+            out = self.model(tensor, past_key_values=self.cache, use_cache=True)
+        self.cache = out.past_key_values
+        logp = torch.log_softmax(out.logits[0].float(), dim=-1)
+        index = torch.tensor(list(targets), device=logp.device).unsqueeze(1)
+        return [float(v) for v in logp.gather(1, index).squeeze(1).tolist()]
+
+
 def hf_sequence_logprob(model: Any) -> SequenceLogprob:  # pragma: no cover - GPU binding
-    """Bind a causal LM; requires torch and is exercised only in an authorized GPU run."""
-    import torch  # type: ignore[import-not-found]
+    """Uncached reference binding: full re-scoring per option. Used in-run only to verify
+    the cached binding on a sample before any arm result counts."""
+    import torch
 
     def score(ids: Sequence[int], start: int) -> float:
         tensor = torch.tensor([list(ids)], device=model.device)

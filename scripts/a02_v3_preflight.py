@@ -45,9 +45,11 @@ def build_preflight(tokenizer: Any) -> dict[str, Any]:
             encode=encode,
             chooser=constrained.target_chooser(expected),
         )
+        work = _gold_path_scoring_work(request, prompt["prompt_token_ids"], encode, expected)
         rows.append(
             {
                 "case_id": case_id,
+                **work,
                 "prompt_tokens": prompt["prompt_tokens"],
                 "rendered_prompt_sha256": prompt["rendered_prompt_sha256"],
                 "gold_native_action_tokens": len(encode(native)) + 1,
@@ -67,6 +69,10 @@ def build_preflight(tokenizer: Any) -> dict[str, Any]:
         "max_prompt_tokens": max(r["prompt_tokens"] for r in rows),
         "max_gold_native_action_tokens": max(r["gold_native_action_tokens"] for r in rows),
         "max_constrained_scorer_calls": max(r["constrained_max_scorer_calls"] for r in rows),
+        "max_gold_path_cached_fed_tokens": max(r["gold_path_cached_fed_tokens"] for r in rows),
+        "max_gold_path_uncached_scored_tokens": max(
+            r["gold_path_uncached_scored_tokens"] for r in rows
+        ),
         "max_constrained_gold_tokens": max(r["constrained_gold_tokens"] for r in rows),
         "oracle_exact": {
             "numerator": sum(r["oracle_exact"] for r in rows),
@@ -74,6 +80,43 @@ def build_preflight(tokenizer: Any) -> dict[str, Any]:
         },
         "gpu_allocated": False,
         "weights_loaded": False,
+    }
+
+
+class _CountingBackend:
+    """Counts fed tokens; returns zero log-probabilities (the path is steered, not scored)."""
+
+    def __init__(self) -> None:
+        self.cache: list[int] = []
+
+    def logprobs(self, keep: int, new_ids: Any, targets: Any) -> list[float]:
+        self.cache = self.cache[:keep] + list(new_ids)
+        return [0.0] * len(new_ids)
+
+
+def _gold_path_scoring_work(
+    request: dict[str, Any], prompt_ids: list[int], encode: Any, expected: dict[str, Any]
+) -> dict[str, int]:
+    """Exact tokens fed per scorer along the gold path, every option scored as in a run."""
+    cached = constrained.CachedSequenceLogprob(_CountingBackend())
+    uncached_tokens = 0
+    scoring = constrained.model_chooser(cached)
+    steer = constrained.target_chooser(expected)
+
+    def chooser(walk: Any, field: str, options: list[str]) -> tuple[str, list[float]]:
+        nonlocal uncached_tokens
+        before = walk.calls
+        scoring(walk, field, options)
+        uncached_tokens += sum(
+            len(prompt_ids) + len(encode(walk.text + option)) - 1 for option in options
+        )
+        assert walk.calls - before == len(options)
+        return steer(walk, field, options)
+
+    constrained.decode(request=request, prompt_ids=prompt_ids, encode=encode, chooser=chooser)
+    return {
+        "gold_path_cached_fed_tokens": cached.fed_tokens,
+        "gold_path_uncached_scored_tokens": uncached_tokens,
     }
 
 

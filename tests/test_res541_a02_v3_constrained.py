@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 from collections.abc import Sequence
 from typing import Any
 
@@ -207,3 +208,88 @@ def test_options_are_scored_from_a_shared_start_under_merging_tokenization() -> 
     assert all(start >= 2 for start in starts)
     assert result["token_ids"] == encode(result["text"])
     assert v3.parse_action(result["text"], v3.observation_ids(request)) == result["action"]
+
+
+class _ToyLM:
+    """Deterministic toy LM: log p(t | context) depends on the whole context."""
+
+    vocab = 97
+
+    def logp(self, context: Sequence[int], token: int) -> float:
+        weights = [((sum(context) * 31 + len(context) * 7 + t * 13) % 17) + 1 for t in range(97)]
+        return math.log(weights[token % 97] / sum(weights))
+
+    def full(self, ids: Sequence[int], start: int) -> float:
+        return sum(self.logp(ids[:i], ids[i]) for i in range(start, len(ids)))
+
+
+class _ToyBackend:
+    def __init__(self, lm: _ToyLM):
+        self.lm = lm
+        self.cache: list[int] = []
+
+    def logprobs(self, keep: int, new_ids: Sequence[int], targets: Sequence[int]) -> list[float]:
+        assert 0 <= keep <= len(self.cache)
+        self.cache = self.cache[:keep]
+        values = []
+        for token, target in zip(new_ids, targets, strict=True):
+            self.cache.append(token)
+            values.append(self.lm.logp(self.cache, target))
+        return values
+
+
+def test_cached_scorer_equals_full_rescoring_and_feeds_far_fewer_tokens() -> None:
+    lm = _ToyLM()
+    full_calls: list[float] = []
+    cached = constrained.CachedSequenceLogprob(_ToyBackend(lm))
+
+    def full(ids: Sequence[int], start: int) -> float:
+        value = lm.full(ids, start)
+        full_calls.append(value)
+        return value
+
+    request = CASES["a02-unsupported-causality"]["request"]
+    prompt = list(range(1, 400))
+    reference = constrained.decode(
+        request=request, prompt_ids=prompt, encode=_encode, chooser=constrained.model_chooser(full)
+    )
+    fast = constrained.decode(
+        request=request,
+        prompt_ids=prompt,
+        encode=_encode,
+        chooser=constrained.model_chooser(cached),
+    )
+    assert fast["action"] == reference["action"]
+    flat_fast = [v for c in fast["choices"] for v in c["scores"]]
+    flat_reference = [v for c in reference["choices"] for v in c["scores"]]
+    assert flat_fast == pytest.approx(flat_reference, abs=1e-9)
+    full_tokens = sum(len(prompt) + len(reference["text"]) for _ in full_calls)
+    assert cached.fed_tokens * 10 < full_tokens
+
+
+def test_cached_scorer_recovers_from_prefix_retokenization() -> None:
+    lm = _ToyLM()
+    cached = constrained.CachedSequenceLogprob(_ToyBackend(lm))
+    first = [5, 6, 7, 8, 9]
+    assert cached(first, 3) == pytest.approx(lm.full(first, 3))
+    # A later call whose prefix diverges inside the previously cached region.
+    second = [5, 6, 70, 8, 9, 10]
+    assert cached(second, 4) == pytest.approx(lm.full(second, 4))
+    assert cached([1, 2], 1) == pytest.approx(lm.full([1, 2], 1))
+
+
+@pytest.mark.parametrize(("ids", "start"), [([1, 2, 3], 0), ([1, 2, 3], 3), ([1], 1)])
+def test_cached_scorer_rejects_empty_or_unconditioned_spans(ids: list[int], start: int) -> None:
+    with pytest.raises(ValueError, match="scored span"):
+        constrained.CachedSequenceLogprob(_ToyBackend(_ToyLM()))(ids, start)
+
+
+def test_cached_scorer_rejects_misaligned_backend() -> None:
+    class Broken(_ToyBackend):
+        def logprobs(
+            self, keep: int, new_ids: Sequence[int], targets: Sequence[int]
+        ) -> list[float]:
+            return [0.0]
+
+    with pytest.raises(ValueError, match="misaligned"):
+        constrained.CachedSequenceLogprob(Broken(_ToyLM()))([1, 2, 3, 4], 2)

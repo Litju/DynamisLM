@@ -24,6 +24,9 @@ def test_preflight_report_is_complete_and_allocates_nothing() -> None:
     assert len(report["cases"]) == 10
     assert all(row["constrained_emitted_ids_are_joint_encoding"] for row in report["cases"])
     assert report["max_constrained_scorer_calls"] == 69
+    for row in report["cases"]:
+        assert 0 < row["gold_path_cached_fed_tokens"] < row["gold_path_uncached_scored_tokens"]
+        assert row["gold_path_cached_fed_tokens"] >= row["prompt_tokens"]
 
 
 def test_profile_token_caps_follow_their_stated_derivation_rule() -> None:
