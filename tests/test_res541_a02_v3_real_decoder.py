@@ -181,3 +181,91 @@ def test_decoded_choices_are_reproducible_and_disclose_short_option_bias(
     # usually beats any item. This is why constrained errors are decoder-and-model choices.
     closes = [c for c in one["choices"] if c["options"][-1] == "]" and len(c["options"]) > 1]
     assert closes
+
+
+CHAT_TEMPLATE = (
+    "{% for m in messages %}<|{{ m.role }}|>{{ m.content }}{% endfor %}"
+    "{% if xml_tools %}<|tools|>{{ xml_tools | tojson }}{% endif %}<|assistant|>"
+)
+
+
+@pytest.fixture(scope="module")
+def chat_tokenizer() -> Any:
+    from scripts import a02_v3_decision as decision
+
+    protocol = decision.load_protocol()
+    corpus = _corpus()
+    corpus.append(v3.ACTION_PROMPT_PATH.read_text(encoding="utf-8"))
+    corpus.append(json.dumps(v3.tool_schema()))
+    for example in decision.heldout_examples(protocol)[:28]:
+        corpus.append(v3.user_message(example["request"]))
+        corpus.append(example["target_text"])
+    model = tokenizers.models.BPE()
+    tok = tokenizers.Tokenizer(model)
+    tok.pre_tokenizer = tokenizers.pre_tokenizers.ByteLevel(add_prefix_space=False)
+    tok.decoder = tokenizers.decoders.ByteLevel()
+    trainer = tokenizers.trainers.BpeTrainer(
+        vocab_size=6000,
+        initial_alphabet=tokenizers.pre_tokenizers.ByteLevel.alphabet(),
+        show_progress=False,
+    )
+    tok.train_from_iterator(corpus * 3, trainer=trainer)
+    fast = transformers.PreTrainedTokenizerFast(tokenizer_object=tok)
+    fast.chat_template = CHAT_TEMPLATE
+    return fast
+
+
+def test_hf_worker_backend_runs_resumable_worker_end_to_end(
+    chat_tokenizer: Any, tmp_path: Any
+) -> None:
+    from scripts import a02_v3_decision as decision
+    from scripts import a02_v3_worker as worker
+
+    torch.manual_seed(7)
+    config = transformers.SmolLM3Config(
+        vocab_size=len(chat_tokenizer),
+        hidden_size=32,
+        intermediate_size=64,
+        num_hidden_layers=4,
+        num_attention_heads=4,
+        num_key_value_heads=2,
+        max_position_embeddings=8192,
+        pad_token_id=0,
+        bos_token_id=None,
+        eos_token_id=None,
+    )
+    lm = transformers.SmolLM3ForCausalLM(config).to(torch.float32)
+    lm.eval()
+    protocol = decision.load_protocol()
+    backend = worker.HFWorkerBackend(lm, chat_tokenizer, protocol["candidate_model"])
+    items = worker.work_items(protocol)[:5]  # qualification + two examples, both arms
+    path = tmp_path / "checkpoint.jsonl"
+    costs = {"QUALIFICATION": 1.0, "ZERO_SHOT_UNCONSTRAINED": 1.0, "ZERO_SHOT_CONSTRAINED": 1.0}
+    first = worker.run_worker(
+        protocol=protocol,
+        items=items,
+        checkpoint=path,
+        backend=backend,
+        deadline=float("inf"),
+        item_cost_bounds=costs,
+        stop_after=2,
+    )
+    assert first["status"] == "STOPPED" and first["committed"] == 2
+    done = worker.run_worker(
+        protocol=protocol,
+        items=items,
+        checkpoint=path,
+        backend=backend,
+        deadline=float("inf"),
+        item_cost_bounds=costs,
+    )
+    assert done["status"] == "COMPLETE"
+    entries = worker.read_checkpoint(path, items)["entries"]
+    qualification = entries[0]["record"]
+    assert qualification["passed"] is True
+    assert all(r["options_scored"] > 0 for r in qualification["examples"])
+    native = entries[1]["record"]
+    assert native["decoder"] == "native" and native["truncated"] is True  # random LM, no EOS
+    constrained_record = entries[2]["record"]
+    example = decision.heldout_examples(protocol)[0]
+    assert v3.parse_action(constrained_record["raw_output"], v3.observation_ids(example["request"]))
