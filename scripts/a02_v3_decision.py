@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import math
 import random
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 from scripts import a02_v3_contract as v3
@@ -272,7 +272,7 @@ def _gain_lower(
 
 
 def decide(
-    evidence: dict[str, Sequence[dict[str, Any]]], protocol: dict[str, Any]
+    evidence: Mapping[str, Sequence[dict[str, Any]]], protocol: dict[str, Any]
 ) -> dict[str, Any]:
     """Apply the preregistered two-stage rule to bound arm evidence."""
     rule = protocol["decision_rule"]
