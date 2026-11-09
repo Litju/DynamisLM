@@ -705,11 +705,9 @@ def _load_tokenizer(path: Path) -> Any:
     for name, digest in profile["tokenizer"]["files"].items():
         if sha256((path / name).read_bytes()) != digest:
             raise ValueError(f"pinned tokenizer file differs: {name}")
-    from transformers import AutoTokenizer
+    from transformers import AutoTokenizer  # type: ignore[import-not-found]
 
-    return AutoTokenizer.from_pretrained(  # type: ignore[no-untyped-call]
-        str(path), local_files_only=True
-    )
+    return AutoTokenizer.from_pretrained(str(path), local_files_only=True)
 
 
 def write_exclusive(path: Path, value: dict[str, Any]) -> str:
