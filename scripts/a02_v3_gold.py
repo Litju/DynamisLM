@@ -3,7 +3,8 @@
 Every gold field is derived from the model-visible request plus a cited authority:
 
 * ``observation_ids``: visible ids of observations of the requested measurement;
-* ``analysis_class`` / ``target_claims``: closed objective-phrase rules in
+* ``analysis_class`` / ``target_claims``: closed phrase rules over the request-bearing
+  ``objective`` and ``question`` fields (V3.1 precedence) in
   ``objective-semantics-v3.json``, each citing RES-70 claim levels;
 * ``operation``: the RES-70 capability registry and operation inventory
   (``a02_v3_contract.operation_for``).
@@ -37,6 +38,11 @@ def load_semantics(path: Path = SEMANTICS_PATH) -> dict[str, Any]:
     phrases = [rule["phrase"].lower() for rule in semantics["rules"]]
     if len(set(ids)) != len(ids) or len(set(phrases)) != len(phrases):
         raise ValueError("V3 objective semantics rules are not unique")
+    if semantics.get("fields", {}).get("request_bearing") != ["objective", "question"]:
+        raise ValueError("V3 objective semantics must declare objective and question precedence")
+    triggers = semantics.get("claim_triggers")
+    if not isinstance(triggers, list) or not triggers or any(not t for t in triggers):
+        raise ValueError("V3 objective semantics must declare claim triggers")
     for rule in semantics["rules"]:
         analysis = rule["analysis_class"]
         if analysis is not None and analysis not in v3.ANALYSIS_CLASSES:
@@ -49,6 +55,34 @@ def load_semantics(path: Path = SEMANTICS_PATH) -> dict[str, Any]:
     return semantics
 
 
+def _normalize(text: str) -> str:
+    return " ".join(text.lower().split())
+
+
+def _match_field(field: str, text: str, semantics: dict[str, Any]) -> list[dict[str, Any]]:
+    """Rules matched in one request-bearing field; uncovered claim triggers fail closed."""
+    lowered = _normalize(text)
+    matched, covered = [], []
+    for rule in semantics["rules"]:
+        phrase = rule["phrase"].lower()
+        count = lowered.count(phrase)
+        if count > 1:
+            raise DerivationUnsupportedError(f"{field} repeats phrase: {rule['id']}")
+        if count == 1:
+            matched.append(rule)
+            start = lowered.index(phrase)
+            covered.append((start, start + len(phrase)))
+    for trigger in semantics["claim_triggers"]:
+        index = lowered.find(trigger)
+        while index >= 0:
+            if not any(lo <= index and index + len(trigger) <= hi for lo, hi in covered):
+                raise DerivationUnsupportedError(
+                    f"{field} carries unadjudicated claim content: {trigger!r}"
+                )
+            index = lowered.find(trigger, index + 1)
+    return matched
+
+
 def derive_gold(request: dict[str, Any], semantics: dict[str, Any] | None = None) -> dict[str, Any]:
     """Return ``{"action": ..., "justification": ...}`` or raise DerivationUnsupportedError."""
     semantics = load_semantics() if semantics is None else semantics
@@ -56,15 +90,25 @@ def derive_gold(request: dict[str, Any], semantics: dict[str, Any] | None = None
     objective = visible.get("objective")
     if not isinstance(objective, str) or not objective:
         raise DerivationUnsupportedError("request has no objective")
-    lowered = objective.lower()
-    matched = []
-    for rule in semantics["rules"]:
-        count = lowered.count(rule["phrase"].lower())
-        if count > 1:
-            raise DerivationUnsupportedError(f"objective repeats phrase: {rule['id']}")
-        if count == 1:
-            matched.append(rule)
-    if not any(not rule.get("composite_marker") for rule in matched):
+    fields = {"objective": objective}
+    question = visible.get("question")
+    if question is not None and not isinstance(question, str):
+        raise DerivationUnsupportedError("request question is not text")
+    if question and _normalize(question) != _normalize(objective):
+        fields["question"] = question
+
+    matched: list[dict[str, Any]] = []
+    matched_by_field: dict[str, list[str]] = {}
+    for field, text in fields.items():
+        field_rules = _match_field(field, text, semantics)
+        matched_by_field[field] = [rule["id"] for rule in field_rules]
+        matched.extend(rule for rule in field_rules if rule not in matched)
+    objective_rules = [
+        rule
+        for rule in semantics["rules"]
+        if rule["id"] in matched_by_field["objective"] and not rule.get("composite_marker")
+    ]
+    if not objective_rules:
         raise DerivationUnsupportedError("objective matches no declared semantic rule")
 
     claims = {
@@ -101,6 +145,8 @@ def derive_gold(request: dict[str, Any], semantics: dict[str, Any] | None = None
     )
     justification = {
         "objective": objective,
+        "request_fields": sorted(fields),
+        "matched_rules_by_field": matched_by_field,
         "matched_rules": [rule["id"] for rule in matched],
         "analysis_class": "composite: NONE" if composite else f"rule {analyses[0]}",
         "observation_ids": {
@@ -156,9 +202,10 @@ def audit_case(request: dict[str, Any], semantics: dict[str, Any]) -> dict[str, 
             _resolve_pointer(visible, item["pointer"]) == item["value"]
             for item in why["observation_ids"]["evidence"]
         ),
-        "objective_phrases_visible": all(
-            rules[rule_id]["phrase"].lower() in visible["objective"].lower()
-            for rule_id in why["matched_rules"]
+        "rule_phrases_visible_in_their_field": all(
+            rules[rule_id]["phrase"].lower() in _normalize(visible[field])
+            for field, rule_ids in why["matched_rules_by_field"].items()
+            for rule_id in rule_ids
         ),
         "claims_from_matched_rules_only": all(
             any(level in rules[rule_id][axis] for rule_id in why["matched_rules"])

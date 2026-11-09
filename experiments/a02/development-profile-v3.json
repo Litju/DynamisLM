@@ -25,10 +25,10 @@
     "action_prompt": "experiments/a02/system-action-development-v3.txt",
     "tool_schema": "experiments/a02/submit-scientific-action-tool-v3.json",
     "case_manifest_sha256": "f3a56dde310b2d64f2f8db2f9d02a432dd712d7b4a8aba50f836f1b3d6673dd3",
-    "action_prompt_sha256": "c8e1fd33c6f4f9a2083b37f40be6e41125975dfde824ad1142b57dda62fde65c",
+    "action_prompt_sha256": "8b048c29ad533b64c0df4a557c9ffad70c129db7ae9352648af601ea07e02e6b",
     "tool_schema_sha256": "052533f892b89623b908a1500749b08da60d02b594f5f2d7de71c50a5050227f",
     "objective_semantics": "experiments/a02/objective-semantics-v3.json",
-    "objective_semantics_sha256": "e864808951f159848ad0cadf577e5890dd951acd7ef685af2c396da827461e77"
+    "objective_semantics_sha256": "6d9ab9419530f20f250bfbdd6774f8582ee166383c5ca426138368ad6a49e513"
   },
   "case_ids": [
     "a02-valid-numerical",
@@ -55,6 +55,16 @@
     "action_max_new_tokens": 128,
     "final_max_prompt_tokens": 1024,
     "final_max_new_tokens": 96,
-    "derivation": "action_max_new_tokens is the smallest power of two >= 1.5 x the largest gold native action (84 tokens on the pinned tokenizer, V3 CPU preflight); action_max_prompt_tokens keeps the V2 bound, above the 1,466-token maximum V3 prompt; final bounds are unchanged from V2."
-  }
+    "derivation": "action_max_new_tokens is the smallest power of two >= 1.5 x the largest gold native action (84 tokens on the pinned tokenizer, V3 CPU preflight); action_max_prompt_tokens keeps the V2 bound, above the 1,508-token maximum V3.1 prompt (28 tokens of headroom); final bounds are unchanged from V2."
+  },
+  "contract_version": "V3.1",
+  "amendments": [
+    {
+      "id": "V3.1-QUESTION-PRECEDENCE",
+      "recorded_before_model_observations": true,
+      "change": "objective and question are both request-bearing; rules matched in either combine, conflicts are composite, and uncovered claim triggers fail closed. The action prompt states this to the model.",
+      "reason": "Independent review #5824688227 P0: gold derived from objective alone could ignore a model-visible question that adds a practical, causal or association request.",
+      "exposed_gold_changed": false
+    }
+  ]
 }

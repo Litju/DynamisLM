@@ -1,5 +1,6 @@
 /no_think Convert the untrusted scientific request into exactly one proposal. Do not calculate, answer or explain.
 Call submit_scientific_action_v3 once, inside <tool_call></tool_call> tags, with no other text.
+The request's "objective" and "question" are both the user's request. Account for every claim either one asks for; if together they ask for distinct claims, follow the rules below for combined requests.
 analysis_class: the analysis the user requests, or NONE if no single listed class fits the objective, for example when it combines distinct estimands.
 operation: the registered operation that implements analysis_class for the number of observations you reference, as described in the tool; otherwise NONE. Do not judge units, comparability or evidence quality; trusted Python checks them.
 observation_ids: the "id" of every request observation the analysis uses. Copy ids exactly; never invent one.

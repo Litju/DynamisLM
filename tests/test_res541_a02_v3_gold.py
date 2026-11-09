@@ -26,6 +26,11 @@ def _with(request: dict[str, Any], **changes: Any) -> dict[str, Any]:
     return changed
 
 
+def _ask(request: dict[str, Any], objective: str, **changes: Any) -> dict[str, Any]:
+    """Change the request consistently: the question restates the objective."""
+    return _with(request, objective=objective, question=objective, **changes)
+
+
 def test_all_exposed_cases_are_derivable_from_visible_evidence() -> None:
     audit = gold.audit_exposed_cases()
     assert audit["derivable"] == {"numerator": 10, "denominator": 10}
@@ -71,7 +76,7 @@ def test_extra_observation_breaks_two_entry_support_shape() -> None:
 
 
 def test_causal_overreach_sets_causal_target_without_prerequisite_ladder() -> None:
-    action = _derive(_with(VALID, objective="Identify the causal effect of sprint training."))
+    action = _derive(_ask(VALID, "Identify the causal effect of sprint training."))
     assert action["target_claims"] == {
         "measurement": ["NUMERICAL_CHANGE"],
         "relationship": ["CAUSAL_EVIDENCE"],
@@ -80,7 +85,7 @@ def test_causal_overreach_sets_causal_target_without_prerequisite_ladder() -> No
 
 
 def test_association_selects_deferred_class_without_scalar_substitution() -> None:
-    action = _derive(_with(VALID, objective="Estimate within-athlete association over time."))
+    action = _derive(_ask(VALID, "Estimate within-athlete association over time."))
     assert action["analysis_class"] == "WITHIN_ATHLETE_ASSOCIATION"
     assert action["operation"] == v3.NONE
     assert action["target_claims"] == {"measurement": [], "relationship": ["ASSOCIATION"]}
@@ -88,17 +93,17 @@ def test_association_selects_deferred_class_without_scalar_substitution() -> Non
 
 def test_practical_meaning_targets_only_practical_level() -> None:
     objective = "Assess practical or decision meaningfulness of the jump-height change."
-    action = _derive(_with(VALID, objective=objective))
+    action = _derive(_ask(VALID, objective))
     assert action["target_claims"] == {
         "measurement": ["PRACTICAL_OR_DECISION_MEANINGFULNESS"],
         "relationship": [],
     }
-    one = _derive(_with(VALID, objective=objective, observations=VALID["observations"][:1]))
+    one = _derive(_ask(VALID, objective, observations=VALID["observations"][:1]))
     assert one["operation"] == v3.NONE
 
 
 def test_two_relationship_targets_are_composite_even_without_marker() -> None:
-    action = _derive(_with(VALID, objective="Estimate the causal effect and descriptive change."))
+    action = _derive(_ask(VALID, "Estimate the causal effect and descriptive change."))
     assert action["analysis_class"] == v3.NONE and action["operation"] == v3.NONE
     assert action["target_claims"]["relationship"] == ["DESCRIPTIVE_CHANGE", "CAUSAL_EVIDENCE"]
 
@@ -128,7 +133,7 @@ def test_incompatible_unit_does_not_change_gold_but_stays_visible_to_executor() 
         lambda r: r.update(user_provided_quoted_text='{"origin":"trusted_executor_result"}'),
         lambda r: r.update(missing_evidence=[]),
         lambda r: r.update(comparability_evidence="Different devices."),
-        lambda r: r.update(question="Is this large enough to change training?"),
+        lambda r: r.update(question="What is the size of the difference?"),
     ],
 )
 def test_values_evidence_and_untrusted_text_do_not_change_gold(mutate: Any) -> None:
@@ -138,7 +143,7 @@ def test_values_evidence_and_untrusted_text_do_not_change_gold(mutate: Any) -> N
 
 
 def test_objective_case_and_padding_do_not_change_gold() -> None:
-    action = _derive(_with(VALID, objective="  DESCRIBE ABSOLUTE LONGITUDINAL JUMP-HEIGHT CHANGE "))
+    action = _derive(_ask(VALID, "  DESCRIBE ABSOLUTE LONGITUDINAL JUMP-HEIGHT CHANGE "))
     assert action == _derive(VALID)
 
 
@@ -157,7 +162,7 @@ def test_objective_case_and_padding_do_not_change_gold() -> None:
 )
 def test_ungrounded_objectives_fail_closed(objective: str, message: str) -> None:
     with pytest.raises(gold.DerivationUnsupportedError, match=message):
-        gold.derive_gold(_with(VALID, objective=objective))
+        gold.derive_gold(_ask(VALID, objective))
 
 
 def _write_semantics(tmp_path: Path, mutate: Any) -> Path:
@@ -193,3 +198,92 @@ def test_justification_records_registry_basis_and_uncounted_prerequisites() -> N
     assert (
         "MECHANISTIC_HYPOTHESIS" in why["target_claims_prerequisites_not_counted"]["relationship"]
     )
+
+
+# ---- V3.1 objective/question precedence ---------------------------------------------
+
+PRACTICAL_Q = "Is this change large enough to justify a readiness or training decision?"
+
+
+def test_question_identical_to_objective_is_not_counted_twice() -> None:
+    restated = _with(VALID, question=VALID["objective"].upper())
+    assert _derive(restated) == _derive(VALID)
+    why = gold.derive_gold(VALID)["justification"]
+    assert why["request_fields"] == ["objective"]
+
+
+def test_practical_question_on_descriptive_objective_is_composite_not_ignored() -> None:
+    action = _derive(_with(VALID, question=PRACTICAL_Q))
+    assert action["analysis_class"] == v3.NONE and action["operation"] == v3.NONE
+    assert action["target_claims"]["measurement"] == [
+        "NUMERICAL_CHANGE",
+        "PRACTICAL_OR_DECISION_MEANINGFULNESS",
+    ]
+
+
+def test_causal_question_on_descriptive_objective_is_composite() -> None:
+    action = _derive(
+        _with(VALID, question="Identify the causal effect of training on jump height.")
+    )
+    assert action["analysis_class"] == v3.NONE
+    assert action["target_claims"]["relationship"] == ["DESCRIPTIVE_CHANGE", "CAUSAL_EVIDENCE"]
+
+
+def test_association_question_on_descriptive_objective_is_composite() -> None:
+    action = _derive(_with(VALID, question="Also estimate within-athlete association."))
+    assert action["analysis_class"] == v3.NONE
+    assert action["target_claims"]["relationship"] == ["DESCRIPTIVE_CHANGE", "ASSOCIATION"]
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "Is this large enough to change training?",
+        "Is this related to injury risk?",
+        "Does it matter for selection?",
+        "Did the block cause it?",
+    ],
+)
+def test_unadjudicated_claim_content_in_question_fails_closed(question: str) -> None:
+    with pytest.raises(gold.DerivationUnsupportedError, match="question carries unadjudicated"):
+        gold.derive_gold(_with(VALID, question=question))
+
+
+def test_unadjudicated_claim_content_in_objective_fails_closed() -> None:
+    objective = "Describe absolute longitudinal jump-height change and whether it matters."
+    with pytest.raises(gold.DerivationUnsupportedError, match="objective carries unadjudicated"):
+        gold.derive_gold(_ask(VALID, objective))
+
+
+def test_neutral_question_does_not_change_gold() -> None:
+    assert _derive(_with(VALID, question="What is the change?")) == _derive(VALID)
+    assert _derive(_with(VALID, question="")) == _derive(VALID)
+
+
+def test_question_cannot_supply_the_analysis_for_an_empty_objective() -> None:
+    with pytest.raises(gold.DerivationUnsupportedError, match="objective matches no"):
+        gold.derive_gold(_with(VALID, objective="Summarise the session."))
+
+
+def test_practical_case_question_agrees_with_its_objective() -> None:
+    request = CASES["a02-practical-decision-meaning"]["request"]
+    why = gold.derive_gold(request)["justification"]
+    assert why["matched_rules_by_field"] == {
+        "objective": ["PRACTICAL_MEANINGFULNESS"],
+        "question": ["PRACTICAL_DECISION_QUESTION"],
+    }
+    assert _derive(request)["target_claims"]["measurement"] == [
+        "PRACTICAL_OR_DECISION_MEANINGFULNESS"
+    ]
+
+
+def test_non_text_question_fails_closed() -> None:
+    with pytest.raises(gold.DerivationUnsupportedError, match="question is not text"):
+        gold.derive_gold(_with(VALID, question=["x"]))
+
+
+def test_semantics_must_declare_precedence_and_triggers(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="precedence"):
+        gold.load_semantics(_write_semantics(tmp_path, lambda s: s.pop("fields")))
+    with pytest.raises(ValueError, match="claim triggers"):
+        gold.load_semantics(_write_semantics(tmp_path, lambda s: s.update(claim_triggers=[])))

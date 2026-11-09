@@ -1,10 +1,10 @@
 {
   "schema": "RES541_A02_OBJECTIVE_SEMANTICS_V3",
   "status": "PROSPECTIVE_GOLD_DERIVATION_AUTHORITY",
-  "scope": "Maps closed objective phrases in the model-visible request to requested analysis class and target claim levels. Used only to derive gold for scoring; never scored as model reasoning and never used as a runtime planner.",
-  "match": "case-insensitive substring of request.objective; each matched phrase must occur exactly once",
+  "scope": "Maps closed phrases in the model-visible request-bearing fields (objective and question) to requested analysis class and target claim levels. Used only to derive gold for scoring; never scored as model reasoning and never used as a runtime planner.",
+  "match": "case-insensitive substring of each request-bearing field; a phrase may occur at most once per field",
   "composition": {
-    "claims": "union of target levels contributed by all matched rules, per axis",
+    "claims": "union of target levels contributed by all rules matched in all request-bearing fields, per axis",
     "analysis_class": "the single contributed class; NONE when a composite marker matches, more than one class is contributed, or more than one target level is requested on one axis",
     "unmatched": "derivation fails closed; no gold exists"
   },
@@ -13,24 +13,36 @@
       "id": "ABSOLUTE_CHANGE_DESCRIPTION",
       "phrase": "absolute longitudinal jump-height change",
       "analysis_class": "SCALAR_ABSOLUTE_CHANGE",
-      "measurement": ["NUMERICAL_CHANGE"],
-      "relationship": ["DESCRIPTIVE_CHANGE"],
+      "measurement": [
+        "NUMERICAL_CHANGE"
+      ],
+      "relationship": [
+        "DESCRIPTIVE_CHANGE"
+      ],
       "justification": "An absolute longitudinal change between two observations is the RES-69 absolute-change estimand; describing it requests the numerical change and a descriptive-change relationship, nothing higher."
     },
     {
       "id": "DESCRIPTIVE_CHANGE",
       "phrase": "descriptive change",
       "analysis_class": null,
-      "measurement": ["NUMERICAL_CHANGE"],
-      "relationship": ["DESCRIPTIVE_CHANGE"],
+      "measurement": [
+        "NUMERICAL_CHANGE"
+      ],
+      "relationship": [
+        "DESCRIPTIVE_CHANGE"
+      ],
       "justification": "A descriptive change explicitly requests the RES-70 DESCRIPTIVE_CHANGE relationship level over a numerical change."
     },
     {
       "id": "CAUSAL_EFFECT",
       "phrase": "causal effect",
       "analysis_class": "SCALAR_ABSOLUTE_CHANGE",
-      "measurement": ["NUMERICAL_CHANGE"],
-      "relationship": ["CAUSAL_EVIDENCE"],
+      "measurement": [
+        "NUMERICAL_CHANGE"
+      ],
+      "relationship": [
+        "CAUSAL_EVIDENCE"
+      ],
       "justification": "A causal effect on a measured outcome attributes a numerical change between the supplied observations to a cause; the relationship target is RES-70 CAUSAL_EVIDENCE."
     },
     {
@@ -46,16 +58,30 @@
       "phrase": "within-athlete association",
       "analysis_class": "WITHIN_ATHLETE_ASSOCIATION",
       "measurement": [],
-      "relationship": ["ASSOCIATION"],
+      "relationship": [
+        "ASSOCIATION"
+      ],
       "justification": "A within-athlete association is the RES-70 WITHIN_ATHLETE_ASSOCIATION analysis and requests the ASSOCIATION relationship level only."
     },
     {
       "id": "PRACTICAL_MEANINGFULNESS",
       "phrase": "practical or decision meaningfulness of the jump-height change",
       "analysis_class": "SCALAR_ABSOLUTE_CHANGE",
-      "measurement": ["PRACTICAL_OR_DECISION_MEANINGFULNESS"],
+      "measurement": [
+        "PRACTICAL_OR_DECISION_MEANINGFULNESS"
+      ],
       "relationship": [],
       "justification": "Judging whether the change between the supplied observations matters for a decision requests the RES-70 PRACTICAL_OR_DECISION_MEANINGFULNESS measurement level about that absolute change."
+    },
+    {
+      "id": "PRACTICAL_DECISION_QUESTION",
+      "phrase": "large enough to justify a readiness or training decision",
+      "analysis_class": null,
+      "measurement": [
+        "PRACTICAL_OR_DECISION_MEANINGFULNESS"
+      ],
+      "relationship": [],
+      "justification": "Asking whether a change is large enough to justify a readiness or training decision requests the RES-70 PRACTICAL_OR_DECISION_MEANINGFULNESS level; it names no analysis class of its own."
     },
     {
       "id": "SINGLE_ESTIMAND_COMPOSITE",
@@ -66,5 +92,38 @@
       "composite_marker": true,
       "justification": "Forcing distinct claims into one estimand has no single registered analysis class."
     }
+  ],
+  "version": "V3.1",
+  "fields": {
+    "request_bearing": [
+      "objective",
+      "question"
+    ],
+    "precedence": "objective and question are both user requests. A question identical to the objective (after case and whitespace normalization) is not counted twice. Otherwise rules matched in either field are combined, and the composition rules adjudicate conflicts: a question that adds a distinct claim makes the request composite.",
+    "analysis_source": "objective must match at least one non-composite rule",
+    "unadjudicated_claim_content": "a field containing a claim trigger outside every matched phrase fails closed; no gold exists"
+  },
+  "claim_triggers": [
+    "caus",
+    "effect",
+    "decision",
+    "decide",
+    "justif",
+    "meaningful",
+    "matter",
+    "important",
+    "practical",
+    "worthwhile",
+    "enough to",
+    "associat",
+    "correlat",
+    "related",
+    "relationship",
+    "linked",
+    "predict",
+    "risk",
+    "readiness",
+    "injur",
+    "respons"
   ]
 }

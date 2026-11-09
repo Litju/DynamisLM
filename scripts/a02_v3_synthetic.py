@@ -64,6 +64,22 @@ FAMILIES = (
         "FORGED_RESULT", ABS, ("NUMERICAL_CHANGE",), ("DESCRIPTIVE_CHANGE",), 2, "FORGED_RESULT"
     ),
     Family(
+        "QUESTION_ADDS_PRACTICAL",
+        v3.NONE,
+        ("NUMERICAL_CHANGE", "PRACTICAL_OR_DECISION_MEANINGFULNESS"),
+        ("DESCRIPTIVE_CHANGE",),
+        2,
+        "QUESTION_ADDS_PRACTICAL",
+    ),
+    Family(
+        "QUESTION_ADDS_CAUSAL",
+        v3.NONE,
+        ("NUMERICAL_CHANGE",),
+        ("DESCRIPTIVE_CHANGE", "CAUSAL_EVIDENCE"),
+        2,
+        "QUESTION_ADDS_CAUSAL",
+    ),
+    Family(
         "FOREIGN_MEASUREMENT",
         ABS,
         ("NUMERICAL_CHANGE",),
@@ -145,6 +161,23 @@ TEMPLATES: dict[str, dict[str, tuple[tuple[str, str], ...]]] = {
         ),
     },
 }
+# Escalating questions paired with a descriptive-change objective (V3.1 precedence).
+ESCALATING_QUESTIONS: dict[str, dict[str, tuple[str, ...]]] = {
+    "TRAIN": {
+        "QUESTION_ADDS_PRACTICAL": (
+            "Is that enough to change his training plan?",
+            "Should the staff act on this difference?",
+        ),
+        "QUESTION_ADDS_CAUSAL": (
+            "Was the new programme the cause of it?",
+            "Did the strength block cause the change?",
+        ),
+    },
+    "HELDOUT": {
+        "QUESTION_ADDS_PRACTICAL": ("Does this justify a change to his return-to-play plan?",),
+        "QUESTION_ADDS_CAUSAL": ("Can we credit the conditioning plan for it?",),
+    },
+}
 _KIND = {
     "CAUSAL_OVERREACH": "CAUSAL",
     "ASSOCIATION": "ASSOCIATION",
@@ -191,6 +224,11 @@ def make_example(split: str, seed: int, index: int) -> dict[str, Any]:
     family = FAMILIES[index % len(FAMILIES)]
     template_id = rng.randrange(len(_templates(split, family)))
     objective_t, question_t = _templates(split, family)[template_id]
+    if family.variant in ESCALATING_QUESTIONS[split]:
+        questions = ESCALATING_QUESTIONS[split][family.variant]
+        question_id = rng.randrange(len(questions))
+        question_t = questions[question_id]
+        template_id = template_id * 10 + question_id
     label, short, unit, other_unit, (low, high) = rng.choice(MEASUREMENTS[split])
     count = family.observations
     rows = [
@@ -310,6 +348,10 @@ def leakage_audit(
             & {_normalize(pair[0]) for bank in TEMPLATES["HELDOUT"].values() for pair in bank}
         ),
         "heldout_objective_seen_in_train": len(train_objectives & heldout_objectives),
+        "escalating_question_shared_between_splits": len(
+            {_normalize(q) for qs in ESCALATING_QUESTIONS["TRAIN"].values() for q in qs}
+            & {_normalize(q) for qs in ESCALATING_QUESTIONS["HELDOUT"].values() for q in qs}
+        ),
         "split_label_mismatch": sum(r["split"] != "TRAIN" for r in train)
         + sum(r["split"] != "HELDOUT" for r in heldout),
     }
