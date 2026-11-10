@@ -17,7 +17,7 @@ PROTOCOL = decision.load_protocol()
 ITEMS = worker.work_items(PROTOCOL)
 PREFLIGHT = {
     "schema": "RES541_A02_V3_CPU_PREFLIGHT_V1",
-    "max_constrained_scorer_calls": 69,
+    "max_constrained_scorer_calls": 69,  # exposed-only, as the real preflight measures
     "max_prompt_tokens": 1508,
     "gpu_allocated": False,
     "weights_loaded": False,
@@ -61,10 +61,12 @@ def test_plan_is_deterministic_and_honest_about_session_count() -> None:
 def test_plan_costs_follow_profile_preflight_and_bounds() -> None:
     costs = PLAN["item_cost_bounds_seconds"]
     assert costs["ZERO_SHOT_UNCONSTRAINED"] == pytest.approx(1 + 128 / 20)
-    assert costs["ZERO_SHOT_CONSTRAINED"] == pytest.approx(1 + 69 / 20)
-    assert costs["QUALIFICATION"] == pytest.approx(3 * (1 + 69 / 20 + 69 * 0.6))
+    calls = PLAN["scorer_call_bound"]["used_for_pricing"]
+    assert calls == execution.workload_scorer_calls(PROTOCOL) > 69
+    assert costs["ZERO_SHOT_CONSTRAINED"] == pytest.approx(1 + calls / 20)
+    assert costs["QUALIFICATION"] == pytest.approx(3 * (1 + calls / 20 + calls * 0.6))
     assert PLAN["generation_seconds_per_session"] == 720 - 180 - 100 - 30
-    assert PLAN["cache_qualification"]["uncached_full_forwards"] == 207
+    assert PLAN["cache_qualification"]["uncached_full_forwards"] == 3 * calls
 
 
 def test_compute_unit_cap_follows_session_count_and_rate_ceiling() -> None:

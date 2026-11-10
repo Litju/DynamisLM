@@ -30,8 +30,10 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Protocol
 
+from scripts import a02_v3_constrained as constrained
 from scripts import a02_v3_contract as v3
 from scripts import a02_v3_decision as decision
+from scripts import a02_v3_score as score
 from scripts import a02_v3_worker as worker
 
 ROOT = v3.ROOT
@@ -86,6 +88,18 @@ def generation_seconds_per_session(b: RuntimeBounds) -> int:
     )
 
 
+def workload_scorer_calls(protocol: dict[str, Any]) -> int:
+    """Largest constrained scorer-call bound over every request the worker will score.
+
+    The CPU preflight measures only the ten exposed cases; the work list is dominated by the 280
+    held-out examples and uses calibration examples, so its bound must come from all of them.
+    """
+    requests = [e["request"] for e in decision.heldout_examples(protocol)]
+    requests += [e["request"] for e in worker.calibration_examples(protocol)]
+    requests += [case["request"] for case in score._cases().values()]
+    return int(max(constrained.max_scorer_calls(request) for request in requests))
+
+
 def build_plan(
     protocol: dict[str, Any],
     preflight: dict[str, Any],
@@ -96,7 +110,8 @@ def build_plan(
     """Deterministic worst-case session packing and compute-unit admission plan."""
     profile = v3.load_profile()
     items = worker.work_items(protocol)
-    costs = item_cost_bounds(profile, preflight, bounds)
+    calls = max(preflight["max_constrained_scorer_calls"], workload_scorer_calls(protocol))
+    costs = item_cost_bounds(profile, {**preflight, "max_constrained_scorer_calls": calls}, bounds)
     budget = generation_seconds_per_session(bounds)
     if budget <= 0 or any(cost > budget for cost in costs.values()):
         raise ValueError("a single work item cannot fit one bounded session")
@@ -119,6 +134,11 @@ def build_plan(
         "preflight_sha256": v3.sha256(v3.canonical(preflight).encode()),
         "bounds": asdict(bounds),
         "item_cost_bounds_seconds": costs,
+        "scorer_call_bound": {
+            "exposed_only_preflight": preflight["max_constrained_scorer_calls"],
+            "used_for_pricing": calls,
+            "basis": "maximum over held-out, calibration and exposed requests",
+        },
         "generation_seconds_per_session": budget,
         "work_items": len(items),
         "worst_case_generation_seconds": round(total_worst, 1),
@@ -137,8 +157,7 @@ def build_plan(
         "cache_qualification": {
             "worst_case_seconds": costs["QUALIFICATION"],
             "share_of_first_session": round(costs["QUALIFICATION"] / budget, 3),
-            "uncached_full_forwards": worker.QUALIFICATION_EXAMPLES
-            * preflight["max_constrained_scorer_calls"],
+            "uncached_full_forwards": worker.QUALIFICATION_EXAMPLES * calls,
         },
         "retry_policy": "No automatic retry. A session that commits fewer items than planned "
         "leaves the remainder to the next individually authorized session; if the planned count "
