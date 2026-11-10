@@ -305,7 +305,10 @@ def admit(
         raise AdmissionError("allowed per-session compute units are below the plan bound")
     if snapshot["balance"] < per_session + plan["bounds"]["cost_buffer_cu"]:
         raise AdmissionError("live balance cannot cover one bounded session")
-    if snapshot["usage_rate_cu_per_hour"] > 0 and not allowance["allow_concurrent_unrelated_usage"]:
+    if (
+        not math.isfinite(snapshot["usage_rate_cu_per_hour"])
+        or snapshot["usage_rate_cu_per_hour"] != 0
+    ):
         raise AdmissionError("account is already consuming compute; usage is not attributable")
     return {
         "admitted": True,
@@ -575,6 +578,11 @@ def run_session(
                 )
                 if status.get("checkpoint_sha256") != digest:
                     raise ValueError("remote status/checkpoint digest differs")
+                if state.get("work", {}).get("returncode") == 0 and (
+                    status.get("status") != "READY"
+                    or status.get("runtime_qualification", {}).get("qualified") is not True
+                ):
+                    raise ValueError("successful work has no qualified READY runtime status")
                 state["remote_status"] = status
                 if recovered.get(REMOTE_CHECKPOINT):
                     state["merge"] = merge_checkpoint(local, downloaded, items, protocol)

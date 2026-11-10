@@ -96,3 +96,22 @@ def test_monitor_stops_during_execution_on_anomaly(monkeypatch: Any, change: str
         1.15,
     )
     assert state["returncode"] is None and state["monitor_failure"]
+
+
+def test_source_identity_detects_a_clean_different_commit(tmp_path: Path, monkeypatch: Any) -> None:
+    def git(*args: str) -> None:
+        subprocess.run(["git", *args], cwd=tmp_path, check=True, capture_output=True)
+
+    git("init")
+    git("config", "user.email", "synthetic@example.invalid")
+    git("config", "user.name", "Synthetic fixture")
+    (tmp_path / "source").write_text("first")
+    git("add", "source")
+    git("commit", "-m", "synthetic first source")
+    monkeypatch.setattr(execution, "ROOT", tmp_path)
+    first = execution.source_identity()
+    (tmp_path / "source").write_text("second")
+    git("add", "source")
+    git("commit", "-m", "synthetic changed source")
+    second = execution.source_identity()
+    assert first["commit"] != second["commit"] and first["tree"] != second["tree"]

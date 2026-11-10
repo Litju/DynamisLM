@@ -232,10 +232,11 @@ def test_live_account_state_still_gates_every_session(
 ) -> None:
     with pytest.raises(execution.AdmissionError, match=message):
         _admit(_allowance(), snapshot=snapshot)
-    assert _admit(
-        _allowance(allow_concurrent_unrelated_usage=True),
-        snapshot={**QUIET, "usage_rate_cu_per_hour": 6.7},
-    )["admitted"]
+    with pytest.raises(execution.AdmissionError, match="not attributable"):
+        _admit(
+            _allowance(allow_concurrent_unrelated_usage=True),
+            snapshot={**QUIET, "usage_rate_cu_per_hour": 6.7},
+        )
 
 
 def test_allowance_session_count_and_cap_exhaustion_stop_admission() -> None:
@@ -414,6 +415,8 @@ class FakeColab:
                 source.write_text(
                     json.dumps(
                         {
+                            "status": "READY",
+                            "runtime_qualification": {"qualified": True},
                             "binding": json.loads(binding_path.read_text()),
                             "checkpoint_sha256": v3.sha256(checkpoint.read_bytes())
                             if checkpoint.exists()
@@ -756,7 +759,7 @@ def test_a_preexisting_session_with_the_exact_name_is_never_adopted(tmp_path: Pa
     refused = _campaign(tmp_path, client)  # usage is not attributable while it exists
     assert refused["status"] == "NOT_ADMITTED" and client.created == []
     result = _campaign(tmp_path, client, _allowance(allow_concurrent_unrelated_usage=True))
-    assert result["status"] == "STOPPED_ON_ANOMALY" and "already exists" in result["anomaly"]
+    assert result["status"] == "NOT_ADMITTED" and "not attributable" in result["reason"]
     assert client.created == [] and client.stopped == []  # a session we did not create stays
     assert name in client.active
 
