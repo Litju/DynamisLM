@@ -31,6 +31,8 @@ import os
 import select
 import subprocess
 import sys
+import threading
+import time
 from collections.abc import Sequence
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
@@ -372,6 +374,68 @@ def _write_exclusive(path: Path, value: dict[str, Any]) -> None:
         handle.write(json.dumps(value, indent=2, sort_keys=True) + "\n")
 
 
+COST_POLL_SECONDS = 5
+
+
+def monitored_stage(
+    client: ColabClient,
+    name: str,
+    stage: str,
+    timeout: int,
+    before: dict[str, Any],
+    admission: dict[str, Any],
+    plan: dict[str, Any],
+    initial_rate: float,
+) -> dict[str, Any]:
+    """V2 conservative maximum of account delta and elapsed-rate bound, with cleanup reserve."""
+    halt = threading.Event()
+    failures: list[str] = []
+    observations: list[dict[str, Any]] = []
+    started = time.monotonic()
+
+    def monitor() -> None:
+        while not halt.wait(COST_POLL_SECONDS):
+            try:
+                snap = client.snapshot()
+                observations.append(snap)
+                rate = float(snap["usage_rate_cu_per_hour"])
+                delta = float(before["balance"]) - float(snap["balance"])
+                if not math.isfinite(delta) or delta < 0 or rate != initial_rate or rate <= 0:
+                    raise RuntimeError("live rate changed or quota attribution is unknown")
+                if {row["name"] for row in snap["active_sessions"]} != {
+                    row["name"] for row in before["active_sessions"]
+                } | {name}:
+                    raise RuntimeError("unexpected provider usage")
+                upper = max(delta, rate * (time.monotonic() - started) / 3600)
+                reserve = plan["bounds"]["cost_buffer_cu"] + rate * 125 / 3600
+                remaining = min(
+                    admission["per_session_cap"],
+                    admission["cumulative_cap"] - admission["spent_before"],
+                )
+                if upper + reserve >= remaining:
+                    raise RuntimeError("live cumulative allowance guard reached")
+            except Exception as exc:
+                failures.append(type(exc).__name__ + ": " + str(exc))
+                try:
+                    client.stop(name)
+                except Exception as stop_exc:
+                    failures.append(type(stop_exc).__name__)
+                return
+
+    thread = threading.Thread(target=monitor, daemon=True)
+    thread.start()
+    try:
+        result = client.exec_stage(name, stage, timeout)
+    finally:
+        halt.set()
+        thread.join(timeout=130)
+    if thread.is_alive():
+        raise RuntimeError("live quota monitor unresponsive")
+    if failures:
+        return {"returncode": None, "monitor_failure": failures, "cost_observations": observations}
+    return {**result, "cost_observations": observations}
+
+
 def run_session(
     *,
     client: ColabClient,
@@ -392,6 +456,9 @@ def run_session(
         "source_identity"
     ):
         raise AdmissionError("session binding differs from authorized source identity")
+    if ledger["sessions"] and ledger.get("source_identity") != binding.get("source_identity"):
+        raise AdmissionError("ledger source identity differs")
+    ledger["source_identity"] = binding.get("source_identity")
     before = client.snapshot()
     admission = admit(
         plan=plan,
@@ -436,7 +503,12 @@ def run_session(
             raise RuntimeError("allocated V3 session is not the exact requested T4")
         after = client.snapshot()
         state["rate_after_allocation"] = after["usage_rate_cu_per_hour"]
-        if after["usage_rate_cu_per_hour"] > plan["bounds"]["admission_rate_ceiling_cu_per_hour"]:
+        if (
+            not math.isfinite(after["usage_rate_cu_per_hour"])
+            or after["usage_rate_cu_per_hour"] <= 0
+            or after["usage_rate_cu_per_hour"]
+            > plan["bounds"]["admission_rate_ceiling_cu_per_hour"]
+        ):
             raise RuntimeError("live T4 rate exceeds the admission ceiling; stopping at once")
         binding_path = run_dir / f"session-{session_index:03d}-binding.json"
         binding_path.write_text(json.dumps({**binding, "session_index": session_index}))
@@ -447,7 +519,16 @@ def run_session(
             if not client.upload(name, path, remote):
                 raise RuntimeError(f"V3 upload failed: {remote}")
         bounds = plan["bounds"]
-        state["prepare"] = client.exec_stage(name, "prepare", bounds["prepare_seconds"])
+        state["prepare"] = monitored_stage(
+            client,
+            name,
+            "prepare",
+            bounds["prepare_seconds"],
+            before,
+            admission,
+            plan,
+            after["usage_rate_cu_per_hour"],
+        )
         if state["prepare"].get("returncode") == 0:
             mid = client.snapshot()
             state["rate_before_work"] = mid["usage_rate_cu_per_hour"]
@@ -459,7 +540,16 @@ def run_session(
             ):
                 raise RuntimeError("session spend already exceeds its bound; no work stage")
             work_timeout = bounds["exec_seconds"] - bounds["prepare_seconds"]
-            state["work"] = client.exec_stage(name, "work", work_timeout)
+            state["work"] = monitored_stage(
+                client,
+                name,
+                "work",
+                work_timeout,
+                before,
+                admission,
+                plan,
+                after["usage_rate_cu_per_hour"],
+            )
     except Exception as exc:  # recorded; teardown and evidence recovery still run
         state["failure"] = f"{type(exc).__name__}: {exc}"
     finally:
