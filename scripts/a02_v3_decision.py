@@ -7,9 +7,14 @@ Correctness is recomputed here from the raw output; no reported ``exact`` field 
 
 Two stages, never conflated:
 
-* Stage 1 (zero-shot arms only) can conclude ``ADOPT_REPAIRED_CONTRACT_WITH_CONSTRAINED_DECODING``
-  or ``ELIGIBLE_FOR_ADAPTATION_EXPERIMENT``. Eligibility means an adaptation experiment is
-  warranted, not that adaptation would help.
+* Stage 1 (zero-shot arms only) concludes one of three things (amendment P5, recorded before any
+  model observation). ``ADOPT_REPAIRED_CONTRACT_WITH_CONSTRAINED_DECODING`` needs the point
+  estimate AND the template-cluster-aware 95% lower bound to reach the threshold on both the
+  overall and the critical-family exact rate. A point pass whose bound does not reach it is
+  ``INCONCLUSIVE_INSUFFICIENT_INDEPENDENT_EVIDENCE``: neither adoption nor eligibility. A point
+  failure on a complete, valid evaluation is ``ADAPTATION_STUDY_ELIGIBLE_NOT_AUTHORIZED``,
+  which warrants proposing an adaptation study, never shows that adaptation would help and
+  authorizes no training.
 * Stage 2 (adapted arms observed) can conclude ``ADAPTATION_BENEFIT_DEMONSTRATED``,
   ``ESCALATE_TO_STRONGER_MODEL_COMPARISON`` or ``ADAPTATION_BENEFIT_NOT_DEMONSTRATED``.
 
@@ -296,22 +301,73 @@ def cluster_design(rows: Sequence[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-def _single_arm_bounds(rows: list[dict[str, Any]], stats: dict[str, Any]) -> dict[str, float]:
-    """Lower bounds for one arm's exact rate (a paired comparison with an always-wrong arm)."""
+def _rate_bounds(
+    rows: list[dict[str, Any]], stats: dict[str, Any], offset: int
+) -> dict[str, float]:
+    """Item-level and template-clustered lower bounds on the exact rate of ``rows``."""
     hits = [bool(r["exact"]) for r in rows]
     never = [False] * len(hits)
+    seed = stats["seed"] + offset
     item = paired_bootstrap_lower(
-        hits, never, resamples=stats["resamples"], seed=stats["seed"] + 2, alpha=stats["alpha"]
+        hits, never, resamples=stats["resamples"], seed=seed, alpha=stats["alpha"]
     )
     clustered = clustered_bootstrap_lower(
         hits,
         never,
         [r["template"] for r in rows],
         resamples=stats["resamples"],
-        seed=stats["seed"] + 2,
+        seed=seed,
         alpha=stats["alpha"],
     )
     return {"item": item, "template_clustered": clustered, "governing": min(item, clustered)}
+
+
+def leave_one_template_out(
+    rows: Sequence[dict[str, Any]], critical: set[str], thresholds: dict[str, float]
+) -> dict[str, Any]:
+    """Recompute the point rates with each template removed, to show what drives the result."""
+    templates = sorted({r["template"] for r in rows})
+    per_template = []
+    for template in templates:
+        kept = [r for r in rows if r["template"] != template]
+        kept_critical = [r for r in kept if r["family"] in critical]
+        exact = _rate(kept)
+        critical_exact = _rate(kept_critical) if kept_critical else None
+        per_template.append(
+            {
+                "template": template,
+                "items_removed": len(rows) - len(kept),
+                "exact": exact,
+                "critical_exact": critical_exact,
+                "point_thresholds_hold": exact >= thresholds["exact"]
+                and critical_exact is not None
+                and critical_exact >= thresholds["critical_exact"],
+            }
+        )
+    worst = min(per_template, key=lambda t: (t["exact"], t["template"]))
+    return {
+        "templates": per_template,
+        "min_exact": worst["exact"],
+        "worst_template_for_exact": worst["template"],
+        "min_critical_exact": min(
+            (t["critical_exact"] for t in per_template if t["critical_exact"] is not None),
+            default=None,
+        ),
+        "point_thresholds_hold_after_every_removal": all(
+            t["point_thresholds_hold"] for t in per_template
+        ),
+    }
+
+
+CONFIDENCE_LIMITATIONS = (
+    "Percentile bootstrap bounds from about 15 template clusters (about 8 effective) are "
+    "approximate and can be optimistic or unstable when a few large clusters dominate.",
+    "Resampling treats templates as the only dependence; the measurement and values drawn per "
+    "example are not modelled.",
+    "The bound describes this synthetic generator only and says nothing about real requests.",
+    "The lower bound is the smaller of the item-level and template-clustered percentile "
+    "bounds, so it is conservative by construction.",
+)
 
 
 def decide(
@@ -334,19 +390,38 @@ def decide(
     }
     report["template_clusters"] = len({r["template"] for r in rows["ZERO_SHOT_CONSTRAINED"]})
     report["cluster_design"] = cluster_design(rows["ZERO_SHOT_CONSTRAINED"])
-    # Reported, not applied: the preregistered sufficiency rule compares point estimates.
     for arm in ZERO_SHOT_ARMS:
-        report[arm]["exact_lower_bounds"] = _single_arm_bounds(rows[arm], stats)
-    report["sufficiency_basis"] = (
-        "Sufficiency compares point estimates with the thresholds. The lower bounds above are "
-        "disclosed and do not change the decision; with few template clusters they can sit far "
-        "below the point estimate."
+        arm_critical = [r for r in rows[arm] if r["family"] in critical]
+        report[arm]["exact_lower_bounds"] = _rate_bounds(rows[arm], stats, 2)
+        report[arm]["critical_exact_lower_bounds"] = _rate_bounds(arm_critical, stats, 3)
+    report["critical_cluster_design"] = cluster_design(
+        [r for r in rows["ZERO_SHOT_CONSTRAINED"] if r["family"] in critical]
     )
+    sufficient = rule["zero_shot_sufficient"]
+    report["leave_one_template_out"] = leave_one_template_out(
+        rows["ZERO_SHOT_CONSTRAINED"], critical, sufficient
+    )
+    report["confidence_limitations"] = list(CONFIDENCE_LIMITATIONS)
+    report["evidence_scope"] = "SYNTHETIC_DEVELOPMENT_ONLY"
     report["claim_ceiling"] = protocol["claim_ceiling"]
 
-    sufficient = rule["zero_shot_sufficient"]
-    if zc["exact"] >= sufficient["exact"] and zc["critical_exact"] >= sufficient["critical_exact"]:
+    point_ok = (
+        zc["exact"] >= sufficient["exact"] and zc["critical_exact"] >= sufficient["critical_exact"]
+    )
+    bound_ok = (
+        zc["exact_lower_bounds"]["governing"] >= sufficient["lower_bound"]
+        and zc["critical_exact_lower_bounds"]["governing"] >= sufficient["lower_bound"]
+    )
+    report["sufficiency_basis"] = {
+        "point_thresholds_met": point_ok,
+        "lower_bound_thresholds_met": bound_ok,
+        "rule": "adoption needs the point estimate and the template-cluster-aware 95% lower "
+        "bound to reach the threshold on both the overall and the critical-family exact rate",
+    }
+    if point_ok and bound_ok:
         return {**report, "stage": 1, "decision": sufficient["decision"]}
+    if point_ok:
+        return {**report, "stage": 1, "decision": sufficient["inconclusive_decision"]}
     if not {"ADAPTED_UNCONSTRAINED", "ADAPTED_CONSTRAINED"} & set(rows):
         return {**report, "stage": 1, "decision": rule["stage_1_otherwise"]}
     if "ADAPTED_CONSTRAINED" not in rows:

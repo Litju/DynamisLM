@@ -142,7 +142,7 @@ def test_both_zero_shot_arms_are_required() -> None:
 
 
 def test_stage_1_adopts_repaired_contract_and_reports_uncredited_gaps() -> None:
-    result = decision.decide(_zero(0.95, zu=0.40), FAST)
+    result = decision.decide(_zero(1.0, zu=0.40), FAST)
     assert result["stage"] == 1
     assert result["decision"] == "ADOPT_REPAIRED_CONTRACT_WITH_CONSTRAINED_DECODING"
     assert result["strict_parse_valid_gap"] == 0.0  # both arms emitted valid syntax here
@@ -155,13 +155,13 @@ def test_stage_1_adopts_repaired_contract_and_reports_uncredited_gaps() -> None:
 def test_stage_1_failure_is_only_eligibility_never_benefit() -> None:
     result = decision.decide(_zero(0.5), FAST)
     assert result["stage"] == 1
-    assert result["decision"] == "ELIGIBLE_FOR_ADAPTATION_EXPERIMENT"
+    assert result["decision"] == "ADAPTATION_STUDY_ELIGIBLE_NOT_AUTHORIZED"
     assert "adaptation_checks" not in result
 
 
 def test_weak_critical_families_block_stage_1_adoption() -> None:
     result = decision.decide(_zero(0.99, critical_rate=0.6), FAST)
-    assert result["decision"] == "ELIGIBLE_FOR_ADAPTATION_EXPERIMENT"
+    assert result["decision"] == "ADAPTATION_STUDY_ELIGIBLE_NOT_AUTHORIZED"
 
 
 def test_stage_2_requires_the_constrained_adapted_arm() -> None:
@@ -260,33 +260,138 @@ def test_cluster_design_effective_count_equals_cluster_count_for_equal_sizes() -
     assert decision.cluster_design([{"template": "only"}] * 5)["effective_clusters"] == 1.0
 
 
-def test_report_discloses_single_arm_bounds_without_changing_the_decision() -> None:
-    result = decision.decide(_zero(0.95), FAST)
+def test_report_discloses_bounds_cluster_design_and_scope_with_every_decision() -> None:
+    result = decision.decide(_zero(1.0), FAST)
     assert result["decision"] == "ADOPT_REPAIRED_CONTRACT_WITH_CONSTRAINED_DECODING"
     for arm in decision.ZERO_SHOT_ARMS:
-        bounds = result[arm]["exact_lower_bounds"]
-        assert bounds["governing"] == min(bounds["item"], bounds["template_clustered"])
-        assert bounds["governing"] <= result[arm]["exact"]
-    assert result["cluster_design"]["template_clusters"] == result["template_clusters"]
-    assert "point estimates" in result["sufficiency_basis"]
+        for key in ("exact_lower_bounds", "critical_exact_lower_bounds"):
+            bounds = result[arm][key]
+            assert bounds["governing"] == min(bounds["item"], bounds["template_clustered"])
+    assert result["cluster_design"]["template_clusters"] == result["template_clusters"] == 15
+    assert result["critical_cluster_design"]["items"] == 9 * 20
+    assert 1 <= result["critical_cluster_design"]["template_clusters"] <= 15
+    assert result["evidence_scope"] == "SYNTHETIC_DEVELOPMENT_ONLY"
+    assert len(result["confidence_limitations"]) >= 3
+    assert len(result["ZERO_SHOT_CONSTRAINED"]["family"]) == 14
+    assert result["sufficiency_basis"] == {
+        "point_thresholds_met": True,
+        "lower_bound_thresholds_met": True,
+        "rule": result["sufficiency_basis"]["rule"],
+    }
+
+
+RELIABILITY_TEMPLATES = {e["template_id"] for e in HELDOUT if e["family"] == "RELIABILITY"}
+
+
+def _winners(fail_templates: set[str]) -> Callable[[int, dict[str, Any]], bool]:
+    return lambda _i, e: e["template_id"] not in fail_templates
+
+
+def _excluding(wrong: set[int]) -> Callable[[int, dict[str, Any]], bool]:
+    return lambda i, _e: i not in wrong
+
+
+def _two_arm(zc_correct: Callable[[int, dict[str, Any]], bool]) -> dict[str, Any]:
+    return {
+        "ZERO_SHOT_CONSTRAINED": _records("ZERO_SHOT_CONSTRAINED", zc_correct),
+        "ZERO_SHOT_UNCONSTRAINED": _records("ZERO_SHOT_UNCONSTRAINED", _rate(0.3)),
+    }
+
+
+def test_point_pass_with_an_insufficient_bound_is_inconclusive_not_adoption_or_eligibility() -> (
+    None
+):
+    result = decision.decide(_two_arm(_winners(RELIABILITY_TEMPLATES)), FAST)
+    zc = result["ZERO_SHOT_CONSTRAINED"]
+    assert zc["exact"] >= 0.9 and zc["critical_exact"] >= 0.9  # the scenario really passes points
+    assert zc["exact_lower_bounds"]["governing"] < 0.9
+    assert result["decision"] == "INCONCLUSIVE_INSUFFICIENT_INDEPENDENT_EVIDENCE"
+    assert result["stage"] == 1 and "adaptation_checks" not in result
+    assert result["sufficiency_basis"]["point_thresholds_met"] is True
+    assert result["sufficiency_basis"]["lower_bound_thresholds_met"] is False
+
+
+def test_an_inconclusive_result_is_never_upgraded_by_adapted_evidence() -> None:
+    evidence = {
+        **_two_arm(_winners(RELIABILITY_TEMPLATES)),
+        "ADAPTED_CONSTRAINED": _records("ADAPTED_CONSTRAINED", _rate(1.0)),
+    }
+    result = decision.decide(evidence, FAST)
+    assert result["decision"] == "INCONCLUSIVE_INSUFFICIENT_INDEPENDENT_EVIDENCE"
+    assert "adaptation_checks" not in result
+
+
+def test_a_critical_family_bound_alone_can_make_the_result_inconclusive() -> None:
+    # Everything outside the critical families is right; critical items sit at 0.90 exactly,
+    # with the 18 errors spread across templates so only the critical bound is threatened.
+    critical_idx = [i for i, e in enumerate(HELDOUT) if e["family"] in CRITICAL]
+    wrong = set(critical_idx[::10])
+    assert len(wrong) == 18
+    result = decision.decide(_two_arm(lambda i, _e: i not in wrong), FAST)
+    zc = result["ZERO_SHOT_CONSTRAINED"]
+    assert zc["critical_exact"] >= 0.9 and zc["exact"] >= 0.9
+    assert (
+        zc["exact_lower_bounds"]["governing"]
+        >= 0.9
+        > zc["critical_exact_lower_bounds"]["governing"]
+    )
+    assert result["decision"] == "INCONCLUSIVE_INSUFFICIENT_INDEPENDENT_EVIDENCE"
+
+
+def test_point_threshold_boundaries_decide_between_inconclusive_and_eligible() -> None:
+    n_wrong_ok, n_wrong_bad = 28, 29  # 252/280 = 0.900 exactly passes; 251/280 fails
+    for wrong, expected in (
+        (n_wrong_ok, "INCONCLUSIVE_INSUFFICIENT_INDEPENDENT_EVIDENCE"),
+        (n_wrong_bad, "ADAPTATION_STUDY_ELIGIBLE_NOT_AUTHORIZED"),
+    ):
+        non_critical = [i for i, e in enumerate(HELDOUT) if e["family"] not in CRITICAL]
+        wrong_idx = set(non_critical[:wrong])
+        result = decision.decide(_two_arm(_excluding(wrong_idx)), FAST)
+        assert result["decision"] == expected, (wrong, result["ZERO_SHOT_CONSTRAINED"]["exact"])
+
+
+def test_perfect_evidence_adopts_and_nothing_below_the_bound_does() -> None:
+    assert decision.decide(_two_arm(lambda _i, _e: True), FAST)["decision"] == (
+        "ADOPT_REPAIRED_CONTRACT_WITH_CONSTRAINED_DECODING"
+    )
+    one_template_wrong = {HELDOUT[0]["template_id"]}
+    result = decision.decide(_two_arm(_winners(one_template_wrong)), FAST)
+    assert result["decision"] != "ADOPT_REPAIRED_CONTRACT_WITH_CONSTRAINED_DECODING"
+
+
+def test_leave_one_template_out_shows_dependence_on_a_single_template() -> None:
+    biggest = max(
+        {e["template_id"] for e in HELDOUT},
+        key=lambda t: sum(e["template_id"] == t for e in HELDOUT),
+    )
+    result = decision.decide(_two_arm(_winners({biggest})), FAST)
+    loto = result["leave_one_template_out"]
+    assert len(loto["templates"]) == 15
+    assert loto["worst_template_for_exact"] != biggest  # removing the failing one helps
+    removed = next(t for t in loto["templates"] if t["template"] == biggest)
+    assert removed["exact"] == 1.0 and removed["items_removed"] >= 49
+    assert loto["min_exact"] <= result["ZERO_SHOT_CONSTRAINED"]["exact"]
+    assert isinstance(loto["point_thresholds_hold_after_every_removal"], bool)
 
 
 def test_template_correlated_success_shows_a_clustered_bound_below_the_item_bound() -> None:
-    template = {e["template_id"]: i for i, e in enumerate(HELDOUT)}
-    winners = {t for n, t in enumerate(sorted(template)) if n % 6 != 0}  # 12 of 15 templates win
-    zc = _records("ZERO_SHOT_CONSTRAINED", lambda _i, e: e["template_id"] in winners)
-    zu = _records("ZERO_SHOT_UNCONSTRAINED", _rate(0.3))
-    result = decision.decide({"ZERO_SHOT_CONSTRAINED": zc, "ZERO_SHOT_UNCONSTRAINED": zu}, FAST)
+    winners = {e["template_id"] for e in HELDOUT}
+    drop = set(sorted(winners)[::6])  # 3 of 15 templates fail
+    result = decision.decide(_two_arm(_winners(drop)), FAST)
     bounds = result["ZERO_SHOT_CONSTRAINED"]["exact_lower_bounds"]
     assert bounds["template_clustered"] < bounds["item"]
-    # A decision that rests on a point estimate must not hide how weak the bound is.
-    assert bounds["governing"] < result["ZERO_SHOT_CONSTRAINED"]["exact"] - 0.05
 
 
 # ---- protocol -------------------------------------------------------------------------
 
 
 def test_protocol_is_preregistered_unauthorized_and_amended_before_observations() -> None:
+    sufficient = PROTOCOL["decision_rule"]["zero_shot_sufficient"]
+    assert (sufficient["exact"], sufficient["critical_exact"], sufficient["lower_bound"]) == (
+        0.9,
+        0.9,
+        0.9,
+    )
     assert PROTOCOL["status"] == "PREREGISTERED_NOT_AUTHORIZED"
     assert not any(PROTOCOL["authorization"][k] for k in ("gpu", "training", "session_005"))
     assert all(a["recorded_before_model_observations"] for a in PROTOCOL["amendments"])

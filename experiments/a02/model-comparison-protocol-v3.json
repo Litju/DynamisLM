@@ -132,7 +132,12 @@
     "zero_shot_sufficient": {
       "exact": 0.9,
       "critical_exact": 0.9,
-      "decision": "ADOPT_REPAIRED_CONTRACT_WITH_CONSTRAINED_DECODING"
+      "lower_bound": 0.9,
+      "lower_bound_basis": "Template-cluster-aware 95% lower confidence bound (the smaller of the item-level and template-clustered percentile bounds, 10000 resamples) on the zero-shot constrained arm's overall exact rate AND its critical-family exact rate.",
+      "decision": "ADOPT_REPAIRED_CONTRACT_WITH_CONSTRAINED_DECODING",
+      "inconclusive_decision": "INCONCLUSIVE_INSUFFICIENT_INDEPENDENT_EVIDENCE",
+      "rule": "Adopt only if both point thresholds and both lower bounds reach 0.90. If both point thresholds pass but a lower bound does not, the result is INCONCLUSIVE_INSUFFICIENT_INDEPENDENT_EVIDENCE: not adoption, and not eligibility to study adaptation. If a point threshold fails on a complete, valid evaluation, the result is ADAPTATION_STUDY_ELIGIBLE_NOT_AUTHORIZED.",
+      "thresholds_frozen": "No threshold may be changed after any V3 model observation."
     },
     "escalate_stronger_model_below": 0.8,
     "statistics": {
@@ -142,7 +147,7 @@
       "alpha": 0.05,
       "per_family": "Wilson 95% intervals, n = 20 per family",
       "cluster_unit": "generator template_id; examples sharing a template are correlated",
-      "sufficiency_basis": "Stage 1 sufficiency compares point estimates with the thresholds. Each zero-shot arm's item-level and template-clustered lower bounds on its exact rate, the cluster design and the per-family Wilson intervals are reported with the decision and do not change it.",
+      "sufficiency_basis": "Adoption needs the point estimate and the template-cluster-aware 95% lower bound to reach 0.90 on both the overall and the critical-family exact rate. The report also gives cluster counts, effective cluster size, per-family performance with Wilson intervals, leave-one-template-out sensitivity and the limitations of the bounds.",
       "cluster_design_heldout": {
         "items": 280,
         "template_clusters": 15,
@@ -152,8 +157,8 @@
       }
     },
     "evaluated_by": "scripts/a02_v3_decision.py::decide",
-    "stage_1_otherwise": "ELIGIBLE_FOR_ADAPTATION_EXPERIMENT",
-    "stage_1_meaning": "Stage 1 observes only the zero-shot arms. Failing the sufficiency rule makes an adaptation experiment eligible for separate authorization; it is not evidence that adaptation would help.",
+    "stage_1_otherwise": "ADAPTATION_STUDY_ELIGIBLE_NOT_AUTHORIZED",
+    "stage_1_meaning": "Stage 1 observes only the zero-shot arms. A point failure on a complete, valid evaluation makes proposing an adaptation study eligible, subject to separate authorization. It is not evidence that adaptation would help and it authorizes no training. An inconclusive result is neither.",
     "adaptation_benefit": {
       "minimum_gain": 0.1,
       "adapted_exact_floor": 0.8,
@@ -168,7 +173,14 @@
       "strict_parse_valid_gap (constrained minus unconstrained strict-parse rate)",
       "decoder_condition_exact_gap (includes constrained-search and selection effects, not syntax alone)"
     ],
-    "sufficiency_caution": "With about 8 effective template clusters a point estimate at the 0.90 threshold can have a clustered lower bound far below it. Adopting the repaired contract is an engineering decision on same-generator development evidence, not a finding that the model is sufficient."
+    "reported_every_decision": [
+      "cluster_design and critical_cluster_design (items, template clusters, effective clusters)",
+      "per-family exact with Wilson 95% intervals",
+      "exact_lower_bounds and critical_exact_lower_bounds per zero-shot arm",
+      "leave_one_template_out point sensitivity",
+      "confidence_limitations",
+      "evidence_scope = SYNTHETIC_DEVELOPMENT_ONLY"
+    ]
   },
   "compute_estimate": {
     "status": "ENGINEERING_ESTIMATE_NOT_A_BOUND",
@@ -224,9 +236,30 @@
       "recorded_before_model_observations": true,
       "change": "Generated gold is independently derived for all 2,800 training and 280 held-out examples from a pinned closed-vocabulary adjudication. Cache qualification moves from held-out examples to training-split calibration examples. Committed and downloaded records are identity-checked, the ordered work list is pinned, and the plan is priced from the whole workload (scorer-call bound 73). Per-session owner authorizations become one finite campaign allowance with stop-on-first-anomaly. Cluster design and single-arm lower bounds are reported; the sufficiency rule is unchanged.",
       "reason": "Closes the findings of the RES-541 continuation gates 3 and 4: the generator was its own gold oracle, qualification read protected requests, and the plan understated the held-out workload."
+    },
+    {
+      "id": "P5-UNCERTAINTY-AWARE-SUFFICIENCY",
+      "version": "V3.2",
+      "recorded_before_model_observations": true,
+      "change": "Adoption now also requires the template-cluster-aware 95% lower bound to reach 0.90 on both overall and critical-family exact rate. Point thresholds stay at 0.90. A point pass with an insufficient bound returns INCONCLUSIVE_INSUFFICIENT_INDEPENDENT_EVIDENCE. A point failure returns ADAPTATION_STUDY_ELIGIBLE_NOT_AUTHORIZED (renamed from ELIGIBLE_FOR_ADAPTATION_EXPERIMENT). Leave-one-template-out sensitivity, critical-family cluster design and confidence-bound limitations are reported.",
+      "reason": "The held-out set has 15 template clusters (about 8.1 effective), so a point estimate at the threshold carries little independent evidence. Owner decision on RES-541 to amend the rule prospectively.",
+      "supersedes": {
+        "protocol_sha256_before_amendment": "bbbe88bd6b1e50afcfe43b9f17272e0e2f14b1cfb12eaa7723e49011eb31b632",
+        "zero_shot_sufficient": {
+          "exact": 0.9,
+          "critical_exact": 0.9,
+          "decision": "ADOPT_REPAIRED_CONTRACT_WITH_CONSTRAINED_DECODING"
+        },
+        "stage_1_otherwise": "ELIGIBLE_FOR_ADAPTATION_EXPERIMENT",
+        "stage_1_meaning": "Stage 1 observes only the zero-shot arms. Failing the sufficiency rule makes an adaptation experiment eligible for separate authorization; it is not evidence that adaptation would help.",
+        "statistics.sufficiency_basis": "Stage 1 sufficiency compares point estimates with the thresholds. Each zero-shot arm's item-level and template-clustered lower bounds on its exact rate, the cluster design and the per-family Wilson intervals are reported with the decision and do not change it.",
+        "sufficiency_caution": "With about 8 effective template clusters a point estimate at the 0.90 threshold can have a clustered lower bound far below it. Adopting the repaired contract is an engineering decision on same-generator development evidence, not a finding that the model is sufficient.",
+        "original_text": "Zero-shot constrained exact >= 0.90 and critical-family exact >= 0.90 on point estimates adopted the repaired contract; otherwise an adaptation experiment became eligible."
+      },
+      "preserved": "The original preregistration is retained verbatim in this record and in Git history (commit bbbe820)."
     }
   ],
-  "claim_ceiling": "Results bound SmolLM3 behaviour on one synthetic development generator whose train and held-out splits share its 14 intent families. They are not evidence of scientific generalization, real-request safety, or PSE readiness. The ten exposed cases are diagnostics. Summed log-probability selection can favour short options such as NONE or an empty list, so the constrained arm's errors are decoder-and-model choices, not proof of understanding or inability. Generated gold agrees with a project-authored closed-vocabulary adjudication of the generator's own phrasing, which checks internal consistency of the synthetic task and not real-request phrasing. The held-out set has 15 template clusters (about 8 effective), so sufficiency rests on point estimates whose clustered lower bounds are reported and may be much lower. CPU qualification used a tiny random model, and the Colab GPU path is unverified.",
+  "claim_ceiling": "Results bound SmolLM3 behaviour on one synthetic development generator whose train and held-out splits share its 14 intent families. They are not evidence of scientific generalization, real-request safety, or PSE readiness. The ten exposed cases are diagnostics. Summed log-probability selection can favour short options such as NONE or an empty list, so the constrained arm's errors are decoder-and-model choices, not proof of understanding or inability. Generated gold agrees with a project-authored closed-vocabulary adjudication of the generator's own phrasing, which checks internal consistency of the synthetic task and not real-request phrasing. The held-out set has 15 template clusters (about 8 effective), so adoption also requires the cluster-aware lower bound to reach 0.90 and an insufficient bound is reported as inconclusive. CPU qualification used a tiny random model, and the Colab GPU path is unverified.",
   "execution": {
     "worker": "scripts/a02_v3_worker.py (hash-chained resumable checkpoint, deadline-bounded, cache qualification on calibration examples first)",
     "controller": "scripts/a02_v3_execution.py (worst-case session plan priced from the whole workload, one finite campaign allowance, stop-on-first-anomaly campaign with no retry, V3-only ledger, exact-target teardown)",

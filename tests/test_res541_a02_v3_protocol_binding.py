@@ -154,4 +154,26 @@ def test_every_amendment_precedes_observations_and_the_caveats_are_disclosed() -
     ceiling = PROTOCOL["claim_ceiling"]
     for phrase in ("15 template clusters", "unverified", "tiny random model"):
         assert phrase in ceiling
-    assert "point estimates" in PROTOCOL["decision_rule"]["statistics"]["sufficiency_basis"]
+    assert "lower bound" in PROTOCOL["decision_rule"]["statistics"]["sufficiency_basis"]
+
+
+def test_amendment_p5_preserves_the_original_rule_and_precedes_observations() -> None:
+    amendment = next(a for a in PROTOCOL["amendments"] if a["id"].startswith("P5-"))
+    assert amendment["recorded_before_model_observations"] is True
+    old = amendment["supersedes"]
+    assert (
+        old["zero_shot_sufficient"]["exact"],
+        old["zero_shot_sufficient"]["critical_exact"],
+    ) == (
+        0.9,
+        0.9,
+    )
+    assert "lower_bound" not in old["zero_shot_sufficient"]  # the original is kept verbatim
+    assert old["stage_1_otherwise"] == "ELIGIBLE_FOR_ADAPTATION_EXPERIMENT"
+    assert len(old["protocol_sha256_before_amendment"]) == 64
+    rule = PROTOCOL["decision_rule"]["zero_shot_sufficient"]
+    assert rule["thresholds_frozen"].startswith("No threshold may be changed after")
+    assert (
+        PROTOCOL["decision_rule"]["stage_1_otherwise"] == "ADAPTATION_STUDY_ELIGIBLE_NOT_AUTHORIZED"
+    )
+    assert rule["inconclusive_decision"] == "INCONCLUSIVE_INSUFFICIENT_INDEPENDENT_EVIDENCE"
