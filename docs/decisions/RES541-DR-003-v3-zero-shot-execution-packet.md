@@ -10,7 +10,7 @@
 
 `DECISION_REQUESTED=AUTHORIZE_OR_DECLINE_ONE_FINITE_CAMPAIGN_ALLOWANCE_FOR_THE_V3_ZERO_SHOT_RUN`
 
-This packet answers independent review #5824688227 and the RES-541 continuation gates.
+This packet answers independent reviews #5824688227 and #5840002363 and the RES-541 continuation gates.
 RES541-DR-002 remains the record of the V3 contract. Its 2,361 s estimate is superseded; the
 engineering estimate is 2,735.7 s and admission uses the worst-case plan below. No V3 model
 observation exists. Every figure here was produced on CPU. The Colab GPU path is unverified.
@@ -127,3 +127,48 @@ where a session stops. The reserve is a ceiling to be spent only if a session is
 **Authorize or decline** one campaign allowance for the V3 zero-shot run. The allowance is a single file, written only by the owner, at `/mnt/e/DynamisLM-A0/a02/v3-zero-shot/campaign-allowance.json`. It binds the plan hash above and names `max_sessions` (at most 10), `cumulative_cap_cu` (at most 3.625), `max_cu_per_session` (at least 0.3625), `valid_until_utc` with a timezone, and `allow_concurrent_unrelated_usage`. It does not exist. No GPU, training, paid upgrade or session 005 is requested.
 
 The result can only adopt the repaired contract, be inconclusive, or make proposing an adaptation study eligible. It cannot authorize training.
+
+
+## Final live-execution safety repair (review #5840002363)
+
+The scientific contract, generated dataset, thresholds, model revisions, worker ordering and
+V2 evidence remain unchanged. The exact commit and tree of the final published source must be
+captured **outside Git**, in the owner campaign allowance's `source_identity` object, with keys
+`commit` and `tree`. `source_identity()` refuses a dirty checkout. Each session rechecks this
+identity before allocation; the session binding, consumed marker, campaign ledger and recovered
+status bind it. The status binds the recovered checkpoint bytes by SHA-256, and checkpoint
+adoption still checks the complete hash chain, prefix, work ordering and scientific identities.
+The Git tree includes the protocol, model revision, runtime policy and required dependency
+identities. There is no self-referential source hash in a repository artifact.
+
+The reviewed V2 independent EOF/deadline watchdog must return READY before allocation. It runs
+in its own process session, stops only the exact session on lost stdin/controller death or
+900-second deadline, and writes a separate watchdog receipt. Disarm follows positive CLI and
+authenticated provider-assignment absence verification. Stop, download and verification
+exceptions are recorded separately so subsequent recovery and ledger writes are attempted.
+The fake-CLI tests kill the actual parent process and exercise lost stdin without a real GPU.
+
+Both `/content/a02-v3-status.json` and the checkpoint are requested from the exact session before
+teardown, independently even after preparation or inference failure. Recovered bytes have
+SHA-256 receipts. Successful work requires qualified READY runtime status. Missing, malformed,
+misbound or inconsistent status cannot authorize checkpoint adoption. Remote stderr is bounded
+and secret-like fields are redacted; failure stage and error type survive bootstrap failures.
+Failed download, runtime/CUDA qualification or preparation is an execution anomaly, never a
+scientific model NO_GO.
+
+During remote stages, a five-second poll uses the V2 conservative maximum of account balance
+delta and elapsed-rate cost, remaining cumulative allowance and a cleanup/poll reserve. Rate
+changes, unknown quota, unexpected session inventory and ambiguous attribution stop the exact
+target. Provider snapshot checks reconcile authenticated CLI, usage and provider assignments.
+Concurrent billed usage is refused even if an allowance requests it. Unknown final quota
+records a conservative over-cap ledger value and blocks continuation. Every anomaly ends the
+automatic campaign; any later invocation is a deliberate operator action consuming another slot.
+
+Owner decision remains one expiring campaign for **only ZERO_SHOT_UNCONSTRAINED and
+ZERO_SHOT_CONSTRAINED**, at most **10 T4 sessions**, **900 seconds each**, **0.3625 CU/session**,
+**3.625 CU total**, with no training, upgrade or uncontrolled retry. The authorization must name
+the exact final source commit/tree and existing plan hash, expire with a timezone, and set
+`allow_concurrent_unrelated_usage=false`. No allowance is created by this repair. Historical QA
+receipts above describe earlier heads; final repair QA/CPU and exact-head hosted CI are linked
+in the PR and Linear completion update. Independent scientific/adversarial review remains a
+merge requirement. All scientific claims remain **SYNTHETIC_DEVELOPMENT_ONLY**.

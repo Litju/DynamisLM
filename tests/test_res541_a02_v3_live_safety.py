@@ -86,10 +86,10 @@ def test_monitor_stops_during_execution_on_anomaly(monkeypatch: Any, change: str
 
     client = Client()
     state = execution.monitored_stage(
-        client,
+        client,  # type: ignore[arg-type]
         "target",
         "work",
-        10,  # type: ignore[arg-type]
+        10,
         {"balance": 100, "active_sessions": []},
         {"per_session_cap": 0.3625, "cumulative_cap": 3.625, "spent_before": 0},
         {"bounds": {"cost_buffer_cu": 0.05}},

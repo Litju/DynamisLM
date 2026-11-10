@@ -394,7 +394,7 @@ def monitored_stage(
     halt = threading.Event()
     failures: list[str] = []
     observations: list[dict[str, Any]] = []
-    started = time.monotonic()
+    started = admission.get("started_monotonic", time.monotonic())
 
     def monitor() -> None:
         while not halt.wait(COST_POLL_SECONDS):
@@ -497,6 +497,7 @@ def run_session(
         watchdog = client.start_watchdog(
             name, run_dir / f"session-{session_index:03d}-watchdog.json"
         )
+        admission["started_monotonic"] = time.monotonic()
         attempted = True
         allocated = client.new(name)
         state["allocated"] = allocated
@@ -537,6 +538,8 @@ def run_session(
             state["rate_before_work"] = mid["usage_rate_cu_per_hour"]
             if mid["usage_rate_cu_per_hour"] > bounds["admission_rate_ceiling_cu_per_hour"]:
                 raise RuntimeError("live T4 rate rose above the admission ceiling; no work stage")
+            if mid["usage_rate_cu_per_hour"] != after["usage_rate_cu_per_hour"]:
+                raise RuntimeError("unsupported live rate change before work")
             if (
                 float(before["balance"]) - float(mid["balance"])
                 > plan["compute_units"]["per_session_cap"]
