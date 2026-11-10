@@ -33,7 +33,7 @@ import subprocess
 import sys
 import threading
 import time
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -787,10 +787,11 @@ class ColabCLI:  # pragma: no cover - provider commands, used only in an authori
     def verify_absent(self, name: str) -> bool:
         self.teardown_receipt: dict[str, Any] = {}
         results = {}
-        for label, command in (
+        commands: tuple[tuple[str, Callable[[], list[str]]], ...] = (
             ("sessions", lambda: ["colab", "--auth=oauth2", "sessions"]),
             ("assignments", self._timeouts._assignment_command),
-        ):
+        )
+        for label, command in commands:
             try:
                 result = self._run(command(), timeout=30)
                 results[label] = result
