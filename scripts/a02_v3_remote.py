@@ -20,6 +20,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -67,6 +68,18 @@ def _sha256_file(path: Path) -> str:
 
 
 def _write_status(value: dict[str, Any]) -> None:
+    value = {
+        **value,
+        "binding": load_binding(),
+        "checkpoint_sha256": _sha256_file(CHECKPOINT) if CHECKPOINT.exists() else None,
+    }
+    if "stages" in value:
+        for stage in value["stages"]:
+            stage["stderr_tail"] = re.sub(
+                r"(?i)(token|password|secret|authorization)[=: ]+\S+",
+                r"\1=[REDACTED]",
+                str(stage.get("stderr_tail", "")),
+            )[:2000]
     temporary = STATUS_PATH.with_suffix(".tmp")
     temporary.write_text(json.dumps(value, sort_keys=True, indent=2) + "\n")
     os.replace(temporary, STATUS_PATH)
@@ -213,7 +226,13 @@ def main() -> int:  # pragma: no cover - remote entry point
     timeout = int(os.environ.get("A02_V3_REMOTE_STAGE_TIMEOUT", "0"))
     if timeout < 60:
         raise ValueError("V3 remote stage timeout is missing or too small")
-    return child(stage, timeout) if child_stage else outer(stage, timeout)
+    try:
+        return child(stage, timeout) if child_stage else outer(stage, timeout)
+    except Exception as exc:
+        status = json.loads(STATUS_PATH.read_bytes()) if STATUS_PATH.exists() else {}
+        status.update(status="EXECUTION_FAILED", failure_stage=stage, error_type=type(exc).__name__)
+        _write_status(status)
+        return 1
 
 
 if __name__ == "__main__":  # pragma: no cover

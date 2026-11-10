@@ -407,6 +407,20 @@ class FakeColab:
 
     def download(self, name: str, remote: str, local: Path) -> bool:
         source = self.root / name / Path(remote).name
+        if remote == execution.REMOTE_STATUS:
+            checkpoint = self.root / name / Path(execution.REMOTE_CHECKPOINT).name
+            binding_path = self.root / name / Path(execution.REMOTE_BINDING).name
+            if binding_path.exists():
+                source.write_text(
+                    json.dumps(
+                        {
+                            "binding": json.loads(binding_path.read_text()),
+                            "checkpoint_sha256": v3.sha256(checkpoint.read_bytes())
+                            if checkpoint.exists()
+                            else None,
+                        }
+                    )
+                )
         if self.fail_download or not source.exists():
             return False
         shutil.copyfile(source, local)
@@ -419,6 +433,16 @@ class FakeColab:
             return False
         self.active.pop(name, None)
         return True
+
+    def start_watchdog(self, name: str, receipt: Path) -> Any:
+        receipt.write_text(json.dumps({"phase": "READY", "session": name}))
+        return receipt
+
+    def finish_watchdog(self, watchdog: Any, verified: bool) -> None:
+        watchdog.write_text(json.dumps({"verified": verified}))
+
+    def verify_absent(self, name: str) -> bool:
+        return name not in self.active
 
     def sessions(self) -> list[str]:
         return list(self.active)
@@ -542,7 +566,7 @@ def test_lost_download_preserves_local_evidence(tmp_path: Path) -> None:
     kept = (tmp_path / "run" / "checkpoint.jsonl").read_bytes()
     client.fail_download = True
     state = _session(tmp_path, client, 2)
-    assert state["merge"] == "EVIDENCE_NOT_RETRIEVED"
+    assert str(state["merge"]).startswith("REJECTED")
     assert (tmp_path / "run" / "checkpoint.jsonl").read_bytes() == kept
     assert state["stopped"] is True
 
@@ -796,3 +820,45 @@ def test_clean_source_drift_refuses_next_session(tmp_path: Path, monkeypatch: An
     with pytest.raises(execution.AdmissionError, match="source identity"):
         _session(tmp_path, client, 2, allowance)
     assert len(client.created) == 1
+
+
+@pytest.mark.parametrize("fault", ["stop", "verify", "download", "prepare"])
+def test_api_exceptions_preserve_receipts_and_ledger(tmp_path: Path, fault: str) -> None:
+    client = FakeColab(tmp_path / "remote", items_per_session=2)
+
+    def broken(*args: Any, **kwargs: Any) -> Any:
+        raise RuntimeError("simulated CLI exception")
+
+    if fault == "prepare":
+        client.exec_stage = broken  # type: ignore[method-assign]
+    else:
+        setattr(client, {"verify": "verify_absent"}.get(fault, fault), broken)
+    state = _session(tmp_path, client, 1)
+    assert (tmp_path / "ledger.json").exists()
+    assert (tmp_path / "run/session-001-control.json").exists()
+    assert (
+        state.get("failure")
+        or state.get("stopped_error")
+        or state.get("merge")
+        or state.get("target_absent_after_stop_error")
+    )
+    assert client.stopped == [state["session"]] or fault == "stop"
+
+
+def test_status_binding_forgery_rejects_checkpoint(tmp_path: Path) -> None:
+    client = FakeColab(tmp_path / "remote", items_per_session=2)
+    original = client.download
+
+    def forged(name: str, remote: str, local: Path) -> bool:
+        result = original(name, remote, local)
+        if remote == execution.REMOTE_STATUS and result:
+            status = json.loads(local.read_text())
+            status["binding"]["session_index"] = 99
+            local.write_text(json.dumps(status))
+        return result
+
+    client.download = forged  # type: ignore[method-assign]
+    state = _session(tmp_path, client, 1)
+    assert "binding differs" in state["merge"]
+    assert not (tmp_path / "run/checkpoint.jsonl").exists()
+    assert state["target_absent_after_stop"]

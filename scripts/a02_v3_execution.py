@@ -26,8 +26,11 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
+import select
 import subprocess
+import sys
 from collections.abc import Sequence
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
@@ -58,6 +61,7 @@ ALLOWANCE_KEYS = frozenset(
     }
 )
 LEDGER_SCHEMA = "RES541_A02_V3_LEDGER_V1"
+REMOTE_STATUS = "/content/a02-v3-status.json"
 REMOTE_CHECKPOINT = "/content/a02-v3-checkpoint.jsonl"
 REMOTE_SOURCE = "/content/a02-v3-source.tar"
 REMOTE_BINDING = "/content/a02-v3-binding.json"
@@ -357,6 +361,9 @@ class ColabClient(Protocol):
     def download(self, name: str, remote: str, local: Path) -> bool: ...
     def stop(self, name: str) -> bool: ...
     def sessions(self) -> list[str]: ...
+    def start_watchdog(self, name: str, receipt: Path) -> Any: ...
+    def finish_watchdog(self, watchdog: Any, verified: bool) -> None: ...
+    def verify_absent(self, name: str) -> bool: ...
 
 
 def _write_exclusive(path: Path, value: dict[str, Any]) -> None:
@@ -410,12 +417,16 @@ def run_session(
     local = run_dir / "checkpoint.jsonl"
     downloaded = run_dir / f"session-{session_index:03d}-checkpoint.jsonl"
     state: dict[str, Any] = {"session": name, "index": session_index, "admission": admission}
+    watchdog = None
     allocated = False
     attempted = False  # only a session this run tried to create may be stopped by this run
     state["sessions_before"] = sorted(client.sessions())
     try:
         if name in state["sessions_before"]:
             raise RuntimeError("a session with this exact V3 name already exists; refusing")
+        watchdog = client.start_watchdog(
+            name, run_dir / f"session-{session_index:03d}-watchdog.json"
+        )
         attempted = True
         allocated = client.new(name)
         state["allocated"] = allocated
@@ -453,19 +464,59 @@ def run_session(
         state["failure"] = f"{type(exc).__name__}: {exc}"
     finally:
         if allocated:
+            status_path = run_dir / f"session-{session_index:03d}-status.json"
+            recovered = {}
+            for remote, path in ((REMOTE_STATUS, status_path), (REMOTE_CHECKPOINT, downloaded)):
+                try:
+                    recovered[remote] = client.download(name, remote, path)
+                    if recovered[remote]:
+                        state[path.name + "_sha256"] = v3.sha256(path.read_bytes())
+                except Exception as exc:
+                    recovered[remote] = False
+                    state[path.name + "_error"] = type(exc).__name__
             try:
-                if client.download(name, REMOTE_CHECKPOINT, downloaded):
+                if not recovered.get(REMOTE_STATUS):
+                    raise ValueError("remote status missing")
+                status = v3.json_object(status_path.read_text())
+                if status.get("binding") != {**binding, "session_index": session_index}:
+                    raise ValueError("remote status source/session binding differs")
+                digest = (
+                    v3.sha256(downloaded.read_bytes()) if recovered.get(REMOTE_CHECKPOINT) else None
+                )
+                if status.get("checkpoint_sha256") != digest:
+                    raise ValueError("remote status/checkpoint digest differs")
+                state["remote_status"] = status
+                if recovered.get(REMOTE_CHECKPOINT):
                     state["merge"] = merge_checkpoint(local, downloaded, items, protocol)
                 else:
                     state["merge"] = "EVIDENCE_NOT_RETRIEVED"
-            except worker.CheckpointError as exc:
+            except Exception as exc:
                 state["merge"] = f"REJECTED: {exc}"
-        state["stopped"] = client.stop(name) if attempted else False
-        remaining = client.sessions()
-        state["target_absent_after_stop"] = attempted and name not in remaining
-        state["unrelated_sessions_after"] = sorted(s for s in remaining if s != name)
-        end = client.snapshot()
-        spent = max(0.0, float(before["balance"]) - float(end["balance"]))
+        state["stopped"] = False
+        state["target_absent_after_stop"] = False
+        state["unrelated_sessions_after"] = []
+        for label, operation in (
+            ("stopped", lambda: client.stop(name) if attempted else False),
+            ("target_absent_after_stop", lambda: attempted and client.verify_absent(name)),
+            ("unrelated_sessions_after", lambda: sorted(s for s in client.sessions() if s != name)),
+        ):
+            try:
+                state[label] = operation()
+            except Exception as exc:
+                state[label + "_error"] = type(exc).__name__
+        if watchdog is not None:
+            try:
+                client.finish_watchdog(watchdog, state["target_absent_after_stop"] is True)
+            except Exception as exc:
+                state["watchdog_error"] = type(exc).__name__
+        try:
+            end = client.snapshot()
+            spent = float(before["balance"]) - float(end["balance"])
+            if not math.isfinite(spent) or spent < 0:
+                raise ValueError("untrustworthy ending balance")
+        except Exception as exc:
+            state["failure"] = "ending quota unknown: " + type(exc).__name__
+            spent = admission["per_session_cap"] + 1
         ledger["sessions"].append(
             {
                 "index": session_index,
@@ -591,6 +642,46 @@ class ColabCLI:  # pragma: no cover - provider commands, used only in an authori
         self._snapshot = a02_dev_execution._colab_snapshot
         self._rows = a02_execution._session_rows
         self._timeouts = a02_execution
+        self.target_endpoint: str | None = None
+
+    def start_watchdog(self, name: str, receipt: Path) -> Any:
+        process = subprocess.Popen(
+            [sys.executable, "-m", "scripts.a02_execution", "watchdog", name, str(receipt)],
+            cwd=ROOT,
+            env=self._timeouts.clean_colab_env(),
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            start_new_session=True,
+        )
+        if process.stdout is None:
+            raise RuntimeError("watchdog readiness pipe unavailable")
+        ready, _, _ = select.select([process.stdout], [], [], 10)
+        if not ready or process.stdout.readline().strip() != "READY":
+            if process.stdin is not None:
+                process.stdin.close()
+            raise RuntimeError("watchdog not READY; no allocation")
+        receipt.write_text(json.dumps({"session": name, "phase": "READY", "pid": process.pid}))
+        return process, receipt
+
+    def finish_watchdog(self, watchdog: Any, verified: bool) -> None:
+        process, receipt = watchdog
+        if process.stdin is not None:
+            if verified:
+                process.stdin.write("D")
+                process.stdin.flush()
+            process.stdin.close()
+        if verified:
+            process.wait(timeout=10)
+            receipt.write_text(json.dumps({"phase": "DISARMED", "exact_target_absent": True}))
+
+    def verify_absent(self, name: str) -> bool:
+        sessions = self._run(["colab", "--auth=oauth2", "sessions"], timeout=30)
+        assignments = self._run(self._timeouts._assignment_command(), timeout=30)
+        return bool(
+            self._timeouts._verify_target_absent(sessions, name, self.target_endpoint, assignments)
+        )
 
     def snapshot(self) -> dict[str, Any]:
         snap: dict[str, Any] = self._snapshot()
@@ -603,6 +694,7 @@ class ColabCLI:  # pragma: no cover - provider commands, used only in an authori
     def hardware(self, name: str) -> str | None:
         out = self._run(["colab", "--auth=oauth2", "status", "--session", name], timeout=30)
         rows = [row for row in self._rows(out.stdout) if row[0] == name]
+        self.target_endpoint = rows[0][1] if len(rows) == 1 else None
         return rows[0][2].upper() if len(rows) == 1 else None
 
     def upload(self, name: str, local: Path, remote: str) -> bool:
@@ -633,6 +725,8 @@ class ColabCLI:  # pragma: no cover - provider commands, used only in an authori
 
     def sessions(self) -> list[str]:
         out = self._run(["colab", "--auth=oauth2", "sessions"], timeout=30)
+        if out.returncode != 0 or out.stderr:
+            raise RuntimeError("session inventory failed")
         return [row[0] for row in self._rows(out.stdout)]
 
 
