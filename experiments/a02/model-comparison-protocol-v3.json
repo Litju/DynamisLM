@@ -257,6 +257,18 @@
         "original_text": "Zero-shot constrained exact >= 0.90 and critical-family exact >= 0.90 on point estimates adopted the repaired contract; otherwise an adaptation experiment became eligible."
       },
       "preserved": "The original preregistration is retained verbatim in this record and in Git history (commit bbbe820)."
+    },
+    {
+      "id": "P6-SESSION-RESERVE",
+      "version": "V3.2",
+      "recorded_before_model_observations": true,
+      "change": "The session plan keeps its nine worst-case-packed sessions and adds one reserve session, so up to ten sessions may be allowed. The plan builder refuses any plan whose total slack is smaller than one whole session. The cumulative cap rises from 3.2625 CU to 3.625 CU (0.3625 CU per session).",
+      "reason": "Nine sessions left 50.2 s of total slack, which cannot absorb even one lost session; a failed allocation is never retried automatically and still consumes its index.",
+      "supersedes": {
+        "sessions": 9,
+        "slack_seconds": 50.2,
+        "cumulative_cap_cu": 3.2625
+      }
     }
   ],
   "claim_ceiling": "Results bound SmolLM3 behaviour on one synthetic development generator whose train and held-out splits share its 14 intent families. They are not evidence of scientific generalization, real-request safety, or PSE readiness. The ten exposed cases are diagnostics. Summed log-probability selection can favour short options such as NONE or an empty list, so the constrained arm's errors are decoder-and-model choices, not proof of understanding or inability. Generated gold agrees with a project-authored closed-vocabulary adjudication of the generator's own phrasing, which checks internal consistency of the synthetic task and not real-request phrasing. The held-out set has 15 template clusters (about 8 effective), so adoption also requires the cluster-aware lower bound to reach 0.90 and an insufficient bound is reported as inconclusive. CPU qualification used a tiny random model, and the Colab GPU path is unverified.",
@@ -315,15 +327,25 @@
       },
       "generation_seconds_per_session": 410,
       "worst_case_generation_seconds": 3639.8,
-      "sessions": 9,
-      "capacity_seconds": 3690,
-      "slack_seconds": 50.2,
+      "sessions": 10,
+      "capacity_seconds": 4100,
+      "slack_seconds": 460.2,
       "compute_units": {
         "per_session_cap": 0.3625,
-        "cumulative_cap": 3.2625,
-        "expected_at_observed_t4_rate": 2.5875
+        "cumulative_cap": 3.625,
+        "expected_at_observed_t4_rate": 2.5875,
+        "expected_if_every_allowed_session_runs": 2.875
       },
-      "feasibility": "All 581 items pack into nine sessions under worst-case costs with little slack; real runs are expected to need fewer. The corrected scorer-call bound (73, from the held-out set rather than the 69 of the ten exposed cases) is what makes this the true worst case."
+      "feasibility": "All 581 items pack into nine sessions under worst-case costs, with only 50 s of slack, which could not absorb a single lost session. The plan therefore adds one reserve session: up to ten allowed sessions, 460 s (12.6%) of slack, enough for one entirely lost session, which is never retried automatically and still consumes its index. Real runs are expected to need fewer. The scorer-call bound of 73 comes from the held-out set rather than the 69 of the ten exposed cases.",
+      "packed_sessions": 9,
+      "reserve_sessions": 1,
+      "robustness": {
+        "capacity_seconds": 4100,
+        "slack_seconds": 460.2,
+        "slack_fraction_of_worst_case": 0.126,
+        "tolerates_one_lost_session": true,
+        "criterion": "total slack must cover at least one entire lost session, because a failed session is never retried automatically and still consumes its index"
+      }
     },
     "qualification_limits": [
       "CPU qualification used a tiny randomly initialised SmolLM3ForCausalLM in float32, not the pinned weights. It shows the cache logic is correct on a real Transformers model, not that FP16 CUDA on a T4 stays within 1e-3 nats.",

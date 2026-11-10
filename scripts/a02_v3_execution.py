@@ -78,6 +78,7 @@ class RuntimeBounds:
     t4_rate_cu_per_hour: float = 1.15  # provider-reported T4 rate in session 004
     admission_rate_ceiling_cu_per_hour: float = 1.25  # stop at once above this
     cost_buffer_cu: float = 0.05  # per-session reserve, as in V2
+    reserve_sessions: int = 1  # extra sessions beyond worst-case packing; see robustness
 
 
 def item_cost_bounds(
@@ -139,6 +140,14 @@ def build_plan(
             start, used = index, 0.0
         used += cost
     sessions.append({"first_item": start, "end_item": len(items), "worst_case_seconds": used})
+    packed = len(sessions)
+    session_count = packed + bounds.reserve_sessions
+    capacity = session_count * budget
+    slack = capacity - sum(s["worst_case_seconds"] for s in sessions)
+    if bounds.reserve_sessions < 0 or slack < budget:
+        # A plan that cannot absorb one entire lost session (for example a failed allocation,
+        # which is never retried automatically) is not robust enough to propose.
+        raise ValueError("the plan has less slack than one whole session; add a reserve session")
     rate = bounds.admission_rate_ceiling_cu_per_hour
     per_session_cu = bounds.session_seconds / 3600 * rate + bounds.cost_buffer_cu
     total_worst = sum(s["worst_case_seconds"] for s in sessions)
@@ -158,13 +167,26 @@ def build_plan(
         "work_items": len(items),
         "worst_case_generation_seconds": round(total_worst, 1),
         "sessions": [{**s, "index": i + 1} for i, s in enumerate(sessions)],
-        "session_count": len(sessions),
-        "worst_case_session_seconds": len(sessions) * bounds.session_seconds,
+        "packed_sessions": packed,
+        "reserve_sessions": bounds.reserve_sessions,
+        "session_count": session_count,
+        "robustness": {
+            "capacity_seconds": capacity,
+            "slack_seconds": round(slack, 1),
+            "slack_fraction_of_worst_case": round(slack / total_worst, 3),
+            "tolerates_one_lost_session": slack >= budget,
+            "criterion": "total slack must cover at least one entire lost session, because a "
+            "failed session is never retried automatically and still consumes its index",
+        },
+        "worst_case_session_seconds": session_count * bounds.session_seconds,
         "compute_units": {
             "per_session_cap": round(per_session_cu, 4),
-            "cumulative_cap": round(len(sessions) * per_session_cu, 4),
+            "cumulative_cap": round(session_count * per_session_cu, 4),
             "expected_at_observed_t4_rate": round(
-                len(sessions) * bounds.session_seconds / 3600 * bounds.t4_rate_cu_per_hour, 4
+                packed * bounds.session_seconds / 3600 * bounds.t4_rate_cu_per_hour, 4
+            ),
+            "expected_if_every_allowed_session_runs": round(
+                session_count * bounds.session_seconds / 3600 * bounds.t4_rate_cu_per_hour, 4
             ),
             "rate_basis": "session-004 provider-reported T4 rate; admission stops above ceiling",
         },
@@ -173,9 +195,10 @@ def build_plan(
             "share_of_first_session": round(costs["QUALIFICATION"] / budget, 3),
             "uncached_full_forwards": worker.QUALIFICATION_EXAMPLES * calls,
         },
-        "retry_policy": "No automatic retry. A session that commits fewer items than planned "
-        "leaves the remainder to the next individually authorized session; if the planned count "
-        "is exhausted, any extra session needs a new owner authorization and plan amendment.",
+        "retry_policy": "No automatic retry. A session that commits fewer items than packed "
+        "leaves the remainder to a later session of the same allowance, which may continue only "
+        "by a deliberate new invocation. The reserve covers one entirely lost session. If the "
+        "allowed count is exhausted, any extra session needs a new allowance and plan amendment.",
     }
     # The hash covers deterministic inputs only, so the printed plan and the plan recomputed at
     # run time are the same plan. Live account state is informational and never hashed.

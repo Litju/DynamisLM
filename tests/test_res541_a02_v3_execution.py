@@ -115,6 +115,28 @@ def test_plan_costs_follow_profile_preflight_and_bounds() -> None:
     assert PLAN["cache_qualification"]["uncached_full_forwards"] == 3 * calls
 
 
+def test_plan_has_a_reserve_session_and_survives_one_lost_session() -> None:
+    robust = PLAN["robustness"]
+    assert PLAN["reserve_sessions"] == 1 and PLAN["session_count"] == PLAN["packed_sessions"] + 1
+    assert robust["tolerates_one_lost_session"] is True
+    assert robust["slack_seconds"] >= PLAN["generation_seconds_per_session"]
+    assert (
+        robust["capacity_seconds"] == PLAN["session_count"] * PLAN["generation_seconds_per_session"]
+    )
+    assert robust["slack_seconds"] == pytest.approx(
+        robust["capacity_seconds"] - PLAN["worst_case_generation_seconds"], abs=0.1
+    )
+    assert robust["slack_fraction_of_worst_case"] > 0.1
+
+
+def test_a_plan_without_a_reserve_is_refused_and_a_larger_reserve_changes_the_hash() -> None:
+    with pytest.raises(ValueError, match="less slack than one whole session"):
+        execution.build_plan(PROTOCOL, PREFLIGHT, execution.RuntimeBounds(reserve_sessions=0))
+    bigger = execution.build_plan(PROTOCOL, PREFLIGHT, execution.RuntimeBounds(reserve_sessions=2))
+    assert bigger["session_count"] == 11 and bigger["plan_sha256"] != PLAN["plan_sha256"]
+    assert bigger["compute_units"]["cumulative_cap"] > PLAN["compute_units"]["cumulative_cap"]
+
+
 def test_compute_unit_cap_follows_session_count_and_rate_ceiling() -> None:
     cu = PLAN["compute_units"]
     per = 900 / 3600 * 1.25 + 0.05
@@ -151,7 +173,7 @@ def test_one_allowance_admits_every_planned_session_without_per_session_ceremony
         ledger["sessions"].append(
             {"index": index, "compute_units_spent": PLAN["compute_units"]["per_session_cap"] / 2}
         )
-    assert PLAN["session_count"] == 9
+    assert PLAN["packed_sessions"] == 9 and PLAN["session_count"] == 10
 
 
 def test_admission_requires_an_allowance() -> None:
@@ -546,7 +568,8 @@ def test_nine_session_campaign_covers_every_item_exactly_once(tmp_path: Path) ->
     client = FakeColab(tmp_path / "remote")
     result = _campaign(tmp_path, client)
     assert result["status"] == "COMPLETE" and result["committed"] == len(ITEMS) == 581
-    assert len(result["sessions"]) == PLAN["session_count"] == 9
+    assert len(result["sessions"]) == PLAN["packed_sessions"] == 9  # the reserve stays unused
+    assert PLAN["session_count"] == 10
     # Worst-case timing reproduces the plan's packing exactly, with no session left idle.
     assert [s["committed_after"] for s in result["sessions"]] == BOUNDARIES
     assert len(client.created) == 9 and client.created == client.stopped
@@ -716,3 +739,32 @@ def test_failed_cache_qualification_ends_the_campaign_before_any_protected_work(
     users = {u for backend in seen for u in backend.touched}
     protected = {v3.user_message(e["request"]) for e in decision.heldout_examples(PROTOCOL)}
     assert users and not users & protected
+
+
+def test_one_lost_session_is_absorbed_by_the_reserve_and_the_run_still_completes(
+    tmp_path: Path,
+) -> None:
+    client = FakeColab(tmp_path / "remote")
+    client.fail_new = True
+    lost = _campaign(tmp_path, client)
+    assert lost["status"] == "STOPPED_ON_ANOMALY" and lost["committed"] == 0
+    client.fail_new = False
+    result = _campaign(tmp_path, client)  # a deliberate new invocation, not an automatic retry
+    assert result["status"] == "COMPLETE" and result["committed"] == 581
+    ledger = json.loads((tmp_path / "ledger.json").read_text())
+    assert [s["index"] for s in ledger["sessions"]] == list(range(1, 11))  # the lost one counts
+    assert len(client.created) == 9
+    entries = worker.read_checkpoint(tmp_path / "run" / "checkpoint.jsonl", ITEMS)["entries"]
+    assert [e["item"] for e in entries] == [item.id for item in ITEMS]
+
+
+def test_two_lost_sessions_exhaust_the_allowance_before_completion(tmp_path: Path) -> None:
+    client = FakeColab(tmp_path / "remote")
+    client.fail_new = True
+    assert _campaign(tmp_path, client)["status"] == "STOPPED_ON_ANOMALY"
+    assert _campaign(tmp_path, client)["status"] == "STOPPED_ON_ANOMALY"
+    client.fail_new = False
+    result = _campaign(tmp_path, client)
+    assert result["status"] == "NOT_ADMITTED"
+    assert "exhausted" in result["reason"]
+    assert result["committed"] < 581 and len(client.created) == 8  # 10 slots - 2 lost

@@ -110,19 +110,27 @@ def test_session_budget_equals_the_plan_code_and_fits_the_maximum_nine_sessions(
     plan = execution.build_plan(PROTOCOL, PREFLIGHT, execution.RuntimeBounds())
     budget = EXECUTION["session_budget"]
     assert budget["work_items"] == plan["work_items"] == 581
-    assert budget["sessions"] == plan["session_count"] == 9
+    assert budget["packed_sessions"] == plan["packed_sessions"] == 9
+    assert budget["sessions"] == plan["session_count"] == 10
+    assert budget["reserve_sessions"] == plan["reserve_sessions"] == 1
+    assert budget["robustness"] == plan["robustness"]
     assert budget["scorer_call_bound"] == plan["scorer_call_bound"]
     assert budget["scorer_call_bound"]["used_for_pricing"] == 73
     assert budget["item_cost_bounds_seconds"] == plan["item_cost_bounds_seconds"]
     assert budget["generation_seconds_per_session"] == plan["generation_seconds_per_session"]
     assert budget["worst_case_generation_seconds"] == plan["worst_case_generation_seconds"]
-    for key in ("per_session_cap", "cumulative_cap", "expected_at_observed_t4_rate"):
+    for key in (
+        "per_session_cap",
+        "cumulative_cap",
+        "expected_at_observed_t4_rate",
+        "expected_if_every_allowed_session_runs",
+    ):
         assert budget["compute_units"][key] == plan["compute_units"][key]
-    assert budget["capacity_seconds"] == 9 * plan["generation_seconds_per_session"]
+    assert budget["capacity_seconds"] == 10 * plan["generation_seconds_per_session"]
     assert budget["slack_seconds"] == pytest.approx(
         budget["capacity_seconds"] - budget["worst_case_generation_seconds"], abs=0.1
     )
-    assert 0 <= budget["slack_seconds"] < plan["generation_seconds_per_session"]
+    assert budget["slack_seconds"] >= plan["generation_seconds_per_session"]
     assert (
         budget["compute_units"]["expected_at_observed_t4_rate"]
         < (budget["compute_units"]["cumulative_cap"])
