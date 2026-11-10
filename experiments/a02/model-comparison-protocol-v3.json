@@ -307,9 +307,10 @@
         "max_sessions",
         "plan_sha256",
         "schema",
+        "source_identity",
         "valid_until_utc"
       ],
-      "rule": "One expiring owner grant bound to the exact plan hash replaces per-session authorizations. It can only tighten the plan's session count and compute-unit caps. Each session still rechecks the ledger, caps, live balance and usage attribution. The campaign stops at the first anomaly and never retries a session; a later invocation is a deliberate new action.",
+      "rule": "One expiring owner grant bound to the exact plan hash and external source_identity (clean Git commit and tree, including runtime policy and dependency identities) replaces per-session authorizations. It can only tighten the plan's session count and compute-unit caps. Each session still rechecks the ledger, caps, live balance and usage attribution. The campaign stops at the first anomaly and never retries a session; a later invocation is a deliberate new action.",
       "exists": false
     },
     "session_budget": {

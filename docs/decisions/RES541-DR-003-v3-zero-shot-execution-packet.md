@@ -78,11 +78,10 @@ is 0.907.
 
 ## Session and compute-unit plan (amendment P6)
 
-Plan hash `2dd513c65d3361d70a6c6ded6de7289a7152ea36d79112345ac417f0230c5aaf`, from protocol
-`1a2e45763d5b0b81fdc40380965567a993208fb1040b995f6b01da963c333604` and the V3.1 preflight
+Plan hash `0a58084ad5c3e0059e953b3c5b3d08af1a4c72745813ac82c4c0743cb58994b1`, from protocol
+`181cf20f1d6cdca292fd71324a82c87a8f136a7b9c0326a421aa9877cf5da7da` and the V3.1 preflight
 `4b5c16f5…`. Amendment digests: P5 `5ef5d744d6851c48b9ed90e7a301d80a824881df3380f4fa1bac23ef0b4e5eb3`,
-P6 `b527e2888b34c639315a3e1993d2b56b5f086cd128d4808f5c6a0a5fb009fc49`. Receipt on E:
-`v3-session-plan-v32-a64ab7e.json`.
+P6 `b527e2888b34c639315a3e1993d2b56b5f086cd128d4808f5c6a0a5fb009fc49`. Current prospective receipt on E: `reports/res541-final-v3-plan.json`. The previous plan and protocol receipts remain historical and unchanged; only the allowance source-binding declaration changed, before observations.
 
 | Item | Worst case |
 | --- | --- |
