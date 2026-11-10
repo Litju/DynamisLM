@@ -63,6 +63,12 @@ def load_protocol() -> dict[str, Any]:
         if synthetic.manifest_sha256(examples) != spec["manifest_sha256"]:
             raise ValueError(f"V3 {name} manifest differs from its preregistered hash")
         splits[name] = examples
+    pinned = protocol["data"]["generated_semantics"]
+    if (
+        v3.ROOT / pinned["path"] != gold.GENERATED_SEMANTICS_PATH
+        or v3.sha256(gold.GENERATED_SEMANTICS_PATH.read_bytes()) != pinned["sha256"]
+    ):
+        raise ValueError("V3 generated-phrasing semantics differ from their preregistered hash")
     for name in ("training", "heldout_evaluation"):
         gold.verify_generated_gold(splits[name])
     if not synthetic.leakage_audit(splits["training"], splits["heldout_evaluation"])["clean"]:

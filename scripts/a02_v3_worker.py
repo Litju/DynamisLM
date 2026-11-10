@@ -74,9 +74,20 @@ class WorkerBackend(Protocol):
     def reference_scorer(self) -> constrained.SequenceLogprob: ...
 
 
+def work_list_sha256(items: Sequence[WorkItem]) -> str:
+    return v3.sha256(v3.canonical([item.id for item in items]).encode())
+
+
 def calibration_examples(protocol: dict[str, Any]) -> list[dict[str, Any]]:
     """Non-held-out examples for cache qualification; disjoint from every protected example."""
     spec = protocol["data"]["training"]
+    declared = protocol["data"]["calibration"]
+    if (declared["split"], declared["seed"], declared["indices"]) != (
+        spec["split"],
+        spec["seed"],
+        list(CALIBRATION_INDICES),
+    ):
+        raise CheckpointError("calibration examples differ from the preregistered selection")
     examples = [
         example
         for example in synthetic.generate(spec["split"], spec["seed"], max(CALIBRATION_INDICES) + 1)
@@ -98,6 +109,9 @@ def work_items(protocol: dict[str, Any]) -> list[WorkItem]:
         items.extend(WorkItem(decision.example_id(example), arm) for arm in ARMS)
     for case_id in v3.load_profile()["case_ids"]:
         items.extend(WorkItem(f"EXPOSED:{case_id}", arm) for arm in ARMS)
+    pinned = protocol["execution"]["work_list"]
+    if len(items) != pinned["items"] or work_list_sha256(items) != pinned["sha256"]:
+        raise CheckpointError("the work list differs from the preregistered ordered list")
     return items
 
 
