@@ -49,6 +49,7 @@ ALLOWANCE_KEYS = frozenset(
     {
         "schema",
         "plan_sha256",
+        "source_identity",
         "max_sessions",
         "cumulative_cap_cu",
         "max_cu_per_session",
@@ -230,6 +231,8 @@ def validate_allowance(plan: dict[str, Any], allowance: dict[str, Any] | None) -
         raise AdmissionError("campaign allowance schema differs")
     if allowance["plan_sha256"] != plan["plan_sha256"]:
         raise AdmissionError("campaign allowance is not bound to this plan")
+    if allowance["source_identity"] != source_identity():
+        raise AdmissionError("campaign source identity differs from the exact clean source")
     sessions = allowance["max_sessions"]
     if (
         not isinstance(sessions, int)
@@ -378,6 +381,10 @@ def run_session(
     protocol = decision.load_protocol()
     items = worker.work_items(protocol)
     ledger = json.loads(ledger_path.read_text()) if ledger_path.exists() else ledger_new(plan)
+    if authorization is not None and binding.get("source_identity") != authorization.get(
+        "source_identity"
+    ):
+        raise AdmissionError("session binding differs from authorized source identity")
     before = client.snapshot()
     admission = admit(
         plan=plan,
@@ -396,6 +403,7 @@ def run_session(
             "session": name,
             "index": session_index,
             "plan_sha256": plan["plan_sha256"],
+            "source_identity": validate_allowance(plan, authorization)["source_identity"],
             "recorded_at_utc": datetime.now(UTC).isoformat(),
         },
     )
@@ -628,6 +636,17 @@ class ColabCLI:  # pragma: no cover - provider commands, used only in an authori
         return [row[0] for row in self._rows(out.stdout)]
 
 
+def source_identity() -> dict[str, str]:
+    """External authorization freezes source, including runtime and dependency policy bytes."""
+    dirty = subprocess.check_output(["git", "status", "--porcelain=v1"], cwd=ROOT, text=True)
+    if dirty.strip():
+        raise AdmissionError("V3 sessions require the exact clean committed source")
+    return {
+        key: subprocess.check_output(["git", "rev-parse", ref], cwd=ROOT, text=True).strip()
+        for key, ref in (("commit", "HEAD"), ("tree", "HEAD^{tree}"))
+    }
+
+
 def source_archive(path: Path) -> tuple[Path, str]:
     """git archive of the exact clean committed HEAD."""
     dirty = subprocess.check_output(["git", "status", "--porcelain=v1"], cwd=ROOT, text=True)
@@ -646,6 +665,7 @@ def remote_binding(plan: dict[str, Any], archive: Path, revision: str) -> dict[s
         "schema": "RES541_A02_V3_REMOTE_BINDING_V1",
         "source_archive_sha256": v3.sha256(archive.read_bytes()),
         "source_revision": revision,
+        "source_identity": source_identity(),
         "plan_sha256": plan["plan_sha256"],
         "protocol_sha256": plan["protocol_sha256"],
         "item_cost_bounds": plan["item_cost_bounds_seconds"],

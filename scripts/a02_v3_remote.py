@@ -36,6 +36,7 @@ _BINDING_KEYS = {
     "schema",
     "source_archive_sha256",
     "source_revision",
+    "source_identity",
     "plan_sha256",
     "protocol_sha256",
     "session_index",

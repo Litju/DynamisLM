@@ -17,6 +17,9 @@ from test_res541_a02_v3_execution import PLAN
 def staged(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     archive = tmp_path / "source.tar"
     archive.write_bytes(b"archive-bytes")
+    monkeypatch.setattr(
+        execution, "source_identity", lambda: {"commit": "a" * 40, "tree": "b" * 40}
+    )
     binding = {
         **execution.remote_binding(PLAN, archive, "a" * 40),
         "session_index": 1,

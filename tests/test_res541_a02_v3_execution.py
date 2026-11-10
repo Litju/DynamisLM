@@ -29,12 +29,20 @@ PLAN = execution.build_plan(PROTOCOL, PREFLIGHT, BOUNDS, live_rate_cu_per_hour=0
 QUIET = {"balance": 87.08, "usage_rate_cu_per_hour": 0.0, "active_sessions": []}
 
 
+@pytest.fixture(autouse=True)
+def clean_source(monkeypatch: Any) -> None:
+    monkeypatch.setattr(
+        execution, "source_identity", lambda: {"commit": "a" * 40, "tree": "b" * 40}
+    )
+
+
 NOW = datetime(2026, 11, 10, 12, 0, tzinfo=UTC)
 
 
 def _allowance(**overrides: Any) -> dict[str, Any]:
     return {
         "schema": execution.ALLOWANCE_SCHEMA,
+        "source_identity": {"commit": "a" * 40, "tree": "b" * 40},
         "plan_sha256": PLAN["plan_sha256"],
         "max_sessions": PLAN["session_count"],
         "cumulative_cap_cu": PLAN["compute_units"]["cumulative_cap"],
@@ -429,7 +437,11 @@ def _session(
         session_index=index,
         run_dir=tmp_path / "run",
         source_archive=archive,
-        binding={"plan_sha256": PLAN["plan_sha256"], "item_cost_bounds": COSTS},
+        binding={
+            "plan_sha256": PLAN["plan_sha256"],
+            "item_cost_bounds": COSTS,
+            "source_identity": {"commit": "a" * 40, "tree": "b" * 40},
+        },
         now=NOW,
     )
 
@@ -444,7 +456,11 @@ def _campaign(tmp_path: Path, client: FakeColab, allowance: Any = "default") -> 
         authorization=_allowance() if allowance == "default" else allowance,
         run_dir=tmp_path / "run",
         source_archive=archive,
-        binding={"plan_sha256": PLAN["plan_sha256"], "item_cost_bounds": COSTS},
+        binding={
+            "plan_sha256": PLAN["plan_sha256"],
+            "item_cost_bounds": COSTS,
+            "source_identity": {"commit": "a" * 40, "tree": "b" * 40},
+        },
         now=NOW,
     )
 
@@ -768,3 +784,15 @@ def test_two_lost_sessions_exhaust_the_allowance_before_completion(tmp_path: Pat
     assert result["status"] == "NOT_ADMITTED"
     assert "exhausted" in result["reason"]
     assert result["committed"] < 581 and len(client.created) == 8  # 10 slots - 2 lost
+
+
+def test_clean_source_drift_refuses_next_session(tmp_path: Path, monkeypatch: Any) -> None:
+    allowance = _allowance()
+    client = FakeColab(tmp_path / "remote")
+    _session(tmp_path, client, 1, allowance)
+    monkeypatch.setattr(
+        execution, "source_identity", lambda: {"commit": "c" * 40, "tree": "b" * 40}
+    )
+    with pytest.raises(execution.AdmissionError, match="source identity"):
+        _session(tmp_path, client, 2, allowance)
+    assert len(client.created) == 1
