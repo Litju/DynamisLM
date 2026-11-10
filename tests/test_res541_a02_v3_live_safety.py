@@ -115,3 +115,20 @@ def test_source_identity_detects_a_clean_different_commit(tmp_path: Path, monkey
     git("commit", "-m", "synthetic changed source")
     second = execution.source_identity()
     assert first["commit"] != second["commit"] and first["tree"] != second["tree"]
+
+
+def test_verification_exception_keeps_available_inventory(monkeypatch: Any) -> None:
+    client = execution.ColabCLI()
+    monkeypatch.setattr(
+        client,
+        "_run",
+        lambda *a, **k: subprocess.CompletedProcess([], 0, "saved CLI inventory", ""),
+    )
+
+    def broken() -> Any:
+        raise RuntimeError("assignment inventory unavailable")
+
+    monkeypatch.setattr(client._timeouts, "_assignment_command", broken)
+    assert client.verify_absent("target") is False
+    assert client.teardown_receipt["sessions"]["stdout"] == "saved CLI inventory"
+    assert client.teardown_receipt["assignments"]["error_type"] == "RuntimeError"

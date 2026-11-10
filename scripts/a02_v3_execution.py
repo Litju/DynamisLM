@@ -485,6 +485,8 @@ def run_session(
         },
     )
     local = run_dir / "checkpoint.jsonl"
+    if local.exists() and not ledger["sessions"]:
+        raise AdmissionError("existing checkpoint has no source-bound session ledger")
     downloaded = run_dir / f"session-{session_index:03d}-checkpoint.jsonl"
     state: dict[str, Any] = {"session": name, "index": session_index, "admission": admission}
     watchdog = None
@@ -605,6 +607,7 @@ def run_session(
                 state[label] = operation()
             except Exception as exc:
                 state[label + "_error"] = type(exc).__name__
+        state["teardown_receipt"] = getattr(client, "teardown_receipt", None)
         if watchdog is not None:
             try:
                 client.finish_watchdog(watchdog, state["target_absent_after_stop"] is True)
@@ -747,7 +750,7 @@ class ColabCLI:  # pragma: no cover - provider commands, used only in an authori
 
     def start_watchdog(self, name: str, receipt: Path) -> Any:
         process = subprocess.Popen(
-            [sys.executable, "-m", "scripts.a02_execution", "watchdog", name, str(receipt)],
+            [sys.executable, "-m", "scripts.a02_v3_execution", "watchdog", name, str(receipt)],
             cwd=ROOT,
             env=self._timeouts.clean_colab_env(),
             stdin=subprocess.PIPE,
@@ -763,7 +766,10 @@ class ColabCLI:  # pragma: no cover - provider commands, used only in an authori
             if process.stdin is not None:
                 process.stdin.close()
             raise RuntimeError("watchdog not READY; no allocation")
-        receipt.write_text(json.dumps({"session": name, "phase": "READY", "pid": process.pid}))
+        if json.loads(receipt.read_text()).get("phase") != "READY":
+            if process.stdin is not None:
+                process.stdin.close()
+            raise RuntimeError("independent watchdog receipt missing")
         return process, receipt
 
     def finish_watchdog(self, watchdog: Any, verified: bool) -> None:
@@ -775,13 +781,33 @@ class ColabCLI:  # pragma: no cover - provider commands, used only in an authori
             process.stdin.close()
         if verified:
             process.wait(timeout=10)
-            receipt.write_text(json.dumps({"phase": "DISARMED", "exact_target_absent": True}))
+            if json.loads(receipt.read_text()).get("phase") != "DISARMED":
+                raise RuntimeError("independent watchdog disarm receipt missing")
 
     def verify_absent(self, name: str) -> bool:
-        sessions = self._run(["colab", "--auth=oauth2", "sessions"], timeout=30)
-        assignments = self._run(self._timeouts._assignment_command(), timeout=30)
+        self.teardown_receipt: dict[str, Any] = {}
+        results = {}
+        for label, command in (
+            ("sessions", lambda: ["colab", "--auth=oauth2", "sessions"]),
+            ("assignments", self._timeouts._assignment_command),
+        ):
+            try:
+                result = self._run(command(), timeout=30)
+                results[label] = result
+                self.teardown_receipt[label] = {
+                    "returncode": result.returncode,
+                    "stdout": result.stdout,
+                    "stderr": result.stderr,
+                    "sha256": v3.sha256(result.stdout.encode()),
+                }
+            except Exception as exc:
+                self.teardown_receipt[label] = {"error_type": type(exc).__name__}
+        if set(results) != {"sessions", "assignments"}:
+            return False
         return bool(
-            self._timeouts._verify_target_absent(sessions, name, self.target_endpoint, assignments)
+            self._timeouts._verify_target_absent(
+                results["sessions"], name, self.target_endpoint, results["assignments"]
+            )
         )
 
     def snapshot(self) -> dict[str, Any]:
@@ -929,4 +955,13 @@ def main() -> int:  # pragma: no cover - thin CLI
 
 
 if __name__ == "__main__":  # pragma: no cover
-    raise SystemExit(main())
+    if len(sys.argv) == 4 and sys.argv[1] == "watchdog":
+        from scripts.a02_execution import _watchdog
+
+        receipt = Path(sys.argv[3])
+        receipt.write_text(json.dumps({"session": sys.argv[2], "phase": "READY"}))
+        _watchdog(sys.argv[2], receipt)
+        if json.loads(receipt.read_text()).get("phase") == "READY":
+            receipt.write_text(json.dumps({"session": sys.argv[2], "phase": "DISARMED"}))
+    else:
+        raise SystemExit(main())
