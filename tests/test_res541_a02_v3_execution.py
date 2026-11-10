@@ -3,10 +3,12 @@ from __future__ import annotations
 import itertools
 import json
 import shutil
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
 import pytest
+from scripts import a02_v3_contract as v3
 from scripts import a02_v3_decision as decision
 from scripts import a02_v3_execution as execution
 from scripts import a02_v3_worker as worker
@@ -27,13 +29,18 @@ PLAN = execution.build_plan(PROTOCOL, PREFLIGHT, BOUNDS, live_rate_cu_per_hour=0
 QUIET = {"balance": 87.08, "usage_rate_cu_per_hour": 0.0, "active_sessions": []}
 
 
-def _authorization(index: int, **overrides: Any) -> dict[str, Any]:
+NOW = datetime(2026, 11, 10, 12, 0, tzinfo=UTC)
+
+
+def _allowance(**overrides: Any) -> dict[str, Any]:
     return {
-        "schema": execution.AUTHORIZATION_SCHEMA,
+        "schema": execution.ALLOWANCE_SCHEMA,
         "plan_sha256": PLAN["plan_sha256"],
-        "session_index": index,
-        "max_cu_this_session": PLAN["compute_units"]["per_session_cap"],
+        "max_sessions": PLAN["session_count"],
         "cumulative_cap_cu": PLAN["compute_units"]["cumulative_cap"],
+        "max_cu_per_session": PLAN["compute_units"]["per_session_cap"],
+        "valid_until_utc": (NOW + timedelta(days=2)).isoformat(),
+        "allow_concurrent_unrelated_usage": False,
         **overrides,
     }
 
@@ -62,7 +69,7 @@ def test_plan_costs_follow_profile_preflight_and_bounds() -> None:
     costs = PLAN["item_cost_bounds_seconds"]
     assert costs["ZERO_SHOT_UNCONSTRAINED"] == pytest.approx(1 + 128 / 20)
     calls = PLAN["scorer_call_bound"]["used_for_pricing"]
-    assert calls == execution.workload_scorer_calls(PROTOCOL) > 69
+    assert calls == execution.workload_scorer_calls(PROTOCOL)
     assert costs["ZERO_SHOT_CONSTRAINED"] == pytest.approx(1 + calls / 20)
     assert costs["QUALIFICATION"] == pytest.approx(3 * (1 + calls / 20 + calls * 0.6))
     assert PLAN["generation_seconds_per_session"] == 720 - 180 - 100 - 30
@@ -83,124 +90,202 @@ def test_plan_rejects_bounds_that_cannot_hold_one_item() -> None:
         execution.build_plan(PROTOCOL, PREFLIGHT, tight)
 
 
-# ---- admission ------------------------------------------------------------------------
+# ---- admission: one finite campaign allowance ------------------------------------------
 
 
-def test_admission_requires_an_individual_authorization() -> None:
-    ledger = execution.ledger_new(PLAN)
-    with pytest.raises(execution.AdmissionError, match="no owner authorization"):
-        execution.admit(
-            plan=PLAN, ledger=ledger, authorization=None, snapshot=QUIET, session_index=1
-        )
-    admitted = execution.admit(
-        plan=PLAN, ledger=ledger, authorization=_authorization(1), snapshot=QUIET, session_index=1
+def _admit(allowance: Any, *, ledger: Any = None, snapshot: Any = None, index: int = 1) -> Any:
+    return execution.admit(
+        plan=PLAN,
+        ledger=ledger or execution.ledger_new(PLAN),
+        authorization=allowance,
+        snapshot=snapshot or QUIET,
+        session_index=index,
+        now=NOW,
     )
-    assert admitted["admitted"] is True
+
+
+def test_one_allowance_admits_every_planned_session_without_per_session_ceremony() -> None:
+    allowance = _allowance()
+    ledger = execution.ledger_new(PLAN)
+    for index in range(1, PLAN["session_count"] + 1):
+        assert _admit(allowance, ledger=ledger, index=index)["admitted"] is True
+        ledger["sessions"].append(
+            {"index": index, "compute_units_spent": PLAN["compute_units"]["per_session_cap"] / 2}
+        )
+    assert PLAN["session_count"] == 9
+
+
+def test_admission_requires_an_allowance() -> None:
+    with pytest.raises(execution.AdmissionError, match="no owner campaign allowance"):
+        _admit(None)
 
 
 @pytest.mark.parametrize(
-    ("authorization", "snapshot", "index", "message"),
+    ("allowance", "message"),
     [
-        (_authorization(2), QUIET, 1, "session_index"),
-        (_authorization(1, plan_sha256="0" * 64), QUIET, 1, "plan_sha256"),
-        (_authorization(1, schema="X"), QUIET, 1, "schema"),
-        (_authorization(2), QUIET, 2, "next unused"),
-        (_authorization(1, cumulative_cap_cu=0.1), QUIET, 1, "cumulative"),
-        (_authorization(1, max_cu_this_session=0.1), QUIET, 1, "per-session"),
-        (_authorization(1), {**QUIET, "balance": 0.2}, 1, "live balance"),
-        (_authorization(1), {**QUIET, "usage_rate_cu_per_hour": 6.7}, 1, "not attributable"),
+        (_allowance(plan_sha256="0" * 64), "not bound to this plan"),
+        (_allowance(schema="X"), "schema differs"),
+        (_allowance(extra=1), "fields differ"),
+        (_allowance(max_sessions=0), "outside the plan"),
+        (_allowance(max_sessions=PLAN["session_count"] + 1), "outside the plan"),
+        (_allowance(max_sessions=True), "outside the plan"),
+        (_allowance(max_sessions=2.5), "outside the plan"),
+        (_allowance(cumulative_cap_cu=0), "positive number"),
+        (_allowance(cumulative_cap_cu=-1), "positive number"),
+        (_allowance(cumulative_cap_cu=True), "positive number"),
+        (_allowance(cumulative_cap_cu=PLAN["compute_units"]["cumulative_cap"] + 0.01), "exceeds"),
+        (_allowance(max_cu_per_session="lots"), "positive number"),
+        (_allowance(allow_concurrent_unrelated_usage="yes"), "boolean"),
+        (_allowance(valid_until_utc="tomorrow"), "not a timestamp"),
+        (_allowance(valid_until_utc="2026-12-01T00:00:00"), "timezone"),
+        (_allowance(valid_until_utc=(NOW - timedelta(seconds=1)).isoformat()), "expired"),
+        (_allowance(valid_until_utc=NOW.isoformat()), "expired"),
+        (_allowance(cumulative_cap_cu=0.1), "cumulative"),
+        (_allowance(max_cu_per_session=0.1), "below the plan bound"),
     ],
 )
-def test_admission_fails_closed(
-    authorization: dict[str, Any], snapshot: dict[str, Any], index: int, message: str
+def test_allowance_can_only_tighten_never_widen_and_fails_closed(
+    allowance: dict[str, Any], message: str
 ) -> None:
     with pytest.raises(execution.AdmissionError, match=message):
-        execution.admit(
-            plan=PLAN,
-            ledger=execution.ledger_new(PLAN),
-            authorization=authorization,
-            snapshot=snapshot,
-            session_index=index,
-        )
+        _admit(allowance)
 
 
-def test_admission_stops_when_planned_sessions_or_cap_are_exhausted() -> None:
+@pytest.mark.parametrize(
+    ("snapshot", "message"),
+    [
+        ({**QUIET, "balance": 0.2}, "live balance"),
+        ({**QUIET, "usage_rate_cu_per_hour": 6.7}, "not attributable"),
+    ],
+)
+def test_live_account_state_still_gates_every_session(
+    snapshot: dict[str, Any], message: str
+) -> None:
+    with pytest.raises(execution.AdmissionError, match=message):
+        _admit(_allowance(), snapshot=snapshot)
+    assert _admit(
+        _allowance(allow_concurrent_unrelated_usage=True),
+        snapshot={**QUIET, "usage_rate_cu_per_hour": 6.7},
+    )["admitted"]
+
+
+def test_allowance_session_count_and_cap_exhaustion_stop_admission() -> None:
     ledger = execution.ledger_new(PLAN)
-    for i in range(1, PLAN["session_count"] + 1):
-        ledger["sessions"].append({"index": i, "compute_units_spent": 0.0})
-    n = PLAN["session_count"] + 1
-    with pytest.raises(execution.AdmissionError, match="exhausted"):
-        execution.admit(
-            plan=PLAN,
-            ledger=ledger,
-            authorization=_authorization(n),
-            snapshot=QUIET,
-            session_index=n,
-        )
-    spent = execution.ledger_new(PLAN)
-    spent["sessions"].append(
-        {"index": 1, "compute_units_spent": PLAN["compute_units"]["cumulative_cap"]}
-    )
+    for index in (1, 2, 3):
+        ledger["sessions"].append({"index": index, "compute_units_spent": 0.1})
+    with pytest.raises(execution.AdmissionError, match="allowance session count is exhausted"):
+        _admit(_allowance(max_sessions=3), ledger=ledger, index=4)
+    per = PLAN["compute_units"]["per_session_cap"]
     with pytest.raises(execution.AdmissionError, match="cumulative"):
-        execution.admit(
-            plan=PLAN,
-            ledger=spent,
-            authorization=_authorization(2),
-            snapshot=QUIET,
-            session_index=2,
-        )
+        _admit(_allowance(cumulative_cap_cu=0.3 + per - 0.01), ledger=ledger, index=4)
+
+    full = execution.ledger_new(PLAN)
+    for index in range(1, PLAN["session_count"] + 1):
+        full["sessions"].append({"index": index, "compute_units_spent": 0.0})
+    with pytest.raises(execution.AdmissionError, match="planned V3 session count is exhausted"):
+        _admit(_allowance(), ledger=full, index=PLAN["session_count"] + 1)
 
 
-def test_tampered_ledger_is_rejected() -> None:
+def test_a_prior_cost_overrun_blocks_further_sessions() -> None:
+    ledger = execution.ledger_new(PLAN)
+    over = PLAN["compute_units"]["per_session_cap"] + 0.01
+    ledger["sessions"].append({"index": 1, "compute_units_spent": over})
+    with pytest.raises(execution.AdmissionError, match="exceeded its bounded cost"):
+        _admit(_allowance(), ledger=ledger, index=2)
+
+
+def test_ledger_session_identity_drift_is_rejected() -> None:
     ledger = execution.ledger_new(PLAN)
     ledger["sessions"].append({"index": 2, "compute_units_spent": 0.0})
     with pytest.raises(execution.AdmissionError, match="inconsistent"):
-        execution.admit(
-            plan=PLAN,
-            ledger=ledger,
-            authorization=_authorization(2),
-            snapshot=QUIET,
-            session_index=2,
-        )
+        _admit(_allowance(), ledger=ledger, index=2)
     with pytest.raises(execution.AdmissionError, match="not bound"):
+        _admit(_allowance(), ledger={**execution.ledger_new(PLAN), "plan_sha256": "x"})
+    with pytest.raises(execution.AdmissionError, match="next unused"):
+        _admit(_allowance(), index=2)
+    other = execution.build_plan(
+        PROTOCOL, PREFLIGHT, execution.RuntimeBounds(cost_buffer_cu=0.06), live_rate_cu_per_hour=0.0
+    )
+    assert other["plan_sha256"] != PLAN["plan_sha256"]
+    with pytest.raises(execution.AdmissionError, match="not bound to this plan"):
         execution.admit(
-            plan=PLAN,
-            ledger={**execution.ledger_new(PLAN), "plan_sha256": "x"},
-            authorization=_authorization(1),
+            plan=other,
+            ledger=execution.ledger_new(other),
+            authorization=_allowance(),
             snapshot=QUIET,
             session_index=1,
+            now=NOW,
         )
 
 
-# ---- simulated sessions -----------------------------------------------------------------
+# ---- simulated provider -----------------------------------------------------------------
+
+
+class SimClock:
+    """Worst-case session clock: time is the summed cost bounds of this session's commits."""
+
+    def __init__(self, checkpoint: Path) -> None:
+        self.checkpoint = checkpoint
+        self.base = self._committed()
+
+    def _committed(self) -> int:
+        return self.checkpoint.read_bytes().count(b"\n") if self.checkpoint.exists() else 0
+
+    def __call__(self) -> float:
+        costs = PLAN["item_cost_bounds_seconds"]
+        total = 0.0
+        for item in ITEMS[self.base : self._committed()]:
+            total += costs["QUALIFICATION" if item.key == "QUALIFICATION" else item.arm]
+        return total
 
 
 class FakeColab:
     """A provider simulation: the 'work' stage runs the real worker on a remote copy."""
 
-    def __init__(self, root: Path, *, items_per_session: int, tear_after: bool = False) -> None:
+    def __init__(
+        self,
+        root: Path,
+        *,
+        items_per_session: int | None = None,
+        tear_after: bool = False,
+        cost_per_session: float = 0.29,
+    ) -> None:
         self.root = root
-        self.items_per_session = items_per_session
+        self.items_per_session = items_per_session  # None: bounded by the plan's session clock
         self.tear_after = tear_after
+        self.cost_per_session = cost_per_session
         self.active: dict[str, dict[str, Any]] = {"res338-fits": {"files": {}}}
+        self.created: list[str] = []
         self.stopped: list[str] = []
         self.balance = 87.08
         self.rate_when_allocated = 1.15
+        self.rate_after_prepare: float | None = None
+        self.balance_drop_after_prepare = 0.0
         self.fail_download = False
         self.fail_new = False
+        self.fail_stop = False
         self.remote_mutator: Any = None
+        self.work_returncode: int | None = None
+        self.backend_factory: Any = _Backend
 
     def snapshot(self) -> dict[str, Any]:
         ours = [n for n in self.active if n.startswith("res541")]
+        rate = self.rate_when_allocated if ours else 0.0
+        if ours and self.rate_after_prepare is not None and self._prepared:
+            rate = self.rate_after_prepare
         return {
-            "balance": self.balance,
-            "usage_rate_cu_per_hour": self.rate_when_allocated if ours else 0.0,
+            "balance": self.balance - (self.balance_drop_after_prepare if self._prepared else 0.0),
+            "usage_rate_cu_per_hour": rate,
             "active_sessions": [{"name": n} for n in self.active if n.startswith("res541")],
         }
+
+    _prepared = False
 
     def new(self, name: str) -> bool:
         if self.fail_new:
             return False
+        self.created.append(name)
+        self._prepared = False
         self.active[name] = {"files": {}}
         return True
 
@@ -215,16 +300,28 @@ class FakeColab:
 
     def exec_stage(self, name: str, stage: str, timeout: int) -> dict[str, Any]:
         if stage == "prepare":
+            self._prepared = True
             return {"returncode": 0, "timed_out": False}
         remote = self.root / name / Path(execution.REMOTE_CHECKPOINT).name
+        kwargs: dict[str, Any]
+        if self.items_per_session is not None:
+            kwargs = {
+                "deadline": float("inf"),
+                "item_cost_bounds": COSTS,
+                "stop_after": self.items_per_session,
+            }
+        else:
+            kwargs = {
+                "deadline": float(PLAN["generation_seconds_per_session"]),
+                "item_cost_bounds": PLAN["item_cost_bounds_seconds"],
+                "clock": SimClock(remote),
+            }
         status = worker.run_worker(
             protocol=PROTOCOL,
             items=ITEMS,
             checkpoint=remote,
-            backend=_Backend(),
-            deadline=float("inf"),
-            item_cost_bounds=COSTS,
-            stop_after=self.items_per_session,
+            backend=self.backend_factory(),
+            **kwargs,
         )
         if self.tear_after:
             with remote.open("ab") as handle:
@@ -232,7 +329,12 @@ class FakeColab:
             return {"returncode": None, "timed_out": True}
         if self.remote_mutator:
             self.remote_mutator(remote)
-        return {"returncode": 0 if status["status"] == "COMPLETE" else 3, "timed_out": False}
+        if self.work_returncode is not None:
+            return {"returncode": self.work_returncode, "timed_out": False}
+        return {
+            "returncode": 3 if status["status"] == "QUALIFICATION_FAILED" else 0,
+            "timed_out": False,
+        }
 
     def download(self, name: str, remote: str, local: Path) -> bool:
         source = self.root / name / Path(remote).name
@@ -243,8 +345,10 @@ class FakeColab:
 
     def stop(self, name: str) -> bool:
         self.stopped.append(name)
+        self.balance -= self.cost_per_session
+        if self.fail_stop:
+            return False
         self.active.pop(name, None)
-        self.balance -= 0.29
         return True
 
     def sessions(self) -> list[str]:
@@ -260,11 +364,27 @@ def _session(
         client=client,
         plan=PLAN,
         ledger_path=tmp_path / "ledger.json",
-        authorization=_authorization(index) if auth == "default" else auth,
+        authorization=_allowance() if auth == "default" else auth,
         session_index=index,
         run_dir=tmp_path / "run",
         source_archive=archive,
         binding={"plan_sha256": PLAN["plan_sha256"], "item_cost_bounds": COSTS},
+        now=NOW,
+    )
+
+
+def _campaign(tmp_path: Path, client: FakeColab, allowance: Any = "default") -> dict[str, Any]:
+    archive = tmp_path / "source.tar"
+    archive.write_bytes(b"source")
+    return execution.run_campaign(
+        client=client,
+        plan=PLAN,
+        ledger_path=tmp_path / "ledger.json",
+        authorization=_allowance() if allowance == "default" else allowance,
+        run_dir=tmp_path / "run",
+        source_archive=archive,
+        binding={"plan_sha256": PLAN["plan_sha256"], "item_cost_bounds": COSTS},
+        now=NOW,
     )
 
 
@@ -287,9 +407,9 @@ def test_interrupted_sessions_resume_to_completion_and_score_on_cpu(tmp_path: Pa
 
 def test_unauthorized_session_never_allocates(tmp_path: Path) -> None:
     client = FakeColab(tmp_path / "remote", items_per_session=10)
-    with pytest.raises(execution.AdmissionError, match="no owner authorization"):
+    with pytest.raises(execution.AdmissionError, match="no owner campaign allowance"):
         _session(tmp_path, client, 1, auth=None)
-    assert client.stopped == [] and set(client.active) == {"res338-fits"}
+    assert client.stopped == [] and client.created == [] and set(client.active) == {"res338-fits"}
     assert not (tmp_path / "run").exists()
 
 
@@ -361,3 +481,199 @@ def test_merge_rejects_shorter_remote_evidence(tmp_path: Path) -> None:
     short_path.write_bytes(b"\n".join(data[:3]) + b"\n")
     with pytest.raises(worker.CheckpointError, match="shorter"):
         execution.merge_checkpoint(long_path, short_path, ITEMS)
+
+
+# ---- the complete bounded campaign ------------------------------------------------------
+
+BOUNDARIES = [session["end_item"] for session in PLAN["sessions"]]
+
+
+def _drift_revision(remote: Path) -> None:
+    """A forged remote checkpoint, re-chained so every hash is valid but a revision differs."""
+    head = worker.GENESIS
+    lines: list[str] = []
+    for seq, line in enumerate(remote.read_bytes().split(b"\n")[:-1]):
+        entry = json.loads(line)
+        entry.pop("line_sha256")
+        if "model_revision" in entry["record"]:
+            entry["record"]["model_revision"] = "f" * 40
+        entry.update(seq=seq, prev_sha256=head)
+        head = worker._line_hash(entry)
+        lines.append(v3.canonical({**entry, "line_sha256": head}))
+    remote.write_text("\n".join(lines) + "\n")
+
+
+def test_nine_session_campaign_covers_every_item_exactly_once(tmp_path: Path) -> None:
+    client = FakeColab(tmp_path / "remote")
+    result = _campaign(tmp_path, client)
+    assert result["status"] == "COMPLETE" and result["committed"] == len(ITEMS) == 581
+    assert len(result["sessions"]) == PLAN["session_count"] == 9
+    # Worst-case timing reproduces the plan's packing exactly, with no session left idle.
+    assert [s["committed_after"] for s in result["sessions"]] == BOUNDARIES
+    assert len(client.created) == 9 and client.created == client.stopped
+    assert "res338-fits" not in client.stopped and set(client.active) == {"res338-fits"}
+    entries = worker.read_checkpoint(tmp_path / "run" / "checkpoint.jsonl", ITEMS)["entries"]
+    assert [e["item"] for e in entries] == [item.id for item in ITEMS]  # none skipped, none doubled
+    assert len({e["item"] for e in entries}) == len(entries)
+    markers = sorted((tmp_path / "run").glob("session-*-used.json"))
+    assert len(markers) == 9
+    ledger = json.loads((tmp_path / "ledger.json").read_text())
+    assert [s["index"] for s in ledger["sessions"]] == list(range(1, 10))
+    assert (
+        sum(s["compute_units_spent"] for s in ledger["sessions"])
+        <= (PLAN["compute_units"]["cumulative_cap"])
+    )
+    report = worker.score_checkpoint(PROTOCOL, tmp_path / "run" / "checkpoint.jsonl")
+    assert report["decision"]["decision"] == "ADOPT_REPAIRED_CONTRACT_WITH_CONSTRAINED_DECODING"
+    heldout = [e for e in entries if e["item"].startswith("HELDOUT:")]
+    assert len(heldout) == 560 and len({e["record"]["example_id"] for e in heldout}) == 280
+
+
+def test_the_nine_session_result_equals_one_uninterrupted_run(tmp_path: Path) -> None:
+    client = FakeColab(tmp_path / "remote")
+    _campaign(tmp_path, client)
+    single = tmp_path / "single.jsonl"
+    worker.run_worker(
+        protocol=PROTOCOL, items=ITEMS, checkpoint=single, backend=_Backend(),
+        deadline=float("inf"), item_cost_bounds=COSTS,
+    )  # fmt: skip
+
+    def content(path: Path) -> list[Any]:
+        return [
+            (e["item"], {k: v for k, v in e["record"].items() if k != "seconds"})
+            for e in worker.read_checkpoint(path, ITEMS)["entries"]
+        ]
+
+    assert content(tmp_path / "run" / "checkpoint.jsonl") == content(single)
+
+
+def test_campaign_stops_at_a_torn_write_then_a_new_invocation_resumes(tmp_path: Path) -> None:
+    client = FakeColab(tmp_path / "remote", tear_after=True)
+    first = _campaign(tmp_path, client)
+    assert first["status"] == "STOPPED_ON_ANOMALY" and len(first["sessions"]) == 1
+    assert "work stage did not finish cleanly" in first["anomaly"]
+    assert len(client.created) == 1  # the failed session was not retried
+    client.tear_after = False
+    resumed = _campaign(tmp_path, client)
+    assert resumed["status"] == "COMPLETE" and resumed["committed"] == 581
+    assert len(client.created) == 1 + 8  # 46 items were already safe; 8 more sessions finish
+    entries = worker.read_checkpoint(tmp_path / "run" / "checkpoint.jsonl", ITEMS)["entries"]
+    assert [e["item"] for e in entries] == [item.id for item in ITEMS]
+
+
+@pytest.mark.parametrize(
+    ("configure", "anomaly"),
+    [
+        (lambda c: setattr(c, "fail_new", True), "allocation failed; no retry"),
+        (lambda c: setattr(c, "rate_when_allocated", 2.0), "exceeds the admission ceiling"),
+        (lambda c: setattr(c, "rate_after_prepare", 3.0), "rate rose above the admission ceiling"),
+        (lambda c: setattr(c, "balance_drop_after_prepare", 5.0), "spend already exceeds"),
+        (lambda c: setattr(c, "fail_download", True), "evidence was not adopted"),
+        (lambda c: setattr(c, "fail_stop", True), "teardown is not confirmed"),
+        (lambda c: setattr(c, "work_returncode", 3), "work stage did not finish cleanly"),
+        (lambda c: setattr(c, "cost_per_session", 0.9), "cost exceeded its bound"),
+        (lambda c: setattr(c, "remote_mutator", _drift_revision), "evidence was not adopted"),
+    ],
+)
+def test_every_anomaly_stops_the_campaign_without_a_retry(
+    tmp_path: Path, configure: Any, anomaly: str
+) -> None:
+    client = FakeColab(tmp_path / "remote")
+    configure(client)
+    result = _campaign(tmp_path, client)
+    assert result["status"] == "STOPPED_ON_ANOMALY", result
+    assert anomaly in result["anomaly"]
+    assert len(result["sessions"]) == 1
+    assert len(client.created) <= 1  # never a second allocation after the anomaly
+    assert len(client.stopped) == 1  # teardown targets only the exact session name
+    assert client.stopped[0].startswith("res541-a02-v3-") and client.stopped[0] != "res338-fits"
+    assert set(client.active) == {"res338-fits"} or client.fail_stop
+
+
+def test_revision_drift_in_remote_evidence_is_rejected_and_local_evidence_survives(
+    tmp_path: Path,
+) -> None:
+    client = FakeColab(tmp_path / "remote")
+    assert _campaign(tmp_path, client, _allowance(max_sessions=1))["status"] == "NOT_ADMITTED"
+    local = tmp_path / "run" / "checkpoint.jsonl"
+    kept = local.read_bytes()
+    client.remote_mutator = _drift_revision
+    result = _campaign(tmp_path, client, _allowance(max_sessions=2))
+    assert result["status"] == "STOPPED_ON_ANOMALY"
+    assert local.read_bytes() == kept
+    ledger = json.loads((tmp_path / "ledger.json").read_text())
+    assert ledger["sessions"][-1]["committed_items"] == len(
+        worker.read_checkpoint(local, ITEMS)["entries"]
+    )
+
+
+def test_cost_overrun_is_recorded_and_blocks_a_later_invocation(tmp_path: Path) -> None:
+    client = FakeColab(tmp_path / "remote", cost_per_session=0.9)
+    first = _campaign(tmp_path, client)
+    assert "cost exceeded its bound" in first["anomaly"]
+    client.cost_per_session = 0.29
+    second = _campaign(tmp_path, client)
+    assert second["status"] == "NOT_ADMITTED" and "exceeded its bounded cost" in second["reason"]
+    assert len(client.created) == 1
+
+
+def test_allowance_session_limit_bounds_the_campaign(tmp_path: Path) -> None:
+    client = FakeColab(tmp_path / "remote")
+    result = _campaign(tmp_path, client, _allowance(max_sessions=3))
+    assert result["status"] == "NOT_ADMITTED"
+    assert "allowance session count is exhausted" in result["reason"]
+    assert len(client.created) == 3 and result["committed"] == BOUNDARIES[2]
+
+
+def test_allowance_cap_bounds_the_campaign_before_the_cap_is_exceeded(tmp_path: Path) -> None:
+    per = PLAN["compute_units"]["per_session_cap"]
+    client = FakeColab(tmp_path / "remote", cost_per_session=0.3)
+    result = _campaign(tmp_path, client, _allowance(cumulative_cap_cu=per * 2 + 0.01))
+    assert result["status"] == "NOT_ADMITTED" and "cumulative" in result["reason"]
+    assert len(client.created) == 2
+    spent = sum(
+        s["compute_units_spent"]
+        for s in json.loads((tmp_path / "ledger.json").read_text())["sessions"]
+    )
+    assert spent <= per * 2 + 0.01
+
+
+def test_expired_or_missing_allowance_allocates_nothing(tmp_path: Path) -> None:
+    client = FakeColab(tmp_path / "remote")
+    expired = _allowance(valid_until_utc=(NOW - timedelta(minutes=1)).isoformat())
+    assert _campaign(tmp_path, client, expired)["status"] == "NOT_ADMITTED"
+    with pytest.raises(execution.AdmissionError, match="no owner campaign allowance"):
+        _campaign(tmp_path, client, None)
+    assert client.created == [] and client.stopped == []
+
+
+def test_a_preexisting_session_with_the_exact_name_is_never_adopted(tmp_path: Path) -> None:
+    client = FakeColab(tmp_path / "remote")
+    name = f"res541-a02-v3-{PLAN['plan_sha256'][:8]}-001"
+    client.active[name] = {"files": {}}
+    refused = _campaign(tmp_path, client)  # usage is not attributable while it exists
+    assert refused["status"] == "NOT_ADMITTED" and client.created == []
+    result = _campaign(tmp_path, client, _allowance(allow_concurrent_unrelated_usage=True))
+    assert result["status"] == "STOPPED_ON_ANOMALY" and "already exists" in result["anomaly"]
+    assert client.created == [] and client.stopped == []  # a session we did not create stays
+    assert name in client.active
+
+
+def test_failed_cache_qualification_ends_the_campaign_before_any_protected_work(
+    tmp_path: Path,
+) -> None:
+    client = FakeColab(tmp_path / "remote")
+    seen: list[_Backend] = []
+
+    def bad_backend() -> _Backend:
+        backend = _Backend(reference_offset=0.01)
+        seen.append(backend)
+        return backend
+
+    client.backend_factory = bad_backend
+    result = _campaign(tmp_path, client)
+    assert result["status"] == "STOPPED_ON_ANOMALY"
+    assert len(client.created) == 1
+    users = {u for backend in seen for u in backend.touched}
+    protected = {v3.user_message(e["request"]) for e in decision.heldout_examples(PROTOCOL)}
+    assert users and not users & protected

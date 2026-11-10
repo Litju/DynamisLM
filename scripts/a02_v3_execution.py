@@ -1,15 +1,19 @@
 """Bounded multi-session controller for the V3 zero-shot arms (RES-541).
 
-Nothing here allocates a GPU unless ``run-session`` is invoked with a valid, individually
-issued owner authorization for that exact session index and plan hash. No such authorization
-exists. The original V2 campaign ledger and session markers are never read for budget or
-modified; V3 keeps its own ledger.
+Nothing here allocates a GPU unless ``run-session`` or ``run-campaign`` is invoked with a valid
+owner campaign allowance bound to the exact plan hash: one finite, expiring grant that names the
+most sessions and compute units that may ever be spent. No such allowance exists. The original
+V2 campaign ledger and session markers are never read for budget or modified; V3 keeps its own
+ledger.
 
 Planning is mechanical: every work item has a worst-case cost derived from the profile and
 preflight with conservative runtime bounds, items are packed in preregistered order into
 sessions of bounded length, and the compute-unit cap follows from the session count and an
 admission rate ceiling. The worker's own deadline check, not this packing, decides where a
 session actually stops, so a session never ends mid-item.
+
+A campaign runs sessions back to back under that one allowance, but stops at the first anomaly
+and never retries one; only a deliberate new invocation continues after a stop.
 
 Per session: admission against the live read-only quota snapshot and the V3 ledger, a session
 marker consumed before allocation, exact-name T4 allocation with no retry, an immediate stop if
@@ -40,7 +44,18 @@ ROOT = v3.ROOT
 E_ROOT = Path("/mnt/e/DynamisLM-A0").resolve()
 V3_DIR = E_ROOT / "a02/v3-zero-shot"
 PLAN_SCHEMA = "RES541_A02_V3_SESSION_PLAN_V1"
-AUTHORIZATION_SCHEMA = "RES541_A02_V3_SESSION_AUTHORIZATION_V1"
+ALLOWANCE_SCHEMA = "RES541_A02_V3_CAMPAIGN_ALLOWANCE_V1"
+ALLOWANCE_KEYS = frozenset(
+    {
+        "schema",
+        "plan_sha256",
+        "max_sessions",
+        "cumulative_cap_cu",
+        "max_cu_per_session",
+        "valid_until_utc",
+        "allow_concurrent_unrelated_usage",
+    }
+)
 LEDGER_SCHEMA = "RES541_A02_V3_LEDGER_V1"
 REMOTE_CHECKPOINT = "/content/a02-v3-checkpoint.jsonl"
 REMOTE_SOURCE = "/content/a02-v3-source.tar"
@@ -178,6 +193,43 @@ def ledger_new(plan: dict[str, Any]) -> dict[str, Any]:
     return {"schema": LEDGER_SCHEMA, "plan_sha256": plan["plan_sha256"], "sessions": []}
 
 
+def validate_allowance(plan: dict[str, Any], allowance: dict[str, Any] | None) -> dict[str, Any]:
+    """Return the allowance if it is a well-formed grant that cannot exceed the plan."""
+    if allowance is None:
+        raise AdmissionError("no owner campaign allowance exists for this V3 plan")
+    if set(allowance) != ALLOWANCE_KEYS:
+        raise AdmissionError("campaign allowance fields differ from the contract")
+    if allowance["schema"] != ALLOWANCE_SCHEMA:
+        raise AdmissionError("campaign allowance schema differs")
+    if allowance["plan_sha256"] != plan["plan_sha256"]:
+        raise AdmissionError("campaign allowance is not bound to this plan")
+    sessions = allowance["max_sessions"]
+    if (
+        not isinstance(sessions, int)
+        or isinstance(sessions, bool)
+        or not (1 <= sessions <= plan["session_count"])
+    ):
+        raise AdmissionError("campaign allowance session count is outside the plan")
+    for key, ceiling in (
+        ("cumulative_cap_cu", plan["compute_units"]["cumulative_cap"]),
+        ("max_cu_per_session", None),
+    ):
+        value = allowance[key]
+        if isinstance(value, bool) or not isinstance(value, int | float) or value <= 0:
+            raise AdmissionError(f"campaign allowance {key} must be a positive number")
+        if ceiling is not None and value > ceiling + 1e-9:
+            raise AdmissionError(f"campaign allowance {key} exceeds the plan cap")
+    if not isinstance(allowance["allow_concurrent_unrelated_usage"], bool):
+        raise AdmissionError("campaign allowance concurrency flag must be boolean")
+    try:
+        expiry = datetime.fromisoformat(str(allowance["valid_until_utc"]))
+    except ValueError as exc:
+        raise AdmissionError("campaign allowance expiry is not a timestamp") from exc
+    if expiry.tzinfo is None:
+        raise AdmissionError("campaign allowance expiry must carry a timezone")
+    return allowance
+
+
 def admit(
     *,
     plan: dict[str, Any],
@@ -185,18 +237,16 @@ def admit(
     authorization: dict[str, Any] | None,
     snapshot: dict[str, Any],
     session_index: int,
+    now: datetime | None = None,
 ) -> dict[str, Any]:
-    """Pure admission decision for one session; raises AdmissionError when not admitted."""
-    if authorization is None:
-        raise AdmissionError("no owner authorization exists for this V3 session")
-    expected = {
-        "schema": AUTHORIZATION_SCHEMA,
-        "plan_sha256": plan["plan_sha256"],
-        "session_index": session_index,
-    }
-    for key, value in expected.items():
-        if authorization.get(key) != value:
-            raise AdmissionError(f"authorization {key} does not match this session")
+    """Pure admission decision for one session; raises AdmissionError when not admitted.
+
+    ``authorization`` is the single campaign allowance. It authorizes every session up to its
+    own limits, so no per-session ceremony is needed, but each limit is rechecked per session.
+    """
+    allowance = validate_allowance(plan, authorization)
+    if (now or datetime.now(UTC)) >= datetime.fromisoformat(str(allowance["valid_until_utc"])):
+        raise AdmissionError("campaign allowance has expired")
     if ledger.get("schema") != LEDGER_SCHEMA or ledger.get("plan_sha256") != plan["plan_sha256"]:
         raise AdmissionError("V3 ledger is not bound to this plan")
     used = ledger["sessions"]
@@ -206,24 +256,27 @@ def admit(
         raise AdmissionError("session index is not the next unused V3 session")
     if session_index > plan["session_count"]:
         raise AdmissionError("planned V3 session count is exhausted; amend the plan")
+    if session_index > allowance["max_sessions"]:
+        raise AdmissionError("campaign allowance session count is exhausted")
     per_session = plan["compute_units"]["per_session_cap"]
+    if any(float(s["compute_units_spent"]) > per_session + 1e-9 for s in used):
+        raise AdmissionError("a prior session exceeded its bounded cost; owner review required")
     spent = sum(float(s["compute_units_spent"]) for s in used)
-    cap = min(plan["compute_units"]["cumulative_cap"], float(authorization["cumulative_cap_cu"]))
+    cap = min(plan["compute_units"]["cumulative_cap"], float(allowance["cumulative_cap_cu"]))
     if spent + per_session > cap + 1e-9:
         raise AdmissionError("cumulative V3 compute-unit cap would be exceeded")
-    if float(authorization["max_cu_this_session"]) + 1e-9 < per_session:
-        raise AdmissionError("authorized per-session compute units are below the plan bound")
+    if float(allowance["max_cu_per_session"]) + 1e-9 < per_session:
+        raise AdmissionError("allowed per-session compute units are below the plan bound")
     if snapshot["balance"] < per_session + plan["bounds"]["cost_buffer_cu"]:
         raise AdmissionError("live balance cannot cover one bounded session")
-    if snapshot["usage_rate_cu_per_hour"] > 0 and not authorization.get(
-        "allow_concurrent_unrelated_usage"
-    ):
+    if snapshot["usage_rate_cu_per_hour"] > 0 and not allowance["allow_concurrent_unrelated_usage"]:
         raise AdmissionError("account is already consuming compute; usage is not attributable")
     return {
         "admitted": True,
         "spent_before": spent,
         "per_session_cap": per_session,
         "cumulative_cap": cap,
+        "sessions_remaining_in_allowance": allowance["max_sessions"] - session_index,
         "unrelated_sessions": sorted(s["name"] for s in snapshot["active_sessions"]),
     }
 
@@ -232,10 +285,15 @@ def admit(
 
 
 def merge_checkpoint(
-    local: Path, downloaded: Path, items: Sequence[worker.WorkItem]
+    local: Path,
+    downloaded: Path,
+    items: Sequence[worker.WorkItem],
+    protocol: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Adopt a downloaded checkpoint only if it verifies and extends the local one."""
     remote_state = worker.read_checkpoint(downloaded, items)
+    if protocol is not None:
+        worker.check_identity(remote_state["entries"], protocol)
     local_state = worker.read_checkpoint(local, items)
     local_lines = local_state["entries"]
     remote_lines = remote_state["entries"]
@@ -287,6 +345,7 @@ def run_session(
     run_dir: Path,
     source_archive: Path,
     binding: dict[str, Any],
+    now: datetime | None = None,
 ) -> dict[str, Any]:
     """Run one admitted session end to end; teardown is unconditional."""
     protocol = decision.load_protocol()
@@ -299,6 +358,7 @@ def run_session(
         authorization=authorization,
         snapshot=before,
         session_index=session_index,
+        now=now,
     )
     name = f"res541-a02-v3-{plan['plan_sha256'][:8]}-{session_index:03d}"
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -316,7 +376,12 @@ def run_session(
     downloaded = run_dir / f"session-{session_index:03d}-checkpoint.jsonl"
     state: dict[str, Any] = {"session": name, "index": session_index, "admission": admission}
     allocated = False
+    attempted = False  # only a session this run tried to create may be stopped by this run
+    state["sessions_before"] = sorted(client.sessions())
     try:
+        if name in state["sessions_before"]:
+            raise RuntimeError("a session with this exact V3 name already exists; refusing")
+        attempted = True
         allocated = client.new(name)
         state["allocated"] = allocated
         if not allocated:
@@ -338,6 +403,15 @@ def run_session(
         bounds = plan["bounds"]
         state["prepare"] = client.exec_stage(name, "prepare", bounds["prepare_seconds"])
         if state["prepare"].get("returncode") == 0:
+            mid = client.snapshot()
+            state["rate_before_work"] = mid["usage_rate_cu_per_hour"]
+            if mid["usage_rate_cu_per_hour"] > bounds["admission_rate_ceiling_cu_per_hour"]:
+                raise RuntimeError("live T4 rate rose above the admission ceiling; no work stage")
+            if (
+                float(before["balance"]) - float(mid["balance"])
+                > plan["compute_units"]["per_session_cap"]
+            ):
+                raise RuntimeError("session spend already exceeds its bound; no work stage")
             work_timeout = bounds["exec_seconds"] - bounds["prepare_seconds"]
             state["work"] = client.exec_stage(name, "work", work_timeout)
     except Exception as exc:  # recorded; teardown and evidence recovery still run
@@ -346,14 +420,14 @@ def run_session(
         if allocated:
             try:
                 if client.download(name, REMOTE_CHECKPOINT, downloaded):
-                    state["merge"] = merge_checkpoint(local, downloaded, items)
+                    state["merge"] = merge_checkpoint(local, downloaded, items, protocol)
                 else:
                     state["merge"] = "EVIDENCE_NOT_RETRIEVED"
             except worker.CheckpointError as exc:
                 state["merge"] = f"REJECTED: {exc}"
-        state["stopped"] = client.stop(name)
+        state["stopped"] = client.stop(name) if attempted else False
         remaining = client.sessions()
-        state["target_absent_after_stop"] = name not in remaining
+        state["target_absent_after_stop"] = attempted and name not in remaining
         state["unrelated_sessions_after"] = sorted(s for s in remaining if s != name)
         end = client.snapshot()
         spent = max(0.0, float(before["balance"]) - float(end["balance"]))
@@ -374,6 +448,99 @@ def run_session(
             json.dumps(state, indent=2, sort_keys=True, default=str) + "\n"
         )
     return state
+
+
+# --------------------------------------------------------------------------- campaign
+
+
+def session_anomaly(
+    state: dict[str, Any], committed_before: int, committed_after: int, per_session_cap: float
+) -> str | None:
+    """Why a finished session is not a clean step, or None. Any anomaly ends the campaign."""
+    if "failure" in state:
+        return f"session failure: {state['failure']}"
+    work = state.get("work")
+    if not isinstance(work, dict) or work.get("timed_out") or work.get("returncode") != 0:
+        return "work stage did not finish cleanly"
+    if not isinstance(state.get("merge"), dict):
+        return f"evidence was not adopted: {state.get('merge')}"
+    if state["merge"].get("torn_tail_discarded"):
+        return "downloaded evidence ended in an interrupted write"
+    if not state.get("stopped") or not state.get("target_absent_after_stop"):
+        return "exact-target teardown is not confirmed"
+    if state["unrelated_sessions_after"] != state["sessions_before"]:
+        return "the set of unrelated sessions changed during this session"
+    if committed_after <= committed_before:
+        return "session committed no new evidence"
+    if state.get("compute_units_spent", 0.0) > per_session_cap + 1e-9:
+        return "session cost exceeded its bound"
+    return None
+
+
+def run_campaign(
+    *,
+    client: ColabClient,
+    plan: dict[str, Any],
+    ledger_path: Path,
+    authorization: dict[str, Any] | None,
+    run_dir: Path,
+    source_archive: Path,
+    binding: dict[str, Any],
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """Run sessions back to back under one allowance until complete or the first anomaly.
+
+    No session is ever retried: after an anomaly the campaign returns and a human decides
+    whether a new invocation is justified. A normal step is a session that ends cleanly and
+    commits new evidence; the worker's deadline, not the controller, decides where it stops.
+    """
+    validate_allowance(plan, authorization)
+    protocol = decision.load_protocol()
+    items = worker.work_items(protocol)
+    local = run_dir / "checkpoint.jsonl"
+
+    def committed() -> int:
+        return len(worker.read_checkpoint(local, items)["entries"]) if local.exists() else 0
+
+    sessions: list[dict[str, Any]] = []
+    while True:
+        before = committed()
+        if before == len(items):
+            return {"status": "COMPLETE", "committed": before, "sessions": sessions}
+        ledger = json.loads(ledger_path.read_text()) if ledger_path.exists() else ledger_new(plan)
+        index = len(ledger["sessions"]) + 1
+        try:
+            state = run_session(
+                client=client,
+                plan=plan,
+                ledger_path=ledger_path,
+                authorization=authorization,
+                session_index=index,
+                run_dir=run_dir,
+                source_archive=source_archive,
+                binding=binding,
+                now=now,
+            )
+        except AdmissionError as exc:
+            return {
+                "status": "NOT_ADMITTED",
+                "reason": str(exc),
+                "committed": before,
+                "sessions": sessions,
+            }
+        after = committed()
+        state["compute_units_spent"] = json.loads(ledger_path.read_text())["sessions"][-1][
+            "compute_units_spent"
+        ]
+        sessions.append({"index": index, "committed_before": before, "committed_after": after})
+        problem = session_anomaly(state, before, after, plan["compute_units"]["per_session_cap"])
+        if problem:
+            return {
+                "status": "STOPPED_ON_ANOMALY",
+                "anomaly": problem,
+                "committed": after,
+                "sessions": sessions,
+            }
 
 
 # --------------------------------------------------------------------------- CLI
@@ -473,9 +640,12 @@ def main() -> int:  # pragma: no cover - thin CLI
     plan_cmd = sub.add_parser("plan", help="print the session plan using a live read-only snapshot")
     plan_cmd.add_argument("--preflight", type=Path, required=True)
     plan_cmd.add_argument("--offline", action="store_true", help="skip the live quota snapshot")
-    run_cmd = sub.add_parser("run-session", help="run one individually authorized session")
+    run_cmd = sub.add_parser("run-session", help="run the next session under the allowance")
     run_cmd.add_argument("--preflight", type=Path, required=True)
-    run_cmd.add_argument("--index", type=int, required=True)
+    camp_cmd = sub.add_parser(
+        "run-campaign", help="run sessions under the allowance until done or the first anomaly"
+    )
+    camp_cmd.add_argument("--preflight", type=Path, required=True)
     args = parser.parse_args()
     protocol = decision.load_protocol()
     preflight = _load_preflight(args.preflight)
@@ -489,24 +659,28 @@ def main() -> int:  # pragma: no cover - thin CLI
         )
         return 0
     plan = build_plan(protocol, preflight, RuntimeBounds())
-    path = V3_DIR / f"session-{args.index:03d}-authorization.json"
-    authorization = json.loads(path.read_text()) if path.exists() else None
-    if authorization is None:
-        raise AdmissionError("no owner authorization exists for this V3 session")
+    path = V3_DIR / "campaign-allowance.json"
+    allowance = json.loads(path.read_text()) if path.exists() else None
+    validate_allowance(plan, allowance)
     run_dir = V3_DIR / f"plan-{plan['plan_sha256'][:12]}"
     run_dir.mkdir(parents=True, exist_ok=True)
-    archive, revision = source_archive(run_dir / f"source-{args.index:03d}.tar")
-    state = run_session(
-        client=ColabCLI(),
-        plan=plan,
-        ledger_path=run_dir / "ledger.json",
-        authorization=authorization,
-        session_index=args.index,
-        run_dir=run_dir,
-        source_archive=archive,
-        binding=remote_binding(plan, archive, revision),
-    )
-    print(json.dumps(state, indent=2, sort_keys=True, default=str))
+    ledger_path = run_dir / "ledger.json"
+    ledger = json.loads(ledger_path.read_text()) if ledger_path.exists() else ledger_new(plan)
+    archive, revision = source_archive(run_dir / f"source-{len(ledger['sessions']) + 1:03d}.tar")
+    common: dict[str, Any] = {
+        "client": ColabCLI(),
+        "plan": plan,
+        "ledger_path": ledger_path,
+        "authorization": allowance,
+        "run_dir": run_dir,
+        "source_archive": archive,
+        "binding": remote_binding(plan, archive, revision),
+    }
+    if args.command == "run-campaign":
+        result = run_campaign(**common)
+    else:
+        result = run_session(session_index=len(ledger["sessions"]) + 1, **common)
+    print(json.dumps(result, indent=2, sort_keys=True, default=str))
     return 0
 
 
