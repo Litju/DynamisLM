@@ -30,12 +30,17 @@ from scripts import a02_v3_constrained as constrained
 from scripts import a02_v3_contract as v3
 from scripts import a02_v3_decision as decision
 from scripts import a02_v3_score as score
+from scripts import a02_v3_synthetic as synthetic
 
 CHECKPOINT_SCHEMA = "RES541_A02_V3_CHECKPOINT_LINE_V1"
 EXPOSED_SCHEMA = "RES541_A02_V3_EXPOSED_RECORD_V1"
 QUALIFICATION_SCHEMA = "RES541_A02_V3_CACHE_QUALIFICATION_V1"
 GENESIS = "0" * 64
 QUALIFICATION_EXAMPLES = 3
+# Training-split indices used to qualify the cached decoder. They are never evaluated, so cache
+# correctness is established before any protected held-out request is touched. Two have three
+# observations, which is the largest option tree.
+CALIBRATION_INDICES = (2, 5, 7)
 QUALIFICATION_TOLERANCE_NATS = 1e-3
 ARMS = decision.ZERO_SHOT_ARMS
 
@@ -67,6 +72,24 @@ class WorkerBackend(Protocol):
     def cached_scorer(self) -> constrained.SequenceLogprob: ...
 
     def reference_scorer(self) -> constrained.SequenceLogprob: ...
+
+
+def calibration_examples(protocol: dict[str, Any]) -> list[dict[str, Any]]:
+    """Non-held-out examples for cache qualification; disjoint from every protected example."""
+    spec = protocol["data"]["training"]
+    examples = [
+        example
+        for example in synthetic.generate(spec["split"], spec["seed"], max(CALIBRATION_INDICES) + 1)
+        if example["index"] in CALIBRATION_INDICES
+    ]
+    protected = {decision.example_id(e) for e in decision.heldout_examples(protocol)}
+    if len(examples) != QUALIFICATION_EXAMPLES or any(
+        decision.example_id(e) in protected
+        or e["split"] == protocol["data"]["heldout_evaluation"]["split"]
+        for e in examples
+    ):
+        raise CheckpointError("calibration examples must be non-held-out")
+    return examples
 
 
 def work_items(protocol: dict[str, Any]) -> list[WorkItem]:
@@ -119,6 +142,25 @@ def read_checkpoint(path: Path, items: Sequence[WorkItem]) -> dict[str, Any]:
         entries.append(line)
         head = digest
     return {"entries": entries, "head": head, "torn_tail_discarded": torn}
+
+
+def check_identity(entries: Sequence[dict[str, Any]], protocol: dict[str, Any]) -> None:
+    """Every committed record must come from the preregistered model, profile and protocol."""
+    model = protocol["candidate_model"]
+    for entry in entries:
+        record = entry["record"]
+        if record.get("schema") == QUALIFICATION_SCHEMA:
+            expected = {"model_id": model["id"], "model_revision": model["revision"]}
+        else:
+            expected = {
+                "model_id": model["id"],
+                "model_revision": model["revision"],
+                "contract_profile_sha256": protocol["contract_profile_sha256"],
+                "protocol_sha256": decision.protocol_sha256(),
+            }
+        for key, value in expected.items():
+            if record.get(key) != value:
+                raise CheckpointError(f"checkpoint identity drift at {entry['item']}: {key}")
 
 
 def _append(path: Path, entry: dict[str, Any]) -> str:
@@ -183,12 +225,10 @@ def _run_arm(
     }
 
 
-def qualify_cache(
-    backend: WorkerBackend, protocol: dict[str, Any], *, examples: int = QUALIFICATION_EXAMPLES
-) -> dict[str, Any]:
-    """Score every option with cached and uncached bindings on the first held-out examples."""
+def qualify_cache(backend: WorkerBackend, protocol: dict[str, Any]) -> dict[str, Any]:
+    """Score every option with cached and uncached bindings on non-held-out calibration examples."""
     rows = []
-    for example in decision.heldout_examples(protocol)[:examples]:
+    for example in calibration_examples(protocol):
         request = example["request"]
         prompt = v3.build_action_prompt(backend.tokenizer, request)
 
@@ -224,6 +264,9 @@ def qualify_cache(
     return {
         "schema": QUALIFICATION_SCHEMA,
         "tolerance_nats": QUALIFICATION_TOLERANCE_NATS,
+        "calibration": "non-held-out training-split examples; no protected request is touched",
+        "model_id": backend.model_identity["id"],
+        "model_revision": backend.model_identity["revision"],
         "examples": rows,
         "passed": passed,
     }
@@ -276,9 +319,14 @@ def run_worker(
     stop_after: int | None = None,
 ) -> dict[str, Any]:
     """Advance the checkpoint through ``items`` until done, the deadline, or ``stop_after``."""
+    if not items or items[0].key != "QUALIFICATION":
+        raise CheckpointError("the work list must begin with cache qualification")
+    if backend.model_identity != protocol["candidate_model"]:
+        raise CheckpointError("backend model identity differs from the preregistered model")
     profile = v3.load_profile()
     sources = _sources(protocol)
     state = read_checkpoint(checkpoint, items)
+    check_identity(state["entries"], protocol)
     if state["torn_tail_discarded"]:
         _truncate_torn_tail(checkpoint)
     entries, head = state["entries"], state["head"]

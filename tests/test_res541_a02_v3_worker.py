@@ -23,6 +23,8 @@ def _targets() -> dict[str, str]:
     targets: dict[str, str] = {}
     for example in decision.heldout_examples(PROTOCOL):
         targets[v3.user_message(example["request"])] = example["target_text"]
+    for example in worker.calibration_examples(PROTOCOL):
+        targets[v3.user_message(example["request"])] = example["target_text"]
     for case in score._cases().values():
         action = gold.derive_gold(case["request"])["action"]
         path = constrained.decode(
@@ -63,11 +65,16 @@ class _Tokenizer:
         return _chunk_ids(text)
 
 
+def _user(ids: Sequence[int]) -> str:
+    text = "".join(_REVERSE[i] for i in ids)
+    prompt, _, _ = text.rpartition(ASSISTANT)
+    return prompt.split("<user>", 1)[1]
+
+
 def _split(ids: Sequence[int]) -> tuple[str, str]:
     text = "".join(_REVERSE[i] for i in ids)
-    prompt, _, action = text.rpartition(ASSISTANT)
-    user = prompt.split("<user>", 1)[1]
-    return TARGETS[user], action
+    _, _, action = text.rpartition(ASSISTANT)
+    return TARGETS[_user(ids)], action
 
 
 class _Backend:
@@ -79,11 +86,13 @@ class _Backend:
         self.tokenizer = _Tokenizer()
         self.reference_offset = reference_offset
         self.native_calls = 0
+        self.touched: list[str] = []  # user message of every request the model was shown
 
     def generate_native(
         self, prompt_ids: Sequence[int], max_new_tokens: int
     ) -> tuple[list[int], str, bool]:
         target, _ = _split(list(prompt_ids))
+        self.touched.append(_user(list(prompt_ids)))
         self.native_calls += 1
         framed = int(v3.sha256(target.encode())[:4], 16) % 2 == 0
         text = target if framed else target[len(v3.OPEN) : -len(v3.CLOSE)]
@@ -92,6 +101,7 @@ class _Backend:
     def _scorer(self, offset: float) -> constrained.SequenceLogprob:
         def score_ids(ids: Sequence[int], start: int) -> float:
             target, action = _split(ids)
+            self.touched.append(_user(ids))
             return (0.0 if target.startswith(action) else -1.0) + offset * (len(ids) - start)
 
         return score_ids
@@ -258,3 +268,140 @@ def test_records_bind_provenance_for_decision_evidence(complete: Path) -> None:
         if e["item"].endswith("|ZERO_SHOT_CONSTRAINED") and e["item"].startswith("HELDOUT:")
     )
     assert constrained_record["choices"] and constrained_record["scorer_calls"] > 0
+
+
+# ---- calibration before protected evidence --------------------------------------------
+
+PROTECTED_USERS = {v3.user_message(e["request"]) for e in decision.heldout_examples(PROTOCOL)}
+CALIBRATION_USERS = {v3.user_message(e["request"]) for e in worker.calibration_examples(PROTOCOL)}
+EXPOSED_USERS = {v3.user_message(c["request"]) for c in score._cases().values()}
+
+
+def test_calibration_examples_are_non_heldout_and_within_the_planned_option_bound() -> None:
+    examples = worker.calibration_examples(PROTOCOL)
+    assert [e["split"] for e in examples] == ["TRAIN"] * worker.QUALIFICATION_EXAMPLES
+    assert not {decision.example_id(e) for e in examples} & {
+        decision.example_id(e) for e in decision.heldout_examples(PROTOCOL)
+    }
+    assert not CALIBRATION_USERS & (PROTECTED_USERS | EXPOSED_USERS)
+    # The plan prices qualification at the preflight maximum; a calibration example above it
+    # would silently exceed the budgeted time.
+    heldout_max = max(
+        constrained.max_scorer_calls(e["request"]) for e in decision.heldout_examples(PROTOCOL)
+    )
+    assert max(constrained.max_scorer_calls(e["request"]) for e in examples) <= heldout_max
+
+
+def test_cache_qualification_only_ever_shows_the_model_calibration_requests(
+    tmp_path: Path,
+) -> None:
+    backend = _Backend()
+    _run(tmp_path / "checkpoint.jsonl", backend=backend, stop_after=1)
+    assert backend.touched and set(backend.touched) <= CALIBRATION_USERS
+    assert not set(backend.touched) & (PROTECTED_USERS | EXPOSED_USERS)
+
+
+def test_no_protected_request_is_shown_before_qualification_has_passed(tmp_path: Path) -> None:
+    backend = _Backend()
+    _run(tmp_path / "checkpoint.jsonl", backend=backend, stop_after=3)
+    first_protected = next(i for i, u in enumerate(backend.touched) if u in PROTECTED_USERS)
+    assert all(u in CALIBRATION_USERS for u in backend.touched[:first_protected])
+    assert first_protected > 0
+
+
+def test_failed_qualification_never_exposes_any_protected_request(tmp_path: Path) -> None:
+    backend = _Backend(reference_offset=0.01)
+    assert _run(tmp_path / "checkpoint.jsonl", backend=backend)["status"] == "QUALIFICATION_FAILED"
+    assert backend.touched and set(backend.touched) <= CALIBRATION_USERS
+    resumed = _Backend()
+    assert _run(tmp_path / "checkpoint.jsonl", backend=resumed)["status"] == "QUALIFICATION_FAILED"
+    assert resumed.touched == [] and resumed.native_calls == 0
+
+
+def test_a_work_list_without_leading_qualification_is_refused(tmp_path: Path) -> None:
+    with pytest.raises(worker.CheckpointError, match="begin with cache qualification"):
+        worker.run_worker(
+            protocol=PROTOCOL, items=ITEMS[1:], checkpoint=tmp_path / "c.jsonl",
+            backend=_Backend(), deadline=float("inf"), item_cost_bounds=COSTS,
+        )  # fmt: skip
+
+
+# ---- adversarial checkpoint and identity faults ---------------------------------------
+
+
+def _rewrite(source: Path, destination: Path, mutate: Any, upto: int = 12) -> None:
+    """Re-chain a checkpoint after ``mutate``: a forgery that passes every hash check."""
+    head, lines = worker.GENESIS, []
+    for seq, line in enumerate(source.read_bytes().split(b"\n")[:upto]):
+        entry = json.loads(line)
+        entry.pop("line_sha256")
+        mutate(seq, entry)
+        entry.update(seq=seq, prev_sha256=head)
+        head = worker._line_hash(entry)
+        lines.append(v3.canonical({**entry, "line_sha256": head}))
+    destination.write_text("\n".join(lines) + "\n")
+
+
+@pytest.mark.parametrize(
+    ("seq", "key"),
+    [
+        (0, "model_revision"),  # the qualification itself ran on another revision
+        (3, "model_revision"),
+        (3, "model_id"),
+        (4, "contract_profile_sha256"),
+        (4, "protocol_sha256"),
+    ],
+)
+def test_rechained_identity_drift_is_refused_before_any_new_item(
+    tmp_path: Path, complete: Path, seq: int, key: str
+) -> None:
+    def drift(n: int, entry: dict[str, Any]) -> None:
+        if n == seq:
+            entry["record"][key] = "drifted"
+
+    forged = tmp_path / "forged.jsonl"
+    _rewrite(complete, forged, drift)
+    assert len(worker.read_checkpoint(forged, ITEMS)["entries"]) == 12  # hashes are consistent
+    backend = _Backend()
+    before = forged.read_bytes()
+    with pytest.raises(worker.CheckpointError, match=f"identity drift at .*: {key}"):
+        _run(forged, backend=backend)
+    assert backend.touched == [] and forged.read_bytes() == before
+
+
+def test_a_backend_for_another_model_revision_is_refused(tmp_path: Path) -> None:
+    drifted = _Backend()
+    drifted.model_identity = {**PROTOCOL["candidate_model"], "revision": "0" * 40}
+
+    with pytest.raises(worker.CheckpointError, match="backend model identity differs"):
+        _run(tmp_path / "checkpoint.jsonl", backend=drifted)
+    assert not (tmp_path / "checkpoint.jsonl").exists()
+
+
+def test_a_duplicated_record_is_refused_not_skipped(tmp_path: Path, complete: Path) -> None:
+    lines = complete.read_bytes().split(b"\n")[:12]
+    duplicate = tmp_path / "duplicate.jsonl"
+    duplicate.write_bytes(b"\n".join([*lines[:6], lines[5], *lines[6:]]) + b"\n")
+    with pytest.raises(worker.CheckpointError, match="chain breaks at line 6"):
+        worker.read_checkpoint(duplicate, ITEMS)
+    with pytest.raises(worker.CheckpointError):
+        _run(duplicate)
+
+
+def test_a_newline_terminated_corrupt_tail_is_not_mistaken_for_a_torn_write(
+    tmp_path: Path, complete: Path
+) -> None:
+    lines = complete.read_bytes().split(b"\n")[:8]
+    path = tmp_path / "checkpoint.jsonl"
+    path.write_bytes(b"\n".join([*lines, b'{"seq": 8, "garbage": true}']) + b"\n")
+    with pytest.raises(worker.CheckpointError, match="chain breaks at line 8"):
+        worker.read_checkpoint(path, ITEMS)
+    before = path.read_bytes()
+    with pytest.raises(worker.CheckpointError):
+        _run(path)
+    assert path.read_bytes() == before  # nothing was truncated, appended or repaired
+
+
+def test_a_checkpoint_longer_than_the_work_list_is_refused(tmp_path: Path, complete: Path) -> None:
+    with pytest.raises(worker.CheckpointError, match="not the preregistered next item"):
+        worker.read_checkpoint(complete, ITEMS[:50])
