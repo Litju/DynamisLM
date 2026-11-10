@@ -274,6 +274,40 @@ def _gain_lower(
     return {"item": item, "template_clustered": clustered, "governing": min(item, clustered)}
 
 
+def cluster_design(rows: Sequence[dict[str, Any]]) -> dict[str, Any]:
+    """Cluster structure of the evidence: how many independent-looking units there really are."""
+    sizes: dict[str, int] = {}
+    for row in rows:
+        sizes[row["template"]] = sizes.get(row["template"], 0) + 1
+    total = sum(sizes.values())
+    return {
+        "items": total,
+        "template_clusters": len(sizes),
+        "min_cluster_items": min(sizes.values()),
+        "max_cluster_items": max(sizes.values()),
+        # Kish effective number of equal-sized clusters: (sum n)^2 / sum n^2.
+        "effective_clusters": total * total / sum(n * n for n in sizes.values()),
+    }
+
+
+def _single_arm_bounds(rows: list[dict[str, Any]], stats: dict[str, Any]) -> dict[str, float]:
+    """Lower bounds for one arm's exact rate (a paired comparison with an always-wrong arm)."""
+    hits = [bool(r["exact"]) for r in rows]
+    never = [False] * len(hits)
+    item = paired_bootstrap_lower(
+        hits, never, resamples=stats["resamples"], seed=stats["seed"] + 2, alpha=stats["alpha"]
+    )
+    clustered = clustered_bootstrap_lower(
+        hits,
+        never,
+        [r["template"] for r in rows],
+        resamples=stats["resamples"],
+        seed=stats["seed"] + 2,
+        alpha=stats["alpha"],
+    )
+    return {"item": item, "template_clustered": clustered, "governing": min(item, clustered)}
+
+
 def decide(
     evidence: Mapping[str, Sequence[dict[str, Any]]], protocol: dict[str, Any]
 ) -> dict[str, Any]:
@@ -293,6 +327,15 @@ def decide(
         "never credited as understanding.",
     }
     report["template_clusters"] = len({r["template"] for r in rows["ZERO_SHOT_CONSTRAINED"]})
+    report["cluster_design"] = cluster_design(rows["ZERO_SHOT_CONSTRAINED"])
+    # Reported, not applied: the preregistered sufficiency rule compares point estimates.
+    for arm in ZERO_SHOT_ARMS:
+        report[arm]["exact_lower_bounds"] = _single_arm_bounds(rows[arm], stats)
+    report["sufficiency_basis"] = (
+        "Sufficiency compares point estimates with the thresholds. The lower bounds above are "
+        "disclosed and do not change the decision; with few template clusters they can sit far "
+        "below the point estimate."
+    )
     report["claim_ceiling"] = protocol["claim_ceiling"]
 
     sufficient = rule["zero_shot_sufficient"]

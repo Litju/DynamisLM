@@ -244,6 +244,45 @@ def test_report_discloses_template_cluster_count_and_per_family_intervals() -> N
     assert len(family) == 14 and all(v["n"] == 20 for v in family.values())
 
 
+def test_cluster_design_reports_real_heldout_cluster_structure() -> None:
+    design = decision.cluster_design(
+        [{"template": e["template_id"]} for e in HELDOUT]  # same key the bound rows carry
+    )
+    assert design["items"] == 280 and design["template_clusters"] == 15
+    assert 1 <= design["effective_clusters"] <= design["template_clusters"]
+    assert design["min_cluster_items"] < design["max_cluster_items"]
+    assert design["effective_clusters"] < design["template_clusters"]  # unequal sizes cost clusters
+
+
+def test_cluster_design_effective_count_equals_cluster_count_for_equal_sizes() -> None:
+    rows = [{"template": f"t{i % 7}"} for i in range(70)]
+    assert decision.cluster_design(rows)["effective_clusters"] == pytest.approx(7.0)
+    assert decision.cluster_design([{"template": "only"}] * 5)["effective_clusters"] == 1.0
+
+
+def test_report_discloses_single_arm_bounds_without_changing_the_decision() -> None:
+    result = decision.decide(_zero(0.95), FAST)
+    assert result["decision"] == "ADOPT_REPAIRED_CONTRACT_WITH_CONSTRAINED_DECODING"
+    for arm in decision.ZERO_SHOT_ARMS:
+        bounds = result[arm]["exact_lower_bounds"]
+        assert bounds["governing"] == min(bounds["item"], bounds["template_clustered"])
+        assert bounds["governing"] <= result[arm]["exact"]
+    assert result["cluster_design"]["template_clusters"] == result["template_clusters"]
+    assert "point estimates" in result["sufficiency_basis"]
+
+
+def test_template_correlated_success_shows_a_clustered_bound_below_the_item_bound() -> None:
+    template = {e["template_id"]: i for i, e in enumerate(HELDOUT)}
+    winners = {t for n, t in enumerate(sorted(template)) if n % 6 != 0}  # 12 of 15 templates win
+    zc = _records("ZERO_SHOT_CONSTRAINED", lambda _i, e: e["template_id"] in winners)
+    zu = _records("ZERO_SHOT_UNCONSTRAINED", _rate(0.3))
+    result = decision.decide({"ZERO_SHOT_CONSTRAINED": zc, "ZERO_SHOT_UNCONSTRAINED": zu}, FAST)
+    bounds = result["ZERO_SHOT_CONSTRAINED"]["exact_lower_bounds"]
+    assert bounds["template_clustered"] < bounds["item"]
+    # A decision that rests on a point estimate must not hide how weak the bound is.
+    assert bounds["governing"] < result["ZERO_SHOT_CONSTRAINED"]["exact"] - 0.05
+
+
 # ---- protocol -------------------------------------------------------------------------
 
 
