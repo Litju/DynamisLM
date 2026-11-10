@@ -185,6 +185,7 @@ def child(stage: str, timeout: int) -> int:  # pragma: no cover - pinned GPU pro
         if not qualification["qualified"]:
             _write_status({"status": "RUNTIME_INCOMPATIBLE", "qualification": qualification})
             return 2
+        _write_status({"status": "RUNTIME_QUALIFIED", "runtime_qualification": qualification})
         path, weights = a02_remote._weights(model["id"], model["revision"], torch, freeze)
         _write_status(
             {

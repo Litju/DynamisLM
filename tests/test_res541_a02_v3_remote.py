@@ -149,3 +149,30 @@ def test_early_prepare_failure_recovers_sanitized_detail(
     assert "private-value" not in status["error_detail"]
     assert "private-bearer" not in status["error_detail"]
     assert status["binding"] == staged["binding"]
+
+
+def test_failed_weight_download_retains_completed_runtime_qualification(
+    staged: dict[str, Any],
+    monkeypatch: Any,
+) -> None:
+    import sys
+    from types import SimpleNamespace
+
+    from scripts import a02_dev_runtime, a02_remote
+
+    qualification = {"qualified": True, "synthetic_fixture": True}
+    monkeypatch.setitem(sys.modules, "torch", SimpleNamespace())
+    monkeypatch.setattr(a02_dev_runtime, "inventory", lambda *a: {"synthetic_fixture": True})
+    monkeypatch.setattr(a02_dev_runtime, "cuda_smoke", lambda *a: {"synthetic_fixture": True})
+    monkeypatch.setattr(a02_dev_runtime, "qualify", lambda *a: qualification)
+
+    def failed_download(*args: Any) -> Any:
+        raise RuntimeError("synthetic download failure")
+
+    monkeypatch.setattr(a02_remote, "_weights", failed_download)
+    with pytest.raises(RuntimeError, match="synthetic download"):
+        remote.child("prepare", 180)
+    status = json.loads(remote.STATUS_PATH.read_text())
+    assert status["runtime_qualification"] == qualification
+    assert status["status"] == "RUNTIME_QUALIFIED"
+    assert status["binding"] == staged["binding"]
