@@ -126,3 +126,26 @@ def test_timed_out_child_reports_failure_and_records_it(staged: dict[str, Any]) 
         "timed_out": True,
         "stderr_tail": "killed",
     }
+
+
+def test_early_prepare_failure_recovers_sanitized_detail(
+    staged: dict[str, Any], monkeypatch: Any
+) -> None:
+    monkeypatch.setenv("A02_V3_REMOTE_STAGE", "prepare")
+    monkeypatch.setenv("A02_V3_REMOTE_STAGE_TIMEOUT", "180")
+    monkeypatch.delenv("A02_V3_CHILD_STAGE", raising=False)
+
+    def broken(*args: Any) -> Any:
+        raise RuntimeError(
+            "download failed token=private-value authorization: Bearer private-bearer"
+        )
+
+    monkeypatch.setattr(remote, "outer", broken)
+    assert remote.main() == 1
+    status = json.loads(remote.STATUS_PATH.read_text())
+    assert status["failure_stage"] == "prepare"
+    assert status["error_type"] == "RuntimeError"
+    assert "download failed" in status["error_detail"]
+    assert "private-value" not in status["error_detail"]
+    assert "private-bearer" not in status["error_detail"]
+    assert status["binding"] == staged["binding"]

@@ -73,10 +73,16 @@ def _write_status(value: dict[str, Any]) -> None:
         "binding": load_binding(),
         "checkpoint_sha256": _sha256_file(CHECKPOINT) if CHECKPOINT.exists() else None,
     }
+    if "error_detail" in value:
+        value["error_detail"] = re.sub(
+            r"(?i)(token|password|secret|authorization)[\s:=]+(?:Bearer\s+)?\S+",
+            r"\1=[REDACTED]",
+            str(value["error_detail"]),
+        )[:2000]
     if "stages" in value:
         for stage in value["stages"]:
             stage["stderr_tail"] = re.sub(
-                r"(?i)(token|password|secret|authorization)[=: ]+\S+",
+                r"(?i)(token|password|secret|authorization)[\s:=]+(?:Bearer\s+)?\S+",
                 r"\1=[REDACTED]",
                 str(stage.get("stderr_tail", "")),
             )[:2000]
@@ -230,7 +236,12 @@ def main() -> int:  # pragma: no cover - remote entry point
         return child(stage, timeout) if child_stage else outer(stage, timeout)
     except Exception as exc:
         status = json.loads(STATUS_PATH.read_bytes()) if STATUS_PATH.exists() else {}
-        status.update(status="EXECUTION_FAILED", failure_stage=stage, error_type=type(exc).__name__)
+        status.update(
+            status="EXECUTION_FAILED",
+            failure_stage=stage,
+            error_type=type(exc).__name__,
+            error_detail=str(exc),
+        )
         _write_status(status)
         return 1
 
