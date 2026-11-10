@@ -649,6 +649,8 @@ def session_anomaly(
     """Why a finished session is not a clean step, or None. Any anomaly ends the campaign."""
     if "failure" in state:
         return f"session failure: {state['failure']}"
+    if "watchdog_error" in state:
+        return "independent watchdog disarm receipt is not confirmed"
     work = state.get("work")
     if not isinstance(work, dict) or work.get("timed_out") or work.get("returncode") != 0:
         return "work stage did not finish cleanly"
@@ -696,6 +698,30 @@ def run_campaign(
     while True:
         before = committed()
         if before == len(items):
+            # Complete work cannot erase a previous cost or teardown anomaly on re-entry.
+            try:
+                ledger = json.loads(ledger_path.read_text())
+                if ledger.get("source_identity") != binding.get("source_identity"):
+                    raise ValueError("complete checkpoint has a different source ledger")
+                last = ledger["sessions"][-1]
+                receipt = run_dir / f"session-{last['index']:03d}-control.json"
+                final = json.loads(receipt.read_text())
+                final["compute_units_spent"] = last["compute_units_spent"]
+                problem = session_anomaly(
+                    final,
+                    final.get("merge", {}).get("committed_before", before),
+                    before,
+                    plan["compute_units"]["per_session_cap"],
+                )
+            except Exception as exc:
+                problem = "completion receipt is untrustworthy: " + type(exc).__name__
+            if problem:
+                return {
+                    "status": "STOPPED_ON_ANOMALY",
+                    "anomaly": problem,
+                    "committed": before,
+                    "sessions": sessions,
+                }
             return {"status": "COMPLETE", "committed": before, "sessions": sessions}
         ledger = json.loads(ledger_path.read_text()) if ledger_path.exists() else ledger_new(plan)
         index = len(ledger["sessions"]) + 1

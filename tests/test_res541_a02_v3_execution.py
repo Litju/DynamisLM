@@ -865,3 +865,14 @@ def test_status_binding_forgery_rejects_checkpoint(tmp_path: Path) -> None:
     assert "binding differs" in state["merge"]
     assert not (tmp_path / "run/checkpoint.jsonl").exists()
     assert state["target_absent_after_stop"]
+
+
+def test_complete_checkpoint_cannot_erase_failed_teardown_on_reentry(tmp_path: Path) -> None:
+    client = FakeColab(tmp_path / "remote", items_per_session=581)
+    client.fail_stop = True
+    first = _campaign(tmp_path, client)
+    assert first["committed"] == 581 and first["status"] == "STOPPED_ON_ANOMALY"
+    again = _campaign(tmp_path, client)
+    assert again["status"] == "STOPPED_ON_ANOMALY"
+    assert "teardown" in again["anomaly"]
+    assert len(client.created) == 1
