@@ -876,3 +876,18 @@ def test_complete_checkpoint_cannot_erase_failed_teardown_on_reentry(tmp_path: P
     assert again["status"] == "STOPPED_ON_ANOMALY"
     assert "teardown" in again["anomaly"]
     assert len(client.created) == 1
+
+
+def test_failed_teardown_cost_remains_unknown_after_late_cleanup(tmp_path: Path) -> None:
+    client = FakeColab(tmp_path / "remote", items_per_session=2)
+    client.fail_stop = True
+    first = _campaign(tmp_path, client)
+    assert first["status"] == "STOPPED_ON_ANOMALY"
+    ledger = json.loads((tmp_path / "ledger.json").read_text())
+    assert ledger["sessions"][-1]["cost_status"] == "UNKNOWN"
+    assert ledger["sessions"][-1]["compute_units_spent"] is None
+    client.fail_stop = False
+    client.stop(client.created[0])
+    again = _campaign(tmp_path, client)
+    assert again["status"] == "NOT_ADMITTED" and "unknown cost" in again["reason"]
+    assert len(client.created) == 1

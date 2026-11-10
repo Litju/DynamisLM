@@ -295,6 +295,8 @@ def admit(
     if session_index > allowance["max_sessions"]:
         raise AdmissionError("campaign allowance session count is exhausted")
     per_session = plan["compute_units"]["per_session_cap"]
+    if any(s.get("cost_status") == "UNKNOWN" for s in used):
+        raise AdmissionError("a prior session has unknown cost; owner review required")
     if any(float(s["compute_units_spent"]) > per_session + 1e-9 for s in used):
         raise AdmissionError("a prior session exceeded its bounded cost; owner review required")
     spent = sum(float(s["compute_units_spent"]) for s in used)
@@ -488,7 +490,12 @@ def run_session(
     if local.exists() and not ledger["sessions"]:
         raise AdmissionError("existing checkpoint has no source-bound session ledger")
     downloaded = run_dir / f"session-{session_index:03d}-checkpoint.jsonl"
-    state: dict[str, Any] = {"session": name, "index": session_index, "admission": admission}
+    state: dict[str, Any] = {
+        "session": name,
+        "index": session_index,
+        "admission": admission,
+        "quota_before": before,
+    }
     watchdog = None
     allocated = False
     attempted = False  # only a session this run tried to create may be stopped by this run
@@ -613,19 +620,32 @@ def run_session(
                 client.finish_watchdog(watchdog, state["target_absent_after_stop"] is True)
             except Exception as exc:
                 state["watchdog_error"] = type(exc).__name__
+        spent: float | None = None
         try:
             end = client.snapshot()
+            state["quota_after"] = end
+            if not state["target_absent_after_stop"]:
+                raise ValueError("exact-target teardown is not confirmed; ending quota unknown")
             spent = float(before["balance"]) - float(end["balance"])
             if not math.isfinite(spent) or spent < 0:
                 raise ValueError("untrustworthy ending balance")
         except Exception as exc:
-            state["failure"] = "ending quota unknown: " + type(exc).__name__
-            spent = admission["per_session_cap"] + 1
+            state["failure"] = (
+                (
+                    "exact-target teardown is not confirmed; "
+                    if not state["target_absent_after_stop"]
+                    else ""
+                )
+                + "ending quota unknown: "
+                + type(exc).__name__
+            )
+            spent = None
         ledger["sessions"].append(
             {
                 "index": session_index,
                 "name": name,
-                "compute_units_spent": round(spent, 4),
+                "compute_units_spent": round(spent, 4) if spent is not None else None,
+                "cost_status": "KNOWN" if spent is not None else "UNKNOWN",
                 "committed_items": len(worker.read_checkpoint(local, items)["entries"])
                 if local.exists()
                 else 0,

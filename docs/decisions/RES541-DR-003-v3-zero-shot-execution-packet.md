@@ -160,7 +160,7 @@ delta and elapsed-rate cost, remaining cumulative allowance and a cleanup/poll r
 changes, unknown quota, unexpected session inventory and ambiguous attribution stop the exact
 target. Provider snapshot checks reconcile authenticated CLI, usage and provider assignments.
 Concurrent billed usage is refused even if an allowance requests it. Unknown final quota
-records a conservative over-cap ledger value and blocks continuation. Every anomaly ends the
+records an UNKNOWN cost with no invented numeric spend and blocks continuation. Every anomaly ends the
 automatic campaign; any later invocation is a deliberate operator action consuming another slot.
 
 Owner decision remains one expiring campaign for **only ZERO_SHOT_UNCONSTRAINED and
