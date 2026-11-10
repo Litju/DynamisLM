@@ -65,6 +65,45 @@ def test_plan_is_deterministic_and_honest_about_session_count() -> None:
     assert all(s["worst_case_seconds"] <= PLAN["generation_seconds_per_session"] for s in sessions)
 
 
+def test_plan_hash_ignores_live_account_state_so_printed_and_run_plans_agree() -> None:
+    hashes = {
+        execution.build_plan(PROTOCOL, PREFLIGHT, BOUNDS, live_rate_cu_per_hour=rate)["plan_sha256"]
+        for rate in (None, 0.0, 1.15, 6.7)
+    }
+    assert hashes == {PLAN["plan_sha256"]}
+    assert "live_rate_at_planning_cu_per_hour" not in json.dumps(
+        {k: v for k, v in PLAN.items() if k != "live_observation_not_hashed"}
+    )
+    # Anything deterministic still changes the hash.
+    other = execution.build_plan(
+        PROTOCOL, PREFLIGHT, execution.RuntimeBounds(session_seconds=901), live_rate_cu_per_hour=0.0
+    )
+    assert other["plan_sha256"] != PLAN["plan_sha256"]
+
+
+def _receipt(tmp_path: Path, **changes: Any) -> Path:
+    receipt = {
+        **PREFLIGHT,
+        "profile_sha256": v3.sha256(v3.PROFILE_PATH.read_bytes()),
+        **changes,
+    }
+    path = tmp_path / "preflight.json"
+    path.write_text(json.dumps(receipt))
+    return path
+
+
+def test_preflight_receipt_must_match_the_current_profile_and_be_cpu_only(tmp_path: Path) -> None:
+    assert execution._load_preflight(_receipt(tmp_path))["gpu_allocated"] is False
+    for changes, message in (
+        ({"profile_sha256": "0" * 64}, "different contract profile"),
+        ({"schema": "X"}, "schema differs"),
+        ({"gpu_allocated": True}, "not CPU-only"),
+        ({"weights_loaded": True}, "not CPU-only"),
+    ):
+        with pytest.raises(ValueError, match=message):
+            execution._load_preflight(_receipt(tmp_path, **changes))
+
+
 def test_plan_costs_follow_profile_preflight_and_bounds() -> None:
     costs = PLAN["item_cost_bounds_seconds"]
     assert costs["ZERO_SHOT_UNCONSTRAINED"] == pytest.approx(1 + 128 / 20)

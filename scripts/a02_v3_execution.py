@@ -167,7 +167,6 @@ def build_plan(
                 len(sessions) * bounds.session_seconds / 3600 * bounds.t4_rate_cu_per_hour, 4
             ),
             "rate_basis": "session-004 provider-reported T4 rate; admission stops above ceiling",
-            "live_rate_at_planning_cu_per_hour": live_rate_cu_per_hour,
         },
         "cache_qualification": {
             "worst_case_seconds": costs["QUALIFICATION"],
@@ -178,7 +177,12 @@ def build_plan(
         "leaves the remainder to the next individually authorized session; if the planned count "
         "is exhausted, any extra session needs a new owner authorization and plan amendment.",
     }
+    # The hash covers deterministic inputs only, so the printed plan and the plan recomputed at
+    # run time are the same plan. Live account state is informational and never hashed.
     plan["plan_sha256"] = v3.sha256(v3.canonical(plan).encode())
+    plan["live_observation_not_hashed"] = {
+        "usage_rate_cu_per_hour_at_planning": live_rate_cu_per_hour
+    }
     return plan
 
 
@@ -631,6 +635,8 @@ def _load_preflight(path: Path) -> dict[str, Any]:
         raise ValueError("V3 preflight receipt schema differs")
     if value.get("gpu_allocated") is not False or value.get("weights_loaded") is not False:
         raise ValueError("V3 preflight receipt is not CPU-only")
+    if value.get("profile_sha256") != v3.sha256(v3.PROFILE_PATH.read_bytes()):
+        raise ValueError("V3 preflight receipt was made for a different contract profile")
     return value
 
 
