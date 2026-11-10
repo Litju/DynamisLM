@@ -24,10 +24,19 @@ from scripts import a02_dev_protocol, a02_experiment
 from scripts import a02_v3_contract as v3
 
 SEMANTICS_PATH = v3.ROOT / "experiments/a02/objective-semantics-v3.json"
+GENERATED_SEMANTICS_PATH = v3.ROOT / "experiments/a02/generated-semantics-v3.json"
 
 
 class DerivationUnsupportedError(ValueError):
     """The request cannot be grounded by the declared V3 authorities."""
+
+
+def _closed_texts(rule: dict[str, Any], semantics: dict[str, Any]) -> list[str]:
+    """Every exact normalized text a closed-vocabulary rule adjudicates."""
+    phrase = rule["phrase"]
+    if "{m}" not in phrase:
+        return [_normalize(phrase)]
+    return [_normalize(phrase.replace("{m}", name)) for name in semantics["measurement_names"]]
 
 
 def load_semantics(path: Path = SEMANTICS_PATH) -> dict[str, Any]:
@@ -35,7 +44,13 @@ def load_semantics(path: Path = SEMANTICS_PATH) -> dict[str, Any]:
     if semantics.get("schema") != "RES541_A02_OBJECTIVE_SEMANTICS_V3":
         raise ValueError("V3 objective semantics schema differs")
     ids = [rule["id"] for rule in semantics["rules"]]
-    phrases = [rule["phrase"].lower() for rule in semantics["rules"]]
+    if semantics.get("closed_vocabulary"):
+        names = semantics.get("measurement_names")
+        if not isinstance(names, list) or not names or len(set(names)) != len(names):
+            raise ValueError("V3 closed-vocabulary semantics must list unique measurement names")
+        phrases = [text for rule in semantics["rules"] for text in _closed_texts(rule, semantics)]
+    else:
+        phrases = [rule["phrase"].lower() for rule in semantics["rules"]]
     if len(set(ids)) != len(ids) or len(set(phrases)) != len(phrases):
         raise ValueError("V3 objective semantics rules are not unique")
     if semantics.get("fields", {}).get("request_bearing") != ["objective", "question"]:
@@ -62,6 +77,11 @@ def _normalize(text: str) -> str:
 def _match_field(field: str, text: str, semantics: dict[str, Any]) -> list[dict[str, Any]]:
     """Rules matched in one request-bearing field; uncovered claim triggers fail closed."""
     lowered = _normalize(text)
+    if semantics.get("closed_vocabulary"):
+        exact = [r for r in semantics["rules"] if lowered in _closed_texts(r, semantics)]
+        if len(exact) != 1:
+            raise DerivationUnsupportedError(f"{field} text is outside the adjudicated vocabulary")
+        return exact
     matched, covered = [], []
     for rule in semantics["rules"]:
         phrase = rule["phrase"].lower()
@@ -81,6 +101,35 @@ def _match_field(field: str, text: str, semantics: dict[str, Any]) -> list[dict[
                 )
             index = lowered.find(trigger, index + 1)
     return matched
+
+
+def derive_generated_gold(request: dict[str, Any]) -> dict[str, Any]:
+    """Derive gold for generator phrasing from the closed-vocabulary adjudication."""
+    return derive_gold(request, load_semantics(GENERATED_SEMANTICS_PATH))
+
+
+class GeneratedGoldError(ValueError):
+    """A generated example's gold is not independently derivable from its visible request."""
+
+
+def verify_generated_gold(examples: list[dict[str, Any]]) -> dict[str, Any]:
+    """Every generated example must be derivable and agree; none may be skipped or dropped.
+
+    Raises on the first underivable or disagreeing example, so coverage can never shrink
+    silently: the returned counts always equal the number of examples supplied.
+    """
+    semantics = load_semantics(GENERATED_SEMANTICS_PATH)
+    per_family: dict[str, int] = {}
+    for example in examples:
+        label = f"{example['split']}:{example['seed']}:{example['index']} ({example['family']})"
+        try:
+            derived = derive_gold(example["request"], semantics)["action"]
+        except DerivationUnsupportedError as error:
+            raise GeneratedGoldError(f"{label}: gold is not derivable: {error}") from error
+        if v3.normalize_action(derived) != example["gold_action"]:
+            raise GeneratedGoldError(f"{label}: generated gold differs from derived gold")
+        per_family[example["family"]] = per_family.get(example["family"], 0) + 1
+    return {"examples": len(examples), "verified": sum(per_family.values()), "families": per_family}
 
 
 def derive_gold(request: dict[str, Any], semantics: dict[str, Any] | None = None) -> dict[str, Any]:

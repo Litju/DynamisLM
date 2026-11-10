@@ -28,6 +28,7 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 from scripts import a02_v3_contract as v3
+from scripts import a02_v3_gold as gold
 from scripts import a02_v3_synthetic as synthetic
 
 PROTOCOL_PATH = v3.ROOT / "experiments/a02/model-comparison-protocol-v3.json"
@@ -62,6 +63,8 @@ def load_protocol() -> dict[str, Any]:
         if synthetic.manifest_sha256(examples) != spec["manifest_sha256"]:
             raise ValueError(f"V3 {name} manifest differs from its preregistered hash")
         splits[name] = examples
+    for name in ("training", "heldout_evaluation"):
+        gold.verify_generated_gold(splits[name])
     if not synthetic.leakage_audit(splits["training"], splits["heldout_evaluation"])["clean"]:
         raise ValueError("V3 preregistered splits are not leakage-clean")
     return protocol

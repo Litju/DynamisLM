@@ -1,0 +1,708 @@
+{
+ "schema": "RES541_A02_OBJECTIVE_SEMANTICS_V3",
+ "status": "PROSPECTIVE_GOLD_DERIVATION_AUTHORITY_GENERATED_PHRASING",
+ "scope": "Closed-vocabulary adjudication of the complete phrasing of the V3 synthetic generator, written from the text of each template and not from the generator's family labels, so generated gold can be checked independently. Derives gold for scoring only; never scored as model reasoning, never a runtime planner.",
+ "closed_vocabulary": true,
+ "match": "exact normalized text of a request-bearing field (case and whitespace insensitive); '{m}' expands over measurement_names. Any other text fails closed.",
+ "measurement_names": [
+  "jump height",
+  "sprint time",
+  "peak force",
+  "total distance",
+  "aerobic speed",
+  "Nordic force"
+ ],
+ "composition": {
+  "claims": "union of target levels contributed by all rules matched in all request-bearing fields, per axis",
+  "analysis_class": "the single contributed class; NONE when a composite marker matches, more than one class is contributed, or more than one target level is requested on one axis",
+  "unmatched": "derivation fails closed; no gold exists"
+ },
+ "rules": [
+  {
+   "id": "OBJ_00",
+   "phrase": "Report how much {m} changed between the two tests.",
+   "analysis_class": "SCALAR_ABSOLUTE_CHANGE",
+   "measurement": [
+    "NUMERICAL_CHANGE"
+   ],
+   "relationship": [
+    "DESCRIPTIVE_CHANGE"
+   ],
+   "justification": "A request for the plain numerical difference between two observations of one measurement is the absolute-change estimand with a descriptive-change relationship and nothing higher."
+  },
+  {
+   "id": "OBJ_01",
+   "phrase": "Quantify the raw difference in {m} across sessions.",
+   "analysis_class": "SCALAR_ABSOLUTE_CHANGE",
+   "measurement": [
+    "NUMERICAL_CHANGE"
+   ],
+   "relationship": [
+    "DESCRIPTIVE_CHANGE"
+   ],
+   "justification": "A request for the plain numerical difference between two observations of one measurement is the absolute-change estimand with a descriptive-change relationship and nothing higher."
+  },
+  {
+   "id": "OBJ_02",
+   "phrase": "Give the absolute change in {m} only.",
+   "analysis_class": "SCALAR_ABSOLUTE_CHANGE",
+   "measurement": [
+    "NUMERICAL_CHANGE"
+   ],
+   "relationship": [
+    "DESCRIPTIVE_CHANGE"
+   ],
+   "justification": "A request for the plain numerical difference between two observations of one measurement is the absolute-change estimand with a descriptive-change relationship and nothing higher."
+  },
+  {
+   "id": "OBJ_03",
+   "phrase": "State the numeric shift in {m} from first to latest test.",
+   "analysis_class": "SCALAR_ABSOLUTE_CHANGE",
+   "measurement": [
+    "NUMERICAL_CHANGE"
+   ],
+   "relationship": [
+    "DESCRIPTIVE_CHANGE"
+   ],
+   "justification": "A request for the plain numerical difference between two observations of one measurement is the absolute-change estimand with a descriptive-change relationship and nothing higher."
+  },
+  {
+   "id": "OBJ_04",
+   "phrase": "Calculate the difference in {m} between the earlier and later test.",
+   "analysis_class": "SCALAR_ABSOLUTE_CHANGE",
+   "measurement": [
+    "NUMERICAL_CHANGE"
+   ],
+   "relationship": [
+    "DESCRIPTIVE_CHANGE"
+   ],
+   "justification": "A request for the plain numerical difference between two observations of one measurement is the absolute-change estimand with a descriptive-change relationship and nothing higher."
+  },
+  {
+   "id": "OBJ_05",
+   "phrase": "Describe the size of the {m} difference, nothing more.",
+   "analysis_class": "SCALAR_ABSOLUTE_CHANGE",
+   "measurement": [
+    "NUMERICAL_CHANGE"
+   ],
+   "relationship": [
+    "DESCRIPTIVE_CHANGE"
+   ],
+   "justification": "A request for the plain numerical difference between two observations of one measurement is the absolute-change estimand with a descriptive-change relationship and nothing higher."
+  },
+  {
+   "id": "OBJ_06",
+   "phrase": "Express the {m} movement between tests as a plain difference.",
+   "analysis_class": "SCALAR_ABSOLUTE_CHANGE",
+   "measurement": [
+    "NUMERICAL_CHANGE"
+   ],
+   "relationship": [
+    "DESCRIPTIVE_CHANGE"
+   ],
+   "justification": "A request for the plain numerical difference between two observations of one measurement is the absolute-change estimand with a descriptive-change relationship and nothing higher."
+  },
+  {
+   "id": "OBJ_07",
+   "phrase": "Show that the new programme caused the {m} gain.",
+   "analysis_class": "SCALAR_ABSOLUTE_CHANGE",
+   "measurement": [
+    "NUMERICAL_CHANGE"
+   ],
+   "relationship": [
+    "CAUSAL_EVIDENCE"
+   ],
+   "justification": "Asking that a change be attributed to, or shown to be caused by, an intervention requests the CAUSAL_EVIDENCE relationship level over the numerical change."
+  },
+  {
+   "id": "OBJ_08",
+   "phrase": "Attribute the {m} change to the strength block.",
+   "analysis_class": "SCALAR_ABSOLUTE_CHANGE",
+   "measurement": [
+    "NUMERICAL_CHANGE"
+   ],
+   "relationship": [
+    "CAUSAL_EVIDENCE"
+   ],
+   "justification": "Asking that a change be attributed to, or shown to be caused by, an intervention requests the CAUSAL_EVIDENCE relationship level over the numerical change."
+  },
+  {
+   "id": "OBJ_09",
+   "phrase": "Prove the intervention produced the change in {m}.",
+   "analysis_class": "SCALAR_ABSOLUTE_CHANGE",
+   "measurement": [
+    "NUMERICAL_CHANGE"
+   ],
+   "relationship": [
+    "CAUSAL_EVIDENCE"
+   ],
+   "justification": "Asking that a change be attributed to, or shown to be caused by, an intervention requests the CAUSAL_EVIDENCE relationship level over the numerical change."
+  },
+  {
+   "id": "OBJ_10",
+   "phrase": "Confirm the conditioning plan is responsible for the {m} change.",
+   "analysis_class": "SCALAR_ABSOLUTE_CHANGE",
+   "measurement": [
+    "NUMERICAL_CHANGE"
+   ],
+   "relationship": [
+    "CAUSAL_EVIDENCE"
+   ],
+   "justification": "Asking that a change be attributed to, or shown to be caused by, an intervention requests the CAUSAL_EVIDENCE relationship level over the numerical change."
+  },
+  {
+   "id": "OBJ_11",
+   "phrase": "Establish that the training caused the shift in {m}.",
+   "analysis_class": "SCALAR_ABSOLUTE_CHANGE",
+   "measurement": [
+    "NUMERICAL_CHANGE"
+   ],
+   "relationship": [
+    "CAUSAL_EVIDENCE"
+   ],
+   "justification": "Asking that a change be attributed to, or shown to be caused by, an intervention requests the CAUSAL_EVIDENCE relationship level over the numerical change."
+  },
+  {
+   "id": "OBJ_12",
+   "phrase": "Estimate how {m} co-varies within this athlete.",
+   "analysis_class": "WITHIN_ATHLETE_ASSOCIATION",
+   "measurement": [],
+   "relationship": [
+    "ASSOCIATION"
+   ],
+   "justification": "Asking whether a measurement co-varies or tracks together within one athlete requests the within-athlete ASSOCIATION analysis and level only."
+  },
+  {
+   "id": "OBJ_13",
+   "phrase": "Quantify the within-player relationship of {m} over time.",
+   "analysis_class": "WITHIN_ATHLETE_ASSOCIATION",
+   "measurement": [],
+   "relationship": [
+    "ASSOCIATION"
+   ],
+   "justification": "Asking whether a measurement co-varies or tracks together within one athlete requests the within-athlete ASSOCIATION analysis and level only."
+  },
+  {
+   "id": "OBJ_14",
+   "phrase": "Measure the within-athlete correlation for {m}; no single difference.",
+   "analysis_class": "WITHIN_ATHLETE_ASSOCIATION",
+   "measurement": [],
+   "relationship": [
+    "ASSOCIATION"
+   ],
+   "justification": "Asking whether a measurement co-varies or tracks together within one athlete requests the within-athlete ASSOCIATION analysis and level only."
+  },
+  {
+   "id": "OBJ_15",
+   "phrase": "Assess whether {m} tracks together within this player across tests.",
+   "analysis_class": "WITHIN_ATHLETE_ASSOCIATION",
+   "measurement": [],
+   "relationship": [
+    "ASSOCIATION"
+   ],
+   "justification": "Asking whether a measurement co-varies or tracks together within one athlete requests the within-athlete ASSOCIATION analysis and level only."
+  },
+  {
+   "id": "OBJ_16",
+   "phrase": "Evaluate the within-athlete association pattern of {m}.",
+   "analysis_class": "WITHIN_ATHLETE_ASSOCIATION",
+   "measurement": [],
+   "relationship": [
+    "ASSOCIATION"
+   ],
+   "justification": "Asking whether a measurement co-varies or tracks together within one athlete requests the within-athlete ASSOCIATION analysis and level only."
+  },
+  {
+   "id": "OBJ_17",
+   "phrase": "Judge whether the {m} change justifies a selection decision.",
+   "analysis_class": "SCALAR_ABSOLUTE_CHANGE",
+   "measurement": [
+    "PRACTICAL_OR_DECISION_MEANINGFULNESS"
+   ],
+   "relationship": [],
+   "justification": "Asking whether a change warrants action, matters, or is important for a decision requests PRACTICAL_OR_DECISION_MEANINGFULNESS about the absolute change."
+  },
+  {
+   "id": "OBJ_18",
+   "phrase": "Decide if the {m} difference is meaningful for training load.",
+   "analysis_class": "SCALAR_ABSOLUTE_CHANGE",
+   "measurement": [
+    "PRACTICAL_OR_DECISION_MEANINGFULNESS"
+   ],
+   "relationship": [],
+   "justification": "Asking whether a change warrants action, matters, or is important for a decision requests PRACTICAL_OR_DECISION_MEANINGFULNESS about the absolute change."
+  },
+  {
+   "id": "OBJ_19",
+   "phrase": "Tell the staff whether the {m} shift is practically important.",
+   "analysis_class": "SCALAR_ABSOLUTE_CHANGE",
+   "measurement": [
+    "PRACTICAL_OR_DECISION_MEANINGFULNESS"
+   ],
+   "relationship": [],
+   "justification": "Asking whether a change warrants action, matters, or is important for a decision requests PRACTICAL_OR_DECISION_MEANINGFULNESS about the absolute change."
+  },
+  {
+   "id": "OBJ_20",
+   "phrase": "Advise whether the {m} difference warrants changing his plan.",
+   "analysis_class": "SCALAR_ABSOLUTE_CHANGE",
+   "measurement": [
+    "PRACTICAL_OR_DECISION_MEANINGFULNESS"
+   ],
+   "relationship": [],
+   "justification": "Asking whether a change warrants action, matters, or is important for a decision requests PRACTICAL_OR_DECISION_MEANINGFULNESS about the absolute change."
+  },
+  {
+   "id": "OBJ_21",
+   "phrase": "Is the {m} change large enough to matter for return-to-play?",
+   "analysis_class": "SCALAR_ABSOLUTE_CHANGE",
+   "measurement": [
+    "PRACTICAL_OR_DECISION_MEANINGFULNESS"
+   ],
+   "relationship": [],
+   "justification": "Asking whether a change warrants action, matters, or is important for a decision requests PRACTICAL_OR_DECISION_MEANINGFULNESS about the absolute change."
+  },
+  {
+   "id": "OBJ_22",
+   "phrase": "Estimate the typical error of the {m} test from these trials.",
+   "analysis_class": "RELIABILITY_RANDOM_ERROR_COMPARISON",
+   "measurement": [],
+   "relationship": [],
+   "justification": "Asking for the typical, random or test-retest error of a measurement requests the reliability analysis of the measurement process, not a change or relationship claim."
+  },
+  {
+   "id": "OBJ_23",
+   "phrase": "Work out test-retest noise for {m} from the two trials.",
+   "analysis_class": "RELIABILITY_RANDOM_ERROR_COMPARISON",
+   "measurement": [],
+   "relationship": [],
+   "justification": "Asking for the typical, random or test-retest error of a measurement requests the reliability analysis of the measurement process, not a change or relationship claim."
+  },
+  {
+   "id": "OBJ_24",
+   "phrase": "Determine measurement error of {m} from repeated trials.",
+   "analysis_class": "RELIABILITY_RANDOM_ERROR_COMPARISON",
+   "measurement": [],
+   "relationship": [],
+   "justification": "Asking for the typical, random or test-retest error of a measurement requests the reliability analysis of the measurement process, not a change or relationship claim."
+  },
+  {
+   "id": "OBJ_25",
+   "phrase": "Quantify the random error of the {m} measurement from these repeats.",
+   "analysis_class": "RELIABILITY_RANDOM_ERROR_COMPARISON",
+   "measurement": [],
+   "relationship": [],
+   "justification": "Asking for the typical, random or test-retest error of a measurement requests the reliability analysis of the measurement process, not a change or relationship claim."
+  },
+  {
+   "id": "OBJ_26",
+   "phrase": "Estimate within-subject noise of the {m} test.",
+   "analysis_class": "RELIABILITY_RANDOM_ERROR_COMPARISON",
+   "measurement": [],
+   "relationship": [],
+   "justification": "Asking for the typical, random or test-retest error of a measurement requests the reliability analysis of the measurement process, not a change or relationship claim."
+  },
+  {
+   "id": "OBJ_27",
+   "phrase": "Give the {m} change and prove the programme caused it, as a single answer.",
+   "analysis_class": null,
+   "measurement": [
+    "NUMERICAL_CHANGE"
+   ],
+   "relationship": [
+    "DESCRIPTIVE_CHANGE",
+    "CAUSAL_EVIDENCE"
+   ],
+   "justification": "Asking for a change and its cause as one number requests two distinct relationship levels at once, so no single analysis class applies."
+  },
+  {
+   "id": "OBJ_28",
+   "phrase": "Report the {m} difference and its causal driver as one combined estimate.",
+   "analysis_class": null,
+   "measurement": [
+    "NUMERICAL_CHANGE"
+   ],
+   "relationship": [
+    "DESCRIPTIVE_CHANGE",
+    "CAUSAL_EVIDENCE"
+   ],
+   "justification": "Asking for a change and its cause as one number requests two distinct relationship levels at once, so no single analysis class applies."
+  },
+  {
+   "id": "OBJ_29",
+   "phrase": "Combine the descriptive {m} change and its cause into one figure.",
+   "analysis_class": null,
+   "measurement": [
+    "NUMERICAL_CHANGE"
+   ],
+   "relationship": [
+    "DESCRIPTIVE_CHANGE",
+    "CAUSAL_EVIDENCE"
+   ],
+   "justification": "Asking for a change and its cause as one number requests two distinct relationship levels at once, so no single analysis class applies."
+  },
+  {
+   "id": "OBJ_30",
+   "phrase": "Merge the {m} difference and its training cause into one number.",
+   "analysis_class": null,
+   "measurement": [
+    "NUMERICAL_CHANGE"
+   ],
+   "relationship": [
+    "DESCRIPTIVE_CHANGE",
+    "CAUSAL_EVIDENCE"
+   ],
+   "justification": "Asking for a change and its cause as one number requests two distinct relationship levels at once, so no single analysis class applies."
+  },
+  {
+   "id": "OBJ_31",
+   "phrase": "Provide one estimate that is both the {m} change and what caused it.",
+   "analysis_class": null,
+   "measurement": [
+    "NUMERICAL_CHANGE"
+   ],
+   "relationship": [
+    "DESCRIPTIVE_CHANGE",
+    "CAUSAL_EVIDENCE"
+   ],
+   "justification": "Asking for a change and its cause as one number requests two distinct relationship levels at once, so no single analysis class applies."
+  },
+  {
+   "id": "Q_00",
+   "phrase": "How much did {m} move?",
+   "analysis_class": null,
+   "measurement": [],
+   "relationship": [],
+   "justification": "A question that only restates or asks for the size of the requested quantity adds no claim level."
+  },
+  {
+   "id": "Q_01",
+   "phrase": "What is the difference?",
+   "analysis_class": null,
+   "measurement": [],
+   "relationship": [],
+   "justification": "A question that only restates or asks for the size of the requested quantity adds no claim level."
+  },
+  {
+   "id": "Q_02",
+   "phrase": "By how much did it change?",
+   "analysis_class": null,
+   "measurement": [],
+   "relationship": [],
+   "justification": "A question that only restates or asks for the size of the requested quantity adds no claim level."
+  },
+  {
+   "id": "Q_03",
+   "phrase": "What shifted?",
+   "analysis_class": null,
+   "measurement": [],
+   "relationship": [],
+   "justification": "A question that only restates or asks for the size of the requested quantity adds no claim level."
+  },
+  {
+   "id": "Q_04",
+   "phrase": "Change?",
+   "analysis_class": null,
+   "measurement": [],
+   "relationship": [],
+   "justification": "A question that only restates or asks for the size of the requested quantity adds no claim level."
+  },
+  {
+   "id": "Q_05",
+   "phrase": "How large?",
+   "analysis_class": null,
+   "measurement": [],
+   "relationship": [],
+   "justification": "A question that only restates or asks for the size of the requested quantity adds no claim level."
+  },
+  {
+   "id": "Q_06",
+   "phrase": "What moved?",
+   "analysis_class": null,
+   "measurement": [],
+   "relationship": [],
+   "justification": "A question that only restates or asks for the size of the requested quantity adds no claim level."
+  },
+  {
+   "id": "Q_07",
+   "phrase": "?",
+   "analysis_class": null,
+   "measurement": [],
+   "relationship": [],
+   "justification": "A question that only restates or asks for the size of the requested quantity adds no claim level."
+  },
+  {
+   "id": "Q_08",
+   "phrase": "How noisy?",
+   "analysis_class": null,
+   "measurement": [],
+   "relationship": [],
+   "justification": "A question about the size of measurement error restates the reliability request and cannot supply an analysis class."
+  },
+  {
+   "id": "Q_09",
+   "phrase": "What is the noise?",
+   "analysis_class": null,
+   "measurement": [],
+   "relationship": [],
+   "justification": "A question about the size of measurement error restates the reliability request and cannot supply an analysis class."
+  },
+  {
+   "id": "Q_10",
+   "phrase": "How reliable?",
+   "analysis_class": null,
+   "measurement": [],
+   "relationship": [],
+   "justification": "A question about the size of measurement error restates the reliability request and cannot supply an analysis class."
+  },
+  {
+   "id": "Q_11",
+   "phrase": "Error?",
+   "analysis_class": null,
+   "measurement": [],
+   "relationship": [],
+   "justification": "A question about the size of measurement error restates the reliability request and cannot supply an analysis class."
+  },
+  {
+   "id": "Q_12",
+   "phrase": "How precise?",
+   "analysis_class": null,
+   "measurement": [],
+   "relationship": [],
+   "justification": "A question about the size of measurement error restates the reliability request and cannot supply an analysis class."
+  },
+  {
+   "id": "Q_13",
+   "phrase": "Did the programme cause it?",
+   "analysis_class": null,
+   "measurement": [],
+   "relationship": [
+    "CAUSAL_EVIDENCE"
+   ],
+   "justification": "Asking whether an intervention caused, worked for, or deserves credit for a change requests CAUSAL_EVIDENCE."
+  },
+  {
+   "id": "Q_14",
+   "phrase": "Was it the strength block?",
+   "analysis_class": null,
+   "measurement": [],
+   "relationship": [
+    "CAUSAL_EVIDENCE"
+   ],
+   "justification": "Asking whether an intervention caused, worked for, or deserves credit for a change requests CAUSAL_EVIDENCE."
+  },
+  {
+   "id": "Q_15",
+   "phrase": "Did it work?",
+   "analysis_class": null,
+   "measurement": [],
+   "relationship": [
+    "CAUSAL_EVIDENCE"
+   ],
+   "justification": "Asking whether an intervention caused, worked for, or deserves credit for a change requests CAUSAL_EVIDENCE."
+  },
+  {
+   "id": "Q_16",
+   "phrase": "Responsible?",
+   "analysis_class": null,
+   "measurement": [],
+   "relationship": [
+    "CAUSAL_EVIDENCE"
+   ],
+   "justification": "Asking whether an intervention caused, worked for, or deserves credit for a change requests CAUSAL_EVIDENCE."
+  },
+  {
+   "id": "Q_17",
+   "phrase": "Was it causal?",
+   "analysis_class": null,
+   "measurement": [],
+   "relationship": [
+    "CAUSAL_EVIDENCE"
+   ],
+   "justification": "Asking whether an intervention caused, worked for, or deserves credit for a change requests CAUSAL_EVIDENCE."
+  },
+  {
+   "id": "Q_18",
+   "phrase": "Was the new programme the cause of it?",
+   "analysis_class": null,
+   "measurement": [],
+   "relationship": [
+    "CAUSAL_EVIDENCE"
+   ],
+   "justification": "Asking whether an intervention caused, worked for, or deserves credit for a change requests CAUSAL_EVIDENCE."
+  },
+  {
+   "id": "Q_19",
+   "phrase": "Did the strength block cause the change?",
+   "analysis_class": null,
+   "measurement": [],
+   "relationship": [
+    "CAUSAL_EVIDENCE"
+   ],
+   "justification": "Asking whether an intervention caused, worked for, or deserves credit for a change requests CAUSAL_EVIDENCE."
+  },
+  {
+   "id": "Q_20",
+   "phrase": "Can we credit the conditioning plan for it?",
+   "analysis_class": null,
+   "measurement": [],
+   "relationship": [
+    "CAUSAL_EVIDENCE"
+   ],
+   "justification": "Asking whether an intervention caused, worked for, or deserves credit for a change requests CAUSAL_EVIDENCE."
+  },
+  {
+   "id": "Q_21",
+   "phrase": "Do they move together?",
+   "analysis_class": null,
+   "measurement": [],
+   "relationship": [
+    "ASSOCIATION"
+   ],
+   "justification": "Asking whether quantities move together or are related requests the ASSOCIATION level."
+  },
+  {
+   "id": "Q_22",
+   "phrase": "Is it related?",
+   "analysis_class": null,
+   "measurement": [],
+   "relationship": [
+    "ASSOCIATION"
+   ],
+   "justification": "Asking whether quantities move together or are related requests the ASSOCIATION level."
+  },
+  {
+   "id": "Q_23",
+   "phrase": "Related?",
+   "analysis_class": null,
+   "measurement": [],
+   "relationship": [
+    "ASSOCIATION"
+   ],
+   "justification": "Asking whether quantities move together or are related requests the ASSOCIATION level."
+  },
+  {
+   "id": "Q_24",
+   "phrase": "Linked?",
+   "analysis_class": null,
+   "measurement": [],
+   "relationship": [
+    "ASSOCIATION"
+   ],
+   "justification": "Asking whether quantities move together or are related requests the ASSOCIATION level."
+  },
+  {
+   "id": "Q_25",
+   "phrase": "Associated?",
+   "analysis_class": null,
+   "measurement": [],
+   "relationship": [
+    "ASSOCIATION"
+   ],
+   "justification": "Asking whether quantities move together or are related requests the ASSOCIATION level."
+  },
+  {
+   "id": "Q_26",
+   "phrase": "Should we act?",
+   "analysis_class": null,
+   "measurement": [
+    "PRACTICAL_OR_DECISION_MEANINGFULNESS"
+   ],
+   "relationship": [],
+   "justification": "Asking whether a change is big enough to act on or matters for a decision requests PRACTICAL_OR_DECISION_MEANINGFULNESS."
+  },
+  {
+   "id": "Q_27",
+   "phrase": "Does it matter?",
+   "analysis_class": null,
+   "measurement": [
+    "PRACTICAL_OR_DECISION_MEANINGFULNESS"
+   ],
+   "relationship": [],
+   "justification": "Asking whether a change is big enough to act on or matters for a decision requests PRACTICAL_OR_DECISION_MEANINGFULNESS."
+  },
+  {
+   "id": "Q_28",
+   "phrase": "Is it big?",
+   "analysis_class": null,
+   "measurement": [
+    "PRACTICAL_OR_DECISION_MEANINGFULNESS"
+   ],
+   "relationship": [],
+   "justification": "Asking whether a change is big enough to act on or matters for a decision requests PRACTICAL_OR_DECISION_MEANINGFULNESS."
+  },
+  {
+   "id": "Q_29",
+   "phrase": "Act on it?",
+   "analysis_class": null,
+   "measurement": [
+    "PRACTICAL_OR_DECISION_MEANINGFULNESS"
+   ],
+   "relationship": [],
+   "justification": "Asking whether a change is big enough to act on or matters for a decision requests PRACTICAL_OR_DECISION_MEANINGFULNESS."
+  },
+  {
+   "id": "Q_30",
+   "phrase": "Is that enough to change his training plan?",
+   "analysis_class": null,
+   "measurement": [
+    "PRACTICAL_OR_DECISION_MEANINGFULNESS"
+   ],
+   "relationship": [],
+   "justification": "Asking whether a change is big enough to act on or matters for a decision requests PRACTICAL_OR_DECISION_MEANINGFULNESS."
+  },
+  {
+   "id": "Q_31",
+   "phrase": "Should the staff act on this difference?",
+   "analysis_class": null,
+   "measurement": [
+    "PRACTICAL_OR_DECISION_MEANINGFULNESS"
+   ],
+   "relationship": [],
+   "justification": "Asking whether a change is big enough to act on or matters for a decision requests PRACTICAL_OR_DECISION_MEANINGFULNESS."
+  },
+  {
+   "id": "Q_32",
+   "phrase": "Does this justify a change to his return-to-play plan?",
+   "analysis_class": null,
+   "measurement": [
+    "PRACTICAL_OR_DECISION_MEANINGFULNESS"
+   ],
+   "relationship": [],
+   "justification": "Asking whether a change is big enough to act on or matters for a decision requests PRACTICAL_OR_DECISION_MEANINGFULNESS."
+  }
+ ],
+ "version": "V3.1",
+ "fields": {
+  "request_bearing": [
+   "objective",
+   "question"
+  ],
+  "precedence": "objective and question are both user requests. A question identical to the objective (after case and whitespace normalization) is not counted twice. Otherwise rules matched in either field are combined, and the composition rules adjudicate conflicts: a question that adds a distinct claim makes the request composite.",
+  "analysis_source": "objective must match at least one non-composite rule",
+  "unadjudicated_claim_content": "a field containing a claim trigger outside every matched phrase fails closed; no gold exists"
+ },
+ "claim_triggers": [
+  "caus",
+  "effect",
+  "decision",
+  "decide",
+  "justif",
+  "meaningful",
+  "matter",
+  "important",
+  "practical",
+  "worthwhile",
+  "enough to",
+  "associat",
+  "correlat",
+  "related",
+  "relationship",
+  "linked",
+  "predict",
+  "risk",
+  "readiness",
+  "injur",
+  "respons"
+ ]
+}
