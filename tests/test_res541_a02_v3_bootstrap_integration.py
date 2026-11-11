@@ -117,7 +117,19 @@ def test_colab_archive_prepare_and_work_use_real_bounded_child(tmp_path: Path) -
     (content_root / "a02-v3-binding.json").write_text(json.dumps(binding))
     python = content_root / "a02/inference-venv/bin/python"
     python.parent.mkdir(parents=True)
-    python.symlink_to(sys.executable)
+    subprocess.run(
+        [sys.executable, "-m", "venv", "--system-site-packages", str(python.parent.parent)],
+        check=True,
+    )
+    project_site = subprocess.check_output(
+        [sys.executable, "-c", "import site; print(site.getsitepackages()[0])"],
+        text=True,
+    ).strip()
+    child_site = subprocess.check_output(
+        [str(python), "-c", "import site; print(site.getsitepackages()[0])"],
+        text=True,
+    ).strip()
+    (Path(child_site) / "res541-test-site.pth").write_text(project_site + "\n")
 
     # Negative control: the original work boundary cannot import from an empty prepared tree.
     negative_root = tmp_path / "negative-content"
