@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import sys
 from datetime import timedelta
 from pathlib import Path
 from typing import Any
@@ -280,7 +281,7 @@ def test_revision_2_cli_only_accepts_one_session_command(
     monkeypatch.setattr(decision, "load_protocol", lambda: {})
     monkeypatch.setattr(execution, "validate_allowance", lambda plan, allowance: allowance)
     monkeypatch.setattr(
-        execution.sys,
+        sys,
         "argv",
         ["a02_v3_execution.py", "run-campaign", "--preflight", "cpu-preflight.json"],
     )
