@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import sys
 from collections import Counter
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
+from scripts import a02_engine
 from scripts import a02_v3_contract as v3
 from scripts import a02_v3_decision as decision
 from scripts import a02_v3_worker as worker
@@ -37,6 +39,18 @@ class CPUBackend:
 
 
 def rehearse(tokenizer_path: Path, checkpoint: Path) -> dict[str, Any]:
+    import dynamislm
+
+    def forbid_network(event: str, args: tuple[Any, ...]) -> None:
+        if event in {"socket.connect", "socket.getaddrinfo"}:
+            raise RuntimeError("network forbidden during CPU rehearsal")
+
+    sys.addaudithook(forbid_network)
+
+    root = Path(__file__).resolve().parents[1]
+    for module in (dynamislm, v3, worker):
+        if module.__file__ is None or not Path(module.__file__).resolve().is_relative_to(root):
+            raise ValueError("rehearsal imported code outside deployed source")
     profile = v3.load_profile()
     for name, digest in profile["tokenizer"]["files"].items():
         if v3.sha256((tokenizer_path / name).read_bytes()) != digest:
@@ -50,6 +64,23 @@ def rehearse(tokenizer_path: Path, checkpoint: Path) -> dict[str, Any]:
     items = worker.work_items(protocol)
     sources = worker._sources(protocol)
     backend = CPUBackend(tokenizer, protocol["candidate_model"])
+    try:
+        worker.run_worker(
+            protocol=protocol,
+            items=items,
+            checkpoint=checkpoint,
+            backend=backend,
+            deadline=float("inf"),
+            item_cost_bounds={
+                "QUALIFICATION": 1.0,
+                "ZERO_SHOT_CONSTRAINED": 1.0,
+                "ZERO_SHOT_UNCONSTRAINED": 1.0,
+            },
+        )
+    except GenerationBoundaryError:
+        pass
+    else:
+        raise AssertionError("worker initialization did not reach generation boundary")
     counts: Counter[str] = Counter()
     maximum = 0
     for item in items:
@@ -69,6 +100,21 @@ def rehearse(tokenizer_path: Path, checkpoint: Path) -> dict[str, Any]:
                 pass
             else:
                 raise AssertionError("rehearsal did not reach generation boundary")
+        if item.key.startswith("EXPOSED:"):
+            source = sources[item.key]
+            result = a02_engine.execute_new(
+                source["case_id"],
+                v3.canonical(source["expected_action"]),
+                f"CPU-SYNTHETIC:{item.id}",
+            )
+            a02_engine.validate_event(
+                result["event"],
+                case_id=source["case_id"],
+                interaction_id=f"CPU-SYNTHETIC:{item.id}",
+            )
+        elif item.key != "QUALIFICATION":
+            source = sources[item.key]
+            v3.parse_action(source["target_text"], v3.observation_ids(source["request"]))
         counts["QUALIFICATION" if item.key == "QUALIFICATION" else item.arm] += 1
     if len(items) != 581:
         raise ValueError("frozen workload count differs")

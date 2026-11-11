@@ -87,6 +87,9 @@ def test_source_archive_extracts_and_rejects_parent_paths(tmp_path: Path) -> Non
     [
         (lambda b: b.pop("plan_sha256"), "fields differ"),
         (lambda b: b.update(extra=1), "fields differ"),
+        (lambda b: b.update(source_identity={}), "source identity"),
+        (lambda b: b["source_identity"].update(tree="corrupt"), "source identity"),
+        (lambda b: b.update(source_revision="c" * 40), "source identity"),
         (lambda b: b.update(schema="X"), "schema differs"),
         (lambda b: b["item_cost_bounds"].update(QUALIFICATION=-1), "cost bounds"),
         (lambda b: b["item_cost_bounds"].pop("ZERO_SHOT_CONSTRAINED"), "cost bounds"),
@@ -198,3 +201,14 @@ def test_failed_weight_download_retains_completed_runtime_qualification(
     assert status["runtime_qualification"] == qualification
     assert status["status"] == "RUNTIME_QUALIFIED"
     assert status["binding"] == staged["binding"]
+
+
+def test_work_rejects_source_change_under_same_plan(staged: dict[str, Any]) -> None:
+    remote._write_status({"status": "READY", "plan_sha256": PLAN["plan_sha256"]})
+    status = json.loads(remote.STATUS_PATH.read_text())
+    status["binding"]["source_identity"]["tree"] = "c" * 40
+    remote.STATUS_PATH.write_text(json.dumps(status))
+    helpers = _Helpers({"returncode": 0, "timed_out": False})
+    with pytest.raises(ValueError, match="READY prepare"):
+        remote.outer("work", 540, helpers)
+    assert helpers.calls == []

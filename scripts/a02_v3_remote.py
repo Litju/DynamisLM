@@ -53,6 +53,17 @@ def load_binding(path: Path | None = None) -> dict[str, Any]:
         raise ValueError("V3 remote binding fields differ")
     if binding["schema"] != BINDING_SCHEMA:
         raise ValueError("V3 remote binding schema differs")
+    identity = binding["source_identity"]
+    if (
+        not isinstance(identity, dict)
+        or set(identity) != {"commit", "tree"}
+        or any(
+            not isinstance(v, str) or re.fullmatch(r"[0-9a-f]{40}", v) is None
+            for v in identity.values()
+        )
+        or binding["source_revision"] != identity["commit"]
+    ):
+        raise ValueError("V3 source identity differs")
     costs = binding["item_cost_bounds"]
     if set(costs) != {"QUALIFICATION", "ZERO_SHOT_UNCONSTRAINED", "ZERO_SHOT_CONSTRAINED"} or any(
         not isinstance(v, int | float) or v <= 0 for v in costs.values()
@@ -103,6 +114,8 @@ def _child_env(source: Path, stage: str) -> dict[str, str]:
         HF_HUB_CACHE=str(WORK / "hf-cache/hub"),
         HF_HUB_DISABLE_TELEMETRY="1",
     )
+    if os.environ.get("A02_V3_BOOTSTRAP_TEST") == "1":
+        env.update(HF_HUB_OFFLINE="1", TRANSFORMERS_OFFLINE="1", CUDA_VISIBLE_DEVICES="")
     return env
 
 
@@ -123,6 +136,11 @@ def outer(stage: str, timeout: int, helpers: Any = None) -> int:
     if _sha256_file(SOURCE_ARCHIVE) != binding["source_archive_sha256"]:
         raise ValueError("uploaded V3 source archive hash differs from the binding")
     bootstrap_test = os.environ.get("A02_V3_BOOTSTRAP_TEST") == "1"
+    if (
+        bootstrap_test
+        and binding["plan_sha256"] != hashlib.sha256(b"synthetic CPU bootstrap plan").hexdigest()
+    ):
+        raise ValueError("CPU rehearsal cannot use a production plan binding")
     if stage == "work":
         status = json.loads(STATUS_PATH.read_bytes()) if STATUS_PATH.exists() else {}
         expected = "BOOTSTRAP_TEST_READY" if bootstrap_test else "READY"

@@ -178,3 +178,45 @@ def test_colab_archive_prepare_and_work_use_real_bounded_child(tmp_path: Path) -
     assert completed["status"] == "BOOTSTRAP_TEST_COMPLETE"
     _assert_stage(completed, binding, "work", extracted)
     assert [stage["stage"] for stage in completed["stages"]] == ["prepare", "work"]
+
+
+def test_session_002_exact_archive_reproduces_git_root_failure(tmp_path: Path) -> None:
+    archive = tmp_path / "session-002.tar"
+    subprocess.run(
+        [
+            "git",
+            "archive",
+            "--format=tar",
+            f"--output={archive}",
+            "ffad2a8ec58392b026f97a5cb0d724a8f1213d5a",
+        ],
+        cwd=REPO_ROOT,
+        check=True,
+    )
+    assert hashlib.sha256(archive.read_bytes()).hexdigest() == (
+        "9512e261d2ee19c9767837f32fc8e549a05d6554d36e258bfe49260f9cbc63ad"
+    )
+    extracted = tmp_path / "source"
+    extracted.mkdir()
+    with tarfile.open(archive) as source:
+        source.extractall(extracted, filter="data")
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "from scripts.a02_v3_contract import build_tool_schema; build_tool_schema()",
+        ],
+        cwd=extracted,
+        env={
+            "PATH": os.environ["PATH"],
+            "PYTHONNOUSERSITE": "1",
+            "PYTHONPATH": f"{extracted}:{extracted}/src",
+        },
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=30,
+    )
+    assert result.returncode != 0
+    assert "mendeley_rpl.py" in result.stderr
+    assert "could not resolve a Git repository root" in result.stderr
