@@ -9,6 +9,10 @@ import tarfile
 from pathlib import Path
 from typing import Any
 
+from huggingface_hub import snapshot_download
+
+TOKENIZER = Path("/mnt/e/DynamisLM-A0/a01/tokenizer")
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 IMPORTS = [
     "scripts.a02_dev_runtime",
@@ -42,6 +46,7 @@ def _run_colab_entrypoint(
     }
     if bootstrap_test:
         environment["A02_V3_BOOTSTRAP_TEST"] = "1"
+        environment["A02_V3_CPU_TOKENIZER"] = str(TOKENIZER)
     assert "PYTHONPATH" not in environment
     assert "PYTHONHOME" not in environment
     return subprocess.run(
@@ -50,7 +55,7 @@ def _run_colab_entrypoint(
         env=environment,
         capture_output=True,
         text=True,
-        timeout=30,
+        timeout=150,
         check=False,
     )
 
@@ -89,11 +94,22 @@ def _assert_stage(
     assert bootstrap["source_archive_sha256"] == binding["source_archive_sha256"]
     assert bootstrap["imports"] == IMPORTS
     assert bootstrap["torch_imported"] is False
-    assert bootstrap["transformers_imported"] is False
+    assert bootstrap["transformers_imported"] is True
+    assert status["cpu_rehearsal"]["items"] == 581
+    assert status["cpu_rehearsal"]["actual_model_evaluations"] == 0
     assert Path(bootstrap["python_executable"]).resolve() == Path(sys.executable).resolve()
 
 
 def test_colab_archive_prepare_and_work_use_real_bounded_child(tmp_path: Path) -> None:
+    global TOKENIZER
+    if not TOKENIZER.is_dir():
+        TOKENIZER = Path(
+            snapshot_download(
+                repo_id="HuggingFaceTB/SmolLM3-3B",
+                revision="a07cc9a04f16550a088caea529712d1d335b0ac1",
+                allow_patterns=["tokenizer*", "special_tokens_map.json", "chat_template.jinja"],
+            )
+        )
     repo = REPO_ROOT
     commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo, text=True).strip()
     tree = subprocess.check_output(["git", "rev-parse", "HEAD^{tree}"], cwd=repo, text=True).strip()
@@ -138,7 +154,7 @@ def test_colab_archive_prepare_and_work_use_real_bounded_child(tmp_path: Path) -
     (negative_root / "a02-v3-binding.json").write_text(json.dumps(binding))
     (negative_root / "a02/v3-source").mkdir(parents=True)
     (negative_root / "a02-v3-status.json").write_text(
-        json.dumps({"status": "READY", "plan_sha256": binding["plan_sha256"]})
+        json.dumps({"status": "READY", "plan_sha256": binding["plan_sha256"], "binding": binding})
     )
     negative = _run_colab_entrypoint(entrypoint, negative_root, stage="work", bootstrap_test=False)
     assert negative.returncode != 0

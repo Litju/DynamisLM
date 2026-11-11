@@ -126,7 +126,11 @@ def outer(stage: str, timeout: int, helpers: Any = None) -> int:
     if stage == "work":
         status = json.loads(STATUS_PATH.read_bytes()) if STATUS_PATH.exists() else {}
         expected = "BOOTSTRAP_TEST_READY" if bootstrap_test else "READY"
-        if status.get("status") != expected or status.get("plan_sha256") != binding["plan_sha256"]:
+        if (
+            status.get("status") != expected
+            or status.get("plan_sha256") != binding["plan_sha256"]
+            or status.get("binding") != binding
+        ):
             raise ValueError("V3 work stage requires a READY prepare stage for this binding")
     if helpers is None:  # pragma: no cover - reviewed remote primitives
         if stage == "prepare":
@@ -186,7 +190,14 @@ def child(stage: str, timeout: int) -> int:  # pragma: no cover - pinned GPU pro
         raise ValueError("extracted V3 protocol differs from the binding")
     if os.environ.get("A02_V3_BOOTSTRAP_TEST") == "1":
         status = json.loads(STATUS_PATH.read_bytes()) if STATUS_PATH.exists() else {}
+        from scripts.a02_v3_cpu_rehearsal import rehearse
+
+        tokenizer_path = os.environ.get("A02_V3_CPU_TOKENIZER")
+        if not tokenizer_path:
+            raise ValueError("CPU rehearsal requires offline pinned tokenizer")
+        rehearsal = rehearse(Path(tokenizer_path), CONTENT_ROOT / f"cpu-{stage}-synthetic.jsonl")
         status.update(
+            cpu_rehearsal=rehearsal,
             status="BOOTSTRAP_TEST_READY" if stage == "prepare" else "BOOTSTRAP_TEST_COMPLETE",
             plan_sha256=binding["plan_sha256"],
             bootstrap_test={
