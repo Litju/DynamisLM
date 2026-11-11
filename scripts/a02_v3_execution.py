@@ -50,6 +50,7 @@ E_ROOT = Path("/mnt/e/DynamisLM-A0").resolve()
 V3_DIR = E_ROOT / "a02/v3-zero-shot"
 PLAN_SCHEMA = "RES541_A02_V3_SESSION_PLAN_V1"
 ALLOWANCE_SCHEMA = "RES541_A02_V3_CAMPAIGN_ALLOWANCE_V1"
+SUCCESSOR_ALLOWANCE_SCHEMA = "RES541_A02_V3_CAMPAIGN_ALLOWANCE_V2"
 ALLOWANCE_KEYS = frozenset(
     {
         "schema",
@@ -62,7 +63,9 @@ ALLOWANCE_KEYS = frozenset(
         "allow_concurrent_unrelated_usage",
     }
 )
+SUCCESSOR_ALLOWANCE_KEYS = ALLOWANCE_KEYS | {"predecessor"}
 LEDGER_SCHEMA = "RES541_A02_V3_LEDGER_V1"
+SUCCESSOR_LEDGER_SCHEMA = "RES541_A02_V3_LEDGER_V2"
 REMOTE_STATUS = "/content/a02-v3-status.json"
 REMOTE_CHECKPOINT = "/content/a02-v3-checkpoint.jsonl"
 REMOTE_SOURCE = "/content/a02-v3-source.tar"
@@ -227,13 +230,220 @@ def ledger_new(plan: dict[str, Any]) -> dict[str, Any]:
     return {"schema": LEDGER_SCHEMA, "plan_sha256": plan["plan_sha256"], "sessions": []}
 
 
+def successor_predecessor(plan: dict[str, Any]) -> dict[str, Any]:
+    """Fingerprint the one consumed V1 session that a V2 allowance may carry forward."""
+    run_dir = V3_DIR / f"plan-{plan['plan_sha256'][:12]}"
+    paths = {
+        "allowance_sha256": V3_DIR / "campaign-allowance.json",
+        "ledger_sha256": run_dir / "ledger.json",
+        "controller_ledger_sha256": run_dir / "session-001-ledger-controller-output.json",
+        "binding_sha256": run_dir / "session-001-binding.json",
+        "used_sha256": run_dir / "session-001-used.json",
+        "control_sha256": run_dir / "session-001-control.json",
+        "status_sha256": run_dir / "session-001-status.json",
+        "cost_reconciliation_sha256": run_dir / "session-001-cost-reconciliation.json",
+        "stop_summary_sha256": run_dir / "campaign-stop-summary.json",
+        "watchdog_sha256": run_dir / "session-001-watchdog.json",
+        "source_archive_sha256": run_dir / "source-001.tar",
+    }
+    evidence = {key: path.read_bytes() for key, path in paths.items()}
+    binding = v3.json_object(evidence["binding_sha256"].decode())
+    predecessor = {
+        "source_identity": binding.get("source_identity"),
+        **{key: v3.sha256(data) for key, data in evidence.items()},
+    }
+    _validate_successor_predecessor(plan, predecessor)
+    return predecessor
+
+
+def _validate_successor_predecessor(
+    plan: dict[str, Any], predecessor: dict[str, Any]
+) -> dict[str, Any]:
+    expected_keys = {
+        "source_identity",
+        "allowance_sha256",
+        "ledger_sha256",
+        "controller_ledger_sha256",
+        "binding_sha256",
+        "used_sha256",
+        "control_sha256",
+        "status_sha256",
+        "cost_reconciliation_sha256",
+        "stop_summary_sha256",
+        "watchdog_sha256",
+        "source_archive_sha256",
+    }
+    if not isinstance(predecessor, dict) or set(predecessor) != expected_keys:
+        raise AdmissionError("V2 allowance predecessor evidence fields differ")
+    source = predecessor["source_identity"]
+    if not isinstance(source, dict) or set(source) != {"commit", "tree"}:
+        raise AdmissionError("V2 allowance predecessor source identity is invalid")
+    if not all(isinstance(value, str) and len(value) == 40 for value in source.values()):
+        raise AdmissionError("V2 allowance predecessor source identity is invalid")
+
+    run_dir = V3_DIR / f"plan-{plan['plan_sha256'][:12]}"
+    paths = {
+        "allowance_sha256": V3_DIR / "campaign-allowance.json",
+        "ledger_sha256": run_dir / "ledger.json",
+        "controller_ledger_sha256": run_dir / "session-001-ledger-controller-output.json",
+        "binding_sha256": run_dir / "session-001-binding.json",
+        "used_sha256": run_dir / "session-001-used.json",
+        "control_sha256": run_dir / "session-001-control.json",
+        "status_sha256": run_dir / "session-001-status.json",
+        "cost_reconciliation_sha256": run_dir / "session-001-cost-reconciliation.json",
+        "stop_summary_sha256": run_dir / "campaign-stop-summary.json",
+        "watchdog_sha256": run_dir / "session-001-watchdog.json",
+        "source_archive_sha256": run_dir / "source-001.tar",
+    }
+    content: dict[str, bytes] = {}
+    for key, path in paths.items():
+        try:
+            content[key] = path.read_bytes()
+        except OSError as exc:
+            raise AdmissionError(f"V2 allowance predecessor evidence is missing: {key}") from exc
+        if v3.sha256(content[key]) != predecessor[key]:
+            raise AdmissionError(f"V2 allowance predecessor evidence changed: {key}")
+
+    allowance = v3.json_object(content["allowance_sha256"].decode())
+    binding = v3.json_object(content["binding_sha256"].decode())
+    used = v3.json_object(content["used_sha256"].decode())
+    control = v3.json_object(content["control_sha256"].decode())
+    status = v3.json_object(content["status_sha256"].decode())
+    cost = v3.json_object(content["cost_reconciliation_sha256"].decode())
+    stop = v3.json_object(content["stop_summary_sha256"].decode())
+    watchdog = v3.json_object(content["watchdog_sha256"].decode())
+    ledger = v3.json_object(content["ledger_sha256"].decode())
+    original = v3.json_object(content["controller_ledger_sha256"].decode())
+    expected_session = f"res541-a02-v3-{plan['plan_sha256'][:8]}-001"
+    teardown_receipt = control.get("teardown_receipt")
+    if not isinstance(teardown_receipt, dict):
+        raise AdmissionError("V2 predecessor teardown receipt is malformed")
+    control_sessions = teardown_receipt.get("sessions", {})
+    control_assignments = teardown_receipt.get("assignments", {})
+    stop_teardown = stop.get("teardown", {})
+    stop_evidence = stop.get("evidence", {})
+    if not all(
+        isinstance(value, dict)
+        for value in (control_sessions, control_assignments, stop_teardown, stop_evidence)
+    ):
+        raise AdmissionError("V2 predecessor teardown receipt is malformed")
+    try:
+        assignment_inventory = json.loads(control_assignments.get("stdout", "{}"))
+    except (json.JSONDecodeError, TypeError) as exc:
+        raise AdmissionError("V2 predecessor provider-assignment receipt is malformed") from exc
+    exact_delta = cost.get("exact_balance_delta_cu")
+    if (
+        isinstance(exact_delta, bool)
+        or not isinstance(exact_delta, int | float)
+        or not math.isfinite(exact_delta)
+        or round(exact_delta, 4) != 0.0121
+    ):
+        raise AdmissionError("V2 predecessor exact cost does not reconcile to session 001")
+    if (
+        set(allowance) != ALLOWANCE_KEYS
+        or allowance.get("schema") != ALLOWANCE_SCHEMA
+        or allowance.get("plan_sha256") != plan["plan_sha256"]
+        or allowance.get("source_identity") != source
+        or allowance.get("max_sessions") != plan["session_count"]
+        or allowance.get("cumulative_cap_cu") != plan["compute_units"]["cumulative_cap"]
+        or allowance.get("max_cu_per_session") != plan["compute_units"]["per_session_cap"]
+        or allowance.get("allow_concurrent_unrelated_usage") is not False
+        or binding.get("schema") != "RES541_A02_V3_REMOTE_BINDING_V1"
+        or binding.get("plan_sha256") != plan["plan_sha256"]
+        or binding.get("source_identity") != source
+        or binding.get("session_index") != 1
+        or binding.get("source_archive_sha256") != predecessor["source_archive_sha256"]
+        or used.get("plan_sha256") != plan["plan_sha256"]
+        or used.get("source_identity") != source
+        or used.get("session") != expected_session
+        or used.get("index") != 1
+        or status.get("status") != "EXECUTION_FAILED"
+        or status.get("failure_stage") != "work"
+        or status.get("error_type") != "ModuleNotFoundError"
+        or status.get("error_detail") != "No module named 'scripts'"
+        or status.get("binding") != binding
+        or status.get("checkpoint_sha256") is not None
+        or control.get("session") != used.get("session")
+        or control.get("stopped") is not True
+        or control.get("target_absent_after_stop") is not True
+        or control.get("session-001-status.json_sha256") != predecessor["status_sha256"]
+        or control.get("prepare", {}).get("returncode") != 0
+        or control.get("work", {}).get("returncode") != 0
+        or control.get("quota_after", {}).get("active_sessions") != []
+        or control.get("quota_after", {}).get("active_assignment_count") != 0
+        or control_sessions.get("returncode") != 0
+        or "No active sessions found" not in control_sessions.get("stdout", "")
+        or control_assignments.get("returncode") != 0
+        or not isinstance(assignment_inventory, dict)
+        or assignment_inventory.get("assignments") != []
+        or watchdog.get("phase") != "DISARMED"
+        or stop.get("campaign_status") != "STOPPED_ON_ANOMALY"
+        or stop.get("source_identity") != source
+        or stop.get("session", {}).get("committed_items") != 0
+        or stop.get("session", {}).get("conservative_recorded_spend_cu") != 0.0121
+        or stop.get("allowance", {}).get("sessions_used") != 1
+        or stop.get("allowance", {}).get("sessions_remaining") != 9
+        or stop.get("allowance", {}).get("conservative_spend_cu") != 0.0121
+        or stop_teardown.get("controller_confirmed_absent_from_cli_and_provider") is not True
+        or stop_teardown.get("independent_cli_sessions") != 0
+        or stop_teardown.get("independent_provider_assignments") != 0
+        or stop_teardown.get("post_teardown_usage_rate_cu_per_hour") != 0.0
+        or stop_evidence.get("source_archive_matches_binding") is not True
+        or stop_evidence.get("remote_status_hash_matches_control") is not True
+        or cost.get("schema") != "RES541_A02_V3_SESSION_COST_RECONCILIATION_V1"
+        or cost.get("source_identity") != source
+        or cost.get("session_index") != 1
+        or cost.get("conservative_recorded_spend_cu") != 0.0121
+        or cost.get("corrected_ledger_sha256") != predecessor["ledger_sha256"]
+        or cost.get("original_controller_ledger_sha256") != predecessor["controller_ledger_sha256"]
+        or cost.get("remote_status_sha256") != predecessor["status_sha256"]
+        or cost.get("teardown_confirmed") is not True
+        or ledger.get("schema") != LEDGER_SCHEMA
+        or ledger.get("plan_sha256") != plan["plan_sha256"]
+        or ledger.get("source_identity") != source
+        or original.get("schema") != LEDGER_SCHEMA
+        or original.get("plan_sha256") != plan["plan_sha256"]
+        or original.get("source_identity") != source
+    ):
+        raise AdmissionError("V2 allowance predecessor evidence is inconsistent")
+    prior = ledger.get("sessions")
+    raw = original.get("sessions")
+    if (
+        not isinstance(prior, list)
+        or len(prior) != 1
+        or prior[0].get("index") != 1
+        or prior[0].get("name") != used.get("session")
+        or prior[0].get("cost_status") != "KNOWN"
+        or prior[0].get("compute_units_spent") != 0.0121
+        or prior[0].get("committed_items") != 0
+        or not isinstance(raw, list)
+        or len(raw) != 1
+        or raw[0].get("index") != 1
+        or raw[0].get("name") != used.get("session")
+        or raw[0].get("cost_status") != "KNOWN"
+        or raw[0].get("compute_units_spent") != 0.0
+    ):
+        raise AdmissionError("V2 allowance predecessor ledger is not the consumed session 001")
+    return {
+        "allowance": allowance,
+        "ledger": ledger,
+        "cost": cost,
+        "source_identity": source,
+    }
+
+
 def validate_allowance(plan: dict[str, Any], allowance: dict[str, Any] | None) -> dict[str, Any]:
     """Return the allowance if it is a well-formed grant that cannot exceed the plan."""
     if allowance is None:
         raise AdmissionError("no owner campaign allowance exists for this V3 plan")
-    if set(allowance) != ALLOWANCE_KEYS:
+    if not isinstance(allowance, dict):
+        raise AdmissionError("campaign allowance is not an object")
+    schema = allowance.get("schema")
+    successor = schema == SUCCESSOR_ALLOWANCE_SCHEMA
+    expected_keys = SUCCESSOR_ALLOWANCE_KEYS if successor else ALLOWANCE_KEYS
+    if set(allowance) != expected_keys:
         raise AdmissionError("campaign allowance fields differ from the contract")
-    if allowance["schema"] != ALLOWANCE_SCHEMA:
+    if schema not in {ALLOWANCE_SCHEMA, SUCCESSOR_ALLOWANCE_SCHEMA}:
         raise AdmissionError("campaign allowance schema differs")
     if allowance["plan_sha256"] != plan["plan_sha256"]:
         raise AdmissionError("campaign allowance is not bound to this plan")
@@ -263,7 +473,93 @@ def validate_allowance(plan: dict[str, Any], allowance: dict[str, Any] | None) -
         raise AdmissionError("campaign allowance expiry is not a timestamp") from exc
     if expiry.tzinfo is None:
         raise AdmissionError("campaign allowance expiry must carry a timezone")
+    if successor:
+        parent = _validate_successor_predecessor(plan, allowance["predecessor"])
+        if allowance["source_identity"] == parent["source_identity"]:
+            raise AdmissionError("V2 successor allowance does not change the source identity")
+        parent_spend = float(parent["ledger"]["sessions"][0]["compute_units_spent"])
+        required_cap = round(parent_spend + plan["compute_units"]["per_session_cap"], 4)
+        parent_expiry = datetime.fromisoformat(parent["allowance"]["valid_until_utc"])
+        if (
+            sessions != 2
+            or float(allowance["max_cu_per_session"])
+            != float(plan["compute_units"]["per_session_cap"])
+            or float(allowance["cumulative_cap_cu"]) != required_cap
+            or allowance["allow_concurrent_unrelated_usage"] is not False
+            or expiry > parent_expiry
+        ):
+            raise AdmissionError("V2 successor allowance exceeds the one-session-002 scope")
     return allowance
+
+
+def _successor_ledger(plan: dict[str, Any], allowance: dict[str, Any]) -> dict[str, Any]:
+    parent = _validate_successor_predecessor(plan, allowance["predecessor"])
+    prior = dict(parent["ledger"]["sessions"][0])
+    prior.update(
+        source_identity=parent["source_identity"],
+        source_archive_sha256=allowance["predecessor"]["source_archive_sha256"],
+        source_binding_sha256=allowance["predecessor"]["binding_sha256"],
+    )
+    return {
+        "schema": SUCCESSOR_LEDGER_SCHEMA,
+        "plan_sha256": plan["plan_sha256"],
+        "source_identity": allowance["source_identity"],
+        "predecessor": allowance["predecessor"],
+        "sessions": [prior],
+    }
+
+
+def _validate_successor_ledger(
+    plan: dict[str, Any], ledger: dict[str, Any], allowance: dict[str, Any]
+) -> None:
+    expected = _successor_ledger(plan, allowance)
+    if not isinstance(ledger, dict) or set(ledger) != set(expected):
+        raise AdmissionError("V2 successor ledger fields differ")
+    sessions = ledger.get("sessions")
+    if (
+        ledger.get("schema") != SUCCESSOR_LEDGER_SCHEMA
+        or ledger.get("plan_sha256") != plan["plan_sha256"]
+        or ledger.get("source_identity") != allowance["source_identity"]
+        or ledger.get("predecessor") != allowance["predecessor"]
+        or not isinstance(sessions, list)
+        or not 1 <= len(sessions) <= 2
+        or sessions[0] != expected["sessions"][0]
+    ):
+        raise AdmissionError("V2 successor ledger does not preserve session 001")
+    if len(sessions) == 2:
+        session = sessions[1]
+        if (
+            not isinstance(session, dict)
+            or session.get("index") != 2
+            or session.get("source_identity") != allowance["source_identity"]
+            or session.get("source_archive_sha256") is None
+            or session.get("cost_status") not in {"KNOWN", "UNKNOWN"}
+            or session.get("committed_items", -1) < 0
+        ):
+            raise AdmissionError("V2 successor ledger session 002 is invalid")
+
+
+def _prepare_successor_ledger(
+    plan: dict[str, Any], allowance: dict[str, Any], run_dir: Path
+) -> Path:
+    path = run_dir / "ledger-v2.json"
+    if path.exists():
+        ledger = v3.json_object(path.read_text(encoding="utf-8"))
+        _validate_successor_ledger(plan, ledger, allowance)
+        return path
+    if (run_dir / "session-002-used.json").exists():
+        raise AdmissionError("session 002 has a consumed marker but no V2 ledger")
+    legacy = json.loads((run_dir / "ledger.json").read_text(encoding="utf-8"))
+    if legacy != _validate_successor_predecessor(plan, allowance["predecessor"])["ledger"]:
+        raise AdmissionError("V2 migration source ledger differs from its predecessor receipt")
+    ledger = _successor_ledger(plan, allowance)
+    with path.open("x", encoding="utf-8") as stream:
+        json.dump(ledger, stream, indent=2, sort_keys=True)
+        stream.write("\n")
+        stream.flush()
+        os.fsync(stream.fileno())
+    _validate_successor_ledger(plan, v3.json_object(path.read_text()), allowance)
+    return path
 
 
 def admit(
@@ -283,8 +579,16 @@ def admit(
     allowance = validate_allowance(plan, authorization)
     if (now or datetime.now(UTC)) >= datetime.fromisoformat(str(allowance["valid_until_utc"])):
         raise AdmissionError("campaign allowance has expired")
-    if ledger.get("schema") != LEDGER_SCHEMA or ledger.get("plan_sha256") != plan["plan_sha256"]:
+    if ledger.get("plan_sha256") != plan["plan_sha256"]:
         raise AdmissionError("V3 ledger is not bound to this plan")
+    if ledger.get("schema") == SUCCESSOR_LEDGER_SCHEMA:
+        if allowance["schema"] != SUCCESSOR_ALLOWANCE_SCHEMA:
+            raise AdmissionError("V2 successor ledger requires a V2 allowance")
+        _validate_successor_ledger(plan, ledger, allowance)
+    elif ledger.get("schema") != LEDGER_SCHEMA:
+        raise AdmissionError("V3 ledger schema differs")
+    elif allowance["schema"] == SUCCESSOR_ALLOWANCE_SCHEMA:
+        raise AdmissionError("V2 successor allowance requires a V2 successor ledger")
     used = ledger["sessions"]
     if [s["index"] for s in used] != list(range(1, len(used) + 1)):
         raise AdmissionError("V3 ledger session sequence is inconsistent")
@@ -461,9 +765,12 @@ def run_session(
         "source_identity"
     ):
         raise AdmissionError("session binding differs from authorized source identity")
-    if ledger["sessions"] and ledger.get("source_identity") != binding.get("source_identity"):
-        raise AdmissionError("ledger source identity differs")
-    ledger["source_identity"] = binding.get("source_identity")
+    if authorization is not None and authorization.get("schema") == SUCCESSOR_ALLOWANCE_SCHEMA:
+        _validate_successor_ledger(plan, ledger, authorization)
+    else:
+        if ledger["sessions"] and ledger.get("source_identity") != binding.get("source_identity"):
+            raise AdmissionError("ledger source identity differs")
+        ledger["source_identity"] = binding.get("source_identity")
     before = client.snapshot()
     admission = admit(
         plan=plan,
@@ -640,17 +947,21 @@ def run_session(
                 + type(exc).__name__
             )
             spent = None
-        ledger["sessions"].append(
-            {
-                "index": session_index,
-                "name": name,
-                "compute_units_spent": round(spent, 4) if spent is not None else None,
-                "cost_status": "KNOWN" if spent is not None else "UNKNOWN",
-                "committed_items": len(worker.read_checkpoint(local, items)["entries"])
-                if local.exists()
-                else 0,
-            }
-        )
+        ledger_session = {
+            "index": session_index,
+            "name": name,
+            "compute_units_spent": round(spent, 4) if spent is not None else None,
+            "cost_status": "KNOWN" if spent is not None else "UNKNOWN",
+            "committed_items": len(worker.read_checkpoint(local, items)["entries"])
+            if local.exists()
+            else 0,
+        }
+        if ledger.get("schema") == SUCCESSOR_LEDGER_SCHEMA:
+            ledger_session.update(
+                source_identity=binding["source_identity"],
+                source_archive_sha256=binding["source_archive_sha256"],
+            )
+        ledger["sessions"].append(ledger_session)
         temporary = ledger_path.with_suffix(".tmp")
         temporary.write_text(json.dumps(ledger, indent=2, sort_keys=True) + "\n")
         os.replace(temporary, ledger_path)
@@ -976,13 +1287,22 @@ def main() -> int:  # pragma: no cover - thin CLI
         )
         return 0
     plan = build_plan(protocol, preflight, RuntimeBounds())
-    path = V3_DIR / "campaign-allowance.json"
+    successor_path = V3_DIR / "campaign-allowance-v2.json"
+    path = successor_path if successor_path.exists() else V3_DIR / "campaign-allowance.json"
     allowance = json.loads(path.read_text()) if path.exists() else None
     validate_allowance(plan, allowance)
     run_dir = V3_DIR / f"plan-{plan['plan_sha256'][:12]}"
     run_dir.mkdir(parents=True, exist_ok=True)
-    ledger_path = run_dir / "ledger.json"
+    if allowance is not None and allowance["schema"] == SUCCESSOR_ALLOWANCE_SCHEMA:
+        if args.command != "run-session":
+            raise AdmissionError("V2 successor allowance permits only one explicit run-session")
+        ledger_path = _prepare_successor_ledger(plan, allowance, run_dir)
+    else:
+        ledger_path = run_dir / "ledger.json"
     ledger = json.loads(ledger_path.read_text()) if ledger_path.exists() else ledger_new(plan)
+    session_index = len(ledger["sessions"]) + 1
+    if allowance is not None and session_index > allowance["max_sessions"]:
+        raise AdmissionError("campaign allowance session count is exhausted")
     archive, revision = source_archive(run_dir / f"source-{len(ledger['sessions']) + 1:03d}.tar")
     common: dict[str, Any] = {
         "client": ColabCLI(),
@@ -996,7 +1316,7 @@ def main() -> int:  # pragma: no cover - thin CLI
     if args.command == "run-campaign":
         result = run_campaign(**common)
     else:
-        result = run_session(session_index=len(ledger["sessions"]) + 1, **common)
+        result = run_session(session_index=session_index, **common)
     print(json.dumps(result, indent=2, sort_keys=True, default=str))
     return 0
 
