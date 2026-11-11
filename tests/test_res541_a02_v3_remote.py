@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import json
+import tarfile
 from pathlib import Path
 from typing import Any
 
@@ -58,6 +60,26 @@ def test_binding_matches_the_controller_contract(staged: dict[str, Any]) -> None
     assert binding["plan_sha256"] == PLAN["plan_sha256"]
     assert binding["protocol_sha256"] == decision.protocol_sha256()
     assert binding["source_archive_sha256"] == hashlib.sha256(b"archive-bytes").hexdigest()
+
+
+def test_source_archive_extracts_and_rejects_parent_paths(tmp_path: Path) -> None:
+    archive = tmp_path / "source.tar"
+    with tarfile.open(archive, "w") as output:
+        member = tarfile.TarInfo("scripts/__init__.py")
+        member.size = len(b'"""Synthetic source."""\n')
+        output.addfile(member, io.BytesIO(b'"""Synthetic source."""\n'))
+    destination = tmp_path / "extracted"
+    destination.mkdir()
+    remote._safe_extract_source(archive, destination)
+    assert (destination / "scripts/__init__.py").read_text() == '"""Synthetic source."""\n'
+
+    unsafe = tmp_path / "unsafe.tar"
+    with tarfile.open(unsafe, "w") as output:
+        member = tarfile.TarInfo("../escaped.py")
+        member.size = len(b"raise AssertionError")
+        output.addfile(member, io.BytesIO(b"raise AssertionError"))
+    with pytest.raises(ValueError, match="unsafe path"):
+        remote._safe_extract_source(unsafe, destination)
 
 
 @pytest.mark.parametrize(

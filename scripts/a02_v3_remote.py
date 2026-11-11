@@ -22,14 +22,16 @@ import json
 import os
 import re
 import sys
+import tarfile
 from pathlib import Path
 from typing import Any
 
-WORK = Path("/content/a02")
-SOURCE_ARCHIVE = Path("/content/a02-v3-source.tar")
-BINDING_PATH = Path("/content/a02-v3-binding.json")
-CHECKPOINT = Path("/content/a02-v3-checkpoint.jsonl")
-STATUS_PATH = Path("/content/a02-v3-status.json")
+CONTENT_ROOT = Path(os.environ.get("A02_V3_CONTENT_ROOT", "/content"))
+WORK = CONTENT_ROOT / "a02"
+SOURCE_ARCHIVE = CONTENT_ROOT / "a02-v3-source.tar"
+BINDING_PATH = CONTENT_ROOT / "a02-v3-binding.json"
+CHECKPOINT = CONTENT_ROOT / "a02-v3-checkpoint.jsonl"
+STATUS_PATH = CONTENT_ROOT / "a02-v3-status.json"
 SOURCE_DIR = WORK / "v3-source"
 BINDING_SCHEMA = "RES541_A02_V3_REMOTE_BINDING_V1"
 CHILD_MARGIN_SECONDS = 30
@@ -104,20 +106,32 @@ def _child_env(source: Path, stage: str) -> dict[str, str]:
     return env
 
 
+def _safe_extract_source(archive: Path, destination: Path) -> None:
+    # Colab exec runs this file in a kernel, so there is no __file__-based package root yet.
+    with tarfile.open(archive, "r:") as source:
+        members = source.getmembers()
+        if not members or any(
+            Path(member.name).is_absolute() or ".." in Path(member.name).parts for member in members
+        ):
+            raise ValueError("V3 source archive contains an unsafe path")
+        source.extractall(destination, members=members, filter="data")
+
+
 def outer(stage: str, timeout: int, helpers: Any = None) -> int:
     """System-Python entry: environment setup, then a bounded pinned-Python child."""
     binding = load_binding()
     if _sha256_file(SOURCE_ARCHIVE) != binding["source_archive_sha256"]:
         raise ValueError("uploaded V3 source archive hash differs from the binding")
+    if stage == "work":
+        status = json.loads(STATUS_PATH.read_bytes()) if STATUS_PATH.exists() else {}
+        if status.get("status") != "READY" or status.get("plan_sha256") != binding["plan_sha256"]:
+            raise ValueError("V3 work stage requires a READY prepare stage for this binding")
     if helpers is None:  # pragma: no cover - reviewed remote primitives
         if stage == "prepare":
             if SOURCE_DIR.exists():
                 raise ValueError("V3 source directory already exists in this VM")
             SOURCE_DIR.mkdir(parents=True)
-            sys.path[:0] = [str(Path(__file__).resolve().parent.parent)]
-            from scripts import a02_dev_remote
-
-            a02_dev_remote._safe_extract(SOURCE_ARCHIVE, SOURCE_DIR)
+            _safe_extract_source(SOURCE_ARCHIVE, SOURCE_DIR)
         sys.path[:0] = [str(SOURCE_DIR), str(SOURCE_DIR / "src")]
         from scripts import a02_dev_remote, a02_remote
 
@@ -134,10 +148,6 @@ def outer(stage: str, timeout: int, helpers: Any = None) -> int:
     if stage == "prepare":
         _write_status({"status": "PREPARING", "plan_sha256": binding["plan_sha256"]})
         helpers.setup()
-    else:
-        status = json.loads(STATUS_PATH.read_bytes()) if STATUS_PATH.exists() else {}
-        if status.get("status") != "READY" or status.get("plan_sha256") != binding["plan_sha256"]:
-            raise ValueError("V3 work stage requires a READY prepare stage for this binding")
     result = helpers.child(
         [str(WORK / "inference-venv/bin/python"), str(SOURCE_DIR / "scripts/a02_v3_remote.py")],
         cwd=SOURCE_DIR,
