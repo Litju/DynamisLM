@@ -31,7 +31,14 @@ from dynamislm.analysis import (
     AnalysisClass,
 )
 from dynamislm.claims.registry import RES70_CLAIM_POLICIES, ClaimAxis
-from dynamislm.qualification import build_registered_operation_inventory
+from dynamislm.external_load.registry import (
+    EXTERNAL_LOAD_RELATIVE_DISTANCE_OPERATION,
+    EXTERNAL_LOAD_UNIT_NORMALIZATION_OPERATION,
+)
+from dynamislm.longitudinal.statistics.registry import (
+    RES69_ABSOLUTE_CHANGE_OPERATION,
+    RES69_WITHIN_ATHLETE_SD_OPERATION,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 PROFILE_PATH = ROOT / "experiments/a02/development-profile-v3.json"
@@ -53,6 +60,14 @@ EXPOSED_OPERATIONS = (
     "dynamislm:registered-operation:longitudinal-absolute-change-v1@1.0.0",
     "dynamislm:registered-operation:longitudinal-within-athlete-sample-sd-v1@1.0.0",
     "dynamislm:registered-operation:unit-normalization@1.0.0",
+)
+# V1 is fixed to V3's four exposed identities; qualification checks full discovery.
+OPERATION_MANIFEST_VERSION = "RES541_A02_V3_OPERATIONS_V1"
+_OPERATION_REFERENCES = (
+    EXTERNAL_LOAD_RELATIVE_DISTANCE_OPERATION,
+    RES69_ABSOLUTE_CHANGE_OPERATION,
+    RES69_WITHIN_ATHLETE_SD_OPERATION,
+    EXTERNAL_LOAD_UNIT_NORMALIZATION_OPERATION,
 )
 ANALYSIS_CLASSES = tuple(item.value for item in AnalysisClass)
 
@@ -139,7 +154,9 @@ def operation_for(analysis_class: str, observation_count: int) -> str:
 
 def operation_descriptions() -> dict[str, str]:
     """Describe each exposed operation from the inventory and capability registry."""
-    inventory = {entry.operation_id: entry for entry in build_registered_operation_inventory()}
+    if tuple(reference.stable_id for reference in _OPERATION_REFERENCES) != EXPOSED_OPERATIONS:
+        raise ValueError("V3 operation manifest authority differs")
+    inventory = {reference.stable_id: reference for reference in _OPERATION_REFERENCES}
     descriptions = {}
     for operation in EXPOSED_OPERATIONS:
         entry = inventory[operation]
@@ -161,7 +178,7 @@ def operation_descriptions() -> dict[str, str]:
                     else analysis.value
                 )
         descriptions[operation] = (
-            f"{entry.label}. Implements "
+            f"{entry.display_label}. Implements "
             + (", ".join(implements) if implements else "no listed analysis_class")
             + "."
         )

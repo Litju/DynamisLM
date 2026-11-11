@@ -206,3 +206,25 @@ def test_action_prompt_renders_with_fake_tokenizer_and_rejects_drift() -> None:
 
     with pytest.raises(ValueError, match="reproduce tokenizer ids"):
         v3.build_action_prompt(Drifting(), VALID)
+
+
+def test_fixed_manifest_matches_repository_inventory() -> None:
+    from dynamislm.qualification import OperationDisposition, build_registered_operation_inventory
+
+    inventory = {entry.operation_id: entry for entry in build_registered_operation_inventory()}
+    assert len(v3._OPERATION_REFERENCES) == len(set(v3.EXPOSED_OPERATIONS))
+    for reference in v3._OPERATION_REFERENCES:
+        entry = inventory[reference.stable_id]
+        assert entry.label == reference.display_label
+        assert entry.disposition is OperationDisposition.IMPLEMENTED
+    assert v3.build_tool_schema() == v3.tool_schema()
+
+
+def test_fixed_manifest_rejects_missing_and_ambiguous_authority(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    references = v3._OPERATION_REFERENCES
+    for altered in (references[:-1], (*references, references[0]), references[::-1]):
+        monkeypatch.setattr(v3, "_OPERATION_REFERENCES", altered)
+        with pytest.raises(ValueError, match="manifest authority differs"):
+            v3.build_tool_schema()
