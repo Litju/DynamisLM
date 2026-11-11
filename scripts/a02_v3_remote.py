@@ -122,9 +122,11 @@ def outer(stage: str, timeout: int, helpers: Any = None) -> int:
     binding = load_binding()
     if _sha256_file(SOURCE_ARCHIVE) != binding["source_archive_sha256"]:
         raise ValueError("uploaded V3 source archive hash differs from the binding")
+    bootstrap_test = os.environ.get("A02_V3_BOOTSTRAP_TEST") == "1"
     if stage == "work":
         status = json.loads(STATUS_PATH.read_bytes()) if STATUS_PATH.exists() else {}
-        if status.get("status") != "READY" or status.get("plan_sha256") != binding["plan_sha256"]:
+        expected = "BOOTSTRAP_TEST_READY" if bootstrap_test else "READY"
+        if status.get("status") != expected or status.get("plan_sha256") != binding["plan_sha256"]:
             raise ValueError("V3 work stage requires a READY prepare stage for this binding")
     if helpers is None:  # pragma: no cover - reviewed remote primitives
         if stage == "prepare":
@@ -147,7 +149,8 @@ def outer(stage: str, timeout: int, helpers: Any = None) -> int:
         )
     if stage == "prepare":
         _write_status({"status": "PREPARING", "plan_sha256": binding["plan_sha256"]})
-        helpers.setup()
+        if not bootstrap_test:
+            helpers.setup()
     result = helpers.child(
         [str(WORK / "inference-venv/bin/python"), str(SOURCE_DIR / "scripts/a02_v3_remote.py")],
         cwd=SOURCE_DIR,
@@ -181,6 +184,36 @@ def child(stage: str, timeout: int) -> int:  # pragma: no cover - pinned GPU pro
     protocol = decision.load_protocol()
     if decision.protocol_sha256() != binding["protocol_sha256"]:
         raise ValueError("extracted V3 protocol differs from the binding")
+    if os.environ.get("A02_V3_BOOTSTRAP_TEST") == "1":
+        status = json.loads(STATUS_PATH.read_bytes()) if STATUS_PATH.exists() else {}
+        status.update(
+            status="BOOTSTRAP_TEST_READY" if stage == "prepare" else "BOOTSTRAP_TEST_COMPLETE",
+            plan_sha256=binding["plan_sha256"],
+            bootstrap_test={
+                "stage": stage,
+                "python_executable": sys.executable,
+                "cwd": str(Path.cwd()),
+                "pythonpath": os.environ.get("PYTHONPATH"),
+                "child_stage": os.environ.get("A02_V3_CHILD_STAGE"),
+                "source_revision": binding["source_revision"],
+                "source_archive_sha256": _sha256_file(SOURCE_ARCHIVE),
+                "imports": [
+                    name
+                    for name in (
+                        "scripts.a02_dev_runtime",
+                        "scripts.a02_remote",
+                        "scripts.a02_v3_contract",
+                        "scripts.a02_v3_decision",
+                        "scripts.a02_v3_worker",
+                    )
+                    if name in sys.modules
+                ],
+                "torch_imported": "torch" in sys.modules,
+                "transformers_imported": "transformers" in sys.modules,
+            },
+        )
+        _write_status(status)
+        return 0
     profile = v3.load_profile()
     freeze = profile["tokenizer"]["files"]
     model = protocol["candidate_model"]
