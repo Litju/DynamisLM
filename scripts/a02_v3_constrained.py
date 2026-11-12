@@ -260,20 +260,26 @@ class HFIncrementalBackend:
         return [float(v) for v in logp.gather(1, index).squeeze(1).tolist()]
 
 
-def hf_sequence_logprob(model: Any) -> SequenceLogprob:
-    """Uncached reference binding: full re-scoring per option. Used in-run only to verify
-    the cached binding on a sample before any arm result counts."""
+def hf_token_logprobs(model: Any, ids: Sequence[int], start: int) -> list[float]:
+    """Uncached full-context per-token log p(ids[i] | ids[:i]) for every i >= start."""
     import torch
     from torch.nn.attention import SDPBackend, sdpa_kernel
 
+    if not 0 < start < len(ids):
+        raise ValueError("scored span must be non-empty and follow at least one token")
+    tensor = torch.tensor([list(ids[:-1])], device=model.device)
+    with torch.inference_mode(), sdpa_kernel(SDPBackend.MATH):
+        logits = model(tensor, use_cache=False, logits_to_keep=len(ids) - start).logits[0]
+    targets = torch.tensor(list(ids[start:]), device=model.device).unsqueeze(1)
+    picked = torch.log_softmax(logits, dim=-1, dtype=torch.float32).gather(1, targets)
+    return [float(v) for v in picked.squeeze(1).tolist()]
+
+
+def hf_sequence_logprob(model: Any) -> SequenceLogprob:
+    """Uncached reference binding: full re-scoring per option. Used in-run only to verify
+    the cached binding on a sample before any arm result counts."""
+
     def score(ids: Sequence[int], start: int) -> float:
-        if not 0 < start < len(ids):
-            raise ValueError("scored span must be non-empty and follow at least one token")
-        tensor = torch.tensor([list(ids[:-1])], device=model.device)
-        with torch.inference_mode(), sdpa_kernel(SDPBackend.MATH):
-            logits = model(tensor, use_cache=False, logits_to_keep=len(ids) - start).logits[0]
-        targets = torch.tensor(list(ids[start:]), device=model.device).unsqueeze(1)
-        picked = torch.log_softmax(logits, dim=-1, dtype=torch.float32).gather(1, targets)
-        return float(picked.sum(dtype=torch.float64).item())
+        return float(sum(hf_token_logprobs(model, ids, start)))
 
     return score
