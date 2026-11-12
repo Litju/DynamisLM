@@ -23,6 +23,7 @@ import os
 import re
 import sys
 import tarfile
+import time
 from pathlib import Path
 from typing import Any
 
@@ -49,9 +50,13 @@ _BINDING_KEYS = {
 
 def load_binding(path: Path | None = None) -> dict[str, Any]:
     binding = json.loads((BINDING_PATH if path is None else path).read_bytes())
-    if not isinstance(binding, dict) or set(binding) != _BINDING_KEYS:
+    diagnostic = isinstance(binding, dict) and binding.get("schema") == (
+        "RES541_A1_DIAGNOSTIC_REMOTE_BINDING_V1"
+    )
+    keys = _BINDING_KEYS | {"numerical_diagnostic"} if diagnostic else _BINDING_KEYS
+    if not isinstance(binding, dict) or set(binding) != keys:
         raise ValueError("V3 remote binding fields differ")
-    if binding["schema"] != BINDING_SCHEMA:
+    if not diagnostic and binding["schema"] != BINDING_SCHEMA:
         raise ValueError("V3 remote binding schema differs")
     identity = binding["source_identity"]
     if (
@@ -132,6 +137,7 @@ def _safe_extract_source(archive: Path, destination: Path) -> None:
 
 def outer(stage: str, timeout: int, helpers: Any = None) -> int:
     """System-Python entry: environment setup, then a bounded pinned-Python child."""
+    outer_started = time.monotonic()
     binding = load_binding()
     if _sha256_file(SOURCE_ARCHIVE) != binding["source_archive_sha256"]:
         raise ValueError("uploaded V3 source archive hash differs from the binding")
@@ -180,6 +186,8 @@ def outer(stage: str, timeout: int, helpers: Any = None) -> int:
         timeout=max(10, timeout - CHILD_MARGIN_SECONDS),
     )
     status = json.loads(STATUS_PATH.read_bytes()) if STATUS_PATH.exists() else {}
+    if stage == "prepare":
+        status["prepare_seconds"] = time.monotonic() - outer_started
     status.setdefault("stages", []).append(
         {
             "stage": stage,
@@ -196,7 +204,8 @@ def child(stage: str, timeout: int) -> int:  # pragma: no cover - pinned GPU pro
     """Pinned-Python entry: runtime qualification, weights and the resumable worker."""
     import time
 
-    deadline = time.monotonic() + max(10, timeout - 2 * CHILD_MARGIN_SECONDS)
+    started = time.monotonic()
+    deadline = started + max(10, timeout - 2 * CHILD_MARGIN_SECONDS)
     from scripts import a02_dev_runtime, a02_remote
     from scripts import a02_v3_contract as v3
     from scripts import a02_v3_decision as decision
@@ -204,6 +213,10 @@ def child(stage: str, timeout: int) -> int:  # pragma: no cover - pinned GPU pro
 
     binding = load_binding()
     protocol = decision.load_protocol()
+    if "numerical_diagnostic" in binding:
+        from scripts import a02_v3_gpu_diagnostic as diagnostic
+
+        diagnostic.validate_specification(binding["numerical_diagnostic"])
     if decision.protocol_sha256() != binding["protocol_sha256"]:
         raise ValueError("extracted V3 protocol differs from the binding")
     if os.environ.get("A02_V3_BOOTSTRAP_TEST") == "1":
@@ -266,6 +279,7 @@ def child(stage: str, timeout: int) -> int:  # pragma: no cover - pinned GPU pro
                 "snapshot_path": str(path),
                 "weights": weights,
                 "runtime_qualification": qualification,
+                "prepare_seconds": time.monotonic() - started,
             }
         )
         return 0
@@ -277,6 +291,29 @@ def child(stage: str, timeout: int) -> int:  # pragma: no cover - pinned GPU pro
     for name, digest in freeze.items():
         if _sha256_file(snapshot / name) != digest:
             raise ValueError(f"V3 tokenizer file differs: {name}")
+    if "numerical_diagnostic" in binding:
+        report_path = CONTENT_ROOT / "a02-v3-diagnostic.jsonl"
+        if report_path.exists():
+            raise ValueError("diagnostic evidence already exists; no retry")
+
+        def emit(value: dict[str, Any]) -> None:
+            with report_path.open("a", encoding="utf-8") as stream:
+                stream.write(json.dumps(value, sort_keys=True) + "\n")
+                stream.flush()
+                os.fsync(stream.fileno())
+
+        result = diagnostic.run(
+            snapshot,
+            deadline=deadline,
+            emit=emit,
+            prepare_seconds=status["prepare_seconds"] + time.monotonic() - started,
+        )
+        status.update(
+            status="DIAGNOSTIC_COMPLETE" if result["passed"] else "DIAGNOSTIC_FAILED",
+            diagnostic_sha256=_sha256_file(report_path),
+        )
+        _write_status(status)
+        return 0 if result["passed"] else 3
     from transformers import AutoModelForCausalLM, AutoTokenizer  # type: ignore[import-not-found]
 
     tokenizer = AutoTokenizer.from_pretrained(str(snapshot), local_files_only=True)

@@ -217,7 +217,7 @@ def realistic_reports(realistic_pair: tuple[Any, Any]) -> tuple[Any, Any]:
             sort_keys=True,
         )
     )
-    return reports
+    return reports[0], reports[1]
 
 
 def test_fp16_reproduces_session_failure_class_while_fp32_passes(

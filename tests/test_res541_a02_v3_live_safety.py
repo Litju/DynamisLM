@@ -14,8 +14,11 @@ import pytest
 from scripts import a02_v3_execution as execution
 
 
+@pytest.mark.parametrize("diagnostic", [False, True])
 @pytest.mark.parametrize("exit_kind", ["death", "disconnect"])
-def test_independent_watchdog_survives_parent_death(tmp_path: Path, exit_kind: str) -> None:
+def test_independent_watchdog_survives_parent_death(
+    tmp_path: Path, exit_kind: str, diagnostic: bool
+) -> None:
     cli = tmp_path / "colab"
     log = tmp_path / "calls"
     cli.write_text('#!/bin/sh\nprintf "%s\\n" "$*" >> "$TEST_CALLS"\n')
@@ -32,6 +35,11 @@ if sys.argv[2] == "death":
     os.kill(os.getpid(), signal.SIGKILL)
 client.finish_watchdog(watchdog, False)
 """
+    if diagnostic:
+        script = script.replace(
+            "from scripts.a02_v3_execution import ColabCLI",
+            "from scripts.a02_v3_diagnostic_session import DiagnosticCLI as ColabCLI",
+        )
     env = {
         **os.environ,
         "PATH": str(tmp_path) + os.pathsep + os.environ["PATH"],
@@ -132,3 +140,50 @@ def test_verification_exception_keeps_available_inventory(monkeypatch: Any) -> N
     assert client.verify_absent("target") is False
     assert client.teardown_receipt["sessions"]["stdout"] == "saved CLI inventory"
     assert client.teardown_receipt["assignments"]["error_type"] == "RuntimeError"
+
+
+def test_diagnostic_watchdog_uses_600_second_deadline(tmp_path: Path) -> None:
+    cli = tmp_path / "colab"
+    log = tmp_path / "deadline-calls"
+    cli.write_text('#!/bin/sh\nprintf "%s\\n" "$*" >> "$TEST_CALLS"\n')
+    cli.chmod(0o755)
+    receipt = tmp_path / "deadline-watchdog.json"
+    script = """
+import runpy, sys
+from scripts import a02_execution
+
+def expired(read, write, error, timeout):
+    assert timeout == 600
+    return [], [], []
+
+a02_execution.select.select = expired
+sys.argv = ["diagnostic", "watchdog", "exact-diagnostic-target", sys.argv[1]]
+runpy.run_module("scripts.a02_v3_diagnostic_session", run_name="__main__")
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", script, str(receipt)],
+        cwd=execution.ROOT,
+        env={
+            **os.environ,
+            "PATH": str(tmp_path) + os.pathsep + os.environ["PATH"],
+            "TEST_CALLS": str(log),
+        },
+        capture_output=True,
+        text=True,
+        timeout=20,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "READY"
+    assert "--auth=oauth2 stop --session exact-diagnostic-target" in log.read_text()
+    assert json.loads(receipt.read_bytes())["phase"] == "VERIFY_RETURNED"
+
+
+def test_diagnostic_watchdog_disarms_after_verified_teardown(tmp_path: Path) -> None:
+    from scripts.a02_v3_diagnostic_session import DiagnosticCLI
+
+    client = DiagnosticCLI()
+    receipt = tmp_path / "disarm.json"
+    watchdog = client.start_watchdog("synthetic-no-provider-target", receipt)
+    assert json.loads(receipt.read_bytes())["phase"] == "READY"
+    client.finish_watchdog(watchdog, True)
+    assert json.loads(receipt.read_bytes())["phase"] == "DISARMED"

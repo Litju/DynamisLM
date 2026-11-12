@@ -56,12 +56,17 @@ def test_loaded_precision_and_both_scorers(tmp_path: Any, selected: str) -> None
     )
     torch.manual_seed(541)
     lm = transformers.SmolLM3ForCausalLM(config).eval()
+    lm.to(torch.bfloat16)
+    stored = lm.model.embed_tokens.weight.detach().float().clone()
     lm.save_pretrained(tmp_path)
     # CPU device_map loading needs the same pinned accelerate present in the remote environment.
     if selected == "float32":
         pytest.importorskip("accelerate")
     model = precision.load_model(tmp_path, selected, device="cpu")
     assert precision.verify_parameters(model, selected)["parameter_dtypes"] == [f"torch.{selected}"]
+    assert torch.equal(
+        model.model.embed_tokens.weight.float(), stored.to(getattr(torch, selected)).float()
+    )
     audit = precision.PrecisionAudit(model, selected)
     observed = []
     hook = model.lm_head.register_forward_hook(lambda m, a, out: observed.append(str(out.dtype)))

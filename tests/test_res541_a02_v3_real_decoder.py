@@ -324,3 +324,49 @@ def test_hf_worker_backend_runs_resumable_worker_end_to_end(
     constrained_record = entries[2]["record"]
     example = decision.heldout_examples(protocol)[0]
     assert v3.parse_action(constrained_record["raw_output"], v3.observation_ids(example["request"]))
+
+
+def test_instrumented_three_path_diagnostic_and_deadline(tokenizer: Any, model: Any) -> None:
+    from scripts import a02_v3_numerics as numerics
+
+    request = CASES["a02-missing-evidence"]["request"]
+    encode = _encode(tokenizer)
+    prompt = encode("<system>" + v3.user_message(request) + "<assistant>")
+    evidence: list[dict[str, Any]] = []
+    checks = []
+    report = numerics.three_path(
+        model=model,
+        request=request,
+        prompt_ids=prompt,
+        encode=encode,
+        before_call=lambda: checks.append(True),
+        emit=evidence.append,
+        trace_layers=True,
+    )
+    assert report["complete"] and report["winners_agree"]
+    assert report["summary"]["A_vs_C"]["candidates_above_tolerance"] == 0
+    assert report["layer_trace"]["projection"]["logit_dtype"] == "torch.float32"
+    assert set(report["layer_trace"]["body"]) == {"A_vs_B", "B_vs_C", "A_vs_C"}
+    assert all(t > 0 for t in report["timing_seconds"].values())
+    assert len(checks) >= 3 * report["scorer_calls"]
+    assert {e["phase"] for e in evidence} == {"PATH_A", "PATH_C", "CANDIDATE_COMPLETE"}
+    for candidate in report["candidates"]:
+        start, end = candidate["scored_suffix"]
+        assert candidate["input_token_ids"][start:] == candidate["target_token_ids"]
+        assert candidate["predictor_positions"] == [start - 1, end - 2]
+    partial: list[dict[str, Any]] = []
+
+    def deadline() -> None:
+        if len(partial) == 2:
+            raise TimeoutError("synthetic deadline")
+
+    with pytest.raises(TimeoutError, match="synthetic deadline"):
+        numerics.three_path(
+            model=model,
+            request=request,
+            prompt_ids=prompt,
+            encode=encode,
+            before_call=deadline,
+            emit=partial.append,
+        )
+    assert len(partial) == 2 and all(e["phase"] == "PATH_C" for e in partial)
