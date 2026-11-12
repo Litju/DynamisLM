@@ -15,7 +15,7 @@ from scripts import a02_v3_contract as v3
 from scripts import a02_v3_decision as decision
 from scripts import a02_v3_execution as execution
 
-from test_res541_a02_v3_execution import NOW, PLAN, FakeColab, _allowance
+from test_res541_a02_v3_execution import NOW, PLAN, PROTOCOL, FakeColab, _allowance
 
 
 class SubprocessPrepare(FakeColab):
@@ -161,7 +161,7 @@ def test_ready_status_requires_complete_bound_preparation(tmp_path: Path, fault:
     else:
         status["weights"]["support_files"] = {}
     with pytest.raises(ValueError):
-        execution.validate_prepared_status(status, binding)
+        execution.validate_prepared_status(status, binding, PROTOCOL)
 
 
 def test_prepare_window_uses_censored_time_and_session_capacity() -> None:

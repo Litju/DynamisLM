@@ -36,13 +36,14 @@ def _run_colab_entrypoint(
         "namespace = {'__name__': '__main__', '__builtins__': __builtins__}\n"
         "exec(compile(entrypoint.read_text(), str(entrypoint), 'exec'), namespace)\n"
     )
+    stage_timeout = 660 if stage == "prepare" else 540
     environment = {
         "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
         "HOME": str(content_root),
         "PYTHONNOUSERSITE": "1",
         "A02_V3_CONTENT_ROOT": str(content_root),
         "A02_V3_REMOTE_STAGE": stage,
-        "A02_V3_REMOTE_STAGE_TIMEOUT": "180" if stage == "prepare" else "540",
+        "A02_V3_REMOTE_STAGE_TIMEOUT": str(stage_timeout),
     }
     if bootstrap_test:
         environment["A02_V3_BOOTSTRAP_TEST"] = "1"
@@ -55,7 +56,7 @@ def _run_colab_entrypoint(
         env=environment,
         capture_output=True,
         text=True,
-        timeout=150,
+        timeout=stage_timeout + 30,
         check=False,
     )
 

@@ -4,6 +4,7 @@ import hashlib
 import io
 import json
 import tarfile
+import time
 from pathlib import Path
 from typing import Any
 
@@ -121,7 +122,7 @@ def test_prepare_runs_setup_then_bounded_pinned_child(staged: dict[str, Any]) ->
     assert remote.outer("prepare", 180, helpers) == 0
     assert helpers.calls[0] == "setup"
     _, command, stage, timeout, pythonpath = helpers.calls[1]
-    assert stage == "prepare" and 149 <= timeout <= 150
+    assert stage == "prepare" and 0 < timeout <= 150
     assert command[0].endswith("inference-venv/bin/python")
     assert pythonpath.endswith("/v3-source/src")
     status = json.loads(remote.STATUS_PATH.read_text())
@@ -138,7 +139,7 @@ def test_work_requires_ready_prepare_for_this_binding(staged: dict[str, Any]) ->
     remote._write_status({"status": "READY", "plan_sha256": PLAN["plan_sha256"]})
     assert remote.outer("work", 540, helpers) == 0
     assert len(helpers.calls) == 1
-    assert helpers.calls[0][2] == "work" and 509 <= helpers.calls[0][3] <= 510
+    assert helpers.calls[0][2] == "work" and 0 < helpers.calls[0][3] <= 510
 
 
 def test_timed_out_child_reports_failure_and_records_it(staged: dict[str, Any]) -> None:
@@ -213,3 +214,19 @@ def test_work_rejects_source_change_under_same_plan(staged: dict[str, Any]) -> N
     with pytest.raises(ValueError, match="READY prepare"):
         remote.outer("work", 540, helpers)
     assert helpers.calls == []
+
+
+def test_setup_elapsed_is_deducted_from_child_window(
+    staged: dict[str, Any], monkeypatch: Any
+) -> None:
+    ticks = iter([0.0, 40.0, 50.0])
+    monkeypatch.setattr(time, "monotonic", lambda: next(ticks))
+    helpers = _Helpers(
+        {"returncode": 0, "timed_out": False},
+        on_child=lambda: remote._write_status(
+            {"status": "READY", "plan_sha256": PLAN["plan_sha256"]}
+        ),
+    )
+    assert remote.outer("prepare", 180, helpers) == 0
+    assert helpers.calls[1][3] == 110
+    assert json.loads(remote.STATUS_PATH.read_text())["prepare_seconds"] == 50

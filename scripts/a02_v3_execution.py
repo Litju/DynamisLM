@@ -660,7 +660,9 @@ def admit(
 # --------------------------------------------------------------------------- checkpoint merge
 
 
-def validate_prepared_status(status: dict[str, Any], binding: dict[str, Any]) -> None:
+def validate_prepared_status(
+    status: dict[str, Any], binding: dict[str, Any], protocol: dict[str, Any]
+) -> None:
     """CLI exit zero cannot attest to a completed, bound preparation child."""
     stages = status.get("stages", [])
     if (
@@ -676,7 +678,7 @@ def validate_prepared_status(status: dict[str, Any], binding: dict[str, Any]) ->
         raise ValueError("preparation has no matching qualified READY child status")
     weights = status.get("weights", {})
     if (
-        weights.get("model_revision") != decision.load_protocol()["candidate_model"]["revision"]
+        weights.get("model_revision") != protocol["candidate_model"]["revision"]
         or not weights.get("weight_files")
         or not status.get("snapshot_path")
         or any(
@@ -915,7 +917,7 @@ def run_session(
         state["prepare_status"] = prepared
         if state["prepare"].get("returncode") != 0 or state["prepare"].get("timed_out"):
             raise RuntimeError("preparation transport or CLI failed; no work")
-        validate_prepared_status(prepared, {**binding, "session_index": session_index})
+        validate_prepared_status(prepared, {**binding, "session_index": session_index}, protocol)
         if prepared.get("checkpoint_sha256") != (
             v3.sha256(local.read_bytes()) if local.exists() else None
         ):
