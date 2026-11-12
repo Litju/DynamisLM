@@ -194,7 +194,16 @@ def test_missing_watchdog_prevents_allocation(bound: Any) -> None:
 
 
 @pytest.mark.parametrize(
-    "fault", ["targets_match", "cache_state_consistent", "kv_dtype", "nan", "over_tolerance"]
+    "fault",
+    [
+        "targets_match",
+        "cache_state_consistent",
+        "kv_dtype",
+        "fresh_kv_dtype",
+        "candidate_score",
+        "nan",
+        "over_tolerance",
+    ],
 )
 def test_equal_scores_cannot_bypass_structural_or_precision_gates(fault: str) -> None:
     row: dict[str, Any] = {
@@ -214,11 +223,18 @@ def test_equal_scores_cannot_bypass_structural_or_precision_gates(fault: str) ->
             for pair in ("A_vs_B", "B_vs_C", "A_vs_C")
         },
     }
+    row["candidates"][0].update(
+        {pair: {"abs_sum_difference": 0.0} for pair in ("A_vs_B", "B_vs_C", "A_vs_C")}
+    )
     diagnostic.validate_row(row)
     if fault in {"targets_match", "cache_state_consistent"}:
         row["candidates"][0][fault] = False
     elif fault == "kv_dtype":
         row["candidates"][0]["c_call"]["kv_dtype"] = "torch.float16"
+    elif fault == "fresh_kv_dtype":
+        row["candidates"][0]["path_states"]["B"][0]["kv_dtype"] = "torch.float16"
+    elif fault == "candidate_score":
+        row["candidates"][0]["A_vs_C"]["abs_sum_difference"] = 0.002
     else:
         row["summary"]["A_vs_C"]["max_abs_score_difference"] = (
             float("nan") if fault == "nan" else 0.00101
@@ -227,7 +243,9 @@ def test_equal_scores_cannot_bypass_structural_or_precision_gates(fault: str) ->
         diagnostic.validate_row(row)
 
 
-@pytest.mark.parametrize("fault", [None, "digest", "binding", "failed", "missing"])
+@pytest.mark.parametrize(
+    "fault", [None, "digest", "binding", "failed", "missing", "unexpected_usage"]
+)
 def test_source_bound_report_recovery(bound: Any, fault: str | None) -> None:
     import json
 
@@ -243,6 +261,13 @@ def test_source_bound_report_recovery(bound: Any, fault: str | None) -> None:
 
         def exec_stage(self, name: str, stage: str, timeout: int) -> dict[str, Any]:
             return {"returncode": 0, "timed_out": False}
+
+        def stop(self, name: str) -> bool:
+            stopped = super().stop(name)
+            if fault == "unexpected_usage":
+                self.quota["usage_rate_cu_per_hour"] = 1.0
+                self.quota["active_sessions"] = [{"name": "unrelated"}]
+            return stopped
 
         def download(self, name: str, remote: str, local: Path) -> bool:
             evidence = json.dumps({"phase": "FINAL", "passed": fault != "failed"}) + "\n"
@@ -275,7 +300,9 @@ def test_source_bound_report_recovery(bound: Any, fault: str | None) -> None:
     )
     assert result["passed"] is (fault is None)
     assert result["target_absent"] is True
-    if fault is not None:
+    if fault == "unexpected_usage":
+        assert "cost_error" in result
+    elif fault is not None:
         assert "evidence_error" in result
 
 

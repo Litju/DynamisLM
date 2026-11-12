@@ -229,6 +229,10 @@ def run(
         try:
             after = client.snapshot()
             state["quota_after"] = after
+            if after["usage_rate_cu_per_hour"] != 0 or after["active_sessions"]:
+                raise ValueError(
+                    "unexpected active usage after teardown; cost attribution uncertain"
+                )
             delta = before["balance"] - after["balance"]
             if not state.get("target_absent") or not math.isfinite(delta) or delta < 0:
                 raise ValueError("cost or teardown is uncertain")

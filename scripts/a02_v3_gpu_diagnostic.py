@@ -72,6 +72,24 @@ def memory(torch: Any) -> dict[str, int]:
     }
 
 
+def validate_candidate(candidate: dict[str, Any]) -> None:
+    if (
+        not candidate["targets_match"]
+        or not candidate["cache_state_consistent"]
+        or candidate["c_call"]["kv_dtype"] != "torch.float32"
+        or any(step["kv_dtype"] != "torch.float32" for step in candidate["path_states"]["B"])
+    ):
+        raise ValueError("scored targets/cache state/precision differ")
+    for name in ("A_vs_B", "B_vs_C", "A_vs_C"):
+        difference = candidate[name]["abs_sum_difference"]
+        if (
+            not math.isfinite(difference)
+            or difference < 0
+            or difference > worker.QUALIFICATION_TOLERANCE_NATS
+        ):
+            raise ValueError("FP32 numerical qualification failed; stop without retry")
+
+
 def validate_row(row: dict[str, Any]) -> None:
     if (
         row["complete"] is not True
@@ -81,13 +99,7 @@ def validate_row(row: dict[str, Any]) -> None:
     ):
         raise ValueError("incomplete diagnostic or candidate ranking disagreement")
     for candidate in row["candidates"]:
-        if (
-            not candidate["targets_match"]
-            or not candidate["cache_state_consistent"]
-            or candidate["c_call"]["kv_dtype"] != "torch.float32"
-            or any(step["kv_dtype"] != "torch.float32" for step in candidate["path_states"]["B"])
-        ):
-            raise ValueError("scored targets/cache state/precision differ")
+        validate_candidate(candidate)
     for name in ("A_vs_B", "B_vs_C", "A_vs_C"):
         pair = row["summary"][name]
         difference = pair["max_abs_score_difference"]
@@ -191,6 +203,15 @@ def run(
         if time.monotonic() >= deadline:
             raise TimeoutError("diagnostic work deadline reached; no retry")
 
+    def progress(value: dict[str, Any]) -> None:
+        emit(value)
+        if value.get("phase") in {"PATH_A", "PATH_C"} and any(
+            not math.isfinite(score) for score in value["token_logprobs"]
+        ):
+            raise ValueError("non-finite likelihood; stop without retry")
+        if value.get("phase") == "CANDIDATE_COMPLETE":
+            validate_candidate(value)
+
     report: dict[str, Any] = {
         "schema": SCHEMA,
         "specification": specification(),
@@ -234,7 +255,7 @@ def run(
                 prompt_ids=prompt["prompt_token_ids"],
                 encode=lambda text: list(tokenizer.encode(text, add_special_tokens=False)),
                 before_call=check,
-                emit=emit,
+                emit=progress,
                 trace_layers=not report["rows"],
             )
             row["example_id"] = decision.example_id(example)
