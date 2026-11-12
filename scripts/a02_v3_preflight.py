@@ -91,7 +91,7 @@ class _CountingBackend:
 
     def logprobs(self, keep: int, new_ids: Any, targets: Any) -> list[float]:
         self.cache = self.cache[:keep] + list(new_ids)
-        return [0.0] * len(new_ids)
+        return [0.0] * len(targets)
 
 
 def _gold_path_scoring_work(
