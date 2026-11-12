@@ -174,3 +174,42 @@ def test_prepare_window_uses_censored_time_and_session_capacity() -> None:
             execution.derive_preparation_seconds(observations, bounds)
     with pytest.raises(ValueError, match="cannot fit"):
         execution.derive_preparation_seconds([1000], bounds)
+
+
+@pytest.mark.parametrize("mode", ["timeout", "start", "returned"])
+def test_real_command_adapter_recovers_sanitized_transport_evidence(
+    tmp_path: Path, monkeypatch: Any, mode: str
+) -> None:
+    # Exercise _run_colab's real exception wrapper, rather than faking a direct TimeoutExpired.
+    client = execution.ColabCLI()
+    original = subprocess.run
+    script = (
+        'import sys,time; print("token=private-token '
+        'https://example.invalid/a?sig=private-signature",file=sys.stderr,flush=True); '
+        + ("time.sleep(5)" if mode == "timeout" else "sys.exit(7)")
+    )
+
+    def run(command: Any, **kwargs: Any) -> Any:
+        target = (
+            [str(tmp_path / "no-such-cli")] if mode == "start" else [sys.executable, "-c", script]
+        )
+        return original(
+            target, cwd=tmp_path, env=kwargs["env"], capture_output=True, text=True, timeout=0.2
+        )
+
+    monkeypatch.setattr(subprocess, "run", run)
+    result = client.exec_stage("synthetic-no-gpu", "prepare", 180)
+    assert result["returncode"] == (7 if mode == "returned" else None)
+    assert result["timed_out"] is (mode == "timeout")
+    assert (
+        result["failure_category"]
+        == {
+            "timeout": "CLI_TRANSPORT_TIMEOUT",
+            "start": "CLI_TRANSPORT_START_FAILURE",
+            "returned": "CLI_OR_TRANSPORT_EXIT",
+        }[mode]
+    )
+    assert "private-token" not in json.dumps(result)
+    assert "private-signature" not in json.dumps(result)
+    if mode != "start":
+        assert "[URL_REDACTED]" in result["stderr_tail"]

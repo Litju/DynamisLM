@@ -1285,7 +1285,7 @@ class ColabCLI:  # pragma: no cover - provider commands, used only in an authori
         return self._run(command, timeout=self._timeouts.UPLOAD_TIMEOUT_SECONDS).returncode == 0
 
     def exec_stage(self, name: str, stage: str, timeout: int) -> dict[str, Any]:
-        from scripts.a02_dev_remote import _safe_excerpt
+        from scripts.a02_dev_execution import ColabCommandError, _safe_command_excerpt
 
         command = [
             "colab", "--auth=oauth2", "exec", "--session", name,
@@ -1296,20 +1296,22 @@ class ColabCLI:  # pragma: no cover - provider commands, used only in an authori
         ]  # fmt: skip
         try:
             result = self._run(command, timeout=timeout + 30)
-        except subprocess.TimeoutExpired as exc:
+        except ColabCommandError as exc:
             return {
                 "returncode": None,
-                "timed_out": True,
-                "failure_category": "CLI_TRANSPORT_TIMEOUT",
-                "stdout_tail": _safe_excerpt(exc.stdout),
-                "stderr_tail": _safe_excerpt(exc.stderr),
+                "timed_out": exc.timed_out,
+                "failure_category": "CLI_TRANSPORT_TIMEOUT"
+                if exc.timed_out
+                else "CLI_TRANSPORT_START_FAILURE",
+                "stdout_tail": exc.stdout_tail,
+                "stderr_tail": exc.stderr_tail,
             }
         return {
             "returncode": result.returncode,
             "timed_out": False,
             "failure_category": "CLI_OR_TRANSPORT_EXIT" if result.returncode else None,
-            "stdout_tail": _safe_excerpt(result.stdout),
-            "stderr_tail": _safe_excerpt(result.stderr),
+            "stdout_tail": _safe_command_excerpt(result.stdout),
+            "stderr_tail": _safe_command_excerpt(result.stderr),
         }
 
     def download(self, name: str, remote: str, local: Path) -> bool:
