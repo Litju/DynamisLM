@@ -231,11 +231,9 @@ class _ToyBackend:
     def logprobs(self, keep: int, new_ids: Sequence[int], targets: Sequence[int]) -> list[float]:
         assert 0 <= keep <= len(self.cache)
         self.cache = self.cache[:keep]
-        values = []
-        for token, target in zip(new_ids, targets, strict=True):
-            self.cache.append(token)
-            values.append(self.lm.logp(self.cache, target))
-        return values
+        self.cache.extend(new_ids)
+        start = len(self.cache) - len(targets) + 1
+        return [self.lm.logp(self.cache[: start + j], target) for j, target in enumerate(targets)]
 
 
 def test_cached_scorer_equals_full_rescoring_and_feeds_far_fewer_tokens() -> None:

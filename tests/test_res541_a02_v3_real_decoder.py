@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Sequence
+from copy import deepcopy
 from typing import Any
 
 import pytest
@@ -141,6 +142,60 @@ def test_cached_scorer_survives_divergent_prefix_on_real_model(tokenizer: Any, m
     reference = constrained.hf_sequence_logprob(model)
     for ids, start in ((a, 70), (b, 40), (a, 50), (a, 85)):
         assert scorer(ids, start) == pytest.approx(reference(ids, start), abs=5e-4)
+
+
+def test_half_precision_scores_use_math_attention_and_only_scored_logits(model: Any) -> None:
+    from torch.nn.attention import SDPBackend, sdpa_kernel  # type: ignore[import-not-found]
+
+    lm = deepcopy(model).to(torch.float16)
+    ids = [i % lm.config.vocab_size for i in range(120)]
+    calls = []
+
+    def observe(module: Any, args: Any, kwargs: Any, output: Any) -> None:
+        calls.append(
+            {
+                "input_tokens": args[0].shape[1],
+                "logit_tokens": output.logits.shape[1],
+                "use_cache": kwargs["use_cache"],
+                "math": torch.backends.cuda.math_sdp_enabled(),
+                "flash": torch.backends.cuda.flash_sdp_enabled(),
+                "efficient": torch.backends.cuda.mem_efficient_sdp_enabled(),
+            }
+        )
+
+    hook = lm.register_forward_hook(observe, with_kwargs=True)
+    try:
+        reference = constrained.hf_sequence_logprob(lm)(ids, 100)
+        cached = constrained.CachedSequenceLogprob(constrained.HFIncrementalBackend(lm))
+        assert cached(ids, 100) == pytest.approx(reference, abs=1e-3)
+        changed = [*ids[:-3], 3, 2, 1]
+        assert cached(changed, 100) == pytest.approx(
+            constrained.hf_sequence_logprob(lm)(changed, 100), abs=1e-3
+        )
+    finally:
+        hook.remove()
+    assert all(c["logit_tokens"] == 20 for c in calls)
+    assert all(c["math"] and not c["flash"] and not c["efficient"] for c in calls)
+    assert calls[0]["input_tokens"] == 119 and calls[0]["use_cache"] is False
+    assert calls[1]["input_tokens"] == 119 and calls[1]["use_cache"] is True
+    assert calls[2]["input_tokens"] < 119 and calls[2]["use_cache"] is True
+    # Independently score the complete context and vocabulary to check suffix indexing.
+    with torch.inference_mode(), sdpa_kernel(SDPBackend.MATH):
+        logits = lm(torch.tensor([ids]), use_cache=False).logits[0, :-1].float()
+    full = torch.log_softmax(logits, dim=-1).gather(1, torch.tensor(ids[1:]).unsqueeze(1))
+    assert reference == pytest.approx(float(full[99:].sum(dtype=torch.float64)), abs=1e-3)
+
+
+@pytest.mark.parametrize("start", [-1, 0, 3])
+def test_reference_rejects_unconditioned_or_empty_spans(model: Any, start: int) -> None:
+    with pytest.raises(ValueError, match="scored span"):
+        constrained.hf_sequence_logprob(model)([1, 2, 3], start)
+
+
+@pytest.mark.parametrize("targets", [[], [1, 2, 3]])
+def test_incremental_backend_rejects_targets_outside_fed_suffix(model: Any, targets: Any) -> None:
+    with pytest.raises(ValueError, match="scored targets"):
+        constrained.HFIncrementalBackend(model).logprobs(0, [1, 2], targets)
 
 
 def test_explicit_attention_mask_and_cache_position_do_not_change_scores(

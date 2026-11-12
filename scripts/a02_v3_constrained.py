@@ -194,7 +194,7 @@ def max_scorer_calls(request: dict[str, Any]) -> int:
 class IncrementalBackend(Protocol):
     def logprobs(self, keep: int, new_ids: Sequence[int], targets: Sequence[int]) -> list[float]:
         """Crop the cache to ``keep`` tokens, feed ``new_ids``, and return log p(targets[j])
-        at each fed position j. The cache then holds ``keep + len(new_ids)`` tokens."""
+        at the final ``len(targets)`` fed positions. Cache all ``keep + len(new_ids)`` tokens."""
         ...
 
 
@@ -218,13 +218,13 @@ class CachedSequenceLogprob:
         limit = min(len(self.cached), start - 1)
         while common < limit and self.cached[common] == ids[common]:
             common += 1
-        feed, targets = ids[common:-1], ids[common + 1 :]
+        feed, targets = ids[common:-1], ids[start:]
         values = self.backend.logprobs(common, feed, targets)
-        if len(values) != len(feed):
+        if len(values) != len(targets):
             raise ValueError("backend returned a misaligned log-probability vector")
         self.fed_tokens += len(feed)
         self.cached = ids[:-1]
-        return float(sum(values[start - 1 - common :]))
+        return float(sum(values))
 
 
 class HFIncrementalBackend:
@@ -240,16 +240,22 @@ class HFIncrementalBackend:
 
     def logprobs(self, keep: int, new_ids: Sequence[int], targets: Sequence[int]) -> list[float]:
         import torch  # type: ignore[import-not-found]
+        from torch.nn.attention import SDPBackend, sdpa_kernel  # type: ignore[import-not-found]
 
+        if not 0 < len(targets) <= len(new_ids):
+            raise ValueError("scored targets must be a non-empty suffix of the fed positions")
         if keep == 0:
             self.cache = None
         elif self.cache is not None:
             self.cache.crop(keep)
         tensor = torch.tensor([list(new_ids)], device=self.model.device)
-        with torch.inference_mode():
-            out = self.model(tensor, past_key_values=self.cache, use_cache=True)
+        # FP16 fused attention takes different numerical paths for prefill and cached tails.
+        with torch.inference_mode(), sdpa_kernel(SDPBackend.MATH):
+            out = self.model(
+                tensor, past_key_values=self.cache, use_cache=True, logits_to_keep=len(targets)
+            )
         self.cache = out.past_key_values
-        logp = torch.log_softmax(out.logits[0].float(), dim=-1)
+        logp = torch.log_softmax(out.logits[0], dim=-1, dtype=torch.float32)
         index = torch.tensor(list(targets), device=logp.device).unsqueeze(1)
         return [float(v) for v in logp.gather(1, index).squeeze(1).tolist()]
 
@@ -258,12 +264,16 @@ def hf_sequence_logprob(model: Any) -> SequenceLogprob:
     """Uncached reference binding: full re-scoring per option. Used in-run only to verify
     the cached binding on a sample before any arm result counts."""
     import torch
+    from torch.nn.attention import SDPBackend, sdpa_kernel
 
     def score(ids: Sequence[int], start: int) -> float:
-        tensor = torch.tensor([list(ids)], device=model.device)
-        with torch.inference_mode():
-            logits = model(tensor).logits[0, :-1].float()
-        picked = torch.log_softmax(logits, dim=-1).gather(1, tensor[0, 1:].unsqueeze(1))
-        return float(picked.squeeze(1)[start - 1 :].sum().item())
+        if not 0 < start < len(ids):
+            raise ValueError("scored span must be non-empty and follow at least one token")
+        tensor = torch.tensor([list(ids[:-1])], device=model.device)
+        with torch.inference_mode(), sdpa_kernel(SDPBackend.MATH):
+            logits = model(tensor, use_cache=False, logits_to_keep=len(ids) - start).logits[0]
+        targets = torch.tensor(list(ids[start:]), device=model.device).unsqueeze(1)
+        picked = torch.log_softmax(logits, dim=-1, dtype=torch.float32).gather(1, targets)
+        return float(picked.sum(dtype=torch.float64).item())
 
     return score
