@@ -7,10 +7,13 @@ continue; any anomaly or unknown cost stops the pipeline. There is no diagnostic
 from __future__ import annotations
 
 import argparse
+import ast
 import json
 import math
 import os
+import subprocess
 import time
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -29,6 +32,148 @@ ROOT = execution.E_ROOT / "a02/owner-automatic-v1"
 TOTAL_CAP_CU = 50.0
 TRAINING_SECONDS = 7200
 TRAINING_CLEANUP_SECONDS = 600
+
+
+def source_archive_path(directory: Path, grant: dict[str, Any]) -> Path:
+    name: str = grant.get("source_archive_name", "source.tar")
+    if name not in {"source.tar", "source-native-cache.tar"}:
+        raise ValueError("unknown source archive policy")
+    return directory / name
+
+
+def cache_compatibility(predecessor: str) -> dict[str, str]:
+    paths = [
+        "scripts/a02_v3_constrained.py",
+        "scripts/a02_v3_numerics.py",
+        "scripts/a02_v3_precision.py",
+        "scripts/a02_v3_gpu_diagnostic.py",
+        "scripts/a02_v3_contract.py",
+        "scripts/a02_v3_synthetic.py",
+        "scripts/a02_v3_decision.py",
+        "scripts/a02_v3_gold.py",
+        "scripts/a02_v3_score.py",
+        "experiments/a02/model-comparison-protocol-v3.json",
+        "experiments/a02/development-profile-v3.json",
+        "experiments/a02/numerical-amendment-a1.md",
+        "experiments/a0/requirements-colab.txt",
+        "pyproject.toml",
+        "uv.lock",
+        "scripts/a02_dev_runtime.py",
+        "scripts/a02_remote.py",
+    ]
+    hashes = {}
+    for path in paths:
+        old = subprocess.check_output(["git", "show", f"{predecessor}:{path}"], cwd=execution.ROOT)
+        current = (execution.ROOT / path).read_bytes()
+        if old != current:
+            raise ValueError(f"qualified numerical/model/data source changed: {path}")
+        hashes[path] = v3.sha256(current)
+
+    def normalized(data: bytes) -> str:
+        tree = ast.parse(data)
+        for node in tree.body:
+            if isinstance(node, ast.ClassDef) and node.name == "HFWorkerBackend":
+                node.body = [
+                    entry
+                    for entry in node.body
+                    if not (
+                        isinstance(entry, ast.FunctionDef)
+                        and entry.name in {"__init__", "generate_native"}
+                    )
+                ]
+        return ast.dump(tree, include_attributes=False)
+
+    old = subprocess.check_output(
+        ["git", "show", f"{predecessor}:scripts/a02_v3_worker.py"], cwd=execution.ROOT
+    )
+    if normalized(old) != normalized((execution.ROOT / "scripts/a02_v3_worker.py").read_bytes()):
+        raise ValueError("qualification, work order, scoring or checkpoint worker changed")
+    hashes["worker_except_native_generation"] = v3.sha256(normalized(old).encode())
+    return hashes
+
+
+def validate_continuation(directory: Path, grant: dict[str, Any]) -> None:
+    certificate = grant["native_cache_continuation"]
+    if certificate["native_amendment_sha256"] != v3.sha256(
+        (execution.ROOT / "experiments/a02/native-cache-execution-v1.md").read_bytes()
+    ):
+        raise ValueError("native cache execution amendment changed")
+    financial = read(directory / "grant.json")
+    if (
+        v3.sha256((directory / "grant.json").read_bytes())
+        != certificate["predecessor_grant_sha256"]
+        or grant["maximum_new_cu"] != financial["maximum_new_cu"]
+        or grant["owner_receipt_sha256"] != financial["owner_receipt_sha256"]
+        or grant["valid_until_utc"] != financial["valid_until_utc"]
+        or grant.get("native_cache") is not True
+    ):
+        raise ValueError("continuation cannot replace or extend financial authority")
+    state = Budget(directory, financial).state()
+    if (
+        not state["sessions"]
+        or state["sessions"][0]["kind"] != "DIAGNOSTIC"
+        or state["sessions"][0]["charge_sha256"] != certificate["diagnostic_charge_sha256"]
+    ):
+        raise ValueError("successful diagnostic cost/evidence was not carried forward")
+    control = directory / "diagnostic-control.json"
+    terminal = directory / "terminal-anomaly.json"
+    if (
+        v3.sha256(control.read_bytes()) != certificate["diagnostic_control_sha256"]
+        or read(control).get("passed") is not True
+        or v3.sha256(terminal.read_bytes()) != certificate["prior_planning_stop_sha256"]
+        or read(terminal).get("error_detail")
+        != "measured conservative campaign exceeds remaining delegated budget"
+    ):
+        raise ValueError(
+            "only successful qualification followed by a nonpaid planning stop may continue"
+        )
+    if (
+        cache_compatibility(financial["source_identity"]["commit"])
+        != certificate["unchanged_qualified_sources"]
+    ):
+        raise ValueError("qualified numerical/data source equivalence differs")
+
+
+def prepare_native_cache_continuation(directory: Path) -> dict[str, Any]:
+    financial = read(directory / "grant.json")
+    state = Budget(directory, financial).state()
+    if len(state["sessions"]) != 1 or state["sessions"][0]["kind"] != "DIAGNOSTIC":
+        raise ValueError("native cache continuation cannot retry any baseline/training allocation")
+    terminal = directory / "terminal-anomaly.json"
+    if (
+        read(terminal).get("error_detail")
+        != "measured conservative campaign exceeds remaining delegated budget"
+    ):
+        raise ValueError("continuation requires the recorded nonpaid planning stop")
+    archive = directory / "source-native-cache.tar"
+    if archive.exists() or (directory / "grant-native-cache.json").exists():
+        raise ValueError("continuation already prepared; no reset")
+    unchanged = cache_compatibility(financial["source_identity"]["commit"])
+    execution.source_archive(archive)
+    grant = {
+        **financial,
+        "source_identity": execution.source_identity(),
+        "source_archive_name": archive.name,
+        "source_archive_sha256": v3.sha256(archive.read_bytes()),
+        "diagnostic": diagnostic.specification(delegated=True),
+        "native_cache": True,
+        "native_cache_continuation": {
+            "native_amendment_sha256": v3.sha256(
+                (execution.ROOT / "experiments/a02/native-cache-execution-v1.md").read_bytes()
+            ),
+            "predecessor_grant_sha256": v3.sha256((directory / "grant.json").read_bytes()),
+            "diagnostic_charge_sha256": state["sessions"][0]["charge_sha256"],
+            "diagnostic_control_sha256": v3.sha256(
+                (directory / "diagnostic-control.json").read_bytes()
+            ),
+            "prior_planning_stop_sha256": v3.sha256(terminal.read_bytes()),
+            "unchanged_qualified_sources": unchanged,
+            "purpose": "native KV caching; qualified diagnostic and original budget preserved",
+        },
+    }
+    validate_grant(directory, grant)
+    execution._write_exclusive(directory / "grant-native-cache.json", grant)
+    return grant
 
 
 def read(path: Path) -> dict[str, Any]:
@@ -274,7 +419,8 @@ def validate_grant(directory: Path, grant: dict[str, Any], *, required_seconds: 
     if execution.source_identity() != grant["source_identity"]:
         raise ValueError("automatic source differs from approved clean commit/tree")
     if (
-        v3.sha256((directory / "source.tar").read_bytes()) != grant["source_archive_sha256"]
+        v3.sha256(source_archive_path(directory, grant).read_bytes())
+        != grant["source_archive_sha256"]
         or diagnostic_session.head_archive_sha256() != grant["source_archive_sha256"]
         or grant["protocol_sha256"] != decision.protocol_sha256()
     ):
@@ -295,10 +441,14 @@ def validate_grant(directory: Path, grant: dict[str, Any], *, required_seconds: 
     ):
         raise ValueError("automatic finite grant expired")
     diagnostic.validate_specification(grant["diagnostic"])
+    if "native_cache_continuation" in grant:
+        validate_continuation(directory, grant)
     training.validate_specification(grant["training"])
 
 
-def measured_plan(report: dict[str, Any], rate: float, remaining: float) -> dict[str, Any]:
+def measured_plan(
+    report: dict[str, Any], rate: float, remaining: float, *, native_cache: bool = False
+) -> dict[str, Any]:
     identity = decision.load_protocol()["candidate_model"]
     runtime = report.get("runtime", {})
     audit = report.get("precision_audit", {})
@@ -341,7 +491,47 @@ def measured_plan(report: dict[str, Any], rate: float, remaining: float) -> dict
     )
     protocol = decision.load_protocol()
     preflight = {"max_constrained_scorer_calls": execution.workload_scorer_calls(protocol)}
-    plan = execution.build_plan(protocol, preflight, bounds)
+    projected_costs = None
+    native_projection = None
+    if native_cache:
+        tails = [
+            c["timing_seconds"]["C"]
+            for row in rows
+            for c in row["candidates"]
+            if c["c_call"]["keep"] > 0
+        ]
+        if not tails or any(not math.isfinite(value) or value <= 0 for value in tails):
+            raise ValueError("cached-native projection needs observed FP32 cached-tail timings")
+        cap = v3.load_profile()["decoding"]["action_max_new_tokens"]
+        calls = preflight["max_constrained_scorer_calls"]
+        tail_bound = max(tails) * 2
+        native_bound = full_forward + cap * tail_bound + 1
+        cached_bound = (
+            max(row["timing_seconds"]["C"] * calls / row["scorer_calls"] for row in rows) * 2
+        )
+        qualification = (
+            sum(row["timing_seconds"]["A"] + row["timing_seconds"]["C"] for row in rows) * 2
+        )
+        qualification *= calls / min(row["scorer_calls"] for row in rows)
+        projected_costs = {
+            "QUALIFICATION": qualification,
+            "ZERO_SHOT_UNCONSTRAINED": native_bound,
+            "ZERO_SHOT_CONSTRAINED": cached_bound,
+        }
+        bounds = replace(bounds, inference_overhead_seconds=math.ceil(overhead + native_bound))
+        native_projection = {
+            "basis": "FP32 cached-tail projection; cached-native timing pending",
+            "cached_tail_samples": len(tails),
+            "per_session_native_calibration_seconds_bound": native_bound,
+            "cached_tail_seconds_bound": tail_bound,
+            "full_prefill_seconds_bound": full_forward,
+            "native_max_tokens": cap,
+            "uncached_native_observation": native,
+            "required": "time cached-native on TRAIN first; reject an exceeded bound",
+        }
+    plan = execution.build_plan(protocol, preflight, bounds, measured_cost_bounds=projected_costs)
+    if native_projection is not None:
+        plan["native_cache_projection"] = native_projection
     plan["compute_units"]["rate_basis"] = (
         "current pinned 3B/T4 FP32 diagnostic; conservative 2x operation times"
     )
@@ -355,14 +545,19 @@ def measured_plan(report: dict[str, Any], rate: float, remaining: float) -> dict
 
 
 def validate_plan(
-    plan: dict[str, Any], report: dict[str, Any], rate: float, initial_budget: float
+    plan: dict[str, Any],
+    report: dict[str, Any],
+    rate: float,
+    initial_budget: float,
+    *,
+    native_cache: bool = False,
 ) -> None:
     payload = {
         k: v for k, v in plan.items() if k not in {"plan_sha256", "live_observation_not_hashed"}
     }
     if plan.get("plan_sha256") != v3.sha256(v3.canonical(payload).encode()):
         raise ValueError("persisted baseline plan content hash differs")
-    derived = measured_plan(report, rate, initial_budget)
+    derived = measured_plan(report, rate, initial_budget, native_cache=native_cache)
     expected = {
         k: v for k, v in derived.items() if k not in {"plan_sha256", "live_observation_not_hashed"}
     }
@@ -517,7 +712,7 @@ def training_session(
         ):
             raise ValueError("training price/resource admission failed before model work")
         files = [
-            (directory.parent / "source.tar", execution.REMOTE_SOURCE),
+            (source_archive_path(directory.parent, grant), execution.REMOTE_SOURCE),
             (binding_path, execution.REMOTE_BINDING),
         ]
         if prior is not None:
@@ -679,12 +874,23 @@ def training_session(
 
 
 def run(directory: Path) -> dict[str, Any]:
-    grant = read(directory / "grant.json")
+    financial_grant = read(directory / "grant.json")
+    active_file = directory / "grant-native-cache.json"
+    grant = read(active_file) if active_file.exists() else financial_grant
     validate_grant(directory, grant)
+    continuation = "native_cache_continuation" in grant
+    terminal_path = directory / (
+        "terminal-anomaly-native-cache.json" if continuation else "terminal-anomaly.json"
+    )
+    result_path = directory / (
+        "pipeline-result-native-cache.json" if continuation else "pipeline-result.json"
+    )
+    archive = source_archive_path(directory, grant)
+    native_cache = grant.get("native_cache") is True
     os.environ["COLAB_CLI_ASSIGN_RETRIES"] = "0"
-    if (directory / "terminal-anomaly.json").exists():
+    if terminal_path.exists():
         raise ValueError("pipeline has a terminal anomaly; no automatic retry")
-    budget = Budget(directory, grant)
+    budget = Budget(directory, financial_grant)
     budget.state()
     client = PipelineCLI()
     quiet(client)
@@ -695,7 +901,7 @@ def run(directory: Path) -> dict[str, Any]:
             validate_grant(
                 directory, grant, required_seconds=grant["diagnostic"]["wall_seconds"] + 300
             )
-            proposed = diagnostic_session.proposal(directory / "source.tar", delegated=True)
+            proposed = diagnostic_session.proposal(archive, delegated=True)
             approval = {
                 "schema": diagnostic_session.AUTH_SCHEMA,
                 "proposal_sha256": proposed["proposal_sha256"],
@@ -712,7 +918,7 @@ def run(directory: Path) -> dict[str, Any]:
                 client=client,
                 proposed=proposed,
                 approval=approval,
-                archive=directory / "source.tar",
+                archive=archive,
                 startup_cu=None,
                 live_t4_rate=None,
             )
@@ -739,7 +945,9 @@ def run(directory: Path) -> dict[str, Any]:
             raise ValueError("diagnostic evidence changed")
         report = json.loads(report_path.read_text().splitlines()[-1])
         rate = state["pricing_observation"]["rate_cu_per_hour"]
-        plan_path = directory / "baseline-plan.json"
+        plan_path = directory / (
+            "baseline-plan-native-cache.json" if native_cache else "baseline-plan.json"
+        )
         initial_baseline_budget = TOTAL_CAP_CU - sum(
             row["conservative_cu"]
             for row in budget.state()["sessions"]
@@ -747,10 +955,11 @@ def run(directory: Path) -> dict[str, Any]:
         )
         if not plan_path.exists():
             execution._write_exclusive(
-                plan_path, measured_plan(report, rate, initial_baseline_budget)
+                plan_path,
+                measured_plan(report, rate, initial_baseline_budget, native_cache=native_cache),
             )
         plan = read(plan_path)
-        validate_plan(plan, report, rate, initial_baseline_budget)
+        validate_plan(plan, report, rate, initial_baseline_budget, native_cache=native_cache)
         baseline = directory / "baseline"
         baseline.mkdir(exist_ok=True)
         allowance = {
@@ -764,7 +973,11 @@ def run(directory: Path) -> dict[str, Any]:
             "allow_concurrent_unrelated_usage": False,
         }
         binding = execution.remote_binding(
-            plan, directory / "source.tar", grant["source_identity"]["commit"], precision="float32"
+            plan,
+            archive,
+            grant["source_identity"]["commit"],
+            precision="float32",
+            native_cache=native_cache,
         )
         items = worker.work_items(decision.load_protocol())
         checkpoint = baseline / "checkpoint.jsonl"
@@ -794,7 +1007,7 @@ def run(directory: Path) -> dict[str, Any]:
                 authorization=allowance,
                 session_index=index,
                 run_dir=baseline,
-                source_archive=directory / "source.tar",
+                source_archive=archive,
                 binding=binding,
             )
             path = baseline / f"session-{index:03d}-control.json"
@@ -894,7 +1107,7 @@ def run(directory: Path) -> dict[str, Any]:
     except Exception as exc:
         result.update(error_type=type(exc).__name__, error_detail=str(exc))
         execution._write_exclusive(
-            directory / "terminal-anomaly.json",
+            terminal_path,
             {
                 "grant_sha256": budget.grant_hash,
                 "error_type": type(exc).__name__,
@@ -903,20 +1116,25 @@ def run(directory: Path) -> dict[str, Any]:
             },
         )
     result["budget"] = read(budget.path)
-    _write_json(directory / "pipeline-result.json", result)
+    _write_json(result_path, result)
     return result
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=("prepare", "run"))
+    parser.add_argument("command", choices=("prepare", "prepare-native-cache", "run"))
     parser.add_argument("--directory", type=Path, required=True)
     args = parser.parse_args()
     if not args.directory.resolve().is_relative_to(execution.E_ROOT):
         raise ValueError("persistent artifacts belong on E:")
-    output = prepare(args.directory) if args.command == "prepare" else run(args.directory)
+    if args.command == "prepare":
+        output = prepare(args.directory)
+    elif args.command == "prepare-native-cache":
+        output = prepare_native_cache_continuation(args.directory)
+    else:
+        output = run(args.directory)
     print(json.dumps(output, sort_keys=True))
-    return 0 if args.command == "prepare" or output["complete"] else 1
+    return 0 if args.command != "run" or output["complete"] else 1
 
 
 if __name__ == "__main__":

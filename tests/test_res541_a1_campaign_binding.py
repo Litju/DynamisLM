@@ -61,3 +61,37 @@ def test_changed_numerical_amendment_is_rejected_before_torch_import(
     monkeypatch.setattr(remote, "load_binding", lambda: binding)
     with pytest.raises(ValueError, match="amendment differs"):
         remote.child("work", 60)
+
+
+def test_native_cache_binding_is_explicit_fp32_only(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    identity = {"commit": "a" * 40, "tree": "b" * 40}
+    monkeypatch.setattr(execution, "source_identity", lambda: identity)
+    archive = tmp_path / "source.tar"
+    archive.write_bytes(b"synthetic")
+    plan = {
+        "plan_sha256": "c" * 64,
+        "protocol_sha256": decision.protocol_sha256(),
+        "item_cost_bounds_seconds": {
+            "QUALIFICATION": 1,
+            "ZERO_SHOT_UNCONSTRAINED": 1,
+            "ZERO_SHOT_CONSTRAINED": 1,
+        },
+    }
+    binding = execution.remote_binding(
+        plan, archive, identity["commit"], precision="float32", native_cache=True
+    )
+    assert (
+        binding["native_cache"] is True and binding["schema"] == remote.NATIVE_CACHE_BINDING_SCHEMA
+    )
+    binding["session_index"] = 1
+    path = tmp_path / "binding.json"
+    path.write_text(json.dumps(binding))
+    assert remote.load_binding(path) == binding
+    binding["native_cache"] = False
+    path.write_text(json.dumps(binding))
+    with pytest.raises(ValueError, match="cache execution"):
+        remote.load_binding(path)
+    with pytest.raises(ValueError, match="FP32"):
+        execution.remote_binding(plan, archive, identity["commit"], native_cache=True)

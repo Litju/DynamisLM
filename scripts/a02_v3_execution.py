@@ -132,12 +132,20 @@ def build_plan(
     bounds: RuntimeBounds,
     *,
     live_rate_cu_per_hour: float | None = None,
+    measured_cost_bounds: dict[str, float] | None = None,
 ) -> dict[str, Any]:
     """Deterministic worst-case session packing and compute-unit admission plan."""
     profile = v3.load_profile()
     items = worker.work_items(protocol)
     calls = max(preflight["max_constrained_scorer_calls"], workload_scorer_calls(protocol))
     costs = item_cost_bounds(profile, {**preflight, "max_constrained_scorer_calls": calls}, bounds)
+    if measured_cost_bounds is not None:
+        if set(measured_cost_bounds) != set(costs) or any(
+            isinstance(value, bool) or not math.isfinite(value) or value <= 0
+            for value in measured_cost_bounds.values()
+        ):
+            raise ValueError("measured operation cost bounds must be finite, positive and complete")
+        costs = dict(measured_cost_bounds)
     budget = generation_seconds_per_session(bounds)
     if budget <= 0 or any(cost > budget for cost in costs.values()):
         raise ValueError("a single work item cannot fit one bounded session")
@@ -210,6 +218,11 @@ def build_plan(
         "by a deliberate new invocation. The reserve covers one entirely lost session. If the "
         "allowed count is exhausted, any extra session needs a new allowance and plan amendment.",
     }
+    if measured_cost_bounds is not None:
+        plan["operation_cost_policy"] = {
+            "basis": "separate measured FP32 operation bounds",
+            "legacy_shared_decode_floor_used": False,
+        }
     # The hash covers deterministic inputs only, so the printed plan and the plan recomputed at
     # run time are the same plan. Live account state is informational and never hashed.
     plan["plan_sha256"] = v3.sha256(v3.canonical(plan).encode())
@@ -1264,11 +1277,18 @@ def source_archive(path: Path) -> tuple[Path, str]:
 
 
 def remote_binding(
-    plan: dict[str, Any], archive: Path, revision: str, *, precision: str = "float16"
+    plan: dict[str, Any],
+    archive: Path,
+    revision: str,
+    *,
+    precision: str = "float16",
+    native_cache: bool = False,
 ) -> dict[str, Any]:
     """The binding the remote bootstrap verifies (session_index is added per session)."""
     if precision not in {"float16", "float32"}:
         raise ValueError("campaign precision must be float16 or float32")
+    if native_cache and precision != "float32":
+        raise ValueError("prospective native cache policy requires A1 FP32")
     binding = {
         "schema": "RES541_A02_V3_REMOTE_BINDING_V1",
         "source_archive_sha256": v3.sha256(archive.read_bytes()),
@@ -1286,6 +1306,10 @@ def remote_binding(
             precision="float32",
             numerical_amendment_sha256=v3.sha256(AMENDMENT.read_bytes()),
         )
+        if native_cache:
+            binding.update(
+                schema="RES541_A1_NATIVE_CACHE_CAMPAIGN_REMOTE_BINDING_V1", native_cache=True
+            )
     return binding
 
 

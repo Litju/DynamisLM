@@ -36,6 +36,7 @@ STATUS_PATH = CONTENT_ROOT / "a02-v3-status.json"
 SOURCE_DIR = WORK / "v3-source"
 BINDING_SCHEMA = "RES541_A02_V3_REMOTE_BINDING_V1"
 FP32_BINDING_SCHEMA = "RES541_A1_FP32_CAMPAIGN_REMOTE_BINDING_V1"
+NATIVE_CACHE_BINDING_SCHEMA = "RES541_A1_NATIVE_CACHE_CAMPAIGN_REMOTE_BINDING_V1"
 TRAINING_BINDING_SCHEMA = "RES541_OWNER_LORA_REMOTE_BINDING_V1"
 CHILD_MARGIN_SECONDS = 30
 _BINDING_KEYS = {
@@ -55,11 +56,19 @@ def load_binding(path: Path | None = None) -> dict[str, Any]:
     diagnostic = isinstance(binding, dict) and binding.get("schema") == (
         "RES541_A1_DIAGNOSTIC_REMOTE_BINDING_V1"
     )
-    fp32 = isinstance(binding, dict) and binding.get("schema") == FP32_BINDING_SCHEMA
+    native_cache = (
+        isinstance(binding, dict) and binding.get("schema") == NATIVE_CACHE_BINDING_SCHEMA
+    )
+    fp32 = isinstance(binding, dict) and binding.get("schema") in {
+        FP32_BINDING_SCHEMA,
+        NATIVE_CACHE_BINDING_SCHEMA,
+    }
     training = isinstance(binding, dict) and binding.get("schema") == TRAINING_BINDING_SCHEMA
     keys = _BINDING_KEYS | {"numerical_diagnostic"} if diagnostic else _BINDING_KEYS
     if fp32:
         keys = keys | {"precision", "numerical_amendment_sha256"}
+    if native_cache:
+        keys = keys | {"native_cache"}
     if training:
         keys = (_BINDING_KEYS - {"item_cost_bounds"}) | {
             "training_spec",
@@ -71,6 +80,8 @@ def load_binding(path: Path | None = None) -> dict[str, Any]:
         raise ValueError("V3 remote binding schema differs")
     if fp32 and binding["precision"] != "float32":
         raise ValueError("A1 campaign requires explicitly selected FP32")
+    if native_cache and binding["native_cache"] is not True:
+        raise ValueError("native cache execution must explicitly be selected")
     identity = binding["source_identity"]
     if (
         not isinstance(identity, dict)
@@ -415,15 +426,37 @@ def child(stage: str, timeout: int) -> int:  # pragma: no cover - pinned GPU pro
             str(snapshot), local_files_only=True, torch_dtype=torch.float16
         ).to("cuda")
         lm.eval()
+    backend = worker.HFWorkerBackend(
+        lm, tokenizer, model, native_cache=True if binding.get("native_cache") is True else None
+    )
+    if binding.get("native_cache") is True:
+        calibration = worker.calibration_examples(protocol)[-1]
+        prompt = v3.build_action_prompt(tokenizer, calibration["request"])
+        backend.generate_native(
+            prompt["prompt_token_ids"], profile["decoding"]["action_max_new_tokens"]
+        )
+        measured = backend.native_measurements[-1]
+        status["native_cache_calibration"] = {
+            **measured,
+            "example_id": decision.example_id(calibration),
+            "prompt_sha256": prompt["rendered_prompt_sha256"],
+        }
+        _write_status(status)
+        if measured["seconds"] > binding["item_cost_bounds"]["ZERO_SHOT_UNCONSTRAINED"]:
+            raise ValueError(
+                "cached native calibration exceeds projected bound; no held-out evaluation"
+            )
     result = worker.run_worker(
         protocol=protocol,
         items=worker.work_items(protocol),
         checkpoint=CHECKPOINT,
-        backend=worker.HFWorkerBackend(lm, tokenizer, model),
+        backend=backend,
         deadline=deadline,
         item_cost_bounds=binding["item_cost_bounds"],
     )
     status.setdefault("work_results", []).append(result)
+    if backend.native_measurements:
+        status["native_cache_measurements"] = backend.native_measurements
     if audit is not None:
         status["precision_audit"] = (
             audit.report() if audit.logit_dtypes else {**audit.identity, "executed_forwards": False}

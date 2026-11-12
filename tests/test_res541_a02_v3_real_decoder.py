@@ -370,3 +370,51 @@ def test_instrumented_three_path_diagnostic_and_deadline(tokenizer: Any, model: 
             emit=partial.append,
         )
     assert len(partial) == 2 and all(e["phase"] == "PATH_C" for e in partial)
+
+
+def test_native_cache_override_handles_pinned_no_cache_config_without_changing_legacy() -> None:
+    from types import SimpleNamespace
+
+    from scripts import a02_v3_worker as worker
+
+    torch.manual_seed(541)
+    config = transformers.SmolLM3Config(
+        vocab_size=128,
+        hidden_size=32,
+        intermediate_size=64,
+        num_hidden_layers=4,
+        num_attention_heads=4,
+        num_key_value_heads=2,
+        pad_token_id=0,
+        bos_token_id=None,
+        eos_token_id=None,
+        use_cache=False,
+    )
+    lm = transformers.SmolLM3ForCausalLM(config).float().eval()
+    tokenizer = SimpleNamespace(
+        pad_token_id=0,
+        eos_token_id=None,
+        decode=lambda ids, **kwargs: " ".join(str(i) for i in ids),
+    )
+    identity = {"id": "SYNTHETIC_TINY_SMOLLM3", "revision": "NOT_A_PRODUCTION_RESULT"}
+    calls = []
+
+    def observe(module: Any, args: Any, kwargs: Any) -> None:
+        calls.append((kwargs["input_ids"].shape[-1], kwargs.get("use_cache")))
+
+    hook = lm.register_forward_pre_hook(observe, with_kwargs=True)
+    try:
+        legacy = worker.HFWorkerBackend(lm, tokenizer, identity)
+        first = legacy.generate_native(list(range(1, 21)), 8)
+        assert all(length >= 20 and cache is False for length, cache in calls)
+        calls.clear()
+        cached = worker.HFWorkerBackend(lm, tokenizer, identity, native_cache=True)
+        second = cached.generate_native(list(range(1, 21)), 8)
+        assert first == second
+        assert calls[0] == (20, True) and all(row == (1, True) for row in calls[1:])
+        assert lm.config.use_cache is False
+        assert cached.native_measurements[-1]["tokens"] == 8
+        assert cached.native_measurements[-1]["attention_backend"] == "MATH"
+        assert not legacy.native_measurements
+    finally:
+        hook.remove()

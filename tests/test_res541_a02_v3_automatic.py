@@ -572,3 +572,109 @@ def test_training_archive_swap_or_cursor_rollback_is_rejected_before_allocation(
         automatic.validate_training_advance(
             previous, {**previous, "next_step": 3, "total_steps": 5}
         )
+
+
+def test_cached_native_projection_uses_fp32_operations_not_uncached_or_fp16_rate() -> None:
+    report = _physical_fixture()
+    report["native_calibration_timing"] = {"tokens": 123, "seconds": 299.04}
+    report["rows"][0]["candidates"][0]["c_call"]["keep"] = 1000
+    with pytest.raises(ValueError, match="budget"):
+        automatic.measured_plan(report, 1.15, 45)
+    plan = automatic.measured_plan(report, 1.15, 45, native_cache=True)
+    assert plan["item_cost_bounds_seconds"]["ZERO_SHOT_UNCONSTRAINED"] < 10
+    assert plan["native_cache_projection"]["uncached_native_observation"]["seconds"] == 299.04
+    assert "projection" in plan["native_cache_projection"]["basis"]
+    native_bound = plan["native_cache_projection"]["per_session_native_calibration_seconds_bound"]
+    assert plan["bounds"]["inference_overhead_seconds"] >= 100 + native_bound
+    assert plan["generation_seconds_per_session"] == (
+        3300 - 180 - plan["bounds"]["inference_overhead_seconds"] - 60
+    )
+    automatic.validate_plan(plan, report, 1.15, 45, native_cache=True)
+    with pytest.raises(ValueError):
+        automatic.validate_plan(plan, report, 1.15, 45)
+
+
+def test_native_continuation_preserves_original_paid_cost_and_terminal_evidence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    owner_root = tmp_path / "owner"
+    owner_root.mkdir()
+    owner = owner_root / "owner-delegated-budget-50cu-v2.json"
+    owner.write_text(
+        json.dumps(
+            {
+                "agent_selected_total_new_cu": 50,
+                "automatic_campaign_requested": True,
+                "actual_lora_weights_requested": True,
+            }
+        )
+    )
+    monkeypatch.setattr(diagnostic_session, "ROOT", owner_root)
+    monkeypatch.setattr(automatic, "ROOT", tmp_path / "automatic")
+    identity = [{"commit": "a" * 40, "tree": "b" * 40}]
+    monkeypatch.setattr(execution, "source_identity", lambda: identity[0])
+
+    def archive(path: Path) -> tuple[Path, str]:
+        path.write_bytes(identity[0]["commit"].encode())
+        return path, identity[0]["commit"]
+
+    monkeypatch.setattr(execution, "source_archive", archive)
+    monkeypatch.setattr(
+        diagnostic_session, "head_archive_sha256", lambda: v3.sha256(identity[0]["commit"].encode())
+    )
+    monkeypatch.setattr(
+        automatic, "cache_compatibility", lambda predecessor: {"synthetic_kernel": "e" * 64}
+    )
+    directory = automatic.ROOT / v3.sha256(owner.read_bytes())
+    original = automatic.prepare(directory)
+    budget = automatic.Budget(directory, original)
+    control = directory / "diagnostic-control.json"
+    control.write_text('{"passed":true}')
+    budget.reserve("diagnostic", "DIAGNOSTIC", 3)
+    budget.close("diagnostic", 0.3564, control, passed=True)
+    terminal = directory / "terminal-anomaly.json"
+    terminal.write_text(
+        json.dumps(
+            {"error_detail": "measured conservative campaign exceeds remaining delegated budget"}
+        )
+    )
+    saved = {
+        name: (directory / name).read_bytes()
+        for name in [
+            "grant.json",
+            "source.tar",
+            "budget-ledger.json",
+            "diagnostic-charge.json",
+            "terminal-anomaly.json",
+        ]
+    }
+    identity[0] = {"commit": "c" * 40, "tree": "d" * 40}
+    active = automatic.prepare_native_cache_continuation(directory)
+    automatic.validate_grant(directory, active)
+    assert active["native_cache"] is True
+    assert automatic.Budget(directory, original).remaining() == pytest.approx(49.6436)
+    assert all((directory / name).read_bytes() == data for name, data in saved.items())
+    assert automatic.source_archive_path(directory, active).name == "source-native-cache.tar"
+    with pytest.raises(ValueError, match="already prepared"):
+        automatic.prepare_native_cache_continuation(directory)
+    with pytest.raises(ValueError, match="finite owner scope"):
+        automatic.validate_grant(directory, {**active, "maximum_new_cu": 100})
+    terminal.write_text('{"error_detail":"paid baseline failed"}')
+    with pytest.raises(ValueError, match="nonpaid planning"):
+        automatic.validate_grant(directory, active)
+
+
+def test_qualified_numerical_kernel_certificate_matches_real_predecessor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    hashes = automatic.cache_compatibility("37367746c4187bbf3e24fa95757ec473a31daab3")
+    assert hashes["scripts/a02_v3_constrained.py"]
+    original = Path.read_bytes
+    numerical = execution.ROOT / "scripts/a02_v3_numerics.py"
+
+    def changed(path: Path) -> bytes:
+        return original(path) + (b"\nCHANGED" if path == numerical else b"")
+
+    monkeypatch.setattr(Path, "read_bytes", changed)
+    with pytest.raises(ValueError, match="source changed"):
+        automatic.cache_compatibility("37367746c4187bbf3e24fa95757ec473a31daab3")

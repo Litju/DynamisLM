@@ -418,18 +418,33 @@ def score_checkpoint(protocol: dict[str, Any], checkpoint: Path) -> dict[str, An
 class HFWorkerBackend:
     """Pinned-model backend: greedy native generation and cached/uncached option scoring."""
 
-    def __init__(self, model: Any, tokenizer: Any, identity: dict[str, str]):
+    def __init__(
+        self,
+        model: Any,
+        tokenizer: Any,
+        identity: dict[str, str],
+        *,
+        native_cache: bool | None = None,
+    ):
         self.model = model
         self.tokenizer = tokenizer
         self.model_identity = identity
+        self.native_cache = native_cache
+        self.native_measurements: list[dict[str, Any]] = []
 
     def generate_native(
         self, prompt_ids: Sequence[int], max_new_tokens: int
     ) -> tuple[list[int], str, bool]:
+        from contextlib import nullcontext
+
         import torch  # type: ignore[import-not-found]
+        from torch.nn.attention import SDPBackend, sdpa_kernel  # type: ignore[import-not-found]
 
         tensor = torch.tensor([list(prompt_ids)], device=self.model.device)
-        with torch.inference_mode():
+        started = time.monotonic()
+        options = {} if self.native_cache is None else {"use_cache": self.native_cache}
+        attention = sdpa_kernel(SDPBackend.MATH) if self.native_cache is True else nullcontext()
+        with torch.inference_mode(), attention:
             output = self.model.generate(
                 tensor,
                 attention_mask=torch.ones_like(tensor),
@@ -437,11 +452,21 @@ class HFWorkerBackend:
                 do_sample=False,
                 num_beams=1,
                 pad_token_id=self.tokenizer.pad_token_id,
+                **options,
             )
         ids = [int(t) for t in output[0, len(prompt_ids) :].tolist()]
         eos = self.tokenizer.eos_token_id
         truncated = len(ids) >= max_new_tokens and (not ids or ids[-1] != eos)
         text = self.tokenizer.decode(ids, skip_special_tokens=True)
+        if self.native_cache is True:
+            self.native_measurements.append(
+                {
+                    "tokens": len(ids),
+                    "seconds": time.monotonic() - started,
+                    "use_cache": True,
+                    "attention_backend": "MATH",
+                }
+            )
         return ids, text, truncated
 
     def cached_scorer(self) -> constrained.SequenceLogprob:
