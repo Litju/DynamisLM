@@ -891,3 +891,56 @@ def test_failed_teardown_cost_remains_unknown_after_late_cleanup(tmp_path: Path)
     again = _campaign(tmp_path, client)
     assert again["status"] == "NOT_ADMITTED" and "unknown cost" in again["reason"]
     assert len(client.created) == 1
+
+
+@pytest.mark.parametrize("fault", [None, "parameter", "intermediate", "logit", "missing"])
+def test_fp32_checkpoint_adoption_requires_actual_precision_evidence(
+    tmp_path: Path, fault: str | None
+) -> None:
+    class FP32Colab(FakeColab):
+        def download(self, name: str, remote: str, local: Path) -> bool:
+            result = super().download(name, remote, local)
+            if result and remote == execution.REMOTE_STATUS:
+                status = json.loads(local.read_bytes())
+                audit = {
+                    "selected_precision": "float32",
+                    "parameter_dtypes": ["torch.float32"],
+                    "intermediate_dtypes": ["torch.float32"],
+                    "logit_dtypes": ["torch.float32"],
+                }
+                if fault in {"parameter", "intermediate", "logit"}:
+                    key = {
+                        "parameter": "parameter_dtypes",
+                        "intermediate": "intermediate_dtypes",
+                        "logit": "logit_dtypes",
+                    }[fault]
+                    audit[key] = ["torch.float16"]
+                if fault != "missing":
+                    status["precision_audit"] = audit
+                local.write_text(json.dumps(status))
+            return result
+
+    archive = tmp_path / "source.tar"
+    archive.write_bytes(b"synthetic source fixture")
+    state = execution.run_session(
+        client=FP32Colab(tmp_path / "remote", items_per_session=2),
+        plan=PLAN,
+        ledger_path=tmp_path / "ledger.json",
+        authorization=_allowance(),
+        session_index=1,
+        run_dir=tmp_path / "run",
+        source_archive=archive,
+        binding={
+            "plan_sha256": PLAN["plan_sha256"],
+            "item_cost_bounds": COSTS,
+            "source_identity": {"commit": "a" * 40, "tree": "b" * 40},
+            "precision": "float32",
+        },
+        now=NOW,
+    )
+    if fault is None:
+        assert state["merge"]["committed_after"] == 2
+    else:
+        assert str(state["merge"]).startswith("REJECTED")
+        assert "precision" in str(state["merge"]) or "evidence" in str(state["merge"])
+        assert not (tmp_path / "run/checkpoint.jsonl").exists()

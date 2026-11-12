@@ -902,6 +902,20 @@ def run_session(
                     or status.get("runtime_qualification", {}).get("qualified") is not True
                 ):
                     raise ValueError("successful work has no qualified READY runtime status")
+                if binding.get("precision") == "float32":
+                    audit = status.get("precision_audit", {})
+                    if (
+                        audit.get("parameter_dtypes") != ["torch.float32"]
+                        or audit.get("selected_precision") != "float32"
+                    ):
+                        raise ValueError("FP32 work has no actual parameter precision evidence")
+                    if audit.get("executed_forwards") is not False and (
+                        audit.get("intermediate_dtypes") != ["torch.float32"]
+                        or audit.get("logit_dtypes") != ["torch.float32"]
+                    ):
+                        raise ValueError(
+                            "FP32 work has mixed or missing intermediate/logit evidence"
+                        )
                 state["remote_status"] = status
                 if recovered.get(REMOTE_CHECKPOINT):
                     state["merge"] = merge_checkpoint(local, downloaded, items, protocol)
@@ -1249,9 +1263,13 @@ def source_archive(path: Path) -> tuple[Path, str]:
     return path, head
 
 
-def remote_binding(plan: dict[str, Any], archive: Path, revision: str) -> dict[str, Any]:
+def remote_binding(
+    plan: dict[str, Any], archive: Path, revision: str, *, precision: str = "float16"
+) -> dict[str, Any]:
     """The binding the remote bootstrap verifies (session_index is added per session)."""
-    return {
+    if precision not in {"float16", "float32"}:
+        raise ValueError("campaign precision must be float16 or float32")
+    binding = {
         "schema": "RES541_A02_V3_REMOTE_BINDING_V1",
         "source_archive_sha256": v3.sha256(archive.read_bytes()),
         "source_revision": revision,
@@ -1260,6 +1278,15 @@ def remote_binding(plan: dict[str, Any], archive: Path, revision: str) -> dict[s
         "protocol_sha256": plan["protocol_sha256"],
         "item_cost_bounds": plan["item_cost_bounds_seconds"],
     }
+    if precision == "float32":
+        from scripts.a02_v3_gpu_diagnostic import AMENDMENT
+
+        binding.update(
+            schema="RES541_A1_FP32_CAMPAIGN_REMOTE_BINDING_V1",
+            precision="float32",
+            numerical_amendment_sha256=v3.sha256(AMENDMENT.read_bytes()),
+        )
+    return binding
 
 
 def _load_preflight(path: Path) -> dict[str, Any]:

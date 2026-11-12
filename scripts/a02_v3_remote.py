@@ -35,6 +35,7 @@ CHECKPOINT = CONTENT_ROOT / "a02-v3-checkpoint.jsonl"
 STATUS_PATH = CONTENT_ROOT / "a02-v3-status.json"
 SOURCE_DIR = WORK / "v3-source"
 BINDING_SCHEMA = "RES541_A02_V3_REMOTE_BINDING_V1"
+FP32_BINDING_SCHEMA = "RES541_A1_FP32_CAMPAIGN_REMOTE_BINDING_V1"
 CHILD_MARGIN_SECONDS = 30
 _BINDING_KEYS = {
     "schema",
@@ -53,11 +54,16 @@ def load_binding(path: Path | None = None) -> dict[str, Any]:
     diagnostic = isinstance(binding, dict) and binding.get("schema") == (
         "RES541_A1_DIAGNOSTIC_REMOTE_BINDING_V1"
     )
+    fp32 = isinstance(binding, dict) and binding.get("schema") == FP32_BINDING_SCHEMA
     keys = _BINDING_KEYS | {"numerical_diagnostic"} if diagnostic else _BINDING_KEYS
+    if fp32:
+        keys = keys | {"precision", "numerical_amendment_sha256"}
     if not isinstance(binding, dict) or set(binding) != keys:
         raise ValueError("V3 remote binding fields differ")
-    if not diagnostic and binding["schema"] != BINDING_SCHEMA:
+    if not diagnostic and not fp32 and binding["schema"] != BINDING_SCHEMA:
         raise ValueError("V3 remote binding schema differs")
+    if fp32 and binding["precision"] != "float32":
+        raise ValueError("A1 campaign requires explicitly selected FP32")
     identity = binding["source_identity"]
     if (
         not isinstance(identity, dict)
@@ -217,6 +223,11 @@ def child(stage: str, timeout: int) -> int:  # pragma: no cover - pinned GPU pro
         from scripts import a02_v3_gpu_diagnostic as diagnostic
 
         diagnostic.validate_specification(binding["numerical_diagnostic"])
+    if binding.get("precision") == "float32":
+        from scripts.a02_v3_gpu_diagnostic import AMENDMENT
+
+        if _sha256_file(AMENDMENT) != binding["numerical_amendment_sha256"]:
+            raise ValueError("FP32 campaign numerical amendment differs")
     if decision.protocol_sha256() != binding["protocol_sha256"]:
         raise ValueError("extracted V3 protocol differs from the binding")
     if os.environ.get("A02_V3_BOOTSTRAP_TEST") == "1":
@@ -318,10 +329,17 @@ def child(stage: str, timeout: int) -> int:  # pragma: no cover - pinned GPU pro
     from transformers import AutoModelForCausalLM, AutoTokenizer  # type: ignore[import-not-found]
 
     tokenizer = AutoTokenizer.from_pretrained(str(snapshot), local_files_only=True)
-    lm = AutoModelForCausalLM.from_pretrained(
-        str(snapshot), local_files_only=True, torch_dtype=torch.float16
-    ).to("cuda")
-    lm.eval()
+    audit = None
+    if binding.get("precision") == "float32":
+        from scripts.a02_v3_precision import PrecisionAudit, load_model
+
+        lm = load_model(snapshot, "float32")
+        audit = PrecisionAudit(lm, "float32")
+    else:
+        lm = AutoModelForCausalLM.from_pretrained(
+            str(snapshot), local_files_only=True, torch_dtype=torch.float16
+        ).to("cuda")
+        lm.eval()
     result = worker.run_worker(
         protocol=protocol,
         items=worker.work_items(protocol),
@@ -331,6 +349,11 @@ def child(stage: str, timeout: int) -> int:  # pragma: no cover - pinned GPU pro
         item_cost_bounds=binding["item_cost_bounds"],
     )
     status.setdefault("work_results", []).append(result)
+    if audit is not None:
+        status["precision_audit"] = (
+            audit.report() if audit.logit_dtypes else {**audit.identity, "executed_forwards": False}
+        )
+        audit.close()
     _write_status(status)
     return 0 if result["status"] in {"COMPLETE", "PAUSED_AT_DEADLINE"} else 3
 
