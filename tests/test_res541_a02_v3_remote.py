@@ -121,7 +121,7 @@ def test_prepare_runs_setup_then_bounded_pinned_child(staged: dict[str, Any]) ->
     assert remote.outer("prepare", 180, helpers) == 0
     assert helpers.calls[0] == "setup"
     _, command, stage, timeout, pythonpath = helpers.calls[1]
-    assert stage == "prepare" and timeout == 150
+    assert stage == "prepare" and 149 <= timeout <= 150
     assert command[0].endswith("inference-venv/bin/python")
     assert pythonpath.endswith("/v3-source/src")
     status = json.loads(remote.STATUS_PATH.read_text())
@@ -137,7 +137,8 @@ def test_work_requires_ready_prepare_for_this_binding(staged: dict[str, Any]) ->
         remote.outer("work", 540, helpers)
     remote._write_status({"status": "READY", "plan_sha256": PLAN["plan_sha256"]})
     assert remote.outer("work", 540, helpers) == 0
-    assert helpers.calls == [("child", helpers.calls[0][1], "work", 510, helpers.calls[0][4])]
+    assert len(helpers.calls) == 1
+    assert helpers.calls[0][2] == "work" and 509 <= helpers.calls[0][3] <= 510
 
 
 def test_timed_out_child_reports_failure_and_records_it(staged: dict[str, Any]) -> None:

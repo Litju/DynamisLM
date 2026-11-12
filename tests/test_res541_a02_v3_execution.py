@@ -416,6 +416,19 @@ class FakeColab:
                     json.dumps(
                         {
                             "status": "READY",
+                            "plan_sha256": json.loads(binding_path.read_text())["plan_sha256"],
+                            "stages": [{"stage": "prepare", "returncode": 0, "timed_out": False}],
+                            "snapshot_path": "/synthetic/pinned-model",
+                            "weights": {
+                                "model_revision": PROTOCOL["candidate_model"]["revision"],
+                                "weight_files": [{"synthetic": True}],
+                                "support_files": {
+                                    key: {"sha256": value}
+                                    for key, value in v3.load_profile()["tokenizer"][
+                                        "files"
+                                    ].items()
+                                },
+                            },
                             "runtime_qualification": {"qualified": True},
                             "binding": json.loads(binding_path.read_text()),
                             "checkpoint_sha256": v3.sha256(checkpoint.read_bytes())

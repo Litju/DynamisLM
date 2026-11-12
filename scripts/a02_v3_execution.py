@@ -34,7 +34,7 @@ import sys
 import threading
 import time
 from collections.abc import Callable, Sequence
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Protocol
@@ -112,6 +112,24 @@ def generation_seconds_per_session(b: RuntimeBounds) -> int:
     return (
         b.exec_seconds - b.prepare_seconds - b.inference_overhead_seconds - b.worker_margin_seconds
     )
+
+
+def derive_preparation_seconds(observations: Sequence[float], bounds: RuntimeBounds) -> int:
+    """Fourfold headroom over observed/censored prepare times, within the session budget.
+
+    A censored download is only a lower bound; the independent watchdog remains necessary.
+    """
+    if not observations or any(
+        isinstance(x, bool) or not math.isfinite(x) or x <= 0 for x in observations
+    ):
+        raise ValueError("preparation observations must be finite positive seconds")
+    seconds = max(180, math.ceil(max(observations) * 4 / 60) * 60)
+    if (
+        bounds.exec_seconds + bounds.cleanup_reserve_seconds > bounds.session_seconds
+        or generation_seconds_per_session(replace(bounds, prepare_seconds=seconds)) <= 0
+    ):
+        raise ValueError("derived preparation window cannot fit the bounded session")
+    return seconds
 
 
 def workload_scorer_calls(protocol: dict[str, Any]) -> int:
@@ -642,6 +660,33 @@ def admit(
 # --------------------------------------------------------------------------- checkpoint merge
 
 
+def validate_prepared_status(status: dict[str, Any], binding: dict[str, Any]) -> None:
+    """CLI exit zero cannot attest to a completed, bound preparation child."""
+    stages = status.get("stages", [])
+    if (
+        status.get("binding") != binding
+        or status.get("status") != "READY"
+        or status.get("plan_sha256") != binding["plan_sha256"]
+        or status.get("runtime_qualification", {}).get("qualified") is not True
+        or len(stages) != 1
+        or stages[-1].get("stage") != "prepare"
+        or stages[-1].get("returncode") != 0
+        or stages[-1].get("timed_out") is not False
+    ):
+        raise ValueError("preparation has no matching qualified READY child status")
+    weights = status.get("weights", {})
+    if (
+        weights.get("model_revision") != decision.load_protocol()["candidate_model"]["revision"]
+        or not weights.get("weight_files")
+        or not status.get("snapshot_path")
+        or any(
+            weights.get("support_files", {}).get(name, {}).get("sha256") != digest
+            for name, digest in v3.load_profile()["tokenizer"]["files"].items()
+        )
+    ):
+        raise ValueError("READY preparation lacks pinned model/tokenizer verification")
+
+
 def merge_checkpoint(
     local: Path,
     downloaded: Path,
@@ -862,6 +907,19 @@ def run_session(
             plan,
             after["usage_rate_cu_per_hour"],
         )
+        prepared_path = run_dir / f"session-{session_index:03d}-prepare-status.json"
+        if not client.download(name, REMOTE_STATUS, prepared_path):
+            raise RuntimeError("authenticated preparation status recovery failed; no work")
+        state["prepare_status_sha256"] = v3.sha256(prepared_path.read_bytes())
+        prepared = v3.json_object(prepared_path.read_text())
+        state["prepare_status"] = prepared
+        if state["prepare"].get("returncode") != 0 or state["prepare"].get("timed_out"):
+            raise RuntimeError("preparation transport or CLI failed; no work")
+        validate_prepared_status(prepared, {**binding, "session_index": session_index})
+        if prepared.get("checkpoint_sha256") != (
+            v3.sha256(local.read_bytes()) if local.exists() else None
+        ):
+            raise RuntimeError("prepared checkpoint differs from uploaded prefix; no work")
         if state["prepare"].get("returncode") == 0:
             mid = client.snapshot()
             state["rate_before_work"] = mid["usage_rate_cu_per_hour"]
@@ -1225,6 +1283,8 @@ class ColabCLI:  # pragma: no cover - provider commands, used only in an authori
         return self._run(command, timeout=self._timeouts.UPLOAD_TIMEOUT_SECONDS).returncode == 0
 
     def exec_stage(self, name: str, stage: str, timeout: int) -> dict[str, Any]:
+        from scripts.a02_dev_remote import _safe_excerpt
+
         command = [
             "colab", "--auth=oauth2", "exec", "--session", name,
             "--env", f"A02_V3_REMOTE_STAGE={stage}",
@@ -1234,9 +1294,21 @@ class ColabCLI:  # pragma: no cover - provider commands, used only in an authori
         ]  # fmt: skip
         try:
             result = self._run(command, timeout=timeout + 30)
-        except subprocess.TimeoutExpired:
-            return {"returncode": None, "timed_out": True}
-        return {"returncode": result.returncode, "timed_out": False}
+        except subprocess.TimeoutExpired as exc:
+            return {
+                "returncode": None,
+                "timed_out": True,
+                "failure_category": "CLI_TRANSPORT_TIMEOUT",
+                "stdout_tail": _safe_excerpt(exc.stdout),
+                "stderr_tail": _safe_excerpt(exc.stderr),
+            }
+        return {
+            "returncode": result.returncode,
+            "timed_out": False,
+            "failure_category": "CLI_OR_TRANSPORT_EXIT" if result.returncode else None,
+            "stdout_tail": _safe_excerpt(result.stdout),
+            "stderr_tail": _safe_excerpt(result.stderr),
+        }
 
     def download(self, name: str, remote: str, local: Path) -> bool:
         command = ["colab", "--auth=oauth2", "download", "--session", name, remote, str(local)]

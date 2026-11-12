@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import re
 import sys
@@ -226,11 +227,14 @@ def outer(stage: str, timeout: int, helpers: Any = None) -> int:
                     stage="PINNED_PEFT_INSTALL",
                     timeout=120,
                 )
+    child_seconds = max(
+        1, math.floor(timeout - (time.monotonic() - outer_started) - CHILD_MARGIN_SECONDS)
+    )
     result = helpers.child(
         [str(WORK / "inference-venv/bin/python"), str(SOURCE_DIR / "scripts/a02_v3_remote.py")],
         cwd=SOURCE_DIR,
         env=_child_env(SOURCE_DIR, stage),
-        timeout=max(10, timeout - CHILD_MARGIN_SECONDS),
+        timeout=child_seconds,
     )
     status = json.loads(STATUS_PATH.read_bytes()) if STATUS_PATH.exists() else {}
     if stage == "prepare":
@@ -243,8 +247,21 @@ def outer(stage: str, timeout: int, helpers: Any = None) -> int:
             "stderr_tail": result.get("stderr_tail"),
         }
     )
+    clean = result.get("returncode") == 0 and result.get("timed_out") is False
+    if not clean or (
+        stage == "prepare" and status.get("status") not in {"READY", "BOOTSTRAP_TEST_READY"}
+    ):
+        status.update(
+            status="EXECUTION_FAILED",
+            failure_stage=stage,
+            failure_category="CHILD_TIMEOUT"
+            if result.get("timed_out")
+            else "CHILD_EXIT_OR_INCOMPLETE_STATUS",
+            child_timeout_seconds=child_seconds,
+        )
+        clean = False
     _write_status(status)
-    return 0 if result.get("returncode") == 0 and not result.get("timed_out") else 1
+    return 0 if clean else 1
 
 
 def child(stage: str, timeout: int) -> int:  # pragma: no cover - pinned GPU process
@@ -326,7 +343,13 @@ def child(stage: str, timeout: int) -> int:  # pragma: no cover - pinned GPU pro
         if not qualification["qualified"]:
             _write_status({"status": "RUNTIME_INCOMPATIBLE", "qualification": qualification})
             return 2
-        _write_status({"status": "RUNTIME_QUALIFIED", "runtime_qualification": qualification})
+        _write_status(
+            {
+                "status": "RUNTIME_QUALIFIED",
+                "runtime_qualification": qualification,
+                "prepare_phase": "PINNED_MODEL_DOWNLOAD_AND_HASH_VERIFY",
+            }
+        )
         path, weights = a02_remote._weights(model["id"], model["revision"], torch, freeze)
         _write_status(
             {
