@@ -86,3 +86,7 @@ that learned tensors change, base weights remain frozen, loss indexes only targe
 next-token positions, exports reload and resumption matches uninterrupted updates.
 Final adapter tensors, config and provenance are recovered outside Git. Training
 loss is never substituted for held-out scientific accuracy or adaptation benefit.
+
+Training also enables deterministic PyTorch algorithms and fixes the cuBLAS
+workspace to `:4096:8`. Recovery binds the actual PyTorch/CUDA/PEFT/device
+runtime and determinism settings; runtime drift stops resumption.

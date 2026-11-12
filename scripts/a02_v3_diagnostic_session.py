@@ -377,7 +377,7 @@ if __name__ == "__main__":
         from scripts import a02_execution
 
         seconds = int(sys.argv[4]) if len(sys.argv) == 5 else diagnostic.WALL_SECONDS
-        if seconds not in {diagnostic.WALL_SECONDS, 1800}:
+        if seconds not in {diagnostic.WALL_SECONDS, 1800, 3600, 7200}:
             raise ValueError("watchdog duration is outside the source-bound policies")
         a02_execution.MAX_SESSION_SECONDS = seconds
         receipt = Path(sys.argv[3])

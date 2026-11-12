@@ -142,7 +142,7 @@ def test_verification_exception_keeps_available_inventory(monkeypatch: Any) -> N
     assert client.teardown_receipt["assignments"]["error_type"] == "RuntimeError"
 
 
-@pytest.mark.parametrize("seconds", [600, 1800])
+@pytest.mark.parametrize("seconds", [600, 1800, 3600, 7200])
 def test_diagnostic_watchdog_uses_600_second_deadline(tmp_path: Path, seconds: int) -> None:
     cli = tmp_path / "colab"
     log = tmp_path / "deadline-calls"

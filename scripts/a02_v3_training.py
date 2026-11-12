@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import gc
 import hashlib
+import importlib.metadata
 import json
 import math
 import os
@@ -48,6 +49,8 @@ def specification() -> dict[str, Any]:
         "schedule": "ceil warmup fraction; linear decay; epoch shuffle seed+epoch",
         "max_grad_norm": 1.0,
         "gradient_checkpointing": True,
+        "deterministic_algorithms": True,
+        "cublas_workspace_config": ":4096:8",
         "loss_scaler_initial_scale": 128.0,
         "numerical_failure": "stop on nonfinite loss/gradient/adapter; no skipped updates",
         "checkpoint_interval_steps": 10,
@@ -308,6 +311,14 @@ def fit(
         "loss_sum": 0.0,
         "target_tokens": 0,
         "initial_adapter_fingerprint": adapter_fingerprint(model),
+        "runtime": {
+            "torch": torch.__version__,
+            "cuda": torch.version.cuda,
+            "peft": importlib.metadata.version("peft"),
+            "device": str(next(model.parameters()).device),
+            "deterministic_algorithms": torch.are_deterministic_algorithms_enabled(),
+            "float32_matmul_precision": torch.get_float32_matmul_precision(),
+        },
         "completed": False,
         "step_bound_seconds": spec["first_step_bound_seconds"],
     }
@@ -319,6 +330,7 @@ def fit(
             "specification_sha256",
             "data_order_sha256",
             "total_steps",
+            "runtime",
         ):
             if old[key] != meta[key]:
                 raise ValueError(f"training checkpoint identity differs: {key}")
@@ -421,6 +433,8 @@ def run(
     validate_specification(spec)
     if peft.__version__ != spec["peft_version"]:
         raise ValueError("unpinned PEFT runtime")
+    os.environ["CUBLAS_WORKSPACE_CONFIG"] = spec["cublas_workspace_config"]
+    torch.use_deterministic_algorithms(spec["deterministic_algorithms"])
     torch.cuda.reset_peak_memory_stats()
     before_free, before_total = torch.cuda.mem_get_info()
     torch.manual_seed(spec["adaptation"]["optimizer"]["seed"])
@@ -441,6 +455,7 @@ def run(
         training_manifest_sha256=spec["training"]["manifest_sha256"],
         trainable_parameters=sum(p.numel() for p in model.parameters() if p.requires_grad),
         runtime={
+            **result["runtime"],
             "torch": torch.__version__,
             "peft": peft.__version__,
             "training_base_parameter_dtypes": sorted(
