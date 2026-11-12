@@ -454,10 +454,13 @@ class HFWorkerBackend:
 def main() -> int:  # pragma: no cover - remote entry point in an authorized session
     import argparse
 
-    from transformers import AutoModelForCausalLM, AutoTokenizer  # type: ignore[import-not-found]
+    from transformers import AutoTokenizer  # type: ignore[import-not-found]
+
+    from scripts.a02_v3_precision import PrecisionAudit, load_model
 
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--snapshot", type=Path, required=True)
+    parser.add_argument("--precision", choices=("float16", "float32"), default="float16")
     parser.add_argument("--checkpoint", type=Path, required=True)
     parser.add_argument("--seconds", type=float, required=True)
     parser.add_argument("--cost-bounds", type=str, required=True)
@@ -465,10 +468,8 @@ def main() -> int:  # pragma: no cover - remote entry point in an authorized ses
     deadline = time.monotonic() + args.seconds
     protocol = decision.load_protocol()
     tokenizer = AutoTokenizer.from_pretrained(str(args.snapshot), local_files_only=True)
-    model = AutoModelForCausalLM.from_pretrained(
-        str(args.snapshot), local_files_only=True, torch_dtype="float16"
-    ).to("cuda")
-    model.eval()
+    model = load_model(args.snapshot, args.precision)
+    audit = PrecisionAudit(model, args.precision)
     backend = HFWorkerBackend(model, tokenizer, protocol["candidate_model"])
     status = run_worker(
         protocol=protocol,
@@ -478,6 +479,8 @@ def main() -> int:  # pragma: no cover - remote entry point in an authorized ses
         deadline=deadline,
         item_cost_bounds=json.loads(args.cost_bounds),
     )
+    status["precision_audit"] = audit.report()
+    audit.close()
     print(json.dumps(status, sort_keys=True))
     return 0
 
