@@ -36,6 +36,7 @@ STATUS_PATH = CONTENT_ROOT / "a02-v3-status.json"
 SOURCE_DIR = WORK / "v3-source"
 BINDING_SCHEMA = "RES541_A02_V3_REMOTE_BINDING_V1"
 FP32_BINDING_SCHEMA = "RES541_A1_FP32_CAMPAIGN_REMOTE_BINDING_V1"
+TRAINING_BINDING_SCHEMA = "RES541_OWNER_LORA_REMOTE_BINDING_V1"
 CHILD_MARGIN_SECONDS = 30
 _BINDING_KEYS = {
     "schema",
@@ -55,12 +56,18 @@ def load_binding(path: Path | None = None) -> dict[str, Any]:
         "RES541_A1_DIAGNOSTIC_REMOTE_BINDING_V1"
     )
     fp32 = isinstance(binding, dict) and binding.get("schema") == FP32_BINDING_SCHEMA
+    training = isinstance(binding, dict) and binding.get("schema") == TRAINING_BINDING_SCHEMA
     keys = _BINDING_KEYS | {"numerical_diagnostic"} if diagnostic else _BINDING_KEYS
     if fp32:
         keys = keys | {"precision", "numerical_amendment_sha256"}
+    if training:
+        keys = (_BINDING_KEYS - {"item_cost_bounds"}) | {
+            "training_spec",
+            "training_checkpoint_sha256",
+        }
     if not isinstance(binding, dict) or set(binding) != keys:
         raise ValueError("V3 remote binding fields differ")
-    if not diagnostic and not fp32 and binding["schema"] != BINDING_SCHEMA:
+    if not diagnostic and not fp32 and not training and binding["schema"] != BINDING_SCHEMA:
         raise ValueError("V3 remote binding schema differs")
     if fp32 and binding["precision"] != "float32":
         raise ValueError("A1 campaign requires explicitly selected FP32")
@@ -75,11 +82,14 @@ def load_binding(path: Path | None = None) -> dict[str, Any]:
         or binding["source_revision"] != identity["commit"]
     ):
         raise ValueError("V3 source identity differs")
-    costs = binding["item_cost_bounds"]
-    if set(costs) != {"QUALIFICATION", "ZERO_SHOT_UNCONSTRAINED", "ZERO_SHOT_CONSTRAINED"} or any(
-        not isinstance(v, int | float) or v <= 0 for v in costs.values()
-    ):
-        raise ValueError("V3 remote binding cost bounds are invalid")
+    if not training:
+        costs = binding["item_cost_bounds"]
+        if set(costs) != {
+            "QUALIFICATION",
+            "ZERO_SHOT_UNCONSTRAINED",
+            "ZERO_SHOT_CONSTRAINED",
+        } or any(not isinstance(v, int | float) or v <= 0 for v in costs.values()):
+            raise ValueError("V3 remote binding cost bounds are invalid")
     return binding
 
 
@@ -185,6 +195,26 @@ def outer(stage: str, timeout: int, helpers: Any = None) -> int:
         _write_status({"status": "PREPARING", "plan_sha256": binding["plan_sha256"]})
         if not bootstrap_test:
             helpers.setup()
+            if "training_spec" in binding:
+                from scripts import a02_remote
+
+                # The training overlay must preserve inherited torch.
+                a02_remote._run(
+                    [
+                        str(a02_remote._install_uv()),
+                        "pip",
+                        "install",
+                        "--python",
+                        str(WORK / "inference-venv/bin/python"),
+                        "--no-deps",
+                        "--only-binary=:all:",
+                        "-r",
+                        str(SOURCE_DIR / "experiments/a02/training-requirements-v1.txt"),
+                    ],
+                    cwd=SOURCE_DIR,
+                    stage="PINNED_PEFT_INSTALL",
+                    timeout=120,
+                )
     result = helpers.child(
         [str(WORK / "inference-venv/bin/python"), str(SOURCE_DIR / "scripts/a02_v3_remote.py")],
         cwd=SOURCE_DIR,
@@ -228,6 +258,10 @@ def child(stage: str, timeout: int) -> int:  # pragma: no cover - pinned GPU pro
 
         if _sha256_file(AMENDMENT) != binding["numerical_amendment_sha256"]:
             raise ValueError("FP32 campaign numerical amendment differs")
+    if "training_spec" in binding:
+        from scripts import a02_v3_training as training
+
+        training.validate_specification(binding["training_spec"])
     if decision.protocol_sha256() != binding["protocol_sha256"]:
         raise ValueError("extracted V3 protocol differs from the binding")
     if os.environ.get("A02_V3_BOOTSTRAP_TEST") == "1":
@@ -302,6 +336,47 @@ def child(stage: str, timeout: int) -> int:  # pragma: no cover - pinned GPU pro
     for name, digest in freeze.items():
         if _sha256_file(snapshot / name) != digest:
             raise ValueError(f"V3 tokenizer file differs: {name}")
+    if "training_spec" in binding:
+        training_root = CONTENT_ROOT / "a02-training"
+        prior = CONTENT_ROOT / "a02-training-prior.tar"
+        expected_prior = binding["training_checkpoint_sha256"]
+        if expected_prior is None:
+            if prior.exists():
+                raise ValueError("unbound training checkpoint present")
+        elif not prior.is_file() or _sha256_file(prior) != expected_prior:
+            raise ValueError("training recovery archive differs")
+        report_path = CONTENT_ROOT / "a02-training-report.jsonl"
+        if report_path.exists():
+            raise ValueError("training work already executed in this session; no retry")
+
+        def training_emit(value: dict[str, Any]) -> None:
+            with report_path.open("a", encoding="utf-8") as stream:
+                stream.write(json.dumps(value, sort_keys=True, allow_nan=False) + "\n")
+                stream.flush()
+                os.fsync(stream.fileno())
+
+        identity = {
+            "source_identity": binding["source_identity"],
+            "source_archive_sha256": binding["source_archive_sha256"],
+            "plan_sha256": binding["plan_sha256"],
+        }
+        result = training.run(
+            snapshot,
+            training_root,
+            binding["training_spec"],
+            identity,
+            deadline=deadline,
+            emit=training_emit,
+            prior=prior if expected_prior is not None else None,
+        )
+        status.update(
+            status="TRAINING_COMPLETE" if result["completed"] else "TRAINING_PAUSED",
+            training_result=result,
+            training_report_sha256=_sha256_file(report_path),
+            training_checkpoint_sha256=_sha256_file(training_root / "checkpoint.tar"),
+        )
+        _write_status(status)
+        return 0
     if "numerical_diagnostic" in binding:
         report_path = CONTENT_ROOT / "a02-v3-diagnostic.jsonl"
         if report_path.exists():

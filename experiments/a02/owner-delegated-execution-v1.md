@@ -50,3 +50,39 @@ The model and revision, FP32 numerical contract, prompts, data, labels, scientif
 thresholds, evaluation ordering, math SDPA scorers and 0.001-nat tolerance are
 unchanged. This operational amendment grants no alternate checkpoint,
 quantization, paid hardware upgrade, held-out training or automatic retry.
+
+## Automatic baseline and learned-weight artifacts
+
+After successful real-model qualification, the automatic controller constructs a
+new source-bound FP32 baseline plan from the observed native token rate, cached
+scoring times and full-context forward times, with conservative twofold timing
+margins and a reserve session. The original 581-item work order and scoring are
+unchanged. Baseline sessions are bounded to 3,600 seconds, with 300 seconds for
+cleanup; this is a prospective operational extension of the original 900-second
+execution plan, not a rewrite of that historical plan. Any no-progress session,
+price/cost anomaly, missing precision proof or failed teardown stops the pipeline.
+
+Only after the complete baseline is scored may the owner-requested LoRA study
+start. Training sessions are bounded to 7,200 seconds with 600 seconds for recovery
+and cleanup. All phases share the same 50-new-CU journal, bound to one fixed
+owner-receipt directory, with at most 64 sessions in total and no automatic retry.
+Session caps and the complete campaign count are derived before admission; the
+journal cannot erase unknown or over-cap cost by starting another proposal.
+
+Training retains the protocol's rank16/alpha32/dropout0.05 q/k/v/o adapters,
+2 epochs, AdamW lr0.0002, warmup0.03, full-input batch-token budget16384 and seed541.
+The explicit T4 execution choices are: frozen FP16 base, trainable FP32 adapters,
+FP16 autocast with an initial loss scale of128, math SDPA for forward AND checkpoint
+recomputation, non-reentrant gradient checkpointing, microbatch1, mean target-token
+cross-entropy gradients, tokenizer EOS appended to target_text, norm clipping1,
+AdamW betas(0.9,0.999)/epsilon1e-8/decay0.01, linear warmup/decay and deterministic
+seed+epoch shuffling. Nonfinite values and skipped optimizer updates stop training.
+These are prospective implementation choices; evaluation remains full FP32.
+
+Optimizer, scheduler, scaler and CPU/CUDA RNG states are checkpointed at complete
+step boundaries. Adapter and base invariants, example order, source/profile/data
+hashes, weight fingerprints and recovery archives are checked. CPU tests must show
+that learned tensors change, base weights remain frozen, loss indexes only target
+next-token positions, exports reload and resumption matches uninterrupted updates.
+Final adapter tensors, config and provenance are recovered outside Git. Training
+loss is never substituted for held-out scientific accuracy or adaptation benefit.
