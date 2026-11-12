@@ -307,6 +307,7 @@ def child(stage: str, timeout: int) -> int:  # pragma: no cover - pinned GPU pro
             deadline=deadline,
             emit=emit,
             prepare_seconds=status["prepare_seconds"] + time.monotonic() - started,
+            diagnostic_spec=binding["numerical_diagnostic"],
         )
         status.update(
             status="DIAGNOSTIC_COMPLETE" if result["passed"] else "DIAGNOSTIC_FAILED",

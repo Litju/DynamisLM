@@ -142,7 +142,8 @@ def test_verification_exception_keeps_available_inventory(monkeypatch: Any) -> N
     assert client.teardown_receipt["assignments"]["error_type"] == "RuntimeError"
 
 
-def test_diagnostic_watchdog_uses_600_second_deadline(tmp_path: Path) -> None:
+@pytest.mark.parametrize("seconds", [600, 1800])
+def test_diagnostic_watchdog_uses_600_second_deadline(tmp_path: Path, seconds: int) -> None:
     cli = tmp_path / "colab"
     log = tmp_path / "deadline-calls"
     cli.write_text('#!/bin/sh\nprintf "%s\\n" "$*" >> "$TEST_CALLS"\n')
@@ -152,16 +153,18 @@ def test_diagnostic_watchdog_uses_600_second_deadline(tmp_path: Path) -> None:
 import runpy, sys
 from scripts import a02_execution
 
+duration = sys.argv[2]
+
 def expired(read, write, error, timeout):
-    assert timeout == 600
+    assert timeout == int(duration)
     return [], [], []
 
 a02_execution.select.select = expired
-sys.argv = ["diagnostic", "watchdog", "exact-diagnostic-target", sys.argv[1]]
+sys.argv = ["diagnostic", "watchdog", "exact-diagnostic-target", sys.argv[1], duration]
 runpy.run_module("scripts.a02_v3_diagnostic_session", run_name="__main__")
 """
     result = subprocess.run(
-        [sys.executable, "-c", script, str(receipt)],
+        [sys.executable, "-c", script, str(receipt), str(seconds)],
         cwd=execution.ROOT,
         env={
             **os.environ,

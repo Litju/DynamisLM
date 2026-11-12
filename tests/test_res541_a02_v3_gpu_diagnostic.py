@@ -347,3 +347,126 @@ def test_diagnostic_remote_binding_is_distinct_from_campaign(tmp_path: Path) -> 
     path.write_text(json.dumps(binding))
     with pytest.raises(ValueError, match="fields"):
         remote.load_binding(path)
+
+
+@pytest.fixture
+def delegated(bound: Any) -> tuple[Any, Any, Any, Path]:
+    _, _, quota, archive = bound
+    proposed = session.proposal(archive, delegated=True)
+    approval = {
+        "schema": session.AUTH_SCHEMA,
+        "proposal_sha256": proposed["proposal_sha256"],
+        "accept_a1_for_diagnostic_only": True,
+        "approve_exact_source_one_session": True,
+        "maximum_new_cu": 3.0,
+    }
+    return proposed, approval, quota, archive
+
+
+def test_delegated_budget_changes_only_operational_semantics(delegated: Any) -> None:
+    proposed, approval, quota, _ = delegated
+    spec = proposed["specification"]
+    original = diagnostic.specification()
+    for key in (
+        "candidate_model",
+        "precision",
+        "tolerance_nats",
+        "protocol_sha256",
+        "amendment_sha256",
+        "calibration_indices",
+        "scientific_evaluations",
+        "stop_reserve_seconds",
+        "historical_cu",
+    ):
+        assert spec[key] == original[key]
+    assert spec["maximum_new_cu"] == 3.0
+    assert spec["wall_seconds"] == 1800
+    assert spec["owner_delegated_total_new_cu"] == 50.0
+    assert diagnostic.bounded_cost(4.0, 0.15, spec=spec) == pytest.approx(2.3)
+    session.admit(proposed, approval, quota, startup_cu=None, live_t4_rate=None)
+    with pytest.raises(ValueError, match="invent"):
+        session.admit(proposed, approval, quota, startup_cu=0, live_t4_rate=1.15)
+    with pytest.raises(ValueError, match="owner"):
+        session.admit(proposed, None, quota, startup_cu=None, live_t4_rate=None)
+
+
+@pytest.mark.parametrize("fault", ["rate", "zero", "nan", "startup", "negative_delta"])
+def test_observed_price_failure_prevents_all_model_preparation(delegated: Any, fault: str) -> None:
+    proposed, approval, quota, archive = delegated
+
+    class PriceClient(FakeClient):
+        def hardware(self, name: str) -> str:
+            super().hardware(name)
+            if fault == "rate":
+                self.quota["usage_rate_cu_per_hour"] = 4.01
+            elif fault == "zero":
+                self.quota["usage_rate_cu_per_hour"] = 0
+            elif fault == "nan":
+                self.quota["usage_rate_cu_per_hour"] = float("nan")
+            elif fault == "startup":
+                self.quota["balance"] -= 0.16
+            else:
+                self.quota["balance"] += 0.01
+            return "T4"
+
+    client = PriceClient(quota)
+    result = session.run(
+        client=client,
+        proposed=proposed,
+        approval=approval,
+        archive=archive,
+        startup_cu=None,
+        live_t4_rate=None,
+    )
+    assert not result["passed"]
+    assert client.calls.count("new") == 1
+    assert "upload" not in client.calls and "prepare" not in client.calls
+    assert client.calls[-3:] == ["stop", "both_inventories", ("disarm", True)]
+
+
+def test_observed_pricing_is_recorded_and_cannot_retry_with_new_proposal(delegated: Any) -> None:
+    proposed, approval, quota, archive = delegated
+    client = FakeClient(quota)
+    result = session.run(
+        client=client,
+        proposed=proposed,
+        approval=approval,
+        archive=archive,
+        startup_cu=None,
+        live_t4_rate=None,
+    )
+    assert result["pricing_observation"]["rate_cu_per_hour"] == 1.15
+    assert result["pricing_observation"]["minimum_startup_charge_quote"] is None
+    assert "prepare" in client.calls
+    changed = session.proposal(
+        archive, delegated=True, now=datetime.now(UTC) - timedelta(minutes=1)
+    )
+    changed_approval = {**approval, "proposal_sha256": changed["proposal_sha256"]}
+    with pytest.raises(FileExistsError):
+        session.run(
+            client=client,
+            proposed=changed,
+            approval=changed_approval,
+            archive=archive,
+            startup_cu=None,
+            live_t4_rate=None,
+        )
+    assert client.calls.count("new") == 1
+
+
+def test_real_cli_requires_zero_allocation_retries(monkeypatch: pytest.MonkeyPatch) -> None:
+    called = []
+
+    def allocate(self: Any, name: str) -> bool:
+        called.append(name)
+        return True
+
+    monkeypatch.setattr(execution.ColabCLI, "new", allocate)
+    monkeypatch.delenv("COLAB_CLI_ASSIGN_RETRIES", raising=False)
+    cli = session.DiagnosticCLI()
+    with pytest.raises(ValueError, match="retries"):
+        cli.new("synthetic-no-allocation")
+    assert not called
+    monkeypatch.setenv("COLAB_CLI_ASSIGN_RETRIES", "0")
+    assert cli.new("synthetic-no-allocation")
+    assert called == ["synthetic-no-allocation"]

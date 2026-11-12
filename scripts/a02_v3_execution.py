@@ -1106,15 +1106,19 @@ class ColabCLI:  # pragma: no cover - provider commands, used only in an authori
         self.target_endpoint: str | None = None
 
     def start_watchdog(self, name: str, receipt: Path) -> Any:
+        command = [
+            sys.executable,
+            "-m",
+            getattr(self, "watchdog_module", "scripts.a02_v3_execution"),
+            "watchdog",
+            name,
+            str(receipt),
+        ]
+        seconds = getattr(self, "watchdog_seconds", None)
+        if seconds is not None:
+            command.append(str(seconds))
         process = subprocess.Popen(
-            [
-                sys.executable,
-                "-m",
-                getattr(self, "watchdog_module", "scripts.a02_v3_execution"),
-                "watchdog",
-                name,
-                str(receipt),
-            ],
+            command,
             cwd=ROOT,
             env=self._timeouts.clean_colab_env(),
             stdin=subprocess.PIPE,

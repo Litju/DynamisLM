@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
 import subprocess
 import sys
 import time
@@ -28,7 +29,9 @@ def head_archive_sha256() -> str:
     )
 
 
-def proposal(archive: Path, *, now: datetime | None = None) -> dict[str, Any]:
+def proposal(
+    archive: Path, *, now: datetime | None = None, delegated: bool = False
+) -> dict[str, Any]:
     identity = execution.source_identity()
     if v3.sha256(archive.read_bytes()) != head_archive_sha256():
         raise ValueError("archive is not derived from exact HEAD")
@@ -37,7 +40,7 @@ def proposal(archive: Path, *, now: datetime | None = None) -> dict[str, Any]:
         "schema": PROPOSAL_SCHEMA,
         "source_identity": identity,
         "source_archive_sha256": v3.sha256(archive.read_bytes()),
-        "specification": diagnostic.specification(),
+        "specification": diagnostic.specification(delegated=delegated),
         "valid_from_utc": now.isoformat(),
         "valid_until_utc": (now + timedelta(hours=24)).isoformat(),
         "owner_approval": False,
@@ -65,16 +68,18 @@ def admit(
     snapshot: dict[str, Any],
     *,
     startup_cu: float | None,
-    live_t4_rate: float,
+    live_t4_rate: float | None,
     now: datetime | None = None,
 ) -> None:
     validate_proposal(proposed)
+    spec = proposed["specification"]
+    discovery = spec.get("pricing_policy") == "OBSERVE_BEFORE_MODEL_LOAD"
     expected = {
         "schema": AUTH_SCHEMA,
         "proposal_sha256": proposed["proposal_sha256"],
         "accept_a1_for_diagnostic_only": True,
         "approve_exact_source_one_session": True,
-        "maximum_new_cu": diagnostic.MAX_NEW_CU,
+        "maximum_new_cu": spec["maximum_new_cu"],
     }
     if approval != expected:
         raise ValueError("explicit owner acceptance of A1 AND exact diagnostic is missing")
@@ -84,14 +89,23 @@ def admit(
     if start.tzinfo is None or end.tzinfo is None or not start <= current < end:
         raise ValueError("diagnostic validity window is not active")
     if end - start > timedelta(hours=24) or (end - current).total_seconds() < (
-        diagnostic.WALL_SECONDS + diagnostic.STOP_RESERVE_SECONDS
+        spec["wall_seconds"] + spec["stop_reserve_seconds"]
     ):
         raise ValueError("diagnostic validity window cannot cover bounded teardown")
-    if startup_cu is None:
+    if startup_cu is None and not discovery:
         raise ValueError("live minimum startup charge must be independently verified")
-    diagnostic.bounded_cost(live_t4_rate, startup_cu)
+    if discovery:
+        if live_t4_rate is not None or startup_cu is not None:
+            raise ValueError("observed-pricing admission must not invent a verified quote")
+        diagnostic.bounded_cost(
+            spec["rate_ceiling_cu_per_hour"], spec["startup_allowance_cu"], spec=spec
+        )
+    else:
+        if live_t4_rate is None or startup_cu is None:
+            raise ValueError("verified live pricing is required")
+        diagnostic.bounded_cost(live_t4_rate, startup_cu, spec=spec)
     balance = snapshot["balance"]
-    if not math.isfinite(balance) or balance < diagnostic.MAX_NEW_CU + diagnostic.RESERVE_CU:
+    if not math.isfinite(balance) or balance < spec["maximum_new_cu"] + spec["reserve_cu"]:
         raise ValueError("live quota cannot cover the diagnostic")
     if snapshot["usage_rate_cu_per_hour"] != 0 or snapshot["active_sessions"]:
         raise ValueError("diagnostic requires zero preexisting active usage/sessions")
@@ -104,11 +118,15 @@ def run(
     approval: dict[str, Any] | None,
     archive: Path,
     startup_cu: float | None,
-    live_t4_rate: float,
+    live_t4_rate: float | None,
 ) -> dict[str, Any]:
     """No allocation before all owner/source/rate/watchdog checks; never retries."""
     before = client.snapshot()
     admit(proposed, approval, before, startup_cu=startup_cu, live_t4_rate=live_t4_rate)
+    spec = proposed["specification"]
+    discovery = spec.get("pricing_policy") == "OBSERVE_BEFORE_MODEL_LOAD"
+    if isinstance(client, DiagnosticCLI):
+        client.watchdog_seconds = spec["wall_seconds"]
     if v3.sha256(archive.read_bytes()) != proposed["source_archive_sha256"]:
         raise ValueError("diagnostic archive differs")
     name = f"res541-a1-{proposed['proposal_sha256'][:12]}"
@@ -116,6 +134,11 @@ def run(
     directory.mkdir(parents=True, exist_ok=True)
     if client.sessions():
         raise ValueError("diagnostic requires empty fresh session inventory")
+    if discovery:
+        execution._write_exclusive(
+            ROOT / "owner-delegated-diagnostic-used.json",
+            {"session": name, "proposal": proposed},
+        )
     execution._write_exclusive(directory / "used.json", {"session": name, "proposal": proposed})
     state: dict[str, Any] = {
         "session": name,
@@ -127,6 +150,8 @@ def run(
     watchdog = None
     attempted = False
     started = time.monotonic()
+    effective_rate = live_t4_rate
+    observed_startup_upper = startup_cu
     state["timing_seconds"] = {}
     try:
         watchdog = client.start_watchdog(name, directory / "watchdog.json")
@@ -136,7 +161,21 @@ def run(
         if client.hardware(name) != "T4":
             raise RuntimeError("allocated hardware differs from T4")
         after = client.snapshot()
-        if after["usage_rate_cu_per_hour"] != live_t4_rate or {
+        if discovery:
+            effective_rate = float(after["usage_rate_cu_per_hour"])
+            observed_startup_upper = float(before["balance"]) - float(after["balance"])
+            state["pricing_observation"] = {
+                "rate_cu_per_hour": effective_rate,
+                "initial_account_delta_cu": observed_startup_upper,
+                "minimum_startup_charge_quote": None,
+                "basis": "live rate and conservative account delta; not a preallocation quote",
+            }
+            if observed_startup_upper > spec["startup_allowance_cu"]:
+                raise RuntimeError("initial charge exceeds startup allowance; no model loading")
+            diagnostic.bounded_cost(effective_rate, observed_startup_upper, spec=spec)
+        if effective_rate is None:
+            raise RuntimeError("live provider rate is unknown; no model loading")
+        if after["usage_rate_cu_per_hour"] != effective_rate or {
             row["name"] for row in after["active_sessions"]
         } != {name}:
             raise RuntimeError("observed provider rate differs from verified rate")
@@ -163,18 +202,19 @@ def run(
         ):
             if not client.upload(name, local, remote):
                 raise RuntimeError("diagnostic upload failed")
-        plan = {"bounds": {"cost_buffer_cu": diagnostic.RESERVE_CU}}
+        plan = {"bounds": {"cost_buffer_cu": spec["reserve_cu"]}}
         admission = {
             "started_monotonic": started,
-            "per_session_cap": diagnostic.MAX_NEW_CU,
-            "cumulative_cap": diagnostic.MAX_NEW_CU,
+            "per_session_cap": spec["maximum_new_cu"],
+            "cumulative_cap": spec["maximum_new_cu"],
             "spent_before": 0.0,
         }
-        for stage, ceiling in (("prepare", 180), ("work", 360)):
+        work_ceiling = (
+            spec["wall_seconds"] - spec["stop_reserve_seconds"] - 180 if discovery else 360
+        )
+        for stage, ceiling in (("prepare", 180), ("work", work_ceiling)):
             remaining = (
-                diagnostic.WALL_SECONDS
-                - diagnostic.STOP_RESERVE_SECONDS
-                - (time.monotonic() - started)
+                spec["wall_seconds"] - spec["stop_reserve_seconds"] - (time.monotonic() - started)
             )
             if remaining < 60:
                 raise TimeoutError("insufficient time before independent watchdog stop")
@@ -187,7 +227,7 @@ def run(
                 before,
                 admission,
                 plan,
-                live_t4_rate,
+                effective_rate,
             )
             state["timing_seconds"][stage] = time.monotonic() - stage_started
             if state[stage].get("returncode") != 0:
@@ -236,12 +276,21 @@ def run(
             delta = before["balance"] - after["balance"]
             if not state.get("target_absent") or not math.isfinite(delta) or delta < 0:
                 raise ValueError("cost or teardown is uncertain")
+            if (
+                effective_rate is None
+                or not math.isfinite(effective_rate)
+                or effective_rate <= 0
+                or observed_startup_upper is None
+                or not math.isfinite(observed_startup_upper)
+                or observed_startup_upper < 0
+            ):
+                raise ValueError("live price was not recovered; conservative cost unknown")
             conservative = max(
-                delta, live_t4_rate * (time.monotonic() - started) / 3600 + (startup_cu or 0)
+                delta, effective_rate * (time.monotonic() - started) / 3600 + observed_startup_upper
             )
             state["new_conservative_cu"] = conservative
             state["cumulative_historical_plus_new_cu"] = diagnostic.HISTORICAL_CU + conservative
-            if conservative > diagnostic.MAX_NEW_CU:
+            if conservative > spec["maximum_new_cu"]:
                 raise ValueError("diagnostic cost cap exceeded")
         except Exception as exc:
             state["cost_error"] = str(exc)
@@ -274,6 +323,13 @@ def run(
 
 
 class DiagnosticCLI(execution.ColabCLI):
+    watchdog_seconds: int = diagnostic.WALL_SECONDS
+
+    def new(self, name: str) -> bool:
+        if os.environ.get("COLAB_CLI_ASSIGN_RETRIES") != "0":
+            raise ValueError("allocation retries must explicitly be disabled")
+        return super().new(name)
+
     def download(self, name: str, remote: str, local: Path) -> bool:
         return (
             self._run(
@@ -293,17 +349,20 @@ def main() -> int:
     parser.add_argument("--approval", type=Path)
     parser.add_argument("--verified-live-t4-rate", type=float)
     parser.add_argument("--verified-startup-cu", type=float)
+    parser.add_argument("--owner-delegated", action="store_true")
     args = parser.parse_args()
     if args.approval is None:
         execution.source_archive(args.archive)
-        value = proposal(args.archive)
+        value = proposal(args.archive, delegated=args.owner_delegated)
         args.proposal.write_text(json.dumps(value, indent=2) + "\n")
         return 0
-    if args.verified_live_t4_rate is None:
+    proposed = json.loads(args.proposal.read_bytes())
+    if args.verified_live_t4_rate is None and "pricing_policy" not in proposed["specification"]:
         raise ValueError("live provider T4 rate must be verified before admission")
+    os.environ["COLAB_CLI_ASSIGN_RETRIES"] = "0"
     result = run(
         client=DiagnosticCLI(),
-        proposed=json.loads(args.proposal.read_bytes()),
+        proposed=proposed,
         approval=json.loads(args.approval.read_bytes()),
         archive=args.archive,
         startup_cu=args.verified_startup_cu,
@@ -314,10 +373,13 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    if len(sys.argv) == 4 and sys.argv[1] == "watchdog":
+    if len(sys.argv) in {4, 5} and sys.argv[1] == "watchdog":
         from scripts import a02_execution
 
-        a02_execution.MAX_SESSION_SECONDS = diagnostic.WALL_SECONDS
+        seconds = int(sys.argv[4]) if len(sys.argv) == 5 else diagnostic.WALL_SECONDS
+        if seconds not in {diagnostic.WALL_SECONDS, 1800}:
+            raise ValueError("watchdog duration is outside the source-bound policies")
+        a02_execution.MAX_SESSION_SECONDS = seconds
         receipt = Path(sys.argv[3])
         receipt.write_text(json.dumps({"session": sys.argv[2], "phase": "READY"}))
         a02_execution._watchdog(sys.argv[2], receipt)

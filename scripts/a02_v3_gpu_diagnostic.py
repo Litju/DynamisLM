@@ -25,8 +25,8 @@ RATE_CEILING = 1.25
 RESERVE_CU = 0.02
 
 
-def specification() -> dict[str, Any]:
-    return {
+def specification(*, delegated: bool = False) -> dict[str, Any]:
+    value = {
         "schema": SCHEMA,
         "precision": "float32",
         "protocol_sha256": decision.protocol_sha256(),
@@ -45,18 +45,44 @@ def specification() -> dict[str, Any]:
         "scientific_evaluations": 0,
     }
 
+    if delegated:
+        value.update(
+            pricing_policy="OBSERVE_BEFORE_MODEL_LOAD",
+            operational_amendment_sha256=v3.sha256(
+                (v3.ROOT / "experiments/a02/owner-delegated-execution-v1.md").read_bytes()
+            ),
+            owner_delegated_total_new_cu=50.0,
+            maximum_new_cu=3.0,
+            wall_seconds=1800,
+            rate_ceiling_cu_per_hour=4.0,
+            reserve_cu=0.05,
+            startup_allowance_cu=0.15,
+        )
+    return value
+
 
 def validate_specification(value: dict[str, Any]) -> None:
-    if value != specification():
+    if value != specification(delegated="pricing_policy" in value):
         raise ValueError("diagnostic specification differs from exact source")
 
 
-def bounded_cost(rate: float, startup_cu: float = 0.0) -> float:
+def bounded_cost(
+    rate: float, startup_cu: float = 0.0, *, spec: dict[str, Any] | None = None
+) -> float:
     if not math.isfinite(rate) or rate <= 0 or not math.isfinite(startup_cu) or startup_cu < 0:
         raise ValueError("live rate/startup charge must be finite and known")
-    cost = rate * (WALL_SECONDS + STOP_RESERVE_SECONDS) / 3600 + startup_cu + RESERVE_CU
-    if rate > RATE_CEILING or cost > MAX_NEW_CU:
-        raise ValueError(f"0.26 CU insufficient or rate outside admission ceiling: {cost:.6f} CU")
+    spec = specification() if spec is None else spec
+    validate_specification(spec)
+    cost: float = (
+        rate * (spec["wall_seconds"] + spec["stop_reserve_seconds"]) / 3600
+        + startup_cu
+        + spec["reserve_cu"]
+    )
+    if rate > spec["rate_ceiling_cu_per_hour"] or cost > spec["maximum_new_cu"]:
+        raise ValueError(
+            f"{spec['maximum_new_cu']} CU insufficient or rate outside admission ceiling: "
+            f"{cost:.6f} CU"
+        )
     return cost
 
 
@@ -113,10 +139,20 @@ def validate_row(row: dict[str, Any]) -> None:
 
 
 def campaign_estimate(
-    rows: list[dict[str, Any]], native: dict[str, Any], overhead: float
+    rows: list[dict[str, Any]],
+    native: dict[str, Any],
+    overhead: float,
+    *,
+    rate_ceiling: float = RATE_CEILING,
 ) -> dict[str, Any]:
     """Planning only: measured FP32 calibration; pack the frozen 581-item order."""
-    if not rows or not native["tokens"] or overhead < 0:
+    if (
+        not rows
+        or not native["tokens"]
+        or overhead < 0
+        or not math.isfinite(rate_ceiling)
+        or rate_ceiling <= 0
+    ):
         raise ValueError("complete measured FP32 throughput and initialization are required")
     from scripts import a02_execution
     from scripts.a02_v3_execution import RuntimeBounds, workload_scorer_calls
@@ -180,8 +216,8 @@ def campaign_estimate(
             "maximum_sessions_with_reserve": sessions + 1,
             "work_seconds": work,
             "expected_elapsed_seconds": elapsed,
-            "cu_at_rate_ceiling": elapsed * RATE_CEILING / 3600 + sessions * RESERVE_CU,
-            "maximum_cu_with_reserve": (sessions + 1) * (window * RATE_CEILING / 3600 + RESERVE_CU),
+            "cu_at_rate_ceiling": elapsed * rate_ceiling / 3600 + sessions * RESERVE_CU,
+            "maximum_cu_with_reserve": (sessions + 1) * (window * rate_ceiling / 3600 + RESERVE_CU),
             "startup_charges": "additional per-session minimum, if any; must be reverified",
             "item_cost_seconds": costs,
         }
@@ -194,10 +230,14 @@ def run(
     deadline: float,
     emit: Callable[[dict[str, Any]], None],
     prepare_seconds: float,
+    diagnostic_spec: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """One pinned-model load, TRAIN-only A/B/C diagnostics, no retry or scientific checkpoint."""
     import torch  # type: ignore[import-not-found]
     from transformers import AutoTokenizer  # type: ignore[import-not-found]
+
+    diagnostic_spec = specification() if diagnostic_spec is None else diagnostic_spec
+    validate_specification(diagnostic_spec)
 
     def check() -> None:
         if time.monotonic() >= deadline:
@@ -214,7 +254,7 @@ def run(
 
     report: dict[str, Any] = {
         "schema": SCHEMA,
-        "specification": specification(),
+        "specification": diagnostic_spec,
         "rows": [],
         "passed": False,
         "scientific_evaluations": 0,
@@ -228,7 +268,7 @@ def run(
         emit({"phase": "BEFORE_LOAD", **report})
         if (
             report["before_load_memory"]["free_bytes"]
-            < specification()["minimum_free_bytes_before_load"]
+            < diagnostic_spec["minimum_free_bytes_before_load"]
         ):
             raise ValueError("less than 13 GiB free before FP32 load; no allocation probe")
         check()
@@ -284,6 +324,7 @@ def run(
             report["rows"],
             report["native_calibration_timing"],
             prepare_seconds + report["load_seconds"],
+            rate_ceiling=diagnostic_spec["rate_ceiling_cu_per_hour"],
         )
         report["precision_audit"] = audit.report()
         report["passed"] = True
