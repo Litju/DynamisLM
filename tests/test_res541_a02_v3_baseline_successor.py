@@ -50,6 +50,23 @@ def extend_synthetic_checkpoint(path: Path, items: list[worker.WorkItem], stop: 
         stream.write(b"".join(lines))
 
 
+def record_ledger_charge(ledger_path: Path, index: int, spent: float = 0.1) -> None:
+    """What the real controller does: append the session's conservative charge to the ledger."""
+    ledger = json.loads(ledger_path.read_text())
+    ledger["sessions"].append(
+        {
+            "index": index,
+            "name": f"synthetic-{index}",
+            "cost_status": "KNOWN",
+            "compute_units_spent": spent,
+            "teardown_verified": True,
+            "committed_items": 0,
+            "cost_accounting": {"cost_status": "KNOWN", "conservative_cu": spent},
+        }
+    )
+    ledger_path.write_text(json.dumps(ledger))
+
+
 class ReadonlyClient:
     def snapshot(self) -> dict[str, Any]:
         return {"balance": 100.0, "usage_rate_cu_per_hour": 0.0, "active_sessions": []}
@@ -371,6 +388,7 @@ def test_successor_preserves_prefix_starts_session3_and_cannot_retry(
         if failed:
             state["failure"] = "synthetic nested timeout"
         (kwargs["run_dir"] / f"session-{index:03d}-control.json").write_text(json.dumps(state))
+        record_ledger_charge(kwargs["ledger_path"], index)
         return state
 
     monkeypatch.setattr(execution, "run_session", session)
@@ -419,13 +437,11 @@ def test_completion_and_approved_window_at_admission_boundary(
     end = datetime.fromisoformat(proposal["valid_until_utc"])
     slot_count = proposal["maximum_new_sessions"] if final_slot else 1
     clock = [end - timedelta(seconds=3700 * slot_count)]
-    seconds = [0.0]
     monkeypatch.setattr(
         successor,
         "datetime",
         SimpleNamespace(now=lambda tz: clock[0], fromisoformat=datetime.fromisoformat),
     )
-    monkeypatch.setattr(successor, "time", SimpleNamespace(monotonic=lambda: seconds[0]))
     owner = directory / "synthetic-owner.json"
     owner.write_text(json.dumps(approval(proposal)))
     called = []
@@ -452,7 +468,6 @@ def test_completion_and_approved_window_at_admission_boundary(
                 lines.append((v3.canonical({**row, "line_sha256": head}) + "\n").encode())
             target.write_bytes(b"".join(lines))
         clock[0] += timedelta(seconds=3600)
-        seconds[0] += 3600
         if edit_proposal:
             changed = json.loads((directory / "proposal.json").read_text())
             for key in ("valid_from_utc", "valid_until_utc"):
@@ -475,6 +490,7 @@ def test_completion_and_approved_window_at_admission_boundary(
             "merge": {"torn_tail_discarded": False},
         }
         (directory / f"session-{index:03d}-control.json").write_text(json.dumps(state))
+        record_ledger_charge(kwargs["ledger_path"], index)
         return state
 
     def score(*args: Any) -> dict[str, Any]:

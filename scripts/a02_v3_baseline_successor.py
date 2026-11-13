@@ -67,6 +67,11 @@ def scientific_compatibility() -> dict[str, str]:
     # Only orchestration, tests and the prospective recovery note may change.
     allowed = {
         "scripts/a02_v3_execution.py",
+        # Session supervision, cost accounting and provider-inventory typing: orchestration
+        # only, containing no scientific, scoring, prompt, decoding or dependency logic.
+        "scripts/a02_v3_supervision.py",
+        "scripts/a02_v3_cost.py",
+        "scripts/a02_dev_execution.py",
         "scripts/a02_v3_remote.py",
         "scripts/a02_v3_baseline_successor.py",
         "experiments/a02/preparation-successor-v1.md",

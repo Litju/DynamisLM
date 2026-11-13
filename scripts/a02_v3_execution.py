@@ -787,6 +787,12 @@ EMERGENCY_ROUNDS = 2
 SUPERVISOR_HEARTBEAT_SLACK_SECONDS = 30
 RECONCILE_ATTEMPTS = 3
 WATCHDOG_TAKEOVER_WAIT_SECONDS = 15
+# Independent watchdog: bounded extra stop/verify rounds until the exact target is verified
+# absent. The environment may only shorten the pause (tests), never extend the schedule.
+WATCHDOG_ROUNDS = 3
+WATCHDOG_RETRY_SECONDS = max(
+    0.0, min(10.0, float(os.environ.get("RES541_WATCHDOG_RETRY_SECONDS", "10")))
+)
 RECONCILE_DELAY_SECONDS = 2
 
 
@@ -1741,6 +1747,51 @@ class ColabCLI:  # pragma: no cover - provider commands, used only in an authori
         return [row[0] for row in self._rows(out.stdout)]
 
 
+def watchdog_extra_rounds(run_id: str, receipt: Path) -> None:
+    """After the frozen base watchdog fired, keep stopping and verifying a bounded number of times.
+
+    The base watchdog (a frozen A02 source) performs one stop and one verification. If exact-target
+    absence was not verified, this continues on the same receipt until absence is verified or the
+    bounded rounds are exhausted; the receipt always records the last round and its evidence.
+    """
+    from scripts import a02_execution as base
+
+    for attempt in range(2, WATCHDOG_ROUNDS + 1):
+        try:
+            state = json.loads(receipt.read_text())
+        except (OSError, ValueError):
+            return
+        if state.get("target_absent") is True:
+            return
+        time.sleep(WATCHDOG_RETRY_SECONDS)
+        state.update(round=attempt, phase="STOP_REQUESTED")
+        base._write_json(receipt, state)
+        try:
+            stopped = base._run(
+                ["colab", "--auth=oauth2", "stop", "--session", run_id],
+                timeout=base.STOP_TIMEOUT_SECONDS,
+            )
+            state["stop_exit_code"] = stopped.returncode
+        except Exception as exc:
+            state["stop_error"] = type(exc).__name__
+        try:
+            sessions = base._run(
+                ["colab", "--auth=oauth2", "sessions"], timeout=base.VERIFY_TIMEOUT_SECONDS
+            )
+            assignments = base._run(base._assignment_command(), timeout=base.VERIFY_TIMEOUT_SECONDS)
+            state["sessions_exit_code"] = sessions.returncode
+            state["session_list"] = sessions.stdout.strip()
+            state["assignments_exit_code"] = assignments.returncode
+            state["target_absent"] = base._verify_target_absent(
+                sessions, run_id, state.get("target_endpoint"), assignments
+            )
+        except Exception as exc:
+            state["verification_error"] = type(exc).__name__
+            state["target_absent"] = False
+        state["phase"] = "VERIFY_RETURNED"
+        base._write_json(receipt, state)
+
+
 def source_identity() -> dict[str, str]:
     """External authorization freezes source, including runtime and dependency policy bytes."""
     dirty = subprocess.check_output(["git", "status", "--porcelain=v1"], cwd=ROOT, text=True)
@@ -1885,6 +1936,8 @@ if __name__ == "__main__":  # pragma: no cover
         receipt = Path(sys.argv[3])
         receipt.write_text(json.dumps({"session": sys.argv[2], "phase": "READY"}))
         a02_execution._watchdog(sys.argv[2], receipt)
+        if json.loads(receipt.read_text()).get("phase") == "VERIFY_RETURNED":
+            watchdog_extra_rounds(sys.argv[2], receipt)
         if json.loads(receipt.read_text()).get("phase") == "READY":
             receipt.write_text(json.dumps({"session": sys.argv[2], "phase": "DISARMED"}))
     else:

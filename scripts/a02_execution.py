@@ -49,12 +49,6 @@ DOWNLOAD_TIMEOUT_SECONDS = 120
 DRIVE_RECEIPT_TIMEOUT_SECONDS = 30
 STOP_TIMEOUT_SECONDS = 30
 VERIFY_TIMEOUT_SECONDS = 30
-# Independent watchdog: bounded stop/verify rounds until the exact target is verified absent.
-WATCHDOG_ROUNDS = 3
-# The environment may only shorten the pause (tests); it can never extend the bounded schedule.
-WATCHDOG_RETRY_SECONDS = max(
-    0.0, min(10.0, float(os.environ.get("RES541_WATCHDOG_RETRY_SECONDS", "10")))
-)
 REMOTE_REPORT = "/content/a02-report.json"
 REMOTE_DRIVE_RECEIPT = "/content/a02-drive-receipt.json"
 DRIVE_OWNER_RECORD = REPORT_DIR / "drive-owner-identity.json"
@@ -202,45 +196,35 @@ def _watchdog(run_id: str, receipt: Path) -> None:
                 pass
         if target_endpoint:
             state["target_endpoint"] = target_endpoint
+        stopped = _run(
+            ["colab", "--auth=oauth2", "stop", "--session", run_id],
+            timeout=STOP_TIMEOUT_SECONDS,
+        )
+        state["stop_exit_code"] = stopped.returncode
     except Exception as exc:
         state["stop_error"] = type(exc).__name__
-    for attempt in range(1, WATCHDOG_ROUNDS + 1):
-        state["round"] = attempt
-        try:
-            stopped = _run(
-                ["colab", "--auth=oauth2", "stop", "--session", run_id],
-                timeout=STOP_TIMEOUT_SECONDS,
-            )
-            state["stop_exit_code"] = stopped.returncode
-        except Exception as exc:
-            state["stop_error"] = type(exc).__name__
-        state["phase"] = "STOP_RETURNED"
-        record()
-        state["phase"] = "VERIFY_REQUESTED"
-        record()
-        try:
-            sessions = _run(["colab", "--auth=oauth2", "sessions"], timeout=VERIFY_TIMEOUT_SECONDS)
-            state["sessions_exit_code"] = sessions.returncode
-            state["session_list"] = sessions.stdout.strip()
-            state["sessions_stderr"] = sessions.stderr
-            state["session_absent"] = sessions.returncode == 0 and _zero_sessions(sessions.stdout)
-            assignments = _run(_assignment_command(), timeout=VERIFY_TIMEOUT_SECONDS)
-            state["assignments_exit_code"] = assignments.returncode
-            state["assignments_stdout"] = assignments.stdout
-            state["assignments_stderr"] = assignments.stderr
-            state["assignments_sha256"] = hashlib.sha256(assignments.stdout.encode()).hexdigest()
-            state["target_absent"] = _verify_target_absent(
-                sessions, run_id, target_endpoint, assignments
-            )
-        except Exception as exc:
-            state["verification_error"] = type(exc).__name__
-            state.setdefault("session_absent", False)
-            state["target_absent"] = False
-        if state.get("target_absent") is True or attempt == WATCHDOG_ROUNDS:
-            break
-        state["phase"] = "RETRY_PENDING"
-        record()
-        time.sleep(WATCHDOG_RETRY_SECONDS)
+    state["phase"] = "STOP_RETURNED"
+    record()
+    state["phase"] = "VERIFY_REQUESTED"
+    record()
+    try:
+        sessions = _run(["colab", "--auth=oauth2", "sessions"], timeout=VERIFY_TIMEOUT_SECONDS)
+        state["sessions_exit_code"] = sessions.returncode
+        state["session_list"] = sessions.stdout.strip()
+        state["sessions_stderr"] = sessions.stderr
+        state["session_absent"] = sessions.returncode == 0 and _zero_sessions(sessions.stdout)
+        assignments = _run(_assignment_command(), timeout=VERIFY_TIMEOUT_SECONDS)
+        state["assignments_exit_code"] = assignments.returncode
+        state["assignments_stdout"] = assignments.stdout
+        state["assignments_stderr"] = assignments.stderr
+        state["assignments_sha256"] = hashlib.sha256(assignments.stdout.encode()).hexdigest()
+        state["target_absent"] = _verify_target_absent(
+            sessions, run_id, target_endpoint, assignments
+        )
+    except Exception as exc:
+        state["verification_error"] = type(exc).__name__
+        state.setdefault("session_absent", False)
+        state["target_absent"] = False
     state["phase"] = "VERIFY_RETURNED"
     record()
 
