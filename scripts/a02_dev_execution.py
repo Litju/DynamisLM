@@ -24,6 +24,7 @@ from scripts import (
     a02_dev_runtime,
     a02_dev_score,
     a02_execution,
+    a02_v3_supervision,
 )
 
 ROOT = a02_execution.ROOT
@@ -64,6 +65,10 @@ _URL = re.compile(r"https?://[^\s<>\"']+")
 
 class DevelopmentRunError(RuntimeError):
     pass
+
+
+class InventoryMismatchError(DevelopmentRunError, a02_v3_supervision.InventoryMismatchError):
+    """Independent provider inventory reads disagree; benign only across a stop transition."""
 
 
 class ColabCommandError(DevelopmentRunError):
@@ -381,9 +386,9 @@ def _colab_snapshot() -> dict[str, Any]:
     session_rows = a02_execution._session_rows(sessions.stdout)
     assignments = a02_execution._provider_assignments()
     if {row[1] for row in session_rows} != {row["endpoint"] for row in assignments}:
-        raise DevelopmentRunError("Colab CLI and provider assignment inventories differ")
+        raise InventoryMismatchError("Colab CLI and provider assignment inventories differ")
     if usage_assignments != len(assignments):
-        raise DevelopmentRunError("Colab usage and provider assignment counts differ")
+        raise InventoryMismatchError("Colab usage and provider assignment counts differ")
     return {
         "balance": balance,
         "usage_rate_cu_per_hour": rate,
