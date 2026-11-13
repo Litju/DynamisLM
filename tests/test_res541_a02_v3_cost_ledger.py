@@ -324,3 +324,15 @@ def test_policy_loads_only_with_an_exact_owner_approval(tmp_path: Path) -> None:
             execution.load_authorized_policy(tmp_path / name)
     with pytest.raises(execution.AdmissionError):
         execution.load_authorized_policy(tmp_path / "does-not-exist")
+
+
+def test_no_allocation_claims_are_never_trusted_from_the_ledger(tmp_path: Path) -> None:
+    entry = _real_entry(tmp_path)
+    forged = json.loads(json.dumps(entry))
+    forged["compute_units_spent"] = 0.0
+    forged["cost_accounting"].update(
+        cost_confidence="NO_ALLOCATION", conservative_cu=0.0, observed_displayed_delta_cu=0
+    )
+    assert not execution._verified_accounting(forged, COST_POLICY)
+    ledger = {"schema": execution.LEDGER_SCHEMA}
+    assert execution._ledger_charge(forged, ledger, PER_SESSION, COST_POLICY) >= PER_SESSION

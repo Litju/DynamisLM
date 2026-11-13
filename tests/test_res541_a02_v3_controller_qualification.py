@@ -227,6 +227,8 @@ print(json.dumps(client.watchdog_takeover))
             break
         time.sleep(0.1)
     final = json.loads(receipt.read_text())
-    assert final["phase"] == "VERIFY_RETURNED" and final["round"] == 3  # bounded, not endless
+    assert (
+        final["phase"] == "VERIFY_RETURNED" and final["round"] == execution.WATCHDOG_ROUNDS
+    )  # bounded
     assert "stop --session exact-qualification-target" in log.read_text()
     assert PLAN["session_count"] >= 1

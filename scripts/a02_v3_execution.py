@@ -648,9 +648,9 @@ def _verified_accounting(session: dict[str, Any], policy: dict[str, Any] | None)
         )
         if cast(float, recorded) < floor - 1e-9:
             return False
-    elif accounting.get("cost_confidence") == "NO_ALLOCATION":
-        again = costing.conservative_charge(**common, observed_rates=[], allocation_attempted=False)
     else:
+        # NO_ALLOCATION cannot be verified from the ledger alone (nothing independent shows no
+        # allocation was attempted), so it is never trusted: it counts at a full session bound.
         return False
     return again.get("cost_status") == "KNOWN" and abs(again["conservative_cu"] - recorded) < 1e-9
 
@@ -928,9 +928,9 @@ ALLOCATION = supervision.Phase.ALLOCATION
 WATCHDOG_TAKEOVER_WAIT_SECONDS = 15
 # Independent watchdog: bounded extra stop/verify rounds until the exact target is verified
 # absent. The environment may only shorten the pause (tests), never extend the schedule.
-WATCHDOG_ROUNDS = 3
+WATCHDOG_ROUNDS = 9  # with 20 s pauses: outlasts one 120 s allocation command
 WATCHDOG_RETRY_SECONDS = max(
-    0.0, min(10.0, float(os.environ.get("RES541_WATCHDOG_RETRY_SECONDS", "10")))
+    0.0, min(20.0, float(os.environ.get("RES541_WATCHDOG_RETRY_SECONDS", "20")))
 )
 RECONCILE_DELAY_SECONDS = 2
 
