@@ -34,8 +34,9 @@ never establishes successful preparation.
 Derive the prospective preparation window by rounding four times the maximum observed
 preparation time up to 60 seconds: 660 seconds for these observations. The failed observation
 is censored, so this is bounded headroom, not proof of eventual download completion. Recompute
-work capacity inside a 3,600-second independent watchdog limit, with 300 seconds for recovery
-and teardown, and refuse any plan that cannot fit its work. No allocation retries.
+work capacity inside a 3,600-second session limit, with 300 seconds for recovery and teardown.
+The independent watchdog starts teardown at 3,420 seconds, leaving 180 seconds for its bounded
+discovery, stop and inventory checks. Refuse any plan that cannot fit its work. No allocation retries.
 
 ## Successor continuity and spending
 
