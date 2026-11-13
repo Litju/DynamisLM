@@ -744,6 +744,7 @@ def _write_exclusive(path: Path, value: dict[str, Any]) -> None:
 
 
 COST_POLL_SECONDS = 5
+COST_SNAPSHOT_TIMEOUT_SECONDS = 30
 
 
 def monitored_stage(
@@ -866,6 +867,79 @@ def run_session(
     watchdog = None
     allocated = False
     attempted = False  # only a session this run tried to create may be stopped by this run
+    monitor_halt = threading.Event()
+    allocation_done = threading.Event()
+    stopping = threading.Event()
+    monitor_failures: list[str] = []
+    monitor_observations: list[dict[str, Any]] = []
+    monitor_thread: threading.Thread | None = None
+
+    def monitor_session() -> None:
+        observed_rate: float | None = None
+        while not monitor_halt.wait(COST_POLL_SECONDS):
+            try:
+                result: dict[str, Any] = {}
+
+                def snapshot(output: dict[str, Any] = result) -> None:
+                    try:
+                        output["snapshot"] = client.snapshot()
+                    except Exception as exc:
+                        output["error"] = exc
+
+                poll = threading.Thread(target=snapshot, name="res541-cost-snapshot", daemon=True)
+                poll.start()
+                poll.join(timeout=COST_SNAPSHOT_TIMEOUT_SECONDS)
+                if poll.is_alive():
+                    raise RuntimeError("live quota snapshot timed out")
+                if "error" in result:
+                    raise RuntimeError("live quota snapshot failed") from result["error"]
+                snap = result["snapshot"]
+                monitor_observations.append(snap)
+                rate = float(snap["usage_rate_cu_per_hour"])
+                delta = float(before["balance"]) - float(snap["balance"])
+                names = {row["name"] for row in snap["active_sessions"]}
+                prior = {row["name"] for row in before["active_sessions"]}
+                target_present = name in names
+                if names - {name} != prior or not math.isfinite(delta) or delta < 0:
+                    raise RuntimeError("unexpected provider usage or quota attribution")
+                if not math.isfinite(rate) or rate < 0:
+                    raise RuntimeError("live rate is invalid")
+                if target_present:
+                    if rate <= 0 or rate > plan["bounds"]["admission_rate_ceiling_cu_per_hour"]:
+                        raise RuntimeError("live T4 rate exceeds the admission ceiling")
+                    if (observed_rate is not None and rate != observed_rate) or (
+                        "initial_rate" in admission and rate != admission["initial_rate"]
+                    ):
+                        raise RuntimeError("live T4 rate changed")
+                    observed_rate = rate
+                    check_cost(snap, rate)
+                elif (allocation_done.is_set() and not stopping.is_set()) or rate != 0:
+                    raise RuntimeError("target allocation or provider usage is uncertain")
+            except Exception as exc:
+                monitor_failures.append(type(exc).__name__ + ": " + str(exc))
+                try:
+                    client.stop(name)
+                except Exception as stop_exc:
+                    monitor_failures.append(type(stop_exc).__name__)
+                return
+
+    def check_monitor() -> None:
+        if monitor_failures:
+            raise RuntimeError("live session cost monitor failed")
+
+    def check_cost(snap: dict[str, Any], rate: float) -> None:
+        delta = float(before["balance"]) - float(snap["balance"])
+        if not math.isfinite(delta) or delta < 0:
+            raise RuntimeError("quota attribution is unknown; no work")
+        elapsed = time.monotonic() - admission["started_monotonic"]
+        upper = max(delta, rate * elapsed / 3600)
+        reserve = plan["bounds"]["cost_buffer_cu"] + rate * 125 / 3600
+        remaining = min(
+            admission["per_session_cap"], admission["cumulative_cap"] - admission["spent_before"]
+        )
+        if upper + reserve >= remaining:
+            raise RuntimeError("live cumulative allowance guard reached; no work")
+
     state["sessions_before"] = sorted(client.sessions())
     try:
         if name in state["sessions_before"]:
@@ -882,7 +956,12 @@ def run_session(
             raise AdmissionError("owner window cannot cover allocation, watchdog and teardown")
         admission["started_monotonic"] = time.monotonic()
         attempted = True
+        monitor_thread = threading.Thread(target=monitor_session, daemon=True)
+        monitor_thread.start()
         allocated = client.new(name)
+        if allocated:
+            allocation_done.set()
+        check_monitor()
         state["allocated"] = allocated
         if not allocated:
             raise RuntimeError("single V3 T4 allocation failed; no retry")
@@ -890,6 +969,9 @@ def run_session(
             raise RuntimeError("allocated V3 session is not the exact requested T4")
         after = client.snapshot()
         state["rate_after_allocation"] = after["usage_rate_cu_per_hour"]
+        expected_sessions = {row["name"] for row in before["active_sessions"]} | {name}
+        if {row["name"] for row in after["active_sessions"]} != expected_sessions:
+            raise RuntimeError("provider inventory differs after allocation; no work")
         if (
             not math.isfinite(after["usage_rate_cu_per_hour"])
             or after["usage_rate_cu_per_hour"] <= 0
@@ -897,6 +979,15 @@ def run_session(
             > plan["bounds"]["admission_rate_ceiling_cu_per_hour"]
         ):
             raise RuntimeError("live T4 rate exceeds the admission ceiling; stopping at once")
+        check_cost(after, after["usage_rate_cu_per_hour"])
+        admission["initial_rate"] = after["usage_rate_cu_per_hour"]
+        if any(
+            name in {row["name"] for row in snap["active_sessions"]}
+            and snap["usage_rate_cu_per_hour"] != admission["initial_rate"]
+            for snap in monitor_observations
+        ):
+            raise RuntimeError("live T4 rate changed during allocation")
+        check_monitor()
         binding_path = run_dir / f"session-{session_index:03d}-binding.json"
         binding_path.write_text(json.dumps({**binding, "session_index": session_index}))
         uploads = [(source_archive, REMOTE_SOURCE), (binding_path, REMOTE_BINDING)]
@@ -905,20 +996,14 @@ def run_session(
         for path, remote in uploads:
             if not client.upload(name, path, remote):
                 raise RuntimeError(f"V3 upload failed: {remote}")
+            check_monitor()
         bounds = plan["bounds"]
-        state["prepare"] = monitored_stage(
-            client,
-            name,
-            "prepare",
-            bounds["prepare_seconds"],
-            before,
-            admission,
-            plan,
-            after["usage_rate_cu_per_hour"],
-        )
+        state["prepare"] = client.exec_stage(name, "prepare", bounds["prepare_seconds"])
+        check_monitor()
         prepared_path = run_dir / f"session-{session_index:03d}-prepare-status.json"
         if not client.download(name, REMOTE_STATUS, prepared_path):
             raise RuntimeError("authenticated preparation status recovery failed; no work")
+        check_monitor()
         state["prepare_status_sha256"] = v3.sha256(prepared_path.read_bytes())
         prepared = v3.json_object(prepared_path.read_text())
         state["prepare_status"] = prepared
@@ -932,6 +1017,8 @@ def run_session(
         if state["prepare"].get("returncode") == 0:
             mid = client.snapshot()
             state["rate_before_work"] = mid["usage_rate_cu_per_hour"]
+            if {row["name"] for row in mid["active_sessions"]} != expected_sessions:
+                raise RuntimeError("provider inventory differs before work; no work")
             if mid["usage_rate_cu_per_hour"] > bounds["admission_rate_ceiling_cu_per_hour"]:
                 raise RuntimeError("live T4 rate rose above the admission ceiling; no work stage")
             if mid["usage_rate_cu_per_hour"] != after["usage_rate_cu_per_hour"]:
@@ -941,6 +1028,7 @@ def run_session(
                 > plan["compute_units"]["per_session_cap"]
             ):
                 raise RuntimeError("session spend already exceeds its bound; no work stage")
+            check_cost(mid, mid["usage_rate_cu_per_hour"])
             work_timeout = min(
                 bounds["exec_seconds"] - bounds["prepare_seconds"],
                 math.floor(
@@ -954,22 +1042,16 @@ def run_session(
             )
             next_item = items[committed]
             item_kind = "QUALIFICATION" if next_item.key == "QUALIFICATION" else next_item.arm
+            # The remote parent and child reserve three 30-second margins in total.
             if work_timeout <= (
                 bounds["inference_overhead_seconds"]
-                + bounds["worker_margin_seconds"]
+                + max(bounds["worker_margin_seconds"], 90)
                 + plan["item_cost_bounds_seconds"][item_kind]
             ):
                 raise RuntimeError("insufficient remaining work-stage time; no work")
-            state["work"] = monitored_stage(
-                client,
-                name,
-                "work",
-                work_timeout,
-                before,
-                admission,
-                plan,
-                after["usage_rate_cu_per_hour"],
-            )
+            check_monitor()
+            state["work"] = client.exec_stage(name, "work", work_timeout)
+            check_monitor()
     except Exception as exc:  # recorded; teardown and evidence recovery still run
         state["failure"] = f"{type(exc).__name__}: {exc}"
     finally:
@@ -1024,6 +1106,7 @@ def run_session(
         state["stopped"] = False
         state["target_absent_after_stop"] = False
         state["unrelated_sessions_after"] = []
+        stopping.set()
         for label, operation in (
             ("stopped", lambda: client.stop(name) if attempted else False),
             (
@@ -1038,6 +1121,15 @@ def run_session(
             except Exception as exc:
                 state[label + "_error"] = type(exc).__name__
         state["teardown_receipt"] = getattr(client, "teardown_receipt", None)
+        if monitor_thread is not None:
+            monitor_halt.set()
+            monitor_thread.join(timeout=130)
+            state["cost_observations"] = monitor_observations
+            if monitor_thread.is_alive():
+                monitor_failures.append("live quota monitor unresponsive")
+            if monitor_failures:
+                state["monitor_failure"] = monitor_failures
+                state["failure"] = "live session cost monitor failed"
         if watchdog is not None:
             try:
                 client.finish_watchdog(watchdog, state["target_absent_after_stop"] is True)

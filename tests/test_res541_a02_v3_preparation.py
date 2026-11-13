@@ -7,6 +7,7 @@ import os
 import shutil
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -177,7 +178,7 @@ def test_prepare_window_uses_censored_time_and_session_capacity() -> None:
         execution.derive_preparation_seconds([1000], bounds)
 
 
-@pytest.mark.parametrize(("elapsed", "expected_timeout"), [(250, 440), (500, None)])
+@pytest.mark.parametrize(("elapsed", "expected_timeout"), [(250, 440), (370, None), (500, None)])
 def test_actual_setup_time_limits_work_and_preserves_cleanup(
     tmp_path: Path, monkeypatch: Any, elapsed: int, expected_timeout: int | None
 ) -> None:
@@ -211,6 +212,108 @@ def test_actual_setup_time_limits_work_and_preserves_cleanup(
     if expected_timeout is None:
         assert "insufficient remaining work-stage time" in state["failure"]
         assert "work" not in state
+
+
+@pytest.mark.parametrize(
+    ("phase", "kind"),
+    [
+        ("allocation", "rate"),
+        ("upload", "rate"),
+        ("prepare_status", "rate"),
+        ("recovery", "rate"),
+        ("upload", "balance"),
+    ],
+)
+def test_cost_monitor_covers_all_paid_session_phases(
+    tmp_path: Path, monkeypatch: Any, phase: str, kind: str
+) -> None:
+    monkeypatch.setattr(execution, "COST_POLL_SECONDS", 0.001)
+    monkeypatch.setattr(
+        execution, "source_identity", lambda: {"commit": "a" * 40, "tree": "b" * 40}
+    )
+
+    class RateChange(FakeColab):
+        work_called = False
+        changed = False
+
+        def change(self, where: str) -> None:
+            if phase != where or self.changed:
+                return
+            self.changed = True
+            if kind == "rate":
+                self.rate_when_allocated = 2.0
+            else:
+                self.balance -= 5.0
+            deadline = time.monotonic() + 3
+            while not self.stopped and time.monotonic() < deadline:
+                time.sleep(0.001)
+            assert self.stopped, "monitor did not stop the exact target"
+
+        def new(self, name: str) -> bool:
+            result = super().new(name)
+            self.change("allocation")
+            return result
+
+        def upload(self, name: str, local: Path, remote: str) -> bool:
+            self.change("upload")
+            return super().upload(name, local, remote)
+
+        def exec_stage(self, name: str, stage: str, timeout: int) -> dict[str, Any]:
+            if stage == "work":
+                self.work_called = True
+            return super().exec_stage(name, stage, timeout)
+
+        def download(self, name: str, remote: str, local: Path) -> bool:
+            if remote == execution.REMOTE_STATUS:
+                self.change("recovery" if self.work_called else "prepare_status")
+            return super().download(name, remote, local)
+
+    client = RateChange(tmp_path / "provider", items_per_session=1)
+    archive = tmp_path / "source.tar"
+    archive.write_bytes(b"synthetic-source")
+    state = execution.run_session(
+        client=client, plan=PLAN, ledger_path=tmp_path / "ledger.json",
+        authorization=_allowance(), session_index=1, run_dir=tmp_path / "run",
+        source_archive=archive, binding=execution.remote_binding(PLAN, archive, "a" * 40),
+        now=NOW,
+    )  # fmt: skip
+    assert state["monitor_failure"] and state["target_absent_after_stop"] is True
+    assert client.created == [state["session"]]
+    assert all(name == state["session"] for name in client.stopped)
+    assert client.work_called is (phase == "recovery")
+
+
+def test_unresponsive_cost_snapshot_stops_target(tmp_path: Path, monkeypatch: Any) -> None:
+    monkeypatch.setattr(execution, "COST_POLL_SECONDS", 0.001)
+    monkeypatch.setattr(execution, "COST_SNAPSHOT_TIMEOUT_SECONDS", 0.01)
+    monkeypatch.setattr(
+        execution, "source_identity", lambda: {"commit": "a" * 40, "tree": "b" * 40}
+    )
+
+    class StalledSnapshot(FakeColab):
+        def snapshot(self) -> dict[str, Any]:
+            if threading.current_thread().name == "res541-cost-snapshot":
+                time.sleep(0.2)
+            return super().snapshot()
+
+        def upload(self, name: str, local: Path, remote: str) -> bool:
+            deadline = time.monotonic() + 2
+            while not self.stopped and time.monotonic() < deadline:
+                time.sleep(0.001)
+            assert self.stopped
+            return super().upload(name, local, remote)
+
+    client = StalledSnapshot(tmp_path / "provider")
+    archive = tmp_path / "source.tar"
+    archive.write_bytes(b"synthetic-source")
+    state = execution.run_session(
+        client=client, plan=PLAN, ledger_path=tmp_path / "ledger.json",
+        authorization=_allowance(), session_index=1, run_dir=tmp_path / "run",
+        source_archive=archive, binding=execution.remote_binding(PLAN, archive, "a" * 40),
+        now=NOW,
+    )  # fmt: skip
+    assert "live quota snapshot timed out" in state["monitor_failure"][0]
+    assert "work" not in state and state["target_absent_after_stop"] is True
 
 
 @pytest.mark.parametrize("mode", ["timeout", "start", "returned"])
