@@ -19,6 +19,35 @@ from scripts import a02_v3_worker as worker
 PROTOCOL = decision.load_protocol()
 
 
+def synthetic_model_metadata() -> dict[str, Any]:
+    return {
+        "synthetic": True,
+        "model_id": PROTOCOL["candidate_model"]["id"],
+        "model_revision": PROTOCOL["candidate_model"]["revision"],
+        "contract_profile_sha256": PROTOCOL["contract_profile_sha256"],
+        "protocol_sha256": decision.protocol_sha256(),
+    }
+
+
+def extend_synthetic_checkpoint(path: Path, items: list[worker.WorkItem], stop: int) -> None:
+    # Inject fixtures in one write; real worker persistence is tested separately and unchanged.
+    state = worker.read_checkpoint(path, items)
+    start, head = len(state["entries"]), state["head"]
+    lines: list[bytes] = []
+    for seq, item in enumerate(items[start:stop], start):
+        entry = {
+            "schema": worker.CHECKPOINT_SCHEMA,
+            "seq": seq,
+            "prev_sha256": head,
+            "item": item.id,
+            "record": synthetic_model_metadata(),
+        }
+        head = worker._line_hash(entry)
+        lines.append((v3.canonical({**entry, "line_sha256": head}) + "\n").encode())
+    with path.open("ab") as stream:
+        stream.write(b"".join(lines))
+
+
 class ReadonlyClient:
     def snapshot(self) -> dict[str, Any]:
         return {"balance": 100.0, "usage_rate_cu_per_hour": 0.0, "active_sessions": []}
@@ -324,18 +353,7 @@ def test_successor_preserves_prefix_starts_session3_and_cannot_retry(
         assert checkpoint.read_bytes() == original
         if not failed:
             items = worker.work_items(decision.load_protocol())
-            head = worker.read_checkpoint(checkpoint, items)["head"]
-            for seq, item in enumerate(items[307:], 307):
-                head = worker._append(
-                    checkpoint,
-                    {
-                        "schema": worker.CHECKPOINT_SCHEMA,
-                        "seq": seq,
-                        "prev_sha256": head,
-                        "item": item.id,
-                        "record": {"synthetic": True},
-                    },
-                )
+            extend_synthetic_checkpoint(checkpoint, items, len(items))
         state = {
             "quota_before": {"balance": 100},
             "quota_after": {"balance": 99.9},
@@ -362,3 +380,122 @@ def test_successor_preserves_prefix_starts_session3_and_cannot_retry(
     with pytest.raises(ValueError, match="consumed"):
         successor.run(directory, path, ReadonlyClient())
     assert called == [3]
+
+
+@pytest.mark.parametrize(
+    ("finish", "edit_proposal", "corrupt_prefix", "expire_after_stop", "final_slot"),
+    [
+        (True, False, False, False, False),
+        (False, False, False, False, False),
+        (False, True, False, False, False),
+        (True, False, True, False, False),
+        (True, False, False, True, False),
+        (True, False, True, False, True),
+    ],
+    ids=[
+        "complete_near_expiry",
+        "incomplete_near_expiry",
+        "changed_approval",
+        "changed_prefix",
+        "completed_then_expired",
+        "final_slot_changed_prefix",
+    ],
+)
+def test_completion_and_approved_window_at_admission_boundary(
+    prepared: Any,
+    monkeypatch: Any,
+    finish: bool,
+    edit_proposal: bool,
+    corrupt_prefix: bool,
+    expire_after_stop: bool,
+    final_slot: bool,
+) -> None:
+    from types import SimpleNamespace
+
+    directory, proposal = prepared
+    end = datetime.fromisoformat(proposal["valid_until_utc"])
+    slot_count = proposal["maximum_new_sessions"] if final_slot else 1
+    clock = [end - timedelta(seconds=3700 * slot_count)]
+    seconds = [0.0]
+    monkeypatch.setattr(
+        successor,
+        "datetime",
+        SimpleNamespace(now=lambda tz: clock[0], fromisoformat=datetime.fromisoformat),
+    )
+    monkeypatch.setattr(successor, "time", SimpleNamespace(monotonic=lambda: seconds[0]))
+    owner = directory / "synthetic-owner.json"
+    owner.write_text(json.dumps(approval(proposal)))
+    called = []
+    scored = []
+
+    def session(**kwargs: Any) -> dict[str, Any]:
+        index = kwargs["session_index"]
+        called.append(index)
+        assert index == 3 or final_slot, "another session must not be admitted at this boundary"
+        target = directory / "checkpoint.jsonl"
+        items = worker.work_items(PROTOCOL)
+        start = len(worker.read_checkpoint(target, items)["entries"])
+        finished_slot = finish and (not final_slot or index == proposal["plan"]["session_count"])
+        stop = len(items) if finished_slot else start + 1
+        extend_synthetic_checkpoint(target, items, stop)
+        if corrupt_prefix and finished_slot:
+            rows = worker.read_checkpoint(target, items)["entries"]
+            rows[0]["record"]["synthetic"] = "replaced inherited bytes"
+            head = worker.GENESIS
+            lines: list[bytes] = []
+            for row in rows:
+                row["prev_sha256"] = head
+                head = worker._line_hash(row)
+                lines.append((v3.canonical({**row, "line_sha256": head}) + "\n").encode())
+            target.write_bytes(b"".join(lines))
+        clock[0] += timedelta(seconds=3600)
+        seconds[0] += 3600
+        if edit_proposal:
+            changed = json.loads((directory / "proposal.json").read_text())
+            for key in ("valid_from_utc", "valid_until_utc"):
+                changed[key] = (
+                    datetime.fromisoformat(changed[key]) + timedelta(seconds=3600)
+                ).isoformat()
+            changed["proposal_sha256"] = v3.sha256(
+                v3.canonical({k: v for k, v in changed.items() if k != "proposal_sha256"}).encode()
+            )
+            (directory / "proposal.json").write_text(json.dumps(changed))
+        state = {
+            "quota_before": {"balance": 100.0},
+            "quota_after": {"balance": 98.85},
+            "rate_after_allocation": 1.15,
+            "target_absent_after_stop": True,
+            "stopped": True,
+            "sessions_before": [],
+            "unrelated_sessions_after": [],
+            "work": {"returncode": 0, "timed_out": False},
+            "merge": {"torn_tail_discarded": False},
+        }
+        (directory / f"session-{index:03d}-control.json").write_text(json.dumps(state))
+        return state
+
+    def score(*args: Any) -> dict[str, Any]:
+        scored.append(True)
+        return {"synthetic": True}
+
+    monkeypatch.setattr(execution, "run_session", session)
+    original_anomaly = execution.session_anomaly
+
+    def anomaly(*args: Any) -> Any:
+        result = original_anomaly(*args)
+        if expire_after_stop:
+            clock[0] += timedelta(seconds=150)
+        return result
+
+    monkeypatch.setattr(execution, "session_anomaly", anomaly)
+    monkeypatch.setattr(worker, "score_checkpoint", score)
+    result = successor.run(directory, owner, ReadonlyClient())
+    assert called == (list(range(3, proposal["plan"]["session_count"] + 1)) if final_slot else [3])
+    expected_complete = finish and not corrupt_prefix
+    assert result["complete"] is expected_complete
+    assert len(scored) == (1 if expected_complete else 0)
+    assert (directory / "terminal-anomaly.json").exists() is (not expected_complete)
+    if edit_proposal:
+        assert "approved proposal" in result["error"]
+    if corrupt_prefix:
+        assert "replaced inherited checkpoint" in result["error"]

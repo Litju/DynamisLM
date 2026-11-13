@@ -457,7 +457,7 @@ class FakeColab:
     def finish_watchdog(self, watchdog: Any, verified: bool) -> None:
         watchdog.write_text(json.dumps({"verified": verified}))
 
-    def verify_absent(self, name: str) -> bool:
+    def verify_absent(self, name: str, *, allocation_attempted: bool = True) -> bool:
         return name not in self.active
 
     def sessions(self) -> list[str]:

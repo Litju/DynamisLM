@@ -464,7 +464,7 @@ def validate_window(value: dict[str, Any], required_seconds: float = 0) -> None:
         raise ValueError("malformed successor validity window") from exc
 
 
-def validate(directory: Path, *, required_seconds: float = 0) -> dict[str, Any]:
+def validate(directory: Path, *, required_seconds: float | None = 0) -> dict[str, Any]:
     value = automatic.read(directory / "proposal.json")
     payload = {k: v for k, v in value.items() if k != "proposal_sha256"}
     if (
@@ -501,7 +501,8 @@ def validate(directory: Path, *, required_seconds: float = 0) -> dict[str, Any]:
         or value["stop_reserve_seconds"] != value["plan"]["bounds"]["cleanup_reserve_seconds"]
     ):
         raise ValueError("successor scope/budget differs")
-    validate_window(value, required_seconds)
+    if required_seconds is not None:
+        validate_window(value, required_seconds)
     return value
 
 
@@ -576,7 +577,8 @@ def run(directory: Path, approval_path: Path, client: Any) -> dict[str, Any]:
     binding = execution.remote_binding(
         plan, archive, proposal["source_identity"]["commit"], precision="float32", native_cache=True
     )
-    items = worker.work_items(decision.load_protocol())
+    protocol = decision.load_protocol()
+    items = worker.work_items(protocol)
     result: dict[str, Any] = {
         "complete": False,
         "proposal_sha256": proposal["proposal_sha256"],
@@ -585,16 +587,26 @@ def run(directory: Path, approval_path: Path, client: Any) -> dict[str, Any]:
         "new_task_evaluations": 0,
         "sessions": [],
     }
+
+    def checked_checkpoint() -> dict[str, Any]:
+        # Completed observations remain valid after the paid-allocation window closes.
+        checked = validate(directory, required_seconds=None)
+        if checked["proposal_sha256"] != proposal["proposal_sha256"]:
+            raise ValueError("approved proposal changed during successor execution")
+        state = worker.read_checkpoint(checkpoint, items)
+        worker.check_identity(state["entries"], protocol)
+        if not checkpoint.read_bytes().startswith(
+            (PREDECESSOR / "baseline/checkpoint.jsonl").read_bytes()
+        ):
+            raise ValueError("successor replaced inherited checkpoint bytes")
+        return state
+
     try:
         for index in range(3, plan["session_count"] + 1):
-            validate(directory, required_seconds=plan["bounds"]["session_seconds"] + 90)
-            before = worker.read_checkpoint(checkpoint, items)
+            before = checked_checkpoint()
             if len(before["entries"]) == len(items):
                 break
-            if not checkpoint.read_bytes().startswith(
-                (PREDECESSOR / "baseline/checkpoint.jsonl").read_bytes()
-            ):
-                raise ValueError("successor replaced inherited checkpoint bytes")
+            validate_window(proposal, required_seconds=plan["bounds"]["session_seconds"] + 90)
             automatic.quiet(client)
             if (
                 result["additional_conservative_cu"] + plan["compute_units"]["per_session_cap"]
@@ -646,7 +658,7 @@ def run(directory: Path, approval_path: Path, client: Any) -> dict[str, Any]:
             _write_json(directory / "progress.json", result)
             if problem:
                 raise ValueError(problem)
-        final = worker.read_checkpoint(checkpoint, items)
+        final = checked_checkpoint()
         if len(final["entries"]) != len(items) or final["torn_tail_discarded"]:
             raise ValueError("successor bounded session count exhausted before complete baseline")
         result["scientific_score"] = worker.score_checkpoint(decision.load_protocol(), checkpoint)

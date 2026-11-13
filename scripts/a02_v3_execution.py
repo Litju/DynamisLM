@@ -734,7 +734,7 @@ class ColabClient(Protocol):
     def sessions(self) -> list[str]: ...
     def start_watchdog(self, name: str, receipt: Path) -> Any: ...
     def finish_watchdog(self, watchdog: Any, verified: bool) -> None: ...
-    def verify_absent(self, name: str) -> bool: ...
+    def verify_absent(self, name: str, *, allocation_attempted: bool = True) -> bool: ...
 
 
 def _write_exclusive(path: Path, value: dict[str, Any]) -> None:
@@ -873,6 +873,13 @@ def run_session(
         watchdog = client.start_watchdog(
             name, run_dir / f"session-{session_index:03d}-watchdog.json"
         )
+        expires = datetime.fromisoformat(
+            str(validate_allowance(plan, authorization)["valid_until_utc"])
+        )
+        if (expires - (now or datetime.now(UTC))).total_seconds() < (
+            plan["bounds"]["session_seconds"] + 90
+        ):
+            raise AdmissionError("owner window cannot cover allocation, watchdog and teardown")
         admission["started_monotonic"] = time.monotonic()
         attempted = True
         allocated = client.new(name)
@@ -1001,7 +1008,11 @@ def run_session(
         state["unrelated_sessions_after"] = []
         for label, operation in (
             ("stopped", lambda: client.stop(name) if attempted else False),
-            ("target_absent_after_stop", lambda: attempted and client.verify_absent(name)),
+            (
+                "target_absent_after_stop",
+                lambda: (attempted or watchdog is not None)
+                and client.verify_absent(name, allocation_attempted=attempted),
+            ),
             ("unrelated_sessions_after", lambda: sorted(s for s in client.sessions() if s != name)),
         ):
             try:
@@ -1239,7 +1250,7 @@ class ColabCLI:  # pragma: no cover - provider commands, used only in an authori
             if json.loads(receipt.read_text()).get("phase") != "DISARMED":
                 raise RuntimeError("independent watchdog disarm receipt missing")
 
-    def verify_absent(self, name: str) -> bool:
+    def verify_absent(self, name: str, *, allocation_attempted: bool = True) -> bool:
         self.teardown_receipt: dict[str, Any] = {}
         results = {}
         commands: tuple[tuple[str, Callable[[], list[str]]], ...] = (
@@ -1260,6 +1271,17 @@ class ColabCLI:  # pragma: no cover - provider commands, used only in an authori
                 self.teardown_receipt[label] = {"error_type": type(exc).__name__}
         if set(results) != {"sessions", "assignments"}:
             return False
+        if not allocation_attempted:
+            # No POST was issued, so there is no target endpoint to bind. Both inventories
+            # must agree and prove the reserved session name absent before watchdog disarm.
+            if any(result.returncode != 0 or result.stderr for result in results.values()):
+                return False
+            sessions = self._timeouts._session_rows(results["sessions"].stdout)
+            assignments = self._timeouts._parse_assignments(results["assignments"].stdout)
+            return bool(
+                {row[1] for row in sessions} == {row["endpoint"] for row in assignments}
+                and not any(row[0] == name for row in sessions)
+            )
         return bool(
             self._timeouts._verify_target_absent(
                 results["sessions"], name, self.target_endpoint, results["assignments"]

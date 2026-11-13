@@ -213,3 +213,75 @@ def test_real_command_adapter_recovers_sanitized_transport_evidence(
     assert "private-signature" not in json.dumps(result)
     if mode != "start":
         assert "[URL_REDACTED]" in result["stderr_tail"]
+
+
+def test_owner_window_is_rechecked_after_watchdog_ready(tmp_path: Path, monkeypatch: Any) -> None:
+    from datetime import datetime, timedelta
+    from types import SimpleNamespace
+
+    clock = [NOW]
+    monkeypatch.setattr(
+        execution, "source_identity", lambda: {"commit": "a" * 40, "tree": "b" * 40}
+    )
+    monkeypatch.setattr(
+        execution,
+        "datetime",
+        SimpleNamespace(now=lambda tz: clock[0], fromisoformat=datetime.fromisoformat),
+    )
+
+    class DelayedWatchdog(FakeColab):
+        def start_watchdog(self, name: str, receipt: Path) -> Any:
+            result = super().start_watchdog(name, receipt)
+            clock[0] += timedelta(seconds=20)
+            return result
+
+    client = DelayedWatchdog(tmp_path / "provider")
+    archive = tmp_path / "source.tar"
+    archive.write_bytes(b"synthetic source")
+    allowance = _allowance(valid_until_utc=(NOW + timedelta(seconds=1000)).isoformat())
+    state = execution.run_session(
+        client=client,
+        plan=PLAN,
+        ledger_path=tmp_path / "ledger.json",
+        authorization=allowance,
+        session_index=1,
+        run_dir=tmp_path / "run",
+        source_archive=archive,
+        binding=execution.remote_binding(PLAN, archive, "a" * 40),
+    )
+    assert client.created == [] and client.stopped == []
+    assert "window cannot cover" in state["failure"]
+    assert state["target_absent_after_stop"] is True
+    assert json.loads((tmp_path / "run/session-001-watchdog.json").read_text())["verified"] is True
+
+
+@pytest.mark.parametrize("mode", ["zero", "failure", "unmatched"])
+def test_unallocated_watchdog_disarm_requires_both_authenticated_inventories(
+    monkeypatch: Any, mode: str
+) -> None:
+    client = execution.ColabCLI()
+    assert client.target_endpoint is None
+
+    def run(command: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        if command[:3] == ["colab", "--auth=oauth2", "sessions"]:
+            text = (
+                "[foreign] gpu-t4-foreign | Hardware: T4 | Shape: Standard | Variant: GPU\n"
+                if mode == "unmatched"
+                else "[colab] No active sessions found on server.\n"
+            )
+            return subprocess.CompletedProcess(command, 0, text, "")
+        return subprocess.CompletedProcess(
+            command,
+            1 if mode == "failure" else 0,
+            '{"endpoint":"https://colab.research.google.com/tun/m/assignments","assignments":[]}',
+            "",
+        )
+
+    monkeypatch.setattr(client, "_run", run)
+    assert client.verify_absent("synthetic-unattempted", allocation_attempted=False) is (
+        mode == "zero"
+    )
+    if mode == "zero":
+        # An attempted allocation still requires a bound exact endpoint; never weaken that gate.
+        with pytest.raises(RuntimeError, match="endpoint"):
+            client.verify_absent("synthetic-attempted")

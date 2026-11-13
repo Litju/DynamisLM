@@ -143,7 +143,7 @@ class FakeClient:
         self.quota["active_sessions"] = []
         return True
 
-    def verify_absent(self, name: str) -> bool:
+    def verify_absent(self, name: str, *, allocation_attempted: bool = True) -> bool:
         self.calls.append("both_inventories")
         return True
 
