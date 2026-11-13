@@ -67,6 +67,7 @@ def scientific_compatibility() -> dict[str, str]:
     # Only orchestration, tests and the prospective recovery note may change.
     allowed = {
         "scripts/a02_v3_execution.py",
+        "scripts/a02_v3_automatic.py",
         # Session supervision, cost accounting and provider-inventory typing: orchestration
         # only, containing no scientific, scoring, prompt, decoding or dependency logic.
         "scripts/a02_v3_supervision.py",
@@ -82,6 +83,25 @@ def scientific_compatibility() -> dict[str, str]:
     ).splitlines()
     if any(name not in allowed and not name.startswith("tests/") for name in changed):
         raise ValueError("successor changes scientific or dependency sources")
+    # Only the baseline campaign orchestration may differ in the automatic pipeline.
+    automatic_path = "scripts/a02_v3_automatic.py"
+    old_automatic = subprocess.check_output(
+        ["git", "show", f"{PREDECESSOR_HEAD}:{automatic_path}"], cwd=execution.ROOT, text=True
+    )
+
+    def without_campaign(source: str) -> str:
+        tree = ast.parse(source)
+        tree.body = [
+            node
+            for node in tree.body
+            if not (isinstance(node, ast.FunctionDef) and node.name == "run")
+        ]
+        return ast.dump(tree, include_attributes=False)
+
+    if without_campaign(old_automatic) != without_campaign(
+        (execution.ROOT / automatic_path).read_text()
+    ):
+        raise ValueError("automatic pipeline changed beyond campaign orchestration")
     inventory = ".repo-policy/noncode-inventory.tsv"
     old_rows = subprocess.check_output(
         ["git", "show", f"{PREDECESSOR_HEAD}:{inventory}"], cwd=execution.ROOT, text=True
