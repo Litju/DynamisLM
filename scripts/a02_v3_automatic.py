@@ -1000,7 +1000,6 @@ def run(directory: Path) -> dict[str, Any]:
             policy = execution.load_authorized_policy(directory)  # before any reservation
             budget.reserve(key, "BASELINE", plan["compute_units"]["per_session_cap"])
             client.watchdog_seconds = plan["bounds"]["session_seconds"]
-            start = time.monotonic()
             state = execution.run_session(
                 client=client,
                 plan=plan,
@@ -1013,12 +1012,15 @@ def run(directory: Path) -> dict[str, Any]:
                 cost_policy=policy,
             )
             path = baseline / f"session-{index:03d}-control.json"
-            spent = None
-            if state.get("target_absent_after_stop") and "failure" not in state:
-                spent = max(
-                    state["quota_before"]["balance"] - state["quota_after"]["balance"],
-                    state["rate_after_allocation"] * (time.monotonic() - start) / 3600,
-                )
+            # One accounting authority: the shared ledger's policy-bound conservative charge.
+            charged = read(baseline / "ledger.json")["sessions"][-1]
+            spent = (
+                charged["compute_units_spent"]
+                if charged.get("cost_status") == "KNOWN"
+                and charged.get("teardown_verified") is True
+                and "failure" not in state
+                else None
+            )
             after = (
                 len(worker.read_checkpoint(checkpoint, items)["entries"])
                 if checkpoint.exists()

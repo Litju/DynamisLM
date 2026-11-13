@@ -11,6 +11,7 @@ from typing import Any
 import pytest
 from scripts import a02_v3_automatic as automatic
 from scripts import a02_v3_contract as v3
+from scripts import a02_v3_cost as cost
 from scripts import a02_v3_decision as decision
 from scripts import a02_v3_diagnostic_session as diagnostic_session
 from scripts import a02_v3_execution as execution
@@ -18,7 +19,7 @@ from scripts import a02_v3_gpu_diagnostic as diagnostic
 from scripts import a02_v3_training as training
 from scripts import a02_v3_worker as worker
 
-from test_res541_a02_v3_execution import write_authorized_policy
+from test_res541_a02_v3_execution import COST_POLICY, write_authorized_policy
 
 
 def test_one_budget_counts_all_stages_and_never_erases_unknown_cost(tmp_path: Path) -> None:
@@ -421,6 +422,14 @@ def test_automatic_sequence_reaches_export_without_per_stage_confirmation(
     def baseline_success(**kwargs: Any) -> dict[str, Any]:
         calls.append("baseline")
         directory = kwargs["run_dir"]
+        accounting = cost.conservative_charge(
+            policy=COST_POLICY,
+            balance_before=100,
+            balance_after=99.8,
+            elapsed_seconds=60,
+            observed_rates=[1.15],
+            teardown_verified=True,
+        )
         (directory / "checkpoint.jsonl").write_bytes(b"SYNTHETIC checkpoint")
         committed[0] = 500 if fault == "baseline_rollback" else 581
         state = {
@@ -439,7 +448,19 @@ def test_automatic_sequence_reaches_export_without_per_stage_confirmation(
         (directory / "session-001-control.json").write_text(json.dumps(state))
         (directory / "ledger.json").write_text(
             json.dumps(
-                {"source_identity": source, "sessions": [{"index": 1, "committed_items": 581}]}
+                {
+                    "source_identity": source,
+                    "sessions": [
+                        {
+                            "index": 1,
+                            "committed_items": 581,
+                            "cost_status": "KNOWN",
+                            "teardown_verified": True,
+                            "compute_units_spent": accounting["conservative_cu"],
+                            "cost_accounting": accounting,
+                        }
+                    ],
+                }
             )
         )
         return state
