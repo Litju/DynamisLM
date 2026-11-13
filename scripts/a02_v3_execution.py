@@ -851,7 +851,7 @@ RECONCILE_DELAY_SECONDS = 2
 
 
 def monitored_stage(
-    client: SupervisedColabClient,
+    client: ColabClient,
     name: str,
     stage: str,
     timeout: int,
