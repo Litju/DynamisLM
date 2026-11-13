@@ -139,3 +139,12 @@ def test_charge_is_rounded_up_never_down() -> None:
         + result["operational_reserve_cu"]
         - 1e-9
     )
+
+
+def test_live_projection_and_final_charge_use_one_formula() -> None:
+    result = charge(elapsed_seconds=777.0, balance_after=86.9)
+    projected = cost.projected_bound(POLICY, observed_delta=0.18, elapsed_seconds=777.0, rate=1.15)
+    assert result["conservative_cu"] == pytest.approx(projected, abs=1e-4)
+    assert cost.projected_bound(POLICY, observed_delta=0, elapsed_seconds=0, rate=1.15) >= (
+        POLICY["startup_charge_cu"] + POLICY["operational_reserve_cu"]
+    )

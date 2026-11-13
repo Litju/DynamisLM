@@ -195,3 +195,47 @@ def _clean_source(monkeypatch: Any) -> None:
     monkeypatch.setattr(
         execution, "source_identity", lambda: {"commit": "a" * 40, "tree": "b" * 40}
     )
+
+
+def test_a_watchdog_that_exited_after_ready_permits_no_allocation(tmp_path: Path) -> None:
+    client = Supervised(tmp_path / "remote")
+    client.watchdog_alive_flag = False  # READY was printed, then the process died
+    state = _session(tmp_path, client, 1)
+    assert client.created == []
+    assert "no live resource supervisor" in state["failure"]
+
+
+def test_a_watchdog_dying_during_paid_work_interrupts_it_and_tears_down(
+    tmp_path: Path,
+) -> None:
+    client = Supervised(tmp_path / "remote", items_per_session=3)
+    original = client.exec_stage
+
+    def stage(name: str, stage: str, timeout: int) -> dict[str, Any]:
+        if stage == "prepare":
+            client.watchdog_alive_flag = False  # the watchdog dies while we are working
+            deadline = time.monotonic() + 3
+            while name in client.active and time.monotonic() < deadline:
+                time.sleep(0.01)
+            return {"returncode": None, "timed_out": True}
+        return original(name, stage, timeout)
+
+    client.exec_stage = stage  # type: ignore[method-assign]
+    started = time.monotonic()
+    state = _session(tmp_path, client, 1)
+    assert time.monotonic() - started < 3  # interrupted, not awaited
+    assert "work" not in state and "failure" in state
+    assert any("supervisor" in f for f in state["terminal_failures"])
+    assert state["target_absent_after_stop"] is True
+
+
+def test_unverified_target_leaves_a_marker_that_blocks_every_later_run(tmp_path: Path) -> None:
+    client = Supervised(tmp_path / "remote", items_per_session=3)
+    client.verify_script = [False] * 500
+    _session(tmp_path, client, 1)
+    assert (tmp_path / "run" / "TEARDOWN-UNVERIFIED.json").exists()
+    (tmp_path / "ledger.json").unlink()  # even with a pristine ledger, the marker refuses
+    client.verify_script = []
+    with pytest.raises(execution.AdmissionError, match="unverified target"):
+        _session(tmp_path, client, 2)
+    assert len(client.created) == 1

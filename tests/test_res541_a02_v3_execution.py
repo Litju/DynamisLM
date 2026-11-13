@@ -30,10 +30,10 @@ COST_POLICY: dict[str, Any] = {
     "schema": "RES541_A02_V3_COST_POLICY_V1",
     "balance_display_resolution_cu": 0.01,
     "billing_granularity_seconds": 60,
-    "posting_delay_seconds": 60,
-    "startup_charge_cu": 0.05,
+    "posting_delay_seconds": 0,
+    "startup_charge_cu": 0.02,
     "verified_rate_cu_per_hour": 1.15,
-    "operational_reserve_cu": 0.02,
+    "operational_reserve_cu": 0.01,
     "verification": {
         "source": "synthetic test fixture",
         "verified_at_utc": "2026-11-13T00:00:00+00:00",
@@ -195,6 +195,7 @@ def test_one_allowance_admits_every_planned_session_without_per_session_ceremony
             {
                 "index": index,
                 "cost_status": "KNOWN",
+                "teardown_verified": True,
                 "compute_units_spent": PLAN["compute_units"]["per_session_cap"] / 2,
             }
         )
@@ -261,6 +262,7 @@ def _known(index: int, spent: float) -> dict[str, Any]:
     return {
         "index": index,
         "cost_status": "KNOWN",
+        "teardown_verified": True,
         "compute_units_spent": spent,
         "cost_accounting": {"cost_status": "KNOWN", "conservative_cu": spent},
     }
@@ -489,6 +491,11 @@ class FakeColab:
     def finish_watchdog(self, watchdog: Any, verified: bool) -> None:
         watchdog.write_text(json.dumps({"verified": verified}))
 
+    watchdog_alive_flag = True
+
+    def watchdog_alive(self, watchdog: Any) -> bool:
+        return self.watchdog_alive_flag
+
     def verify_absent(self, name: str, *, allocation_attempted: bool = True) -> bool:
         return name not in self.active
 
@@ -554,7 +561,7 @@ def test_interrupted_sessions_resume_to_completion_and_score_on_cpu(tmp_path: Pa
     ledger = json.loads((tmp_path / "ledger.json").read_text())
     assert [s["committed_items"] for s in ledger["sessions"]] == [200, 400, 581]
     # displayed delta 0.29 + one display step of rounding uncertainty + operational reserve
-    assert all(s["compute_units_spent"] == pytest.approx(0.32) for s in ledger["sessions"])
+    assert all(s["compute_units_spent"] == pytest.approx(0.31) for s in ledger["sessions"])
     assert all(
         s["cost_accounting"]["observed_displayed_delta_cu"] == 0.29 for s in ledger["sessions"]
     )
@@ -949,7 +956,8 @@ def test_failed_teardown_cost_remains_unknown_after_late_cleanup(tmp_path: Path)
     client.fail_stop = False
     client.stop(client.created[0])
     again = _campaign(tmp_path, client)
-    assert again["status"] == "NOT_ADMITTED" and "unknown cost" in again["reason"]
+    assert again["status"] == "NOT_ADMITTED"
+    assert "unverified target" in again["reason"]  # durable marker refuses before the ledger
     assert len(client.created) == 1
 
 

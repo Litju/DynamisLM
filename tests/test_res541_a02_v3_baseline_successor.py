@@ -518,3 +518,11 @@ def test_completion_and_approved_window_at_admission_boundary(
         assert "approved proposal" in result["error"]
     if corrupt_prefix:
         assert "replaced inherited checkpoint" in result["error"]
+
+
+def test_sealed_inherited_hashes_match_the_verified_predecessor_receipts() -> None:
+    predecessor = successor.verify_predecessor()
+    stub = {"predecessor": predecessor, "plan": {"plan_sha256": "x"}, "source_identity": {}}
+    entries = successor.inherited_ledger(stub)["sessions"]
+    digests = {v3.sha256(v3.canonical(entry).encode()) for entry in entries}
+    assert digests == execution.SEALED_INHERITED_ENTRY_SHA256

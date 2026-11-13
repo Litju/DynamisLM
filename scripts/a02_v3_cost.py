@@ -87,6 +87,28 @@ def policy_sha256(policy: dict[str, Any]) -> str:
     return hashlib.sha256(text.encode()).hexdigest()
 
 
+def projected_bound(
+    policy: dict[str, Any], *, observed_delta: float, elapsed_seconds: float, rate: float
+) -> float:
+    """Conservative charge if the session ended after ``elapsed_seconds`` (policy must be valid).
+
+    This is the single formula used for admission, live monitoring and final accounting.
+    """
+    resolution = float(policy["balance_display_resolution_cu"])
+    granularity = int(policy["billing_granularity_seconds"])
+    billed = (
+        math.ceil(
+            (max(elapsed_seconds, 0.0) + float(policy["posting_delay_seconds"])) / granularity
+        )
+        * granularity
+    )
+    time_estimate = float(policy["startup_charge_cu"]) + (
+        max(float(policy["verified_rate_cu_per_hour"]), rate) * billed / 3600
+    )
+    delta_upper = max(observed_delta, 0.0) + resolution
+    return max(delta_upper, time_estimate) + float(policy["operational_reserve_cu"])
+
+
 def _ceil4(value: float) -> float:
     """Round up to four decimals: a ledger charge may never be rounded below the bound."""
     return math.ceil(value * 10_000 - 1e-9) / 10_000

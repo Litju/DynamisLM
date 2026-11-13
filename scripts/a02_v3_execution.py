@@ -69,6 +69,14 @@ ALLOWANCE_KEYS = frozenset(
 SUCCESSOR_ALLOWANCE_KEYS = ALLOWANCE_KEYS | {"predecessor"}
 LEDGER_SCHEMA = "RES541_A02_V3_LEDGER_V1"
 SUCCESSOR_LEDGER_SCHEMA = "RES541_A02_V3_LEDGER_V2"
+# Canonical hashes of the sealed historical ledger rows that keep their recorded charge. They are
+# derived from the verified predecessor receipts; a row merely flagged ``inherited`` is not trusted.
+SEALED_INHERITED_ENTRY_SHA256 = frozenset(
+    {
+        "3966c710e71f2d450f60b4a0629ec81e55b4bc933df6b96bcee134be92aff507",
+        "d28842a4065f9ba822df0bc8b9019cc2a3014c08f7bc7e6aca22fae231ae90de",
+    }
+)
 REMOTE_STATUS = "/content/a02-v3-status.json"
 REMOTE_CHECKPOINT = "/content/a02-v3-checkpoint.jsonl"
 REMOTE_SOURCE = "/content/a02-v3-source.tar"
@@ -613,11 +621,16 @@ def _ledger_charge(session: dict[str, Any], ledger: dict[str, Any], per_session:
         and accounting.get("conservative_cu") == recorded
     ):
         return recorded
-    if session.get("inherited") is True or (
-        session.get("index") == 1 and ledger.get("schema") == SUCCESSOR_LEDGER_SCHEMA
-    ):
+    if _sealed_historical(session, ledger):
         return recorded
     return max(recorded, per_session)
+
+
+def _sealed_historical(session: dict[str, Any], ledger: dict[str, Any]) -> bool:
+    """Only receipts sealed by the verified predecessor (or the validated V2 session 001)."""
+    if session.get("inherited") is True:
+        return v3.sha256(v3.canonical(session).encode()) in SEALED_INHERITED_ENTRY_SHA256
+    return session.get("index") == 1 and ledger.get("schema") == SUCCESSOR_LEDGER_SCHEMA
 
 
 def admit(
@@ -628,6 +641,7 @@ def admit(
     snapshot: dict[str, Any],
     session_index: int,
     now: datetime | None = None,
+    cost_policy: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Pure admission decision for one session; raises AdmissionError when not admitted.
 
@@ -659,8 +673,12 @@ def admit(
     per_session = plan["compute_units"]["per_session_cap"]
     if any(s.get("cost_status") != "KNOWN" for s in used):
         raise AdmissionError("a prior session has unknown cost; owner review required")
-    if any(s.get("teardown_verified") is False for s in used):
-        raise AdmissionError("a prior session has unverified teardown; owner review required")
+    if any(
+        s.get("teardown_verified") is not True and not _sealed_historical(s, ledger) for s in used
+    ):
+        raise AdmissionError(
+            "a prior session lacks verified teardown evidence; owner review required"
+        )
     effective = [_ledger_charge(s, ledger, per_session) for s in used]
     if any(charge > per_session + 1e-9 for charge in effective):
         raise AdmissionError("a prior session exceeded its bounded cost; owner review required")
@@ -668,6 +686,17 @@ def admit(
     cap = min(plan["compute_units"]["cumulative_cap"], float(allowance["cumulative_cap_cu"]))
     if spent + per_session > cap + 1e-9:
         raise AdmissionError("cumulative V3 compute-unit cap would be exceeded")
+    if cost_policy is not None:
+        full = costing.projected_bound(
+            cost_policy,
+            observed_delta=0.0,
+            elapsed_seconds=float(plan["bounds"]["session_seconds"]),
+            rate=float(plan["bounds"]["admission_rate_ceiling_cu_per_hour"]),
+        )
+        if full > per_session + 1e-9:
+            raise AdmissionError("verified pricing makes one full session exceed its bound")
+        if spent + full > cap + 1e-9:
+            raise AdmissionError("cumulative V3 compute-unit cap would be exceeded by pricing")
     if float(allowance["max_cu_per_session"]) + 1e-9 < per_session:
         raise AdmissionError("allowed per-session compute units are below the plan bound")
     if snapshot["balance"] < per_session + plan["bounds"]["cost_buffer_cu"]:
@@ -753,6 +782,16 @@ def merge_checkpoint(
 # --------------------------------------------------------------------------- session
 
 
+def _watchdog_alive(client: Any, watchdog: Any) -> bool:
+    probe = getattr(client, "watchdog_alive", None)
+    if not callable(probe):
+        return False  # an unverifiable watchdog is not an enforceable one
+    try:
+        return probe(watchdog) is True
+    except Exception:
+        return False
+
+
 class TransitionUnresolvedError(RuntimeError):
     """Straddling inventory reads never converged; teardown verification decides instead."""
 
@@ -771,6 +810,19 @@ class ColabClient(Protocol):
     def verify_absent(self, name: str, *, allocation_attempted: bool = True) -> bool: ...
 
 
+class SupervisedColabClient(ColabClient, Protocol):
+    """A client whose independent watchdog liveness can be checked (needed for paid work)."""
+
+    def watchdog_alive(self, watchdog: Any) -> bool: ...
+
+
+def _write_marker_if_absent(path: Path, value: dict[str, Any]) -> None:
+    try:
+        _write_exclusive(path, value)
+    except FileExistsError:
+        pass
+
+
 def _write_exclusive(path: Path, value: dict[str, Any]) -> None:
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
     with os.fdopen(fd, "w", encoding="utf-8") as handle:
@@ -786,6 +838,8 @@ TERMINATION_BACKOFF_SECONDS = 5
 EMERGENCY_ROUNDS = 2
 SUPERVISOR_HEARTBEAT_SLACK_SECONDS = 30
 RECONCILE_ATTEMPTS = 3
+ALLOCATION_UNRESOLVED_LIMIT = 6
+ALLOCATION = supervision.Phase.ALLOCATION
 WATCHDOG_TAKEOVER_WAIT_SECONDS = 15
 # Independent watchdog: bounded extra stop/verify rounds until the exact target is verified
 # absent. The environment may only shorten the pause (tests), never extend the schedule.
@@ -797,7 +851,7 @@ RECONCILE_DELAY_SECONDS = 2
 
 
 def monitored_stage(
-    client: ColabClient,
+    client: SupervisedColabClient,
     name: str,
     stage: str,
     timeout: int,
@@ -857,7 +911,7 @@ def monitored_stage(
 
 def run_session(
     *,
-    client: ColabClient,
+    client: SupervisedColabClient,
     plan: dict[str, Any],
     ledger_path: Path,
     authorization: dict[str, Any] | None,
@@ -886,6 +940,12 @@ def run_session(
         if ledger["sessions"] and ledger.get("source_identity") != binding.get("source_identity"):
             raise AdmissionError("ledger source identity differs")
         ledger["source_identity"] = binding.get("source_identity")
+    try:
+        policy = costing.validate_policy(cost_policy)
+    except costing.CostPolicyError as exc:
+        raise AdmissionError(f"no verified cost policy; nothing may be allocated: {exc}") from exc
+    if (run_dir / "TEARDOWN-UNVERIFIED.json").exists():
+        raise AdmissionError("an earlier session left an unverified target; owner review required")
     before = client.snapshot()
     admission = admit(
         plan=plan,
@@ -894,6 +954,7 @@ def run_session(
         snapshot=before,
         session_index=session_index,
         now=now,
+        cost_policy=policy,
     )
     name = f"res541-a02-v3-{plan['plan_sha256'][:8]}-{session_index:03d}"
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -930,6 +991,7 @@ def run_session(
     emergency_log: list[dict[str, Any]] = []
     abandoned: list[str] = []
     heartbeat = [time.monotonic()]
+    unresolved = [0]
     monitor_thread: threading.Thread | None = None
 
     def heartbeat_limit() -> float:
@@ -941,6 +1003,7 @@ def run_session(
         """Work needs a live monitor thread, a fresh heartbeat and an armed watchdog."""
         return (
             watchdog is not None
+            and _watchdog_alive(client, watchdog)
             and monitor_thread is not None
             and monitor_thread.is_alive()
             and time.monotonic() - heartbeat[0] <= heartbeat_limit()
@@ -991,6 +1054,12 @@ def run_session(
                     phase0 in supervision.TEARDOWN_PHASES
                     or phase1 in supervision.TEARDOWN_PHASES
                     or epoch1 != epoch0
+                    # The provider creates the target while new() is in flight, so a mismatch
+                    # (never a hang) is expected during allocation; persistence is bounded below.
+                    or (
+                        isinstance(exc, supervision.InventoryMismatchError)
+                        and ALLOCATION in (phase0, phase1)
+                    )
                 )
                 if not window:
                     if isinstance(exc, supervision.CallTimeoutError):
@@ -1029,8 +1098,15 @@ def run_session(
                 phase0, epoch0 = lifecycle.view()
                 try:
                     snap, straddled = reconciled_snapshot(phase0, epoch0)
+                    unresolved[0] = 0
                 except TransitionUnresolvedError:
-                    continue  # the teardown verification is authoritative; cost needs a clean end
+                    unresolved[0] += 1
+                    if (
+                        lifecycle.phase is ALLOCATION
+                        and unresolved[0] > ALLOCATION_UNRESOLVED_LIMIT
+                    ):
+                        raise RuntimeError("allocation inventories never converged") from None
+                    continue  # teardown verification is authoritative; cost needs a clean end
                 monitor_observations.append(snap)
                 rate = float(snap["usage_rate_cu_per_hour"])
                 delta = float(before["balance"]) - float(snap["balance"])
@@ -1079,12 +1155,14 @@ def run_session(
         if not math.isfinite(delta) or delta < 0:
             raise RuntimeError("quota attribution is unknown; no work")
         elapsed = time.monotonic() - admission["started_monotonic"]
-        upper = max(delta, rate * elapsed / 3600)
-        reserve = plan["bounds"]["cost_buffer_cu"] + rate * 125 / 3600
+        # Policy-bound conservative charge if the session had to stop and verify now.
+        projected = costing.projected_bound(
+            policy, observed_delta=delta, elapsed_seconds=elapsed + 125, rate=rate
+        )
         remaining = min(
             admission["per_session_cap"], admission["cumulative_cap"] - admission["spent_before"]
         )
-        if upper + reserve >= remaining:
+        if projected >= remaining:
             raise RuntimeError("live cumulative allowance guard reached; no work")
 
     state["sessions_before"] = sorted(client.sessions())
@@ -1289,6 +1367,10 @@ def run_session(
             state["termination_attempts"] = termination.attempts
             if not termination.absent:
                 state["teardown_uncertain"] = True
+                _write_marker_if_absent(
+                    run_dir / "TEARDOWN-UNVERIFIED.json",
+                    {"session": name, "index": session_index, "attempts": termination.attempts},
+                )
                 lifecycle.fail("exact-target absence was not verified after bounded escalation")
         elif watchdog is not None:
             lifecycle.transition(supervision.Phase.STOP_REQUESTED, "no allocation was attempted")
@@ -1480,7 +1562,7 @@ def session_anomaly(
 
 def run_campaign(
     *,
-    client: ColabClient,
+    client: SupervisedColabClient,
     plan: dict[str, Any],
     ledger_path: Path,
     authorization: dict[str, Any] | None,
@@ -1619,6 +1701,10 @@ class ColabCLI:  # pragma: no cover - provider commands, used only in an authori
                 process.stdin.close()
             raise RuntimeError("independent watchdog receipt missing")
         return process, receipt
+
+    def watchdog_alive(self, watchdog: Any) -> bool:
+        process, _receipt = watchdog
+        return bool(process.poll() is None)
 
     def finish_watchdog(self, watchdog: Any, verified: bool) -> None:
         process, receipt = watchdog

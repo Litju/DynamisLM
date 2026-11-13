@@ -194,3 +194,52 @@ def test_normal_teardown_is_followed_by_a_clean_next_session_admission(tmp_path:
     for index in range(1, len(client.created) + 1):
         control = json.loads((tmp_path / f"run/session-{index:03d}-control.json").read_text())
         assert "monitor_failure" not in control and "failure" not in control
+
+
+class Creating(Supervised):
+    """The provider creates the target while ``new()`` is still running."""
+
+    def __init__(self, root: Path, *, mismatching_reads: int, **kwargs: Any) -> None:
+        super().__init__(root, **kwargs)
+        self.mismatching_reads = mismatching_reads
+        self.creating = False
+
+    def new(self, name: str) -> bool:
+        self.creating = True
+        deadline = time.monotonic() + 1.5
+        reads = self.monitor_reads
+        while self.monitor_reads < reads + 3 and time.monotonic() < deadline:
+            time.sleep(0.005)
+        self.creating = False
+        return super().new(name)
+
+    monitor_reads = 0
+
+    def snapshot(self) -> dict[str, Any]:
+        if threading.current_thread().name == "res541-cost-snapshot":
+            self.monitor_reads += 1
+            if self.creating and self.monitor_reads <= self.mismatching_reads + 1:
+                raise supervision.InventoryMismatchError("target appeared between reads")
+            if self.creating and self.mismatching_reads > 100:
+                raise supervision.InventoryMismatchError("never converges")
+        return super().snapshot()
+
+
+def test_inventory_mismatch_during_allocation_is_not_a_false_terminal_failure(
+    tmp_path: Path,
+) -> None:
+    client = Creating(tmp_path / "remote", mismatching_reads=2, items_per_session=3)
+    state = _session(tmp_path, client, 1)
+    assert "monitor_failure" not in state and "failure" not in state, state.get("failure")
+    assert state["transition_reconciliation"]
+
+
+def test_inventories_that_never_converge_during_allocation_still_fail_closed(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    monkeypatch.setattr(execution, "ALLOCATION_UNRESOLVED_LIMIT", 1)
+    monkeypatch.setattr(execution, "RECONCILE_ATTEMPTS", 1)
+    client = Creating(tmp_path / "remote", mismatching_reads=10**6, items_per_session=3)
+    state = _session(tmp_path, client, 1)
+    assert any("never converged" in f for f in state.get("monitor_failure", []))
+    assert "failure" in state and state["target_absent_after_stop"] is True
