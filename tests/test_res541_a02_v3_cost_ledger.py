@@ -6,6 +6,7 @@ from typing import Any
 
 import pytest
 from scripts import a02_v3_contract as v3
+from scripts import a02_v3_cost as cost
 from scripts import a02_v3_execution as execution
 
 from test_res541_a02_v3_execution import (
@@ -289,7 +290,7 @@ def test_negative_matching_amounts_cannot_defeat_the_cumulative_guard(tmp_path: 
 def _approval(policy: dict[str, Any], **overrides: Any) -> dict[str, Any]:
     return {
         "schema": execution.POLICY_APPROVAL_SCHEMA,
-        "policy_sha256": execution.costing.policy_sha256(policy),
+        "policy_sha256": cost.policy_sha256(policy),
         "approved": True,
         "owner_statement": "synthetic owner approval for the exact policy bytes",
         "recorded_utc": "2026-11-13T00:00:00+00:00",
