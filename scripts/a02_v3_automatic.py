@@ -997,6 +997,7 @@ def run(directory: Path) -> dict[str, Any]:
             index = len(ledger["sessions"]) + 1
             key = f"baseline-{index:03d}"
             quiet(client)
+            policy = execution.load_authorized_policy(directory)  # before any reservation
             budget.reserve(key, "BASELINE", plan["compute_units"]["per_session_cap"])
             client.watchdog_seconds = plan["bounds"]["session_seconds"]
             start = time.monotonic()
@@ -1009,6 +1010,7 @@ def run(directory: Path) -> dict[str, Any]:
                 run_dir=baseline,
                 source_archive=archive,
                 binding=binding,
+                cost_policy=policy,
             )
             path = baseline / f"session-{index:03d}-control.json"
             spent = None

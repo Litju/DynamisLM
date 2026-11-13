@@ -132,6 +132,30 @@ class SessionLifecycle:
             )
 
 
+def run_to_completion(operation: Callable[[], Any], timeout: float, label: str) -> tuple[bool, Any]:
+    """Run an operation that must NOT be abandoned (an allocation request).
+
+    Returns ``(finished, value)``. When ``finished`` is False the request is still in flight and
+    the caller must treat the target as possibly about to appear: it may not disarm supervision.
+    """
+    box: dict[str, Any] = {}
+
+    def run() -> None:
+        try:
+            box["value"] = operation()
+        except BaseException as exc:
+            box["error"] = exc
+
+    thread = threading.Thread(target=run, name=f"res541-{label}", daemon=True)
+    thread.start()
+    thread.join(timeout)
+    if thread.is_alive():
+        return False, thread
+    if "error" in box:
+        raise box["error"]
+    return True, box.get("value")
+
+
 def bounded_call(operation: Callable[[], Any], timeout: float, label: str) -> Any:
     """Run in a daemon thread; raise CallTimeoutError if it outlives ``timeout``."""
     box: dict[str, Any] = {}
@@ -160,13 +184,17 @@ def run_cancellable(
     supervisor_ok: Callable[[], bool],
     poll: float = 0.2,
     abandoned: list[str] | None = None,
+    require_permitted: bool = True,
 ) -> Any:
     """Run a provider call, but return control the moment supervision fails or is cancelled.
 
     A blocked command is abandoned rather than awaited: the controller then proceeds to bounded
     teardown. The abandoned command ends when the session is stopped or the process exits.
     """
-    lifecycle.require_work_permitted(label)
+    if require_permitted:
+        lifecycle.require_work_permitted(label)
+    elif lifecycle.cancelled.is_set():
+        raise CancelledError(f"{label} refused: terminal failure already recorded")
     if not supervisor_ok():
         lifecycle.fail(f"no live resource supervisor before {label}")
         raise SupervisionError(f"{label} refused: no live resource supervisor")

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import itertools
 import json
 import shutil
@@ -39,6 +40,27 @@ COST_POLICY: dict[str, Any] = {
         "verified_at_utc": "2026-11-13T00:00:00+00:00",
     },
 }
+
+
+def write_authorized_policy(directory: Path) -> None:
+    """Synthetic owner-approved cost policy files, as the controllers require before paid work."""
+    digest = hashlib.sha256(
+        json.dumps(COST_POLICY, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
+    ).hexdigest()
+    (directory / "cost-policy.json").write_text(json.dumps(COST_POLICY))
+    (directory / "cost-policy-approval.json").write_text(
+        json.dumps(
+            {
+                "schema": "RES541_A02_V3_COST_POLICY_OWNER_APPROVAL_V1",
+                "policy_sha256": digest,
+                "approved": True,
+                "owner_statement": "synthetic owner approval for the exact policy bytes",
+                "recorded_utc": "2026-11-13T00:00:00+00:00",
+            }
+        )
+    )
+
+
 QUIET = {"balance": 87.08, "usage_rate_cu_per_hour": 0.0, "active_sessions": []}
 
 

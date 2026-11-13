@@ -18,6 +18,8 @@ from scripts import a02_v3_gpu_diagnostic as diagnostic
 from scripts import a02_v3_training as training
 from scripts import a02_v3_worker as worker
 
+from test_res541_a02_v3_execution import write_authorized_policy
+
 
 def test_one_budget_counts_all_stages_and_never_erases_unknown_cost(tmp_path: Path) -> None:
     grant = {"synthetic_owner_grant": True}
@@ -354,6 +356,7 @@ def test_failed_diagnostic_cannot_start_baseline_or_training(
         automatic, "training_session", lambda *a, **k: calls.append("TRAINING_MUST_NOT_RUN")
     )
     monkeypatch.setenv("COLAB_CLI_ASSIGN_RETRIES", "0")
+    write_authorized_policy(tmp_path)
     result = automatic.run(tmp_path)
     assert not result["complete"]
     assert calls == ["diagnostic"]
@@ -469,6 +472,7 @@ def test_automatic_sequence_reaches_export_without_per_stage_confirmation(
 
     monkeypatch.setattr(automatic, "training_session", train_success)
     monkeypatch.setenv("COLAB_CLI_ASSIGN_RETRIES", "0")
+    write_authorized_policy(tmp_path)
     result = automatic.run(tmp_path)
     if fault is not None:
         assert not result["complete"]

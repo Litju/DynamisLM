@@ -38,7 +38,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Protocol, cast
 
 from scripts import a02_v3_constrained as constrained
 from scripts import a02_v3_contract as v3
@@ -604,26 +604,76 @@ def _prepare_successor_ledger(
     return path
 
 
-def _ledger_charge(session: dict[str, Any], ledger: dict[str, Any], per_session: float) -> float:
+def _finite_non_negative(value: Any) -> bool:
+    return isinstance(value, int | float) and not isinstance(value, bool) and 0 <= value < math.inf
+
+
+def _verified_accounting(session: dict[str, Any], policy: dict[str, Any] | None) -> bool:
+    """A recorded charge counts as verified only if it recomputes under the authorized policy.
+
+    The ledger is controller-written, so this guards against malformed or inconsistent
+    records (negative or non-finite amounts, a different policy, understated inputs): the
+    record must be bound to the authorized policy hash, recompute to its own amount, and never
+    be below the minimum any allocated session costs under that policy.
+    """
+    accounting = session.get("cost_accounting")
+    recorded = session.get("compute_units_spent")
+    if (
+        policy is None
+        or not isinstance(accounting, dict)
+        or not _finite_non_negative(recorded)
+        or session.get("teardown_verified") is not True
+        or accounting.get("schema") != costing.ACCOUNTING_SCHEMA
+        or accounting.get("cost_status") != "KNOWN"
+        or accounting.get("cost_policy_sha256") != costing.policy_sha256(policy)
+        or accounting.get("conservative_cu") != recorded
+    ):
+        return False
+    common: dict[str, Any] = {
+        "policy": policy,
+        "balance_before": accounting.get("displayed_balance_before"),
+        "balance_after": accounting.get("displayed_balance_after"),
+        "elapsed_seconds": accounting.get("elapsed_seconds"),
+        "teardown_verified": True,
+    }
+    if accounting.get("cost_confidence") == "CONSERVATIVE_BOUND":
+        again = costing.conservative_charge(
+            **common, observed_rates=[accounting.get("rate_used_cu_per_hour")]
+        )
+        floor = costing.projected_bound(
+            policy,
+            observed_delta=0.0,
+            elapsed_seconds=0.0,
+            rate=float(policy["verified_rate_cu_per_hour"]),
+        )
+        if cast(float, recorded) < floor - 1e-9:
+            return False
+    elif accounting.get("cost_confidence") == "NO_ALLOCATION":
+        again = costing.conservative_charge(**common, observed_rates=[], allocation_attempted=False)
+    else:
+        return False
+    return again.get("cost_status") == "KNOWN" and abs(again["conservative_cu"] - recorded) < 1e-9
+
+
+def _ledger_charge(
+    session: dict[str, Any],
+    ledger: dict[str, Any],
+    per_session: float,
+    policy: dict[str, Any] | None = None,
+) -> float:
     """The charge a ledger entry counts for in the cumulative guard.
 
-    Entries written under the conservative contract carry their accounting record. Sealed
-    historical receipts (inherited or the V2 predecessor session) keep their recorded amount.
-    Any other entry was produced by the old displayed-balance delta, which rounding can
-    understate, so the guard counts a full session bound for it instead of trusting the delta.
-    The entry itself is never modified.
+    Entries whose accounting verifies under the authorized policy keep their recorded amount, as
+    do sealed historical receipts. Any other entry (legacy rounded-delta, malformed or unbound
+    accounting) counts at least a full session bound instead of its recorded amount. The entry
+    itself is never modified.
     """
-    recorded = float(session["compute_units_spent"])
-    accounting = session.get("cost_accounting")
-    if (
-        isinstance(accounting, dict)
-        and accounting.get("cost_status") == "KNOWN"
-        and accounting.get("conservative_cu") == recorded
-    ):
-        return recorded
-    if _sealed_historical(session, ledger):
-        return recorded
-    return max(recorded, per_session)
+    recorded = session.get("compute_units_spent")
+    if _verified_accounting(session, policy) or _sealed_historical(session, ledger):
+        return cast(float, recorded)
+    return max(
+        cast(float, recorded) if _finite_non_negative(recorded) else per_session, per_session
+    )
 
 
 def _sealed_historical(session: dict[str, Any], ledger: dict[str, Any]) -> bool:
@@ -679,7 +729,12 @@ def admit(
         raise AdmissionError(
             "a prior session lacks verified teardown evidence; owner review required"
         )
-    effective = [_ledger_charge(s, ledger, per_session) for s in used]
+    if any(
+        not _finite_non_negative(s.get("compute_units_spent")) and not _sealed_historical(s, ledger)
+        for s in used
+    ):
+        raise AdmissionError("a prior ledger charge is malformed; owner review required")
+    effective = [_ledger_charge(s, ledger, per_session, cost_policy) for s in used]
     if any(charge > per_session + 1e-9 for charge in effective):
         raise AdmissionError("a prior session exceeded its bounded cost; owner review required")
     spent = sum(effective)
@@ -816,6 +871,35 @@ class SupervisedColabClient(ColabClient, Protocol):
     def watchdog_alive(self, watchdog: Any) -> bool: ...
 
 
+POLICY_APPROVAL_SCHEMA = "RES541_A02_V3_COST_POLICY_OWNER_APPROVAL_V1"
+
+
+def load_authorized_policy(directory: Path) -> dict[str, Any]:
+    """Load the cost policy only together with an owner approval bound to its exact hash."""
+    try:
+        policy = costing.validate_policy(
+            json.loads((directory / "cost-policy.json").read_text(encoding="utf-8"))
+        )
+        approval = json.loads((directory / "cost-policy-approval.json").read_text("utf-8"))
+        stamp = datetime.fromisoformat(str(approval["recorded_utc"]))
+    except (OSError, ValueError, KeyError, costing.CostPolicyError) as exc:
+        raise AdmissionError(f"no owner-approved cost policy: {type(exc).__name__}") from exc
+    if (
+        not isinstance(approval, dict)
+        or set(approval)
+        != {"schema", "policy_sha256", "approved", "owner_statement", "recorded_utc"}
+        or approval["schema"] != POLICY_APPROVAL_SCHEMA
+        or approval["policy_sha256"] != costing.policy_sha256(policy)
+        or approval["approved"] is not True
+        or not isinstance(approval["owner_statement"], str)
+        or not approval["owner_statement"].strip()
+        or stamp.tzinfo is None
+        or stamp > datetime.now(UTC)
+    ):
+        raise AdmissionError("cost policy is not bound to an explicit owner approval")
+    return policy
+
+
 def _write_marker_if_absent(path: Path, value: dict[str, Any]) -> None:
     try:
         _write_exclusive(path, value)
@@ -839,6 +923,7 @@ EMERGENCY_ROUNDS = 2
 SUPERVISOR_HEARTBEAT_SLACK_SECONDS = 30
 RECONCILE_ATTEMPTS = 3
 ALLOCATION_UNRESOLVED_LIMIT = 6
+ALLOCATION_WAIT_SECONDS = 180  # one colab new command (120 s) plus margin; never abandoned
 ALLOCATION = supervision.Phase.ALLOCATION
 WATCHDOG_TAKEOVER_WAIT_SECONDS = 15
 # Independent watchdog: bounded extra stop/verify rounds until the exact target is verified
@@ -981,6 +1066,7 @@ def run_session(
     }
     watchdog = None
     stop_confirmed: float | None = None
+    allocation_in_flight: Any = None
     allocated = False
     attempted = False  # only a session this run tried to create may be stopped by this run
     monitor_halt = threading.Event()
@@ -1087,6 +1173,11 @@ def run_session(
         observed_rate: float | None = None
         while not monitor_halt.wait(COST_POLL_SECONDS):
             heartbeat[0] = time.monotonic()
+            if watchdog is not None and not _watchdog_alive(client, watchdog):
+                reason = "RuntimeError: independent watchdog is no longer alive"
+                if not lifecycle.cancelled.is_set():
+                    monitor_failures.append(reason)
+                    lifecycle.fail(reason)
             if lifecycle.cancelled.is_set():
                 # Terminal failure: keep supervising until the exact target is verified absent.
                 if lifecycle.phase is supervision.Phase.VERIFIED_STOPPED:
@@ -1186,7 +1277,19 @@ def run_session(
         heartbeat[0] = time.monotonic()
         monitor_thread = threading.Thread(target=monitor_session, daemon=True)
         monitor_thread.start()
-        allocated = bool(provider("allocation", lambda: client.new(name)))
+        supervisor_check = supervisor_ok()
+        if not supervisor_check:
+            lifecycle.fail("no live resource supervisor before allocation")
+            raise supervision.SupervisionError("allocation refused: no live resource supervisor")
+        finished, outcome = supervision.run_to_completion(
+            lambda: client.new(name), ALLOCATION_WAIT_SECONDS, "allocation"
+        )
+        if not finished:
+            # The request may still create the target later: supervision must outlive it.
+            allocation_in_flight = outcome
+            lifecycle.fail("allocation request did not return within its bound")
+            raise supervision.SupervisionError("allocation request still in flight")
+        allocated = bool(outcome)
         if allocated:
             lifecycle.transition(supervision.Phase.RUNNING, "target allocated")
         check_monitor()
@@ -1303,7 +1406,16 @@ def run_session(
             recovered = {}
             for remote, path in ((REMOTE_STATUS, status_path), (REMOTE_CHECKPOINT, downloaded)):
                 try:
-                    recovered[remote] = client.download(name, remote, path)
+                    recovered[remote] = bool(
+                        supervision.run_cancellable(
+                            functools.partial(client.download, name, remote, path),
+                            lifecycle,
+                            f"recovery download {remote}",
+                            supervisor_ok=supervisor_ok,
+                            abandoned=abandoned,
+                            require_permitted=False,
+                        )
+                    )
                     if recovered[remote]:
                         state[path.name + "_sha256"] = v3.sha256(path.read_bytes())
                 except Exception as exc:
@@ -1362,6 +1474,11 @@ def run_session(
                 backoff=TERMINATION_BACKOFF_SECONDS,
             )
             stop_confirmed = time.monotonic()
+            late_allocation = allocation_in_flight is not None and allocation_in_flight.is_alive()
+            if late_allocation:
+                # The allocation command has not ended; absence now proves nothing about later.
+                termination.absent = False
+                state["allocation_unresolved"] = True
             state["stopped"] = termination.stop_succeeded
             state["target_absent_after_stop"] = termination.absent
             state["termination_attempts"] = termination.attempts
@@ -1990,7 +2107,7 @@ def main() -> int:  # pragma: no cover - thin CLI
     session_index = len(ledger["sessions"]) + 1
     if allowance is not None and session_index > allowance["max_sessions"]:
         raise AdmissionError("campaign allowance session count is exhausted")
-    policy_path = V3_DIR / "cost-policy.json"
+    cost_policy = load_authorized_policy(V3_DIR)
     archive, revision = source_archive(run_dir / f"source-{len(ledger['sessions']) + 1:03d}.tar")
     common: dict[str, Any] = {
         "client": ColabCLI(),
@@ -2000,7 +2117,7 @@ def main() -> int:  # pragma: no cover - thin CLI
         "run_dir": run_dir,
         "source_archive": archive,
         "binding": remote_binding(plan, archive, revision),
-        "cost_policy": json.loads(policy_path.read_text()) if policy_path.exists() else None,
+        "cost_policy": cost_policy,
     }
     if args.command == "run-campaign":
         result = run_campaign(**common)

@@ -243,3 +243,67 @@ def test_unverified_target_leaves_a_marker_that_blocks_every_later_run(tmp_path:
     with pytest.raises(execution.AdmissionError, match="unverified target"):
         _session(tmp_path, client, 2)
     assert len(client.created) == 1
+
+
+def test_an_allocation_still_in_flight_is_never_abandoned_or_disarmed(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    monkeypatch.setattr(execution, "ALLOCATION_WAIT_SECONDS", 0.2)
+    client = Supervised(tmp_path / "remote", items_per_session=3)
+    original = client.new
+
+    def late_new(name: str) -> bool:
+        time.sleep(0.8)  # the provider creates the target long after supervision gave up waiting
+        return original(name)
+
+    client.new = late_new  # type: ignore[method-assign]
+    state = _session(tmp_path, client, 1)
+    assert state["allocation_unresolved"] is True
+    assert state["target_absent_after_stop"] is False  # absence now proves nothing about later
+    assert client.disarm_requests == [False] and state["watchdog_disarmed"] is False
+    assert (tmp_path / "run" / "TEARDOWN-UNVERIFIED.json").exists()
+    assert state["teardown_uncertain"] is True
+
+
+def test_watchdog_death_during_evidence_recovery_aborts_recovery_promptly(
+    tmp_path: Path,
+) -> None:
+    client = Supervised(tmp_path / "remote", items_per_session=3)
+    original = client.download
+    never = threading.Event()
+
+    def download(name: str, remote: str, local: Path) -> bool:
+        recovering = local.name.endswith("-status.json") and "prepare" not in local.name
+        if recovering and remote == execution.REMOTE_STATUS:
+            client.watchdog_alive_flag = False  # dies while the paid session is being drained
+            never.wait(60)
+        return original(name, remote, local)
+
+    client.download = download  # type: ignore[method-assign]
+    outcome: dict[str, Any] = {}
+    runner = threading.Thread(target=lambda: outcome.update(_session(tmp_path, client, 1)))
+    runner.start()
+    runner.join(timeout=30)
+    returned = not runner.is_alive()
+    never.set()
+    runner.join(timeout=30)
+    assert returned, "recovery awaited a provider call after the watchdog died"
+    assert outcome["target_absent_after_stop"] is True  # teardown still ran
+    assert not isinstance(outcome["merge"], dict)  # evidence recovery was cut short, not adopted
+    assert any("supervisor" in f or "watchdog" in f for f in outcome["terminal_failures"])
+
+
+def test_the_monitor_itself_notices_a_dead_watchdog(tmp_path: Path) -> None:
+    client = Supervised(tmp_path / "remote", items_per_session=3)
+    client.block_work.set()  # work blocks until the target disappears
+    original = client.exec_stage
+
+    def stage(name: str, stage: str, timeout: int) -> dict[str, Any]:
+        if stage == "work":
+            client.watchdog_alive_flag = False
+        return original(name, stage, timeout)
+
+    client.exec_stage = stage  # type: ignore[method-assign]
+    state = _session(tmp_path, client, 1)
+    assert any("watchdog" in f or "supervisor" in f for f in state["terminal_failures"])
+    assert state["target_absent_after_stop"] is True

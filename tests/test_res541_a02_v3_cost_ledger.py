@@ -230,36 +230,96 @@ def test_an_inherited_flag_alone_never_exempts_an_entry(monkeypatch: Any) -> Non
     )["admitted"]  # fmt: skip
 
 
-def test_forged_accounting_record_cannot_lower_a_charge() -> None:
-    entry = {
-        "index": 1,
-        "cost_status": "KNOWN",
-        "teardown_verified": True,
-        "compute_units_spent": 0.0,
-        "cost_accounting": {"cost_status": "KNOWN", "conservative_cu": 0.5},
-    }
-    assert execution._ledger_charge(entry, {"schema": execution.LEDGER_SCHEMA}, PER_SESSION) == (
-        PER_SESSION
+def _real_entry(tmp_path: Path) -> dict[str, Any]:
+    client = FakeColab(tmp_path / "remote", items_per_session=3, cost_per_session=0.0)
+    _session(tmp_path, client, 1)
+    entry: dict[str, Any] = _ledger(tmp_path)["sessions"][0]
+    return entry
+
+
+def test_a_genuine_record_is_verified_and_counted_at_its_recorded_amount(tmp_path: Path) -> None:
+    entry = _real_entry(tmp_path)
+    ledger = {"schema": execution.LEDGER_SCHEMA}
+    assert execution._verified_accounting(entry, COST_POLICY)
+    assert (
+        execution._ledger_charge(entry, ledger, PER_SESSION, COST_POLICY)
+        == (entry["compute_units_spent"])
     )
+    assert execution._ledger_charge(entry, ledger, PER_SESSION, None) == PER_SESSION
 
 
-def test_live_guard_stops_work_when_the_policy_bound_reaches_the_cap(
-    tmp_path: Path, monkeypatch: Any
-) -> None:
-    """Billed-granule rounding and startup are part of the live guard, not only elapsed*rate."""
-    import time
+@pytest.mark.parametrize(
+    "tamper",
+    [
+        lambda e: e.update(compute_units_spent=-5.0)
+        or e["cost_accounting"].update(conservative_cu=-5.0),
+        lambda e: e.update(compute_units_spent=float("nan"))
+        or e["cost_accounting"].update(conservative_cu=float("nan")),
+        lambda e: e.update(compute_units_spent=0.0)
+        or e["cost_accounting"].update(conservative_cu=0.0),  # below the minimum for any session
+        lambda e: e["cost_accounting"].update(cost_policy_sha256="0" * 64),
+        lambda e: e["cost_accounting"].update(schema="OTHER"),
+        lambda e: e["cost_accounting"].update(elapsed_seconds=0.0, conservative_cu=0.0001)
+        or e.update(compute_units_spent=0.0001),
+        lambda e: e.update(teardown_verified=None),
+        lambda e: e["cost_accounting"].update(cost_confidence="PRECISE_PROVIDER"),
+    ],
+)
+def test_forged_or_malformed_accounting_never_lowers_the_guard(tmp_path: Path, tamper: Any) -> None:
+    entry = _real_entry(tmp_path)
+    tamper(entry)
+    assert not execution._verified_accounting(entry, COST_POLICY)
+    ledger = {"schema": execution.LEDGER_SCHEMA}
+    assert execution._ledger_charge(entry, ledger, PER_SESSION, COST_POLICY) >= PER_SESSION
 
-    clock = [0.0]
-    monkeypatch.setattr(time, "monotonic", lambda: clock[0])
-    monkeypatch.setattr(execution, "SUPERVISOR_HEARTBEAT_SLACK_SECONDS", 10**9)
 
-    class Slow(FakeColab):
-        def exec_stage(self, name: str, stage: str, timeout: int) -> dict[str, Any]:
-            if stage == "prepare":
-                clock[0] += 900  # past the point where the policy-bound charge reaches the cap
-            return super().exec_stage(name, stage, timeout)
+def test_negative_matching_amounts_cannot_defeat_the_cumulative_guard(tmp_path: Path) -> None:
+    entry = _real_entry(tmp_path)
+    entry["compute_units_spent"] = -50.0
+    entry["cost_accounting"]["conservative_cu"] = -50.0
+    ledger = execution.ledger_new(PLAN)
+    ledger["sessions"].append(entry)
+    with pytest.raises(execution.AdmissionError, match="malformed"):
+        execution.admit(
+            plan=PLAN, ledger=ledger, authorization=_allowance(), snapshot=QUIET,
+            session_index=2, now=NOW, cost_policy=COST_POLICY,
+        )  # fmt: skip
 
-    client = Slow(tmp_path / "remote", items_per_session=3, cost_per_session=0.0)
-    state = _session(tmp_path, client, 1)
-    assert "live cumulative allowance guard reached" in state["failure"]
-    assert "work" not in state and state["target_absent_after_stop"] is True
+
+def _approval(policy: dict[str, Any], **overrides: Any) -> dict[str, Any]:
+    return {
+        "schema": execution.POLICY_APPROVAL_SCHEMA,
+        "policy_sha256": execution.costing.policy_sha256(policy),
+        "approved": True,
+        "owner_statement": "synthetic owner approval for the exact policy bytes",
+        "recorded_utc": "2026-11-13T00:00:00+00:00",
+        **overrides,
+    }
+
+
+def _write_policy(directory: Path, policy: dict[str, Any], approval: Any) -> None:
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / "cost-policy.json").write_text(json.dumps(policy))
+    if approval is not None:
+        (directory / "cost-policy-approval.json").write_text(json.dumps(approval))
+
+
+def test_policy_loads_only_with_an_exact_owner_approval(tmp_path: Path) -> None:
+    _write_policy(tmp_path / "ok", COST_POLICY, _approval(COST_POLICY))
+    assert execution.load_authorized_policy(tmp_path / "ok") == COST_POLICY
+    changed = {**COST_POLICY, "startup_charge_cu": 0.0}  # understated pricing, valid shape
+    cases = {
+        "no_approval": (COST_POLICY, None),
+        "other_policy": (changed, _approval(COST_POLICY)),
+        "not_approved": (COST_POLICY, _approval(COST_POLICY, approved=False)),
+        "blank_statement": (COST_POLICY, _approval(COST_POLICY, owner_statement=" ")),
+        "future": (COST_POLICY, _approval(COST_POLICY, recorded_utc="2999-01-01T00:00:00+00:00")),
+        "extra_key": (COST_POLICY, {**_approval(COST_POLICY), "x": 1}),
+        "naive_time": (COST_POLICY, _approval(COST_POLICY, recorded_utc="2026-11-13T00:00:00")),
+    }
+    for name, (policy, approval) in cases.items():
+        _write_policy(tmp_path / name, policy, approval)
+        with pytest.raises(execution.AdmissionError, match="cost policy|approved"):
+            execution.load_authorized_policy(tmp_path / name)
+    with pytest.raises(execution.AdmissionError):
+        execution.load_authorized_policy(tmp_path / "does-not-exist")
