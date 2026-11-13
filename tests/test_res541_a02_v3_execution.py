@@ -332,6 +332,7 @@ class FakeColab:
         self.rate_after_prepare: float | None = None
         self.balance_drop_after_prepare = 0.0
         self.fail_download = False
+        self.fail_status_download = False
         self.fail_new = False
         self.fail_stop = False
         self.remote_mutator: Any = None
@@ -437,7 +438,11 @@ class FakeColab:
                         }
                     )
                 )
-        if self.fail_download or not source.exists():
+        if (
+            (self.fail_download and remote == execution.REMOTE_CHECKPOINT)
+            or (self.fail_status_download and remote == execution.REMOTE_STATUS)
+            or not source.exists()
+        ):
             return False
         shutil.copyfile(source, local)
         return True
@@ -686,6 +691,10 @@ def test_campaign_stops_at_a_torn_write_then_a_new_invocation_resumes(tmp_path: 
         (lambda c: setattr(c, "rate_when_allocated", 2.0), "exceeds the admission ceiling"),
         (lambda c: setattr(c, "rate_after_prepare", 3.0), "rate rose above the admission ceiling"),
         (lambda c: setattr(c, "balance_drop_after_prepare", 5.0), "spend already exceeds"),
+        (
+            lambda c: setattr(c, "fail_status_download", True),
+            "authenticated preparation status recovery failed; no work",
+        ),
         (lambda c: setattr(c, "fail_download", True), "evidence was not adopted"),
         (lambda c: setattr(c, "fail_stop", True), "teardown is not confirmed"),
         (lambda c: setattr(c, "work_returncode", 3), "work stage did not finish cleanly"),
@@ -706,6 +715,10 @@ def test_every_anomaly_stops_the_campaign_without_a_retry(
     assert len(client.stopped) == 1  # teardown targets only the exact session name
     assert client.stopped[0].startswith("res541-a02-v3-") and client.stopped[0] != "res338-fits"
     assert set(client.active) == {"res338-fits"} or client.fail_stop
+    if client.fail_status_download:
+        control = json.loads((tmp_path / "run/session-001-control.json").read_text())
+        assert "work" not in control and not isinstance(control["merge"], dict)
+        assert control["target_absent_after_stop"] is True
 
 
 def test_revision_drift_in_remote_evidence_is_rejected_and_local_evidence_survives(
