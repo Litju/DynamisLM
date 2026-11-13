@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import select
 import subprocess
 import sys
 import time
@@ -75,7 +76,7 @@ def test_stalled_successor_watchdog_reserves_time_for_slow_teardown(
     elapsed = [0]
     monkeypatch.setattr(a02_execution, "MAX_SESSION_SECONDS", 3420)
     monkeypatch.setattr(
-        a02_execution.select,
+        select,
         "select",
         lambda r, w, x, timeout: (elapsed.__setitem__(0, elapsed[0] + timeout) or ([], [], [])),
     )
