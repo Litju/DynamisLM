@@ -14,7 +14,6 @@ import math
 import os
 import re
 import subprocess
-import time
 from collections import Counter
 from dataclasses import asdict, replace
 from datetime import UTC, datetime, timedelta
@@ -23,6 +22,7 @@ from typing import Any
 
 from scripts import a02_v3_automatic as automatic
 from scripts import a02_v3_contract as v3
+from scripts import a02_v3_cost as costing
 from scripts import a02_v3_decision as decision
 from scripts import a02_v3_execution as execution
 from scripts import a02_v3_worker as worker
@@ -404,9 +404,10 @@ def continuation_plan(root: Path, predecessor: dict[str, Any], rate: float) -> d
     return plan
 
 
-def prepare(directory: Path, client: Any) -> dict[str, Any]:
+def prepare(directory: Path, client: Any, cost_policy: dict[str, Any]) -> dict[str, Any]:
     if directory.exists():
         raise ValueError("successor directory already exists; no overwrite")
+    costing.validate_policy(cost_policy)  # owner-verified pricing evidence, never invented here
     predecessor = verify_predecessor()
     compatibility = scientific_compatibility()
     snapshot = automatic.quiet(client)
@@ -426,6 +427,8 @@ def prepare(directory: Path, client: Any) -> dict[str, Any]:
         "scientific_compatibility": compatibility,
         "predecessor": predecessor,
         "plan": plan,
+        "cost_policy": cost_policy,
+        "cost_policy_sha256": costing.policy_sha256(cost_policy),
         "valid_from_utc": now.isoformat(),
         "valid_until_utc": (now + timedelta(hours=48)).isoformat(),
         "live_readonly_snapshot": snapshot,
@@ -486,6 +489,12 @@ def validate(directory: Path, *, required_seconds: float | None = 0) -> dict[str
         )
     ):
         raise ValueError("successor evidence or re-derived plan differs")
+    try:
+        costing.validate_policy(value.get("cost_policy"))
+    except costing.CostPolicyError as exc:
+        raise ValueError(f"successor cost policy is not verified: {exc}") from exc
+    if value.get("cost_policy_sha256") != costing.policy_sha256(value["cost_policy"]):
+        raise ValueError("successor cost policy hash differs")
     if (
         value["scope"] != "REMAINING_BASELINE_ONLY_NO_TRAINING"
         or value["training_authorized"] is not False
@@ -616,7 +625,6 @@ def run(directory: Path, approval_path: Path, client: Any) -> dict[str, Any]:
                 raise ValueError("successor additional cap exhausted")
             client.watchdog_module = "scripts.a02_v3_execution"
             client.watchdog_seconds = proposal["independent_watchdog_seconds"]
-            started = time.monotonic()
             state = execution.run_session(
                 client=client,
                 plan=plan,
@@ -626,13 +634,17 @@ def run(directory: Path, approval_path: Path, client: Any) -> dict[str, Any]:
                 run_dir=directory,
                 source_archive=archive,
                 binding=binding,
+                cost_policy=proposal["cost_policy"],
             )
-            spent = None
-            if state.get("target_absent_after_stop") and state.get("quota_after"):
-                spent = max(
-                    state["quota_before"]["balance"] - state["quota_after"]["balance"],
-                    state.get("rate_after_allocation", 0) * (time.monotonic() - started) / 3600,
-                )
+            # One accounting authority: the shared ledger's conservative charge, never a
+            # displayed-balance delta recomputed here.
+            charged = json.loads(ledger_path.read_text())["sessions"][-1]
+            spent = (
+                charged["compute_units_spent"]
+                if charged.get("cost_status") == "KNOWN"
+                and charged.get("teardown_verified") is True
+                else None
+            )
             after = worker.read_checkpoint(checkpoint, items)
             problem = execution.session_anomaly(
                 state,
@@ -685,12 +697,15 @@ def main() -> int:
     parser.add_argument("command", choices=("prepare", "validate", "run"))
     parser.add_argument("--directory", required=True, type=Path)
     parser.add_argument("--approval", type=Path)
+    parser.add_argument("--cost-policy", type=Path)
     args = parser.parse_args()
     if not args.directory.resolve().is_relative_to(execution.E_ROOT):
         raise ValueError("persistent successor evidence belongs on E:")
     os.environ["COLAB_CLI_ASSIGN_RETRIES"] = "0"
     if args.command == "prepare":
-        output = prepare(args.directory, automatic.PipelineCLI())
+        if args.cost_policy is None:
+            raise ValueError("an owner-verified --cost-policy file is required")
+        output = prepare(args.directory, automatic.PipelineCLI(), automatic.read(args.cost_policy))
     elif args.command == "validate":
         output = validate(args.directory)
     else:

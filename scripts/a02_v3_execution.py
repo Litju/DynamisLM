@@ -42,6 +42,7 @@ from typing import Any, Protocol
 
 from scripts import a02_v3_constrained as constrained
 from scripts import a02_v3_contract as v3
+from scripts import a02_v3_cost as costing
 from scripts import a02_v3_decision as decision
 from scripts import a02_v3_score as score
 from scripts import a02_v3_supervision as supervision
@@ -595,6 +596,30 @@ def _prepare_successor_ledger(
     return path
 
 
+def _ledger_charge(session: dict[str, Any], ledger: dict[str, Any], per_session: float) -> float:
+    """The charge a ledger entry counts for in the cumulative guard.
+
+    Entries written under the conservative contract carry their accounting record. Sealed
+    historical receipts (inherited or the V2 predecessor session) keep their recorded amount.
+    Any other entry was produced by the old displayed-balance delta, which rounding can
+    understate, so the guard counts a full session bound for it instead of trusting the delta.
+    The entry itself is never modified.
+    """
+    recorded = float(session["compute_units_spent"])
+    accounting = session.get("cost_accounting")
+    if (
+        isinstance(accounting, dict)
+        and accounting.get("cost_status") == "KNOWN"
+        and accounting.get("conservative_cu") == recorded
+    ):
+        return recorded
+    if session.get("inherited") is True or (
+        session.get("index") == 1 and ledger.get("schema") == SUCCESSOR_LEDGER_SCHEMA
+    ):
+        return recorded
+    return max(recorded, per_session)
+
+
 def admit(
     *,
     plan: dict[str, Any],
@@ -632,11 +657,14 @@ def admit(
     if session_index > allowance["max_sessions"]:
         raise AdmissionError("campaign allowance session count is exhausted")
     per_session = plan["compute_units"]["per_session_cap"]
-    if any(s.get("cost_status") == "UNKNOWN" for s in used):
+    if any(s.get("cost_status") != "KNOWN" for s in used):
         raise AdmissionError("a prior session has unknown cost; owner review required")
-    if any(float(s["compute_units_spent"]) > per_session + 1e-9 for s in used):
+    if any(s.get("teardown_verified") is False for s in used):
+        raise AdmissionError("a prior session has unverified teardown; owner review required")
+    effective = [_ledger_charge(s, ledger, per_session) for s in used]
+    if any(charge > per_session + 1e-9 for charge in effective):
         raise AdmissionError("a prior session exceeded its bounded cost; owner review required")
-    spent = sum(float(s["compute_units_spent"]) for s in used)
+    spent = sum(effective)
     cap = min(plan["compute_units"]["cumulative_cap"], float(allowance["cumulative_cap_cu"]))
     if spent + per_session > cap + 1e-9:
         raise AdmissionError("cumulative V3 compute-unit cap would be exceeded")
@@ -832,8 +860,13 @@ def run_session(
     source_archive: Path,
     binding: dict[str, Any],
     now: datetime | None = None,
+    cost_policy: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Run one admitted session end to end; teardown is unconditional."""
+    """Run one admitted session end to end; teardown is unconditional.
+
+    ``cost_policy`` carries the owner-verified pricing components used for the conservative
+    ledger charge; without a valid one the session cost is UNKNOWN and nothing further runs.
+    """
     protocol = decision.load_protocol()
     items = worker.work_items(protocol)
     ledger = json.loads(ledger_path.read_text()) if ledger_path.exists() else ledger_new(plan)
@@ -880,6 +913,7 @@ def run_session(
         "quota_before": before,
     }
     watchdog = None
+    stop_confirmed: float | None = None
     allocated = False
     attempted = False  # only a session this run tried to create may be stopped by this run
     monitor_halt = threading.Event()
@@ -1243,6 +1277,7 @@ def run_session(
                 call_timeout=TERMINATION_CALL_TIMEOUT_SECONDS,
                 backoff=TERMINATION_BACKOFF_SECONDS,
             )
+            stop_confirmed = time.monotonic()
             state["stopped"] = termination.stop_succeeded
             state["target_absent_after_stop"] = termination.absent
             state["termination_attempts"] = termination.attempts
@@ -1312,8 +1347,9 @@ def run_session(
         if transition_events:
             state["transition_reconciliation"] = transition_events
         spent: float | None = None
+        accounting: dict[str, Any]
+        end: dict[str, Any] = {}
         try:
-            end = {}
             for end_attempt in range(RECONCILE_ATTEMPTS):
                 try:
                     end = supervision.bounded_call(
@@ -1327,9 +1363,6 @@ def run_session(
             state["quota_after"] = end
             if not state["target_absent_after_stop"]:
                 raise ValueError("exact-target teardown is not confirmed; ending quota unknown")
-            spent = float(before["balance"]) - float(end["balance"])
-            if not math.isfinite(spent) or spent < 0:
-                raise ValueError("untrustworthy ending balance")
         except Exception as exc:
             state["failure"] = (
                 (f"{state['failure']}; " if "failure" in state else "")
@@ -1341,12 +1374,56 @@ def run_session(
                 + "ending quota unknown: "
                 + type(exc).__name__
             )
-            spent = None
+        rates = [
+            float(r)
+            for r in (state.get("rate_after_allocation"), state.get("rate_before_work"))
+            if r is not None
+        ] + [
+            float(o["usage_rate_cu_per_hour"])
+            for o in monitor_observations
+            if name in {row["name"] for row in o.get("active_sessions", [])}
+        ]
+        if not rates and attempted and isinstance(cost_policy, dict):
+            # The target was never observed live: bound by the verified rate, not by zero.
+            rates = [cost_policy.get("verified_rate_cu_per_hour", math.nan)]
+        precise = getattr(client, "precise_charge", None)
+        try:
+            precise_cu = precise(name) if callable(precise) and attempted else None
+        except Exception:
+            precise_cu = None
+        started = admission.get("started_monotonic")
+        elapsed = (
+            stop_confirmed - started
+            if attempted and stop_confirmed is not None and started is not None
+            else (0.0 if not attempted else math.nan)
+        )
+        accounting = costing.conservative_charge(
+            policy=cost_policy,
+            balance_before=before.get("balance"),
+            balance_after=end.get("balance"),
+            elapsed_seconds=elapsed,
+            observed_rates=rates,
+            teardown_verified=state["target_absent_after_stop"] is True and bool(end),
+            allocation_attempted=attempted,
+            precise_charge_cu=precise_cu,
+        )
+        spent = accounting["conservative_cu"]
+        if spent is not None:
+            accounting["remaining_budget_after_cu"] = round(
+                admission["cumulative_cap"] - admission["spent_before"] - spent, 4
+            )
+        else:
+            state["failure"] = (
+                f"{state['failure']}; " if "failure" in state else ""
+            ) + f"session cost is UNKNOWN: {accounting['reason']}"
+        state["cost_accounting"] = accounting
         ledger_session = {
             "index": session_index,
             "name": name,
-            "compute_units_spent": round(spent, 4) if spent is not None else None,
+            "compute_units_spent": spent,
             "cost_status": "KNOWN" if spent is not None else "UNKNOWN",
+            "cost_accounting": accounting,
+            "teardown_verified": state["target_absent_after_stop"] is True,
             "committed_items": len(worker.read_checkpoint(local, items)["entries"])
             if local.exists()
             else 0,
@@ -1405,6 +1482,7 @@ def run_campaign(
     source_archive: Path,
     binding: dict[str, Any],
     now: datetime | None = None,
+    cost_policy: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Run sessions back to back under one allowance until complete or the first anomaly.
 
@@ -1462,6 +1540,7 @@ def run_campaign(
                 source_archive=source_archive,
                 binding=binding,
                 now=now,
+                cost_policy=cost_policy,
             )
         except AdmissionError as exc:
             return {
@@ -1774,6 +1853,7 @@ def main() -> int:  # pragma: no cover - thin CLI
     session_index = len(ledger["sessions"]) + 1
     if allowance is not None and session_index > allowance["max_sessions"]:
         raise AdmissionError("campaign allowance session count is exhausted")
+    policy_path = V3_DIR / "cost-policy.json"
     archive, revision = source_archive(run_dir / f"source-{len(ledger['sessions']) + 1:03d}.tar")
     common: dict[str, Any] = {
         "client": ColabCLI(),
@@ -1783,6 +1863,7 @@ def main() -> int:  # pragma: no cover - thin CLI
         "run_dir": run_dir,
         "source_archive": archive,
         "binding": remote_binding(plan, archive, revision),
+        "cost_policy": json.loads(policy_path.read_text()) if policy_path.exists() else None,
     }
     if args.command == "run-campaign":
         result = run_campaign(**common)

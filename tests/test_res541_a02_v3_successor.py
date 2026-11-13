@@ -11,7 +11,7 @@ import pytest
 from scripts import a02_v3_decision as decision
 from scripts import a02_v3_execution as execution
 
-from test_res541_a02_v3_execution import NOW, PLAN, QUIET, FakeColab
+from test_res541_a02_v3_execution import COST_POLICY, NOW, PLAN, QUIET, FakeColab
 
 OLD_SOURCE = {"commit": "a" * 40, "tree": "b" * 40}
 NEW_SOURCE = {"commit": "c" * 40, "tree": "d" * 40}
@@ -230,6 +230,7 @@ def test_revision_2_session_002_records_its_new_source_and_stops_at_two(
     source_archive.write_bytes(b"synthetic session 002 Git archive")
     binding = execution.remote_binding(PLAN, source_archive, NEW_SOURCE["commit"])
     state = execution.run_session(
+        cost_policy=COST_POLICY,
         client=FakeColab(tmp_path / "remote", items_per_session=1),
         plan=PLAN,
         ledger_path=ledger_path,

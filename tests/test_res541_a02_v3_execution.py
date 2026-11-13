@@ -26,6 +26,19 @@ PREFLIGHT = {
 }
 BOUNDS = execution.RuntimeBounds()
 PLAN = execution.build_plan(PROTOCOL, PREFLIGHT, BOUNDS, live_rate_cu_per_hour=0.0)
+COST_POLICY: dict[str, Any] = {
+    "schema": "RES541_A02_V3_COST_POLICY_V1",
+    "balance_display_resolution_cu": 0.01,
+    "billing_granularity_seconds": 60,
+    "posting_delay_seconds": 60,
+    "startup_charge_cu": 0.05,
+    "verified_rate_cu_per_hour": 1.15,
+    "operational_reserve_cu": 0.02,
+    "verification": {
+        "source": "synthetic test fixture",
+        "verified_at_utc": "2026-11-13T00:00:00+00:00",
+    },
+}
 QUIET = {"balance": 87.08, "usage_rate_cu_per_hour": 0.0, "active_sessions": []}
 
 
@@ -179,7 +192,11 @@ def test_one_allowance_admits_every_planned_session_without_per_session_ceremony
     for index in range(1, PLAN["session_count"] + 1):
         assert _admit(allowance, ledger=ledger, index=index)["admitted"] is True
         ledger["sessions"].append(
-            {"index": index, "compute_units_spent": PLAN["compute_units"]["per_session_cap"] / 2}
+            {
+                "index": index,
+                "cost_status": "KNOWN",
+                "compute_units_spent": PLAN["compute_units"]["per_session_cap"] / 2,
+            }
         )
     assert PLAN["packed_sessions"] == 9 and PLAN["session_count"] == 10
 
@@ -239,10 +256,20 @@ def test_live_account_state_still_gates_every_session(
         )
 
 
+def _known(index: int, spent: float) -> dict[str, Any]:
+    """A ledger entry written under the conservative accounting contract."""
+    return {
+        "index": index,
+        "cost_status": "KNOWN",
+        "compute_units_spent": spent,
+        "cost_accounting": {"cost_status": "KNOWN", "conservative_cu": spent},
+    }
+
+
 def test_allowance_session_count_and_cap_exhaustion_stop_admission() -> None:
     ledger = execution.ledger_new(PLAN)
     for index in (1, 2, 3):
-        ledger["sessions"].append({"index": index, "compute_units_spent": 0.1})
+        ledger["sessions"].append(_known(index, 0.1))
     with pytest.raises(execution.AdmissionError, match="allowance session count is exhausted"):
         _admit(_allowance(max_sessions=3), ledger=ledger, index=4)
     per = PLAN["compute_units"]["per_session_cap"]
@@ -251,7 +278,7 @@ def test_allowance_session_count_and_cap_exhaustion_stop_admission() -> None:
 
     full = execution.ledger_new(PLAN)
     for index in range(1, PLAN["session_count"] + 1):
-        full["sessions"].append({"index": index, "compute_units_spent": 0.0})
+        full["sessions"].append(_known(index, 0.0))
     with pytest.raises(execution.AdmissionError, match="planned V3 session count is exhausted"):
         _admit(_allowance(), ledger=full, index=PLAN["session_count"] + 1)
 
@@ -259,7 +286,7 @@ def test_allowance_session_count_and_cap_exhaustion_stop_admission() -> None:
 def test_a_prior_cost_overrun_blocks_further_sessions() -> None:
     ledger = execution.ledger_new(PLAN)
     over = PLAN["compute_units"]["per_session_cap"] + 0.01
-    ledger["sessions"].append({"index": 1, "compute_units_spent": over})
+    ledger["sessions"].append(_known(1, over))
     with pytest.raises(execution.AdmissionError, match="exceeded its bounded cost"):
         _admit(_allowance(), ledger=ledger, index=2)
 
@@ -475,6 +502,7 @@ def _session(
     archive = tmp_path / "source.tar"
     archive.write_bytes(b"source")
     return execution.run_session(
+        cost_policy=COST_POLICY,
         client=client,
         plan=PLAN,
         ledger_path=tmp_path / "ledger.json",
@@ -495,6 +523,7 @@ def _campaign(tmp_path: Path, client: FakeColab, allowance: Any = "default") -> 
     archive = tmp_path / "source.tar"
     archive.write_bytes(b"source")
     return execution.run_campaign(
+        cost_policy=COST_POLICY,
         client=client,
         plan=PLAN,
         ledger_path=tmp_path / "ledger.json",
@@ -524,7 +553,11 @@ def test_interrupted_sessions_resume_to_completion_and_score_on_cpu(tmp_path: Pa
     assert report["decision"]["decision"] == "ADOPT_REPAIRED_CONTRACT_WITH_CONSTRAINED_DECODING"
     ledger = json.loads((tmp_path / "ledger.json").read_text())
     assert [s["committed_items"] for s in ledger["sessions"]] == [200, 400, 581]
-    assert all(s["compute_units_spent"] == pytest.approx(0.29) for s in ledger["sessions"])
+    # displayed delta 0.29 + one display step of rounding uncertainty + operational reserve
+    assert all(s["compute_units_spent"] == pytest.approx(0.32) for s in ledger["sessions"])
+    assert all(
+        s["cost_accounting"]["observed_displayed_delta_cu"] == 0.29 for s in ledger["sessions"]
+    )
 
 
 def test_unauthorized_session_never_allocates(tmp_path: Path) -> None:
@@ -950,6 +983,7 @@ def test_fp32_checkpoint_adoption_requires_actual_precision_evidence(
     archive = tmp_path / "source.tar"
     archive.write_bytes(b"synthetic source fixture")
     state = execution.run_session(
+        cost_policy=COST_POLICY,
         client=FP32Colab(tmp_path / "remote", items_per_session=2),
         plan=PLAN,
         ledger_path=tmp_path / "ledger.json",

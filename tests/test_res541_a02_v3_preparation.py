@@ -17,7 +17,14 @@ from scripts import a02_v3_contract as v3
 from scripts import a02_v3_decision as decision
 from scripts import a02_v3_execution as execution
 
-from test_res541_a02_v3_execution import NOW, PLAN, PROTOCOL, FakeColab, _allowance
+from test_res541_a02_v3_execution import (
+    COST_POLICY,
+    NOW,
+    PLAN,
+    PROTOCOL,
+    FakeColab,
+    _allowance,
+)
 
 
 class SubprocessPrepare(FakeColab):
@@ -107,6 +114,7 @@ def test_real_child_status_overrules_successful_cli(
     archive.write_bytes(b"synthetic-source")
     client = SubprocessPrepare(tmp_path / "provider", mode)
     state = execution.run_session(
+        cost_policy=COST_POLICY,
         client=client,
         plan=PLAN,
         ledger_path=tmp_path / "ledger.json",
@@ -204,6 +212,7 @@ def test_actual_setup_time_limits_work_and_preserves_cleanup(
     archive = tmp_path / "source.tar"
     archive.write_bytes(b"synthetic-source")
     state = execution.run_session(
+        cost_policy=COST_POLICY,
         client=client, plan=PLAN, ledger_path=tmp_path / "ledger.json",
         authorization=_allowance(), session_index=1, run_dir=tmp_path / "run",
         source_archive=archive, binding=execution.remote_binding(PLAN, archive, "a" * 40),
@@ -274,6 +283,7 @@ def test_cost_monitor_covers_all_paid_session_phases(
     archive = tmp_path / "source.tar"
     archive.write_bytes(b"synthetic-source")
     state = execution.run_session(
+        cost_policy=COST_POLICY,
         client=client, plan=PLAN, ledger_path=tmp_path / "ledger.json",
         authorization=_allowance(), session_index=1, run_dir=tmp_path / "run",
         source_archive=archive, binding=execution.remote_binding(PLAN, archive, "a" * 40),
@@ -309,6 +319,7 @@ def test_unresponsive_cost_snapshot_stops_target(tmp_path: Path, monkeypatch: An
     archive = tmp_path / "source.tar"
     archive.write_bytes(b"synthetic-source")
     state = execution.run_session(
+        cost_policy=COST_POLICY,
         client=client, plan=PLAN, ledger_path=tmp_path / "ledger.json",
         authorization=_allowance(), session_index=1, run_dir=tmp_path / "run",
         source_archive=archive, binding=execution.remote_binding(PLAN, archive, "a" * 40),
@@ -382,6 +393,7 @@ def test_owner_window_is_rechecked_after_watchdog_ready(tmp_path: Path, monkeypa
     archive.write_bytes(b"synthetic source")
     allowance = _allowance(valid_until_utc=(NOW + timedelta(seconds=1000)).isoformat())
     state = execution.run_session(
+        cost_policy=COST_POLICY,
         client=client,
         plan=PLAN,
         ledger_path=tmp_path / "ledger.json",

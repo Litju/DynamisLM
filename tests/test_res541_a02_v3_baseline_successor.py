@@ -16,6 +16,8 @@ from scripts import a02_v3_decision as decision
 from scripts import a02_v3_execution as execution
 from scripts import a02_v3_worker as worker
 
+from test_res541_a02_v3_execution import COST_POLICY
+
 PROTOCOL = decision.load_protocol()
 
 
@@ -197,7 +199,7 @@ def prepared(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, dic
         successor, "head_archive_sha256", lambda: v3.sha256(b"synthetic source archive")
     )
     directory = tmp_path / "successor"
-    proposal = successor.prepare(directory, ReadonlyClient())
+    proposal = successor.prepare(directory, ReadonlyClient(), COST_POLICY)
     return directory, proposal
 
 
