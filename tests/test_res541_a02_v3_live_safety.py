@@ -11,13 +11,14 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from scripts import a02_execution
 from scripts import a02_v3_execution as execution
 
 
-@pytest.mark.parametrize("diagnostic", [False, True])
+@pytest.mark.parametrize("diagnostic", [False, True, "successor"])
 @pytest.mark.parametrize("exit_kind", ["death", "disconnect"])
 def test_independent_watchdog_survives_parent_death(
-    tmp_path: Path, exit_kind: str, diagnostic: bool
+    tmp_path: Path, exit_kind: str, diagnostic: bool | str
 ) -> None:
     cli = tmp_path / "colab"
     log = tmp_path / "calls"
@@ -35,10 +36,15 @@ if sys.argv[2] == "death":
     os.kill(os.getpid(), signal.SIGKILL)
 client.finish_watchdog(watchdog, False)
 """
-    if diagnostic:
+    if diagnostic is True:
         script = script.replace(
             "from scripts.a02_v3_execution import ColabCLI",
             "from scripts.a02_v3_diagnostic_session import DiagnosticCLI as ColabCLI",
+        )
+    elif diagnostic == "successor":
+        script = script.replace(
+            "watchdog = client.start_watchdog(",
+            "client.watchdog_seconds = 3420\nwatchdog = client.start_watchdog(",
         )
     env = {
         **os.environ,
@@ -61,6 +67,40 @@ client.finish_watchdog(watchdog, False)
         "stop" not in line or line.endswith("exact-test-target")
         for line in log.read_text().splitlines()
     )
+
+
+def test_stalled_successor_watchdog_reserves_time_for_slow_teardown(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    elapsed = [0]
+    monkeypatch.setattr(a02_execution, "MAX_SESSION_SECONDS", 3420)
+    monkeypatch.setattr(
+        a02_execution.select,
+        "select",
+        lambda r, w, x, timeout: (elapsed.__setitem__(0, elapsed[0] + timeout) or ([], [], [])),
+    )
+    monkeypatch.setattr(a02_execution, "_assignment_command", lambda: ["assignments"])
+
+    def run(command: list[str], *, timeout: int) -> subprocess.CompletedProcess[str]:
+        elapsed[0] += timeout
+        if command[-1] == "sessions":
+            output = "[target] gpu-t4-test | Hardware: T4 | Shape: Standard | Variant: GPU\n"
+            if elapsed[0] > 3480:
+                output = "[colab] No active sessions found on server.\n"
+        elif command == ["assignments"]:
+            output = (
+                '{"endpoint":"https://colab.research.google.com/tun/m/assignments",'
+                '"assignments":[]}'
+            )
+        else:
+            output = ""
+        return subprocess.CompletedProcess(command, 0, output, "")
+
+    monkeypatch.setattr(a02_execution, "_run", run)
+    receipt = tmp_path / "watchdog.json"
+    a02_execution._watchdog("target", receipt)
+    assert elapsed[0] == 3540 < 3600
+    assert json.loads(receipt.read_text())["target_absent"] is True
 
 
 @pytest.mark.parametrize("change", ["rate", "balance", "usage", "exception"])

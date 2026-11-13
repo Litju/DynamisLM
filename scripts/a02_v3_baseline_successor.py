@@ -437,7 +437,8 @@ def prepare(directory: Path, client: Any) -> dict[str, Any]:
         + plan["compute_units"]["maximum_additional_cu"],
         "maximum_new_sessions": plan["new_session_count"],
         "first_new_session_index": 3,
-        "independent_watchdog_seconds": plan["bounds"]["session_seconds"],
+        # Reserve 180 seconds for watchdog discovery, stop and both inventory checks.
+        "independent_watchdog_seconds": plan["bounds"]["session_seconds"] - 180,
         "stop_reserve_seconds": plan["bounds"]["cleanup_reserve_seconds"],
         "no_retry": True,
         "training_authorized": False,
@@ -497,7 +498,7 @@ def validate(directory: Path, *, required_seconds: float | None = 0) -> dict[str
         or value["last_observed_t4_cu_per_hour"]
         != value["predecessor"]["last_observed_t4_cu_per_hour"]
         or value["first_new_session_index"] != 3
-        or value["independent_watchdog_seconds"] != value["plan"]["bounds"]["session_seconds"]
+        or value["independent_watchdog_seconds"] != value["plan"]["bounds"]["session_seconds"] - 180
         or value["stop_reserve_seconds"] != value["plan"]["bounds"]["cleanup_reserve_seconds"]
     ):
         raise ValueError("successor scope/budget differs")
@@ -613,7 +614,8 @@ def run(directory: Path, approval_path: Path, client: Any) -> dict[str, Any]:
                 > proposal["maximum_additional_cu"] + 1e-9
             ):
                 raise ValueError("successor additional cap exhausted")
-            client.watchdog_seconds = plan["bounds"]["session_seconds"]
+            client.watchdog_module = "scripts.a02_v3_execution"
+            client.watchdog_seconds = proposal["independent_watchdog_seconds"]
             started = time.monotonic()
             state = execution.run_session(
                 client=client,

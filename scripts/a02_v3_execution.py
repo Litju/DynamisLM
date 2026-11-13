@@ -1500,12 +1500,17 @@ def main() -> int:  # pragma: no cover - thin CLI
 
 
 if __name__ == "__main__":  # pragma: no cover
-    if len(sys.argv) == 4 and sys.argv[1] == "watchdog":
-        from scripts.a02_execution import _watchdog
+    if len(sys.argv) in {4, 5} and sys.argv[1] == "watchdog":
+        from scripts import a02_execution
+
+        if len(sys.argv) == 5:
+            if sys.argv[4] != "3420":
+                raise ValueError("watchdog duration is outside the successor policy")
+            a02_execution.MAX_SESSION_SECONDS = 3420
 
         receipt = Path(sys.argv[3])
         receipt.write_text(json.dumps({"session": sys.argv[2], "phase": "READY"}))
-        _watchdog(sys.argv[2], receipt)
+        a02_execution._watchdog(sys.argv[2], receipt)
         if json.loads(receipt.read_text()).get("phase") == "READY":
             receipt.write_text(json.dumps({"session": sys.argv[2], "phase": "DISARMED"}))
     else:

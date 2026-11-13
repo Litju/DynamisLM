@@ -208,6 +208,7 @@ def test_proposal_prices_only_remaining_work_and_preserves_original_ceiling(prep
     assert plan["starting_item"] == 307 and plan["scheduled_work_items"] == 274
     assert plan["sessions"][0]["first_item"] == 307 and plan["sessions"][-1]["end_item"] == 581
     assert plan["preparation_derivation"]["result_seconds"] == 660
+    assert proposal["independent_watchdog_seconds"] == 3420
     assert plan["qualification"] == "INHERITED_PASSED_DO_NOT_REPEAT"
     assert plan["compute_units"]["maximum_additional_cu"] <= 48.5712
     assert proposal["original_maximum_new_cu"] == 50 and proposal["training_authorized"] is False
