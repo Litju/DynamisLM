@@ -941,7 +941,25 @@ def run_session(
                 > plan["compute_units"]["per_session_cap"]
             ):
                 raise RuntimeError("session spend already exceeds its bound; no work stage")
-            work_timeout = bounds["exec_seconds"] - bounds["prepare_seconds"]
+            work_timeout = min(
+                bounds["exec_seconds"] - bounds["prepare_seconds"],
+                math.floor(
+                    bounds["exec_seconds"]
+                    - (time.monotonic() - admission["started_monotonic"])
+                    - 30
+                ),
+            )
+            committed = (
+                len(worker.read_checkpoint(local, items)["entries"]) if local.exists() else 0
+            )
+            next_item = items[committed]
+            item_kind = "QUALIFICATION" if next_item.key == "QUALIFICATION" else next_item.arm
+            if work_timeout <= (
+                bounds["inference_overhead_seconds"]
+                + bounds["worker_margin_seconds"]
+                + plan["item_cost_bounds_seconds"][item_kind]
+            ):
+                raise RuntimeError("insufficient remaining work-stage time; no work")
             state["work"] = monitored_stage(
                 client,
                 name,

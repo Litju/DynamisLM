@@ -7,6 +7,7 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -174,6 +175,42 @@ def test_prepare_window_uses_censored_time_and_session_capacity() -> None:
             execution.derive_preparation_seconds(observations, bounds)
     with pytest.raises(ValueError, match="cannot fit"):
         execution.derive_preparation_seconds([1000], bounds)
+
+
+@pytest.mark.parametrize(("elapsed", "expected_timeout"), [(250, 440), (500, None)])
+def test_actual_setup_time_limits_work_and_preserves_cleanup(
+    tmp_path: Path, monkeypatch: Any, elapsed: int, expected_timeout: int | None
+) -> None:
+    clock = [0.0]
+    monkeypatch.setattr(time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(
+        execution, "source_identity", lambda: {"commit": "a" * 40, "tree": "b" * 40}
+    )
+
+    class SlowSetup(FakeColab):
+        work_timeout: int | None = None
+
+        def exec_stage(self, name: str, stage: str, timeout: int) -> dict[str, Any]:
+            if stage == "prepare":
+                clock[0] += elapsed
+            else:
+                self.work_timeout = timeout
+            return super().exec_stage(name, stage, timeout)
+
+    client = SlowSetup(tmp_path / "provider", items_per_session=1)
+    archive = tmp_path / "source.tar"
+    archive.write_bytes(b"synthetic-source")
+    state = execution.run_session(
+        client=client, plan=PLAN, ledger_path=tmp_path / "ledger.json",
+        authorization=_allowance(), session_index=1, run_dir=tmp_path / "run",
+        source_archive=archive, binding=execution.remote_binding(PLAN, archive, "a" * 40),
+        now=NOW,
+    )  # fmt: skip
+    assert client.work_timeout == expected_timeout
+    assert state["target_absent_after_stop"] is True
+    if expected_timeout is None:
+        assert "insufficient remaining work-stage time" in state["failure"]
+        assert "work" not in state
 
 
 @pytest.mark.parametrize("mode", ["timeout", "start", "returned"])
