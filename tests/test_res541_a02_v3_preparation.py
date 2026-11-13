@@ -298,6 +298,7 @@ def test_unallocated_watchdog_disarm_requires_both_authenticated_inventories(
 ) -> None:
     client = execution.ColabCLI()
     assert client.target_endpoint is None
+    monkeypatch.setattr(client._timeouts, "_colab_python", lambda: sys.executable)
 
     def run(command: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
         if command[:3] == ["colab", "--auth=oauth2", "sessions"]:
@@ -322,3 +323,17 @@ def test_unallocated_watchdog_disarm_requires_both_authenticated_inventories(
         # An attempted allocation still requires a bound exact endpoint; never weaken that gate.
         with pytest.raises(RuntimeError, match="endpoint"):
             client.verify_absent("synthetic-attempted")
+
+
+def test_unallocated_watchdog_refuses_missing_cli(monkeypatch: Any) -> None:
+    client = execution.ColabCLI()
+
+    def missing() -> str:
+        raise RuntimeError("CLI unavailable")
+
+    monkeypatch.setattr(client._timeouts, "_colab_python", missing)
+    monkeypatch.setattr(
+        client, "_run", lambda command, **kwargs: subprocess.CompletedProcess(command, 0, "", "")
+    )
+    assert client.verify_absent("synthetic-unattempted", allocation_attempted=False) is False
+    assert client.teardown_receipt["assignments"]["error_type"] == "RuntimeError"
