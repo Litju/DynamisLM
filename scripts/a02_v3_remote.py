@@ -230,10 +230,12 @@ def outer(stage: str, timeout: int, helpers: Any = None) -> int:
     child_seconds = max(
         1, math.floor(timeout - (time.monotonic() - outer_started) - CHILD_MARGIN_SECONDS)
     )
+    child_env = _child_env(SOURCE_DIR, stage)
+    child_env["A02_V3_REMOTE_STAGE_TIMEOUT"] = str(child_seconds)
     result = helpers.child(
         [str(WORK / "inference-venv/bin/python"), str(SOURCE_DIR / "scripts/a02_v3_remote.py")],
         cwd=SOURCE_DIR,
-        env=_child_env(SOURCE_DIR, stage),
+        env=child_env,
         timeout=child_seconds,
     )
     status = json.loads(STATUS_PATH.read_bytes()) if STATUS_PATH.exists() else {}

@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import sys
 import tarfile
 import time
 from pathlib import Path
@@ -230,3 +231,35 @@ def test_setup_elapsed_is_deducted_from_child_window(
     assert remote.outer("prepare", 180, helpers) == 0
     assert helpers.calls[1][3] == 110
     assert json.loads(remote.STATUS_PATH.read_text())["prepare_seconds"] == 50
+
+
+def test_work_child_receives_its_actual_timeout_after_outer_setup(
+    staged: dict[str, Any], monkeypatch: Any
+) -> None:
+    from scripts.a02_dev_remote import _run_bounded_child
+
+    remote._write_status({"status": "READY", "plan_sha256": PLAN["plan_sha256"]})
+    original = remote._sha256_file
+
+    def delayed(path: Path) -> str:
+        time.sleep(0.1)
+        return original(path)
+
+    monkeypatch.setattr(remote, "_sha256_file", delayed)
+
+    class RealChild:
+        def child(self, command: list[str], *, cwd: Path, env: dict[str, str], timeout: int) -> Any:
+            result = _run_bounded_child(
+                [
+                    sys.executable,
+                    "-c",
+                    "import os; print(os.getenv('A02_V3_REMOTE_STAGE_TIMEOUT'))",
+                ],
+                cwd=execution.ROOT,
+                env=env,
+                timeout=timeout,
+            )
+            assert int(result["stdout_tail"].strip()) == timeout < 540
+            return result
+
+    assert remote.outer("work", 540, RealChild()) == 0
