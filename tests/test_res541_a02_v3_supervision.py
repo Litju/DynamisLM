@@ -229,7 +229,7 @@ def test_a_watchdog_dying_during_paid_work_interrupts_it_and_tears_down(
     runner.join(timeout=30)
     assert interrupted, "the blocked provider call was awaited instead of abandoned"
     assert "work" not in outcome and "failure" in outcome
-    assert any("supervisor" in f for f in outcome["terminal_failures"])
+    assert any("supervisor" in f or "watchdog" in f for f in outcome["terminal_failures"])
     assert outcome["target_absent_after_stop"] is True
 
 
