@@ -520,6 +520,10 @@ def test_completion_and_approved_window_at_admission_boundary(
         assert "replaced inherited checkpoint" in result["error"]
 
 
+@pytest.mark.skipif(
+    not (successor.PREDECESSOR / "execution-evidence-manifest-20261112.json").exists(),
+    reason="real predecessor evidence lives outside Git (E:); verified locally, not on hosted CI",
+)
 def test_sealed_inherited_hashes_match_the_verified_predecessor_receipts() -> None:
     predecessor = successor.verify_predecessor()
     stub = {"predecessor": predecessor, "plan": {"plan_sha256": "x"}, "source_identity": {}}
