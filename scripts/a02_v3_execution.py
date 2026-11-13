@@ -25,6 +25,7 @@ after failure, a fork-safe merge of the downloaded checkpoint, and exact-target 
 from __future__ import annotations
 
 import argparse
+import functools
 import json
 import math
 import os
@@ -43,6 +44,7 @@ from scripts import a02_v3_constrained as constrained
 from scripts import a02_v3_contract as v3
 from scripts import a02_v3_decision as decision
 from scripts import a02_v3_score as score
+from scripts import a02_v3_supervision as supervision
 from scripts import a02_v3_worker as worker
 
 ROOT = v3.ROOT
@@ -723,6 +725,10 @@ def merge_checkpoint(
 # --------------------------------------------------------------------------- session
 
 
+class TransitionUnresolvedError(RuntimeError):
+    """Straddling inventory reads never converged; teardown verification decides instead."""
+
+
 class ColabClient(Protocol):
     def snapshot(self) -> dict[str, Any]: ...
     def new(self, name: str) -> bool: ...
@@ -745,6 +751,15 @@ def _write_exclusive(path: Path, value: dict[str, Any]) -> None:
 
 COST_POLL_SECONDS = 5
 COST_SNAPSHOT_TIMEOUT_SECONDS = 30
+# Bounded emergency escalation: never an unbounded shutdown path, never a silent give-up.
+TERMINATION_ROUNDS = 3
+TERMINATION_CALL_TIMEOUT_SECONDS = 45
+TERMINATION_BACKOFF_SECONDS = 5
+EMERGENCY_ROUNDS = 2
+SUPERVISOR_HEARTBEAT_SLACK_SECONDS = 30
+RECONCILE_ATTEMPTS = 3
+WATCHDOG_TAKEOVER_WAIT_SECONDS = 15
+RECONCILE_DELAY_SECONDS = 2
 
 
 def monitored_stage(
@@ -868,32 +883,114 @@ def run_session(
     allocated = False
     attempted = False  # only a session this run tried to create may be stopped by this run
     monitor_halt = threading.Event()
-    allocation_done = threading.Event()
-    stopping = threading.Event()
+    lifecycle = supervision.SessionLifecycle()
     monitor_failures: list[str] = []
     monitor_observations: list[dict[str, Any]] = []
+    transition_events: list[dict[str, Any]] = []
+    emergency_log: list[dict[str, Any]] = []
+    abandoned: list[str] = []
+    heartbeat = [time.monotonic()]
     monitor_thread: threading.Thread | None = None
+
+    def heartbeat_limit() -> float:
+        return (
+            COST_POLL_SECONDS + COST_SNAPSHOT_TIMEOUT_SECONDS + SUPERVISOR_HEARTBEAT_SLACK_SECONDS
+        )
+
+    def supervisor_ok() -> bool:
+        """Work needs a live monitor thread, a fresh heartbeat and an armed watchdog."""
+        return (
+            watchdog is not None
+            and monitor_thread is not None
+            and monitor_thread.is_alive()
+            and time.monotonic() - heartbeat[0] <= heartbeat_limit()
+            and not lifecycle.cancelled.is_set()
+        )
+
+    def emergency_terminate(reason: str) -> supervision.Termination:
+        outcome = supervision.terminate_until_absent(
+            client,
+            name,
+            lifecycle,
+            allocation_attempted=True,
+            rounds=EMERGENCY_ROUNDS,
+            call_timeout=TERMINATION_CALL_TIMEOUT_SECONDS,
+            backoff=TERMINATION_BACKOFF_SECONDS,
+            keep_going=lambda: not monitor_halt.is_set(),
+        )
+        emergency_log.append(
+            {
+                "reason": reason,
+                "absent": outcome.absent,
+                "stop_succeeded": outcome.stop_succeeded,
+                "attempts": outcome.attempts,
+            }
+        )
+        return outcome
+
+    def take_snapshot() -> dict[str, Any]:
+        snap: dict[str, Any] = supervision.bounded_call(
+            client.snapshot, COST_SNAPSHOT_TIMEOUT_SECONDS, "cost-snapshot"
+        )
+        return snap
+
+    def reconciled_snapshot(phase0: supervision.Phase, epoch0: int) -> tuple[dict[str, Any], bool]:
+        """Snapshot plus whether it may straddle a lifecycle transition.
+
+        Independent provider reads are not atomic. A stop issued while they are taken yields a
+        mismatch that is expected - but only inside a recognised teardown window. During
+        RUNNING the same mismatch is a genuine provider fault and fails the session.
+        """
+        attempt = 0
+        while True:
+            try:
+                snap = take_snapshot()
+            except (supervision.InventoryMismatchError, supervision.CallTimeoutError) as exc:
+                phase1, epoch1 = lifecycle.view()
+                window = (
+                    phase0 in supervision.TEARDOWN_PHASES
+                    or phase1 in supervision.TEARDOWN_PHASES
+                    or epoch1 != epoch0
+                )
+                if not window:
+                    if isinstance(exc, supervision.CallTimeoutError):
+                        raise RuntimeError("live quota snapshot timed out") from exc
+                    raise
+                attempt += 1
+                transition_events.append(
+                    {"attempt": attempt, "phase": phase1.value, "error": type(exc).__name__}
+                )
+                if attempt >= RECONCILE_ATTEMPTS or monitor_halt.is_set():
+                    raise TransitionUnresolvedError(type(exc).__name__) from exc
+                time.sleep(RECONCILE_DELAY_SECONDS)
+                heartbeat[0] = time.monotonic()
+                phase0, epoch0 = lifecycle.view()
+                continue
+            phase1, epoch1 = lifecycle.view()
+            straddled = (
+                epoch1 != epoch0
+                or phase0 in supervision.TEARDOWN_PHASES
+                or phase1 in supervision.TEARDOWN_PHASES
+            )
+            return snap, straddled
 
     def monitor_session() -> None:
         observed_rate: float | None = None
         while not monitor_halt.wait(COST_POLL_SECONDS):
+            heartbeat[0] = time.monotonic()
+            if lifecycle.cancelled.is_set():
+                # Terminal failure: keep supervising until the exact target is verified absent.
+                if lifecycle.phase is supervision.Phase.VERIFIED_STOPPED:
+                    return
+                emergency_terminate("continued supervision after terminal failure")
+                heartbeat[0] = time.monotonic()
+                continue
             try:
-                result: dict[str, Any] = {}
-
-                def snapshot(output: dict[str, Any] = result) -> None:
-                    try:
-                        output["snapshot"] = client.snapshot()
-                    except Exception as exc:
-                        output["error"] = exc
-
-                poll = threading.Thread(target=snapshot, name="res541-cost-snapshot", daemon=True)
-                poll.start()
-                poll.join(timeout=COST_SNAPSHOT_TIMEOUT_SECONDS)
-                if poll.is_alive():
-                    raise RuntimeError("live quota snapshot timed out")
-                if "error" in result:
-                    raise RuntimeError("live quota snapshot failed") from result["error"]
-                snap = result["snapshot"]
+                phase0, epoch0 = lifecycle.view()
+                try:
+                    snap, straddled = reconciled_snapshot(phase0, epoch0)
+                except TransitionUnresolvedError:
+                    continue  # the teardown verification is authoritative; cost needs a clean end
                 monitor_observations.append(snap)
                 rate = float(snap["usage_rate_cu_per_hour"])
                 delta = float(before["balance"]) - float(snap["balance"])
@@ -904,6 +1001,7 @@ def run_session(
                     raise RuntimeError("unexpected provider usage or quota attribution")
                 if not math.isfinite(rate) or rate < 0:
                     raise RuntimeError("live rate is invalid")
+                phase_now = lifecycle.phase
                 if target_present:
                     if rate <= 0 or rate > plan["bounds"]["admission_rate_ceiling_cu_per_hour"]:
                         raise RuntimeError("live T4 rate exceeds the admission ceiling")
@@ -912,20 +1010,29 @@ def run_session(
                     ):
                         raise RuntimeError("live T4 rate changed")
                     observed_rate = rate
-                    check_cost(snap, rate)
-                elif (allocation_done.is_set() and not stopping.is_set()) or rate != 0:
-                    raise RuntimeError("target allocation or provider usage is uncertain")
+                    if phase_now in {supervision.Phase.RUNNING, supervision.Phase.ALLOCATION}:
+                        check_cost(snap, rate)
+                else:
+                    in_run = phase_now is supervision.Phase.RUNNING and not straddled
+                    stale_rate = straddled and observed_rate is not None and rate == observed_rate
+                    if in_run or (rate != 0 and not stale_rate):
+                        raise RuntimeError("target allocation or provider usage is uncertain")
             except Exception as exc:
-                monitor_failures.append(type(exc).__name__ + ": " + str(exc))
-                try:
-                    client.stop(name)
-                except Exception as stop_exc:
-                    monitor_failures.append(type(stop_exc).__name__)
-                return
+                reason = type(exc).__name__ + ": " + str(exc)
+                monitor_failures.append(reason)
+                lifecycle.fail(reason)
+                emergency_terminate(reason)
+                heartbeat[0] = time.monotonic()
 
     def check_monitor() -> None:
-        if monitor_failures:
+        if monitor_failures or lifecycle.cancelled.is_set():
             raise RuntimeError("live session cost monitor failed")
+
+    def provider(label: str, operation: Callable[[], Any]) -> Any:
+        """Every paid-session provider command runs cancellable under a live supervisor."""
+        return supervision.run_cancellable(
+            operation, lifecycle, label, supervisor_ok=supervisor_ok, abandoned=abandoned
+        )
 
     def check_cost(snap: dict[str, Any], rate: float) -> None:
         delta = float(before["balance"]) - float(snap["balance"])
@@ -947,6 +1054,8 @@ def run_session(
         watchdog = client.start_watchdog(
             name, run_dir / f"session-{session_index:03d}-watchdog.json"
         )
+        if watchdog is None:
+            raise RuntimeError("no enforceable independent watchdog; no allocation")
         expires = datetime.fromisoformat(
             str(validate_allowance(plan, authorization)["valid_until_utc"])
         )
@@ -956,18 +1065,21 @@ def run_session(
             raise AdmissionError("owner window cannot cover allocation, watchdog and teardown")
         admission["started_monotonic"] = time.monotonic()
         attempted = True
+        heartbeat[0] = time.monotonic()
         monitor_thread = threading.Thread(target=monitor_session, daemon=True)
         monitor_thread.start()
-        allocated = client.new(name)
+        allocated = bool(provider("allocation", lambda: client.new(name)))
         if allocated:
-            allocation_done.set()
+            lifecycle.transition(supervision.Phase.RUNNING, "target allocated")
         check_monitor()
         state["allocated"] = allocated
         if not allocated:
             raise RuntimeError("single V3 T4 allocation failed; no retry")
-        if client.hardware(name) != "T4":
+        if provider("hardware", lambda: client.hardware(name)) != "T4":
             raise RuntimeError("allocated V3 session is not the exact requested T4")
-        after = client.snapshot()
+        after = supervision.bounded_call(
+            client.snapshot, COST_SNAPSHOT_TIMEOUT_SECONDS, "post-allocation-snapshot"
+        )
         state["rate_after_allocation"] = after["usage_rate_cu_per_hour"]
         expected_sessions = {row["name"] for row in before["active_sessions"]} | {name}
         if {row["name"] for row in after["active_sessions"]} != expected_sessions:
@@ -994,14 +1106,23 @@ def run_session(
         if local.exists():
             uploads.append((local, REMOTE_CHECKPOINT))
         for path, remote in uploads:
-            if not client.upload(name, path, remote):
+            if not provider(
+                f"upload {remote}",
+                functools.partial(client.upload, name, path, remote),
+            ):
                 raise RuntimeError(f"V3 upload failed: {remote}")
             check_monitor()
         bounds = plan["bounds"]
-        state["prepare"] = client.exec_stage(name, "prepare", bounds["prepare_seconds"])
+        state["prepare"] = provider(
+            "prepare stage",
+            lambda: client.exec_stage(name, "prepare", bounds["prepare_seconds"]),
+        )
         check_monitor()
         prepared_path = run_dir / f"session-{session_index:03d}-prepare-status.json"
-        if not client.download(name, REMOTE_STATUS, prepared_path):
+        if not provider(
+            "preparation status download",
+            lambda: client.download(name, REMOTE_STATUS, prepared_path),
+        ):
             raise RuntimeError("authenticated preparation status recovery failed; no work")
         check_monitor()
         state["prepare_status_sha256"] = v3.sha256(prepared_path.read_bytes())
@@ -1015,7 +1136,9 @@ def run_session(
         ):
             raise RuntimeError("prepared checkpoint differs from uploaded prefix; no work")
         if state["prepare"].get("returncode") == 0:
-            mid = client.snapshot()
+            mid = supervision.bounded_call(
+                client.snapshot, COST_SNAPSHOT_TIMEOUT_SECONDS, "pre-work-snapshot"
+            )
             state["rate_before_work"] = mid["usage_rate_cu_per_hour"]
             if {row["name"] for row in mid["active_sessions"]} != expected_sessions:
                 raise RuntimeError("provider inventory differs before work; no work")
@@ -1050,12 +1173,14 @@ def run_session(
             ):
                 raise RuntimeError("insufficient remaining work-stage time; no work")
             check_monitor()
-            state["work"] = client.exec_stage(name, "work", work_timeout)
+            state["work"] = provider(
+                "work stage", lambda: client.exec_stage(name, "work", work_timeout)
+            )
             check_monitor()
     except Exception as exc:  # recorded; teardown and evidence recovery still run
         state["failure"] = f"{type(exc).__name__}: {exc}"
     finally:
-        if allocated:
+        if allocated and not lifecycle.cancelled.is_set():
             status_path = run_dir / f"session-{session_index:03d}-status.json"
             recovered = {}
             for remote, path in ((REMOTE_STATUS, status_path), (REMOTE_CHECKPOINT, downloaded)):
@@ -1103,23 +1228,56 @@ def run_session(
                     state["merge"] = "EVIDENCE_NOT_RETRIEVED"
             except Exception as exc:
                 state["merge"] = f"REJECTED: {exc}"
+        elif allocated:
+            state["merge"] = "EVIDENCE_NOT_RETRIEVED_AFTER_TERMINAL_FAILURE"
         state["stopped"] = False
         state["target_absent_after_stop"] = False
         state["unrelated_sessions_after"] = []
-        stopping.set()
-        for label, operation in (
-            ("stopped", lambda: client.stop(name) if attempted else False),
-            (
-                "target_absent_after_stop",
-                lambda: (attempted or watchdog is not None)
-                and client.verify_absent(name, allocation_attempted=attempted),
-            ),
-            ("unrelated_sessions_after", lambda: sorted(s for s in client.sessions() if s != name)),
-        ):
+        if attempted:
+            termination = supervision.terminate_until_absent(
+                client,
+                name,
+                lifecycle,
+                allocation_attempted=attempted,
+                rounds=TERMINATION_ROUNDS,
+                call_timeout=TERMINATION_CALL_TIMEOUT_SECONDS,
+                backoff=TERMINATION_BACKOFF_SECONDS,
+            )
+            state["stopped"] = termination.stop_succeeded
+            state["target_absent_after_stop"] = termination.absent
+            state["termination_attempts"] = termination.attempts
+            if not termination.absent:
+                state["teardown_uncertain"] = True
+                lifecycle.fail("exact-target absence was not verified after bounded escalation")
+        elif watchdog is not None:
+            lifecycle.transition(supervision.Phase.STOP_REQUESTED, "no allocation was attempted")
+            lifecycle.transition(supervision.Phase.TEARDOWN_VERIFICATION, "reserved name check")
             try:
-                state[label] = operation()
+                absent = bool(
+                    supervision.bounded_call(
+                        lambda: client.verify_absent(name, allocation_attempted=False),
+                        TERMINATION_CALL_TIMEOUT_SECONDS,
+                        "verify-absent",
+                    )
+                )
+                state["target_absent_after_stop"] = absent
+                lifecycle.transition(
+                    supervision.Phase.VERIFIED_STOPPED if absent else supervision.Phase.UNCERTAIN,
+                    "reserved name check",
+                )
             except Exception as exc:
-                state[label + "_error"] = type(exc).__name__
+                state["target_absent_after_stop_error"] = type(exc).__name__
+                lifecycle.transition(supervision.Phase.UNCERTAIN, "reserved name check failed")
+        try:
+            state["unrelated_sessions_after"] = sorted(
+                s
+                for s in supervision.bounded_call(
+                    client.sessions, TERMINATION_CALL_TIMEOUT_SECONDS, "sessions"
+                )
+                if s != name
+            )
+        except Exception as exc:
+            state["unrelated_sessions_after_error"] = type(exc).__name__
         state["teardown_receipt"] = getattr(client, "teardown_receipt", None)
         if monitor_thread is not None:
             monitor_halt.set()
@@ -1131,13 +1289,41 @@ def run_session(
                 state["monitor_failure"] = monitor_failures
                 state["failure"] = "live session cost monitor failed"
         if watchdog is not None:
+            # Disarm only on verified exact-target absence, never because a stop was attempted.
+            verified = (
+                state["target_absent_after_stop"] is True
+                and lifecycle.phase is supervision.Phase.VERIFIED_STOPPED
+            )
             try:
-                client.finish_watchdog(watchdog, state["target_absent_after_stop"] is True)
+                client.finish_watchdog(watchdog, verified)
             except Exception as exc:
                 state["watchdog_error"] = type(exc).__name__
+            state["watchdog_disarmed"] = verified
+            takeover = getattr(client, "watchdog_takeover", None)
+            if takeover is not None:
+                state["watchdog_takeover"] = takeover
+        state["lifecycle"] = lifecycle.history
+        if lifecycle.failures:
+            state["terminal_failures"] = lifecycle.failures
+        if emergency_log:
+            state["emergency_stop"] = emergency_log
+        if abandoned:
+            state["abandoned_operations"] = abandoned
+        if transition_events:
+            state["transition_reconciliation"] = transition_events
         spent: float | None = None
         try:
-            end = client.snapshot()
+            end = {}
+            for end_attempt in range(RECONCILE_ATTEMPTS):
+                try:
+                    end = supervision.bounded_call(
+                        client.snapshot, COST_SNAPSHOT_TIMEOUT_SECONDS, "ending-snapshot"
+                    )
+                    break
+                except (supervision.InventoryMismatchError, supervision.CallTimeoutError):
+                    if end_attempt + 1 >= RECONCILE_ATTEMPTS:
+                        raise
+                    time.sleep(RECONCILE_DELAY_SECONDS)
             state["quota_after"] = end
             if not state["target_absent_after_stop"]:
                 raise ValueError("exact-target teardown is not confirmed; ending quota unknown")
@@ -1146,7 +1332,8 @@ def run_session(
                 raise ValueError("untrustworthy ending balance")
         except Exception as exc:
             state["failure"] = (
-                (
+                (f"{state['failure']}; " if "failure" in state else "")
+                + (
                     "exact-target teardown is not confirmed; "
                     if not state["target_absent_after_stop"]
                     else ""
@@ -1359,6 +1546,20 @@ class ColabCLI:  # pragma: no cover - provider commands, used only in an authori
             process.wait(timeout=10)
             if json.loads(receipt.read_text()).get("phase") != "DISARMED":
                 raise RuntimeError("independent watchdog disarm receipt missing")
+        else:
+            # Hand supervision to the surviving watchdog; it keeps stopping and verifying on its
+            # own bounded schedule. Record whatever it has reported so far as evidence.
+            try:
+                process.wait(timeout=WATCHDOG_TAKEOVER_WAIT_SECONDS)
+            except subprocess.TimeoutExpired:
+                pass
+            try:
+                self.watchdog_takeover = {
+                    "still_running": process.poll() is None,
+                    "receipt": json.loads(receipt.read_text()),
+                }
+            except (OSError, ValueError):
+                self.watchdog_takeover = {"still_running": process.poll() is None}
 
     def verify_absent(self, name: str, *, allocation_attempted: bool = True) -> bool:
         self.teardown_receipt: dict[str, Any] = {}

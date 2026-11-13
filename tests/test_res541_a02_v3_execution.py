@@ -712,7 +712,8 @@ def test_every_anomaly_stops_the_campaign_without_a_retry(
     assert anomaly in result["anomaly"]
     assert len(result["sessions"]) == 1
     assert len(client.created) <= 1  # never a second allocation after the anomaly
-    assert len(client.stopped) == 1  # teardown targets only the exact session name
+    assert 1 <= len(client.stopped) <= 3  # exact session only; failed stops escalate 3 rounds
+    assert len(set(client.stopped)) == 1
     assert client.stopped[0].startswith("res541-a02-v3-") and client.stopped[0] != "res338-fits"
     assert set(client.active) == {"res338-fits"} or client.fail_stop
     if client.fail_status_download:
@@ -871,7 +872,7 @@ def test_api_exceptions_preserve_receipts_and_ledger(tmp_path: Path, fault: str)
         or state.get("merge")
         or state.get("target_absent_after_stop_error")
     )
-    assert client.stopped == [state["session"]] or fault == "stop"
+    assert set(client.stopped) == {state["session"]} or fault == "stop"
 
 
 def test_status_binding_forgery_rejects_checkpoint(tmp_path: Path) -> None:

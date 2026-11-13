@@ -184,6 +184,8 @@ def test_actual_setup_time_limits_work_and_preserves_cleanup(
 ) -> None:
     clock = [0.0]
     monkeypatch.setattr(time, "monotonic", lambda: clock[0])
+    # The simulated clock jumps without the monitor beating; heartbeat is tested elsewhere.
+    monkeypatch.setattr(execution, "SUPERVISOR_HEARTBEAT_SLACK_SECONDS", 10**9)
     monkeypatch.setattr(
         execution, "source_identity", lambda: {"commit": "a" * 40, "tree": "b" * 40}
     )

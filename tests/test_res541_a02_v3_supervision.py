@@ -1,0 +1,197 @@
+from __future__ import annotations
+
+import threading
+import time
+from pathlib import Path
+from typing import Any
+
+import pytest
+from scripts import a02_v3_execution as execution
+from scripts import a02_v3_supervision as supervision
+
+from test_res541_a02_v3_execution import FakeColab, _campaign, _session
+
+
+@pytest.fixture(autouse=True)
+def _fast(monkeypatch: Any) -> None:
+    monkeypatch.setattr(execution, "COST_POLL_SECONDS", 0.01)
+    monkeypatch.setattr(execution, "RECONCILE_ATTEMPTS", 2)
+
+
+class Supervised(FakeColab):
+    """FakeColab with observable watchdog disposition and scripted provider misbehaviour."""
+
+    def __init__(self, root: Path, **kwargs: Any) -> None:
+        super().__init__(root, **kwargs)
+        self.disarm_requests: list[bool] = []
+        self.stop_always: Any = None  # False or an Exception: every stop misbehaves
+        self.stop_script: list[Any] = []  # True/False/Exception per stop call; empty -> normal
+        self.verify_script: list[Any] = []
+        self.block_work = threading.Event()
+        self.rate_spike_on_work = False
+
+    def finish_watchdog(self, watchdog: Any, verified: bool) -> None:
+        self.disarm_requests.append(verified)
+        super().finish_watchdog(watchdog, verified)
+
+    def stop(self, name: str) -> bool:
+        self.stopped.append(name)
+        if self.stop_always is not None:
+            if isinstance(self.stop_always, Exception):
+                raise self.stop_always
+            return False
+        if self.stop_script:
+            step = self.stop_script.pop(0)
+            if isinstance(step, Exception):
+                raise step
+            if step is False:
+                return False
+        self.active.pop(name, None)
+        return True
+
+    def verify_absent(self, name: str, *, allocation_attempted: bool = True) -> bool:
+        if self.verify_script:
+            step = self.verify_script.pop(0)
+            if isinstance(step, Exception):
+                raise step
+            if step is False:
+                return False
+        return name not in self.active
+
+    def exec_stage(self, name: str, stage: str, timeout: int) -> dict[str, Any]:
+        if stage == "work" and self.block_work.is_set():
+            self.rate_after_prepare = 2.0 if self.rate_spike_on_work else None
+            deadline = time.monotonic() + 5
+            while name in self.active and time.monotonic() < deadline:
+                time.sleep(0.005)
+            return {"returncode": None, "timed_out": True}
+        return super().exec_stage(name, stage, timeout)
+
+
+def _blocked_hung_work(client: Supervised) -> None:
+    client.block_work.set()
+    client.rate_spike_on_work = True
+
+
+def test_failed_stop_during_blocked_work_escalates_and_keeps_watchdog_armed(
+    tmp_path: Path,
+) -> None:
+    client = Supervised(tmp_path / "remote")
+    _blocked_hung_work(client)
+    client.stop_always = False  # the provider never honours any stop
+    state = _session(tmp_path, client, 1)
+    assert "failure" in state and state["teardown_uncertain"] is True
+    assert state["target_absent_after_stop"] is False
+    assert client.disarm_requests == [False]  # never disarmed on an attempted stop
+    assert state["watchdog_disarmed"] is False
+    assert state["emergency_stop"], "the monitor must escalate, not stop once and exit"
+    assert state["lifecycle"][-1]["phase"] == "UNCERTAIN"
+    assert state["terminal_failures"]
+    assert len(state["termination_attempts"]) == execution.TERMINATION_ROUNDS  # bounded
+    assert state["abandoned_operations"]  # the blocked exec_stage was abandoned, not awaited
+
+
+def test_stop_exception_is_recorded_and_never_treated_as_success(tmp_path: Path) -> None:
+    client = Supervised(tmp_path / "remote")
+    _blocked_hung_work(client)
+    client.stop_always = RuntimeError("boom")
+    state = _session(tmp_path, client, 1)
+    assert state["teardown_uncertain"] is True
+    assert any("stop_error" in a for a in state["termination_attempts"])
+    assert client.disarm_requests == [False]
+
+
+def test_delayed_provider_termination_is_verified_before_disarm(tmp_path: Path) -> None:
+    client = Supervised(tmp_path / "remote")
+    client.stop_script = [False, False]  # slow to die: third stop works
+    client.verify_script = [False, False]
+    state = _session(tmp_path, client, 1)
+    assert state["target_absent_after_stop"] is True
+    assert [a["verified_absent"] for a in state["termination_attempts"]] == [False, False, True]
+    assert client.disarm_requests == [True]
+
+
+def test_repeated_inventory_uncertainty_blocks_disarm_and_next_allocation(
+    tmp_path: Path,
+) -> None:
+    client = Supervised(tmp_path / "remote")
+    client.verify_script = [RuntimeError("inventory conflict")] * 500
+    result = _campaign(tmp_path, client)
+    assert result["status"] == "STOPPED_ON_ANOMALY"
+    assert client.disarm_requests == [False]
+    assert len(client.created) == 1
+    again = _campaign(tmp_path, client)  # a second invocation must not allocate either
+    assert again["status"] == "NOT_ADMITTED"
+    assert len(client.created) == 1
+
+
+def test_stop_returning_true_is_not_proof_of_absence(tmp_path: Path) -> None:
+    client = Supervised(tmp_path / "remote")
+
+    def lying_stop(name: str) -> bool:
+        client.stopped.append(name)
+        return True  # claims success but the session persists
+
+    client.stop = lying_stop  # type: ignore[method-assign]
+    state = _session(tmp_path, client, 1)
+    assert state["stopped"] is True and state["target_absent_after_stop"] is False
+    assert client.disarm_requests == [False]
+
+
+def test_watchdog_takeover_is_recorded_in_control_evidence(tmp_path: Path) -> None:
+    client = Supervised(tmp_path / "remote")
+    client.watchdog_takeover = {"phase": "VERIFY_RETURNED", "target_absent": True}  # type: ignore[attr-defined]
+    client.verify_script = [False] * 10
+    state = _session(tmp_path, client, 1)
+    assert state["watchdog_disarmed"] is False
+    assert state["watchdog_takeover"]["phase"] == "VERIFY_RETURNED"
+    assert (tmp_path / "run" / "session-001-control.json").exists()
+
+
+def test_no_allocation_without_an_enforceable_watchdog(tmp_path: Path) -> None:
+    client = Supervised(tmp_path / "remote")
+    client.start_watchdog = lambda name, receipt: None  # type: ignore[method-assign]
+    state = _session(tmp_path, client, 1)
+    assert client.created == []
+    assert "no enforceable independent watchdog" in state["failure"]
+
+
+def test_no_work_when_the_monitor_heartbeat_is_stale(tmp_path: Path, monkeypatch: Any) -> None:
+    monkeypatch.setattr(execution, "SUPERVISOR_HEARTBEAT_SLACK_SECONDS", -10_000)
+    client = Supervised(tmp_path / "remote")
+    state = _session(tmp_path, client, 1)
+    assert client.created == []
+    assert "no live resource supervisor" in state["failure"]
+
+
+def test_lifecycle_refuses_work_after_terminal_failure() -> None:
+    lifecycle = supervision.SessionLifecycle()
+    lifecycle.require_work_permitted("upload")
+    lifecycle.fail("budget guard")
+    with pytest.raises(supervision.SupervisionError):
+        lifecycle.require_work_permitted("upload")
+    with pytest.raises(supervision.SupervisionError):
+        supervision.run_cancellable(lambda: True, lifecycle, "work", supervisor_ok=lambda: True)
+
+
+def test_verified_stopped_is_final_and_bounded_call_abandons_hangs() -> None:
+    lifecycle = supervision.SessionLifecycle()
+    for phase in (
+        supervision.Phase.STOP_REQUESTED,
+        supervision.Phase.TEARDOWN_VERIFICATION,
+        supervision.Phase.VERIFIED_STOPPED,
+    ):
+        assert lifecycle.transition(phase)
+    assert lifecycle.transition(supervision.Phase.RUNNING) is False
+    assert lifecycle.phase is supervision.Phase.VERIFIED_STOPPED
+    gate = threading.Event()
+    with pytest.raises(supervision.CallTimeoutError):
+        supervision.bounded_call(gate.wait, 0.05, "hang")
+    gate.set()
+
+
+@pytest.fixture(autouse=True)
+def _clean_source(monkeypatch: Any) -> None:
+    monkeypatch.setattr(
+        execution, "source_identity", lambda: {"commit": "a" * 40, "tree": "b" * 40}
+    )
