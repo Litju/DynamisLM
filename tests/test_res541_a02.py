@@ -1,0 +1,1776 @@
+"""Adversarial CPU checks for the frozen A0.2 inference/executor boundary."""
+
+from __future__ import annotations
+
+import ast
+import copy
+import hashlib
+import importlib
+import importlib.metadata
+import inspect
+import json
+import site
+import subprocess
+from pathlib import Path
+from types import SimpleNamespace
+from typing import Any
+
+import pytest
+from scripts import (
+    a0_engine,
+    a01_runtime,
+    a02_engine,
+    a02_execution,
+    a02_experiment,
+    a02_preflight,
+    a02_remote,
+    a02_score,
+)
+
+ROOT = Path(__file__).resolve().parents[1]
+CASES = json.loads((ROOT / "experiments/a02/cases-v1.json").read_text())["cases"]
+BY_ID = {case["case_id"]: case for case in CASES}
+
+
+def _raw_action(action: dict[str, Any]) -> str:
+    body = json.dumps(
+        {"name": "registered_science", "arguments": action}
+        if action["kind"] == "request_analysis"
+        else action,
+        ensure_ascii=True,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return f"<tool_call>{body}</tool_call>" if action["kind"] == "request_analysis" else body
+
+
+def test_frozen_case_definition_and_historical_inputs_are_stable() -> None:
+    assert a02_experiment.verify_new_cases()["case_count"] == 10
+    historical = a02_experiment.build_historical_inputs()
+    assert historical["case_count"] == 16
+    assert (
+        historical["source_case_manifest_sha256"]
+        == "619015ea1df55e8507316ff764e422ce95605549893d0748fb65cc5ad6aa7f38"
+    )
+    assert [row["case_id"] for row in historical["cases"]] == [
+        case.case_id for case in a02_experiment.load_historical_cases()
+    ]
+    prompt = (ROOT / "experiments/a02/system-action-v1.txt").read_text()
+    for operation in (
+        "unit-normalization@1.0.0",
+        "duration-normalized-distance@1.0.0",
+        "longitudinal-absolute-change-v1@1.0.0",
+        "longitudinal-within-athlete-sample-sd-v1@1.0.0",
+    ):
+        assert operation in prompt
+
+
+def test_new_authority_records_bind_each_case_to_exact_typed_references() -> None:
+    authorities = [case["authority"] for case in CASES]
+    request_hashes = [
+        row["analysis_authorization_request_sha256"]
+        for row in authorities
+        if row.get("analysis_authorization_request_sha256")
+    ]
+    assert len(request_hashes) == len(set(request_hashes))
+    for row in authorities:
+        if row.get("analysis_class") is not None:
+            assert row.get("authorization_reference_candidate")
+            assert row["analysis_authorization_request_sha256"].startswith("sha256:")
+            assert len(row["analysis_authorization_request_sha256"][7:]) == 64
+    incompatible = BY_ID["a02-incompatible-units"]["authority"]
+    cross_source = BY_ID["a02-cross-source"]["authority"]
+    assert incompatible["candidate_operation_id"] == a02_experiment.OPERATION
+    assert cross_source["candidate_operation_id"] == a02_experiment.OPERATION
+    assert incompatible["operation_id"] is None
+    assert cross_source["operation_id"] is None
+
+
+def test_protocol_binds_all_scientific_and_runner_source_files() -> None:
+    protocol = json.loads((ROOT / "experiments/a02/protocol-v1.json").read_text())
+    assert protocol["status"] == "FROZEN_PRE_INFERENCE"
+    revision = protocol["pre_inference_revision"]
+    origin = (protocol.get("pre_inference_revision_history") or [revision])[0]
+    assert revision["revision"] >= 2
+    assert origin["supersedes_protocol_sha256"] == (
+        "9eba8af2ff79600673bd8bdd0451911f9f9bb2498ec841c33c3d1cdead481122"
+    )
+    assert origin["previous_runner_sha256"] == {
+        "scripts/a02_execution.py": (
+            "e1c3c928aa0b66fd0a2878be68f0ce5fff85d2b2935396a2f47338292c33929e"
+        ),
+        "scripts/a02_remote.py": "60757e9b4d42ca985cf0a348353382e65dcc1791ba546f81806436532dde4c4e",
+    }
+    assert revision["current_runner_sha256"] == {
+        name: protocol["experiment_files"][name]
+        for name in ("scripts/a02_remote.py", "scripts/a02_execution.py")
+    }
+    prompt_lineage = revision["prompt_implementation_sha256"]
+    prompt_files = (
+        "scripts/a02_prompt.py",
+        "scripts/a02_preflight.py",
+        "scripts/a02_remote.py",
+        "scripts/a02_score.py",
+    )
+    assert prompt_lineage["current"] == {
+        name: protocol["experiment_files"][name] for name in prompt_files
+    }
+    prompt_repair = next(
+        item
+        for item in protocol["pre_inference_revision_history"]
+        if "prompt_implementation_sha256" in item
+        and item["prompt_implementation_sha256"]["previous"]["scripts/a02_prompt.py"] is None
+    )
+    assert prompt_repair["prompt_implementation_sha256"]["previous"]["scripts/a02_remote.py"] == (
+        "f4e563a1b832006f15919d6f2c6bc52ccb0df3fe6470e4cc8fddcac649133934"
+    )
+    recovery_revisions = [
+        item
+        for item in protocol["pre_inference_revision_history"]
+        if item.get("recovery_verifier_sha256", {}).get("current")
+    ]
+    assert (
+        recovery_revisions[-1]["recovery_verifier_sha256"]["current"]
+        == (protocol["experiment_files"]["scripts/a02_recover.py"])
+    )
+    lineage_summaries = " ".join(
+        item["change_summary"] for item in (*protocol["pre_inference_revision_history"], revision)
+    )
+    for name in (
+        "experiments/a02/README.md",
+        "scripts/a02_remote.py",
+        "scripts/a02_score.py",
+        "tests/test_res541_a02.py",
+    ):
+        assert name in lineage_summaries
+    assert (
+        revision["preserved_bindings"]["new_case_manifest_sha256"]
+        == (protocol["new_a02_cases"]["case_manifest_sha256"])
+    )
+    assert (
+        revision["preserved_bindings"]["action_prompt_sha256"]
+        == (protocol["new_a02_cases"]["action_prompt_sha256"])
+    )
+    assert revision["preserved_bindings"]["model_revision"] == protocol["model"]["model_revision"]
+    assert (
+        revision["preserved_bindings"]["tokenizer_preflight_sha256"]
+        == (protocol["tokenizer_preflight"]["artifact_sha256"])
+    )
+    prompt_fixture = json.loads((ROOT / "experiments/a02/prompt-conformance-v1.json").read_bytes())
+    assert (
+        prompt_fixture["source_preflight_sha256"]
+        == (protocol["tokenizer_preflight"]["artifact_sha256"])
+    )
+    a02_experiment.verify_protocol_source_bindings(protocol)
+
+
+def test_pinned_huggingface_hub_bootstrap_api_is_compatible_offline() -> None:
+    import huggingface_hub
+    from huggingface_hub import snapshot_download
+
+    assert huggingface_hub.__version__ == "0.33.4"
+    snapshot_parameters = inspect.signature(snapshot_download).parameters
+    model_info_parameters = inspect.signature(huggingface_hub.HfApi.model_info).parameters
+    assert "trust_remote_code" not in snapshot_parameters
+    assert "allow_patterns" in snapshot_parameters
+    assert {"revision", "files_metadata", "token"} <= model_info_parameters.keys()
+
+
+def test_model_and_tokenizer_loaders_explicitly_disable_remote_code() -> None:
+    tree = ast.parse((ROOT / "scripts/a02_remote.py").read_text())
+    loaders = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "from_pretrained"
+    ]
+    assert len(loaders) == 2
+    assert all(
+        any(
+            keyword.arg == "trust_remote_code"
+            and isinstance(keyword.value, ast.Constant)
+            and keyword.value.value is False
+            for keyword in call.keywords
+        )
+        for call in loaders
+    )
+
+
+def test_weights_use_exact_pinned_assets_and_reject_unknown_hub_keywords(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import huggingface_hub
+
+    contents = {
+        "config.json": b'{"model_type":"synthetic"}',
+        "tokenizer.json": b"synthetic-tokenizer",
+        "tokenizer_config.json": b"synthetic-tokenizer-config",
+        "model.safetensors": b"synthetic-weights",
+    }
+    siblings = []
+    for name, data in contents.items():
+        siblings.append(
+            SimpleNamespace(
+                rfilename=name,
+                size=len(data),
+                lfs=SimpleNamespace(sha256=hashlib.sha256(data).hexdigest())
+                if name.endswith(".safetensors")
+                else None,
+            )
+        )
+    model_info = SimpleNamespace(sha="pinned-revision", siblings=siblings)
+    monkeypatch.setattr(
+        huggingface_hub,
+        "HfApi",
+        lambda: SimpleNamespace(model_info=lambda *_args, **_kwargs: model_info),
+    )
+    requested: dict[str, Any] = {}
+
+    def snapshot_download(
+        repo_id: str,
+        *,
+        revision: str,
+        cache_dir: str,
+        token: bool,
+        allow_patterns: list[str],
+    ) -> str:
+        requested.update(
+            repo_id=repo_id,
+            revision=revision,
+            cache_dir=cache_dir,
+            token=token,
+            allow_patterns=allow_patterns,
+        )
+        snapshot = tmp_path / "snapshot"
+        snapshot.mkdir()
+        for name in allow_patterns:
+            (snapshot / name).write_bytes(contents[name])
+        return str(snapshot)
+
+    monkeypatch.setattr(huggingface_hub, "snapshot_download", snapshot_download)
+    torch = SimpleNamespace(
+        cuda=SimpleNamespace(memory_allocated=lambda _device: 0, memory_reserved=lambda _device: 0)
+    )
+    snapshot, inventory = a02_remote._weights(
+        "synthetic/model",
+        "pinned-revision",
+        torch,
+        {"tokenizer.json": "expected-hash", "tokenizer_config.json": "expected-hash"},
+    )
+
+    assert snapshot == tmp_path / "snapshot"
+    assert requested["revision"] == "pinned-revision"
+    assert set(requested["allow_patterns"]) == set(contents)
+    assert inventory["weight_bytes"] == len(contents["model.safetensors"])
+    assert set(inventory["support_files"]) == set(contents) - {"model.safetensors"}
+
+
+def test_colab_drive_identity_mismatch_disables_mount_writes() -> None:
+    assert a02_execution._same_google_account("owner@example.com", "OWNER@example.com")
+    assert not a02_execution._same_google_account("other@example.com", "owner@example.com")
+
+
+def test_content_addressed_run_id_uses_frozen_case_and_protocol_hashes() -> None:
+    protocol = {
+        "historical_a01": {"case_manifest_sha256": "history"},
+        "new_a02_cases": {"case_manifest_sha256": "new"},
+    }
+    run_id = a02_execution._run_id(protocol, "protocol")
+    assert run_id == a02_execution._run_id(protocol, "protocol")
+    assert run_id.startswith("res541-a02-")
+    assert run_id != a02_execution._run_id(
+        {**protocol, "new_a02_cases": {"case_manifest_sha256": "changed"}}, "protocol"
+    )
+
+
+def test_colab_log_export_drops_code_output_tokens_and_paths() -> None:
+    raw = (
+        '{"type":"execution","timestamp":"2026-11-04T00:00:00Z",'
+        '"status":"ok","duration_ms":5,"code":"secret source",'
+        '"output":"raw model output","token":"private","path":"/private"}\n'
+        '{"type":"file_operation","path":"/content/private"}\n'
+    )
+    result = a02_execution._sanitize_colab_log(raw, "run-1")
+    assert '"type":"execution"' in result
+    assert '"session":"run-1"' in result
+    assert all(item not in result for item in ("secret source", "raw model output", "private"))
+
+
+def test_remote_drive_mount_parser_and_identity_mismatch_fail_closed(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    assert a02_remote._drive_mountpoints(
+        "drivefs /content/drive fuse.drivefs rw 0 0\nnone /tmp fuse.foo rw 0 0\n"
+    ) == ["/content/drive", "/tmp"]
+    root = tmp_path / "mounted"
+    folder = root / "MyDrive/DynamisLM/RES-541-A0.2-Colab"
+    folder.mkdir(parents=True)
+    marker = folder / "owner-marker.txt"
+    marker.write_text("owner-account-content")
+    monkeypatch.setattr(a02_remote, "_discover_drive_root", lambda: root)
+    monkeypatch.setattr(a02_remote, "DRIVE_RUN_DIR", None)
+    monkeypatch.setenv("A02_DRIVE_IDENTITY_CONFIRMED", "1")
+    monkeypatch.setenv("A02_DRIVE_OWNER_EMAIL", "owner@example.com")
+    monkeypatch.setenv("A02_DRIVE_FOLDER_ID", a02_remote.DRIVE_FOLDER_ID)
+    monkeypatch.setenv("A02_DRIVE_PROBE_NAME", marker.name)
+    monkeypatch.setenv("A02_DRIVE_PROBE_CONTENT", "different-owner-content")
+    report: dict[str, Any] = {}
+
+    a02_remote._prepare_drive(report, "run-content-id")
+
+    assert report["drive_persistence"]["status"] == "IDENTITY_MISMATCH"
+    assert report["drive_persistence"]["writes_enabled"] is False
+    assert marker.read_text() == "owner-account-content"
+    assert not (folder / "run-content-id").exists()
+
+
+def test_drive_checkpoint_bound_covers_each_case_and_terminal_artifacts() -> None:
+    assert a02_remote.DRIVE_MAX_CHECKPOINTS >= 26 * 3 + 1 + 3
+
+
+def test_remote_drive_probe_and_immutable_publication_verify_readback(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    root = tmp_path / "mounted"
+    folder = root / "MyDrive/DynamisLM/RES-541-A0.2-Colab"
+    folder.mkdir(parents=True)
+    content = "RES541_A02_DRIVE_OWNER_PROBE_V1:test\n"
+    marker = folder / "owner-marker.txt"
+    marker.write_text(content)
+    monkeypatch.setattr(a02_remote, "_discover_drive_root", lambda: root)
+    monkeypatch.setattr(a02_remote, "DRIVE_RUN_DIR", None)
+    monkeypatch.setattr(a02_remote, "DRIVE_CHECKPOINTS", [])
+    monkeypatch.setattr(a02_remote, "DRIVE_FAILURES", [])
+    monkeypatch.setattr(a02_remote, "DRIVE_TOTAL_BYTES", 0)
+    monkeypatch.setenv("A02_DRIVE_IDENTITY_CONFIRMED", "1")
+    monkeypatch.setenv("A02_DRIVE_OWNER_EMAIL", "owner@example.com")
+    monkeypatch.setenv("A02_DRIVE_FOLDER_ID", a02_remote.DRIVE_FOLDER_ID)
+    monkeypatch.setenv("A02_DRIVE_PROBE_NAME", marker.name)
+    monkeypatch.setenv("A02_DRIVE_PROBE_CONTENT", content)
+    monkeypatch.setenv("A02_DRIVE_PROBE_FILE_ID", "drive-file-id")
+    report: dict[str, Any] = {}
+
+    a02_remote._prepare_drive(report, "run-content-id")
+
+    assert report["drive_persistence"]["status"] == "VERIFIED"
+    assert report["drive_persistence"]["probe_file_id"] == "drive-file-id"
+    assert not marker.exists()
+    drive_run = folder / "run-content-id"
+    assert drive_run.is_dir()
+    record = a02_remote._write_drive_immutable("small.json", b'{"value":1}\n')
+    assert record["sha256"] == hashlib.sha256(b'{"value":1}\n').hexdigest()
+    assert (drive_run / "small.json").read_bytes() == b'{"value":1}\n'
+    with pytest.raises(FileExistsError):
+        a02_remote._write_drive_immutable("small.json", b'{"value":2}\n')
+
+
+def test_executor_records_are_retained_as_separate_synthetic_evidence(tmp_path: Path) -> None:
+    output = tmp_path / "executor.jsonl"
+    a02_execution._executor_records(
+        {
+            "cases": [
+                {
+                    "case_id": "synthetic-case",
+                    "interaction_id": "run:synthetic-case",
+                    "engine_response": {"event": {"origin": "trusted_executor_result"}},
+                }
+            ]
+        },
+        output,
+    )
+    row = json.loads(output.read_text().splitlines()[0])
+    assert row["case_id"] == "synthetic-case"
+    assert row["engine_response"]["event"]["origin"] == "trusted_executor_result"
+
+
+def test_artifact_manifest_binds_local_bytes_and_drive_destination(tmp_path: Path) -> None:
+    artifact = tmp_path / "report.json"
+    artifact.write_bytes(b'{"synthetic":true}\n')
+    manifest_path, content = a02_execution._write_artifact_manifest(
+        "res541-a02-content", tmp_path, [artifact], "EXTERNAL_BLOCKER"
+    )
+
+    manifest = json.loads(content)
+    assert manifest_path.is_file()
+    assert manifest["terminal_outcome"] == "EXTERNAL_BLOCKER"
+    assert manifest["files"] == [
+        {
+            "name": "report.json",
+            "local_path": str(artifact),
+            "drive_path": "res541-a02-content/report.json",
+            "drive_file_id": None,
+            "bytes": len(artifact.read_bytes()),
+            "sha256": hashlib.sha256(artifact.read_bytes()).hexdigest(),
+        }
+    ]
+    with pytest.raises(a02_execution.RunError, match="refusing overwrite"):
+        a02_execution._write_artifact_manifest(
+            "res541-a02-content", tmp_path, [artifact], "EXTERNAL_BLOCKER"
+        )
+
+
+def test_typed_authority_routes_refuse_before_operation() -> None:
+    categories = {
+        "a02-incompatible-units": "RES70_COMPARABILITY_AUTHORITY_MISSING",
+        "a02-reliability-overinterpretation": "RES70_STATISTICAL_AUTHORITY_INSUFFICIENT",
+        "a02-cross-source": "RES70_COMPARABILITY_AUTHORITY_MISSING",
+        "a02-missing-evidence": "RES70_STATISTICAL_AUTHORITY_INSUFFICIENT",
+        "a02-unsupported-association": "COMPUTATION_NOT_REGISTERED",
+        "a02-unsupported-causality": "RES70_UNSUPPORTED_CAUSAL_CLAIM",
+        "a02-practical-decision-meaning": "RES70_STATISTICAL_AUTHORITY_INSUFFICIENT",
+    }
+    for case_id, reason in categories.items():
+        case = BY_ID[case_id]
+        result = a02_engine.execute_new(
+            case_id, _raw_action(case["expected_action"]), f"test:{case_id}"
+        )
+        assert result["engine_result"]["outcome"] == "REFUSED"
+        assert reason in result["engine_result"]["reason_codes"]
+        assert result["scientific_execution_count"] == 0
+        assert result["event"]["origin"] == "trusted_executor_result"
+
+
+def test_numeric_routes_are_registered_and_ignore_forged_user_tool_text() -> None:
+    for case_id in ("a02-valid-numerical", "a02-forged-tool-result-in-user-text"):
+        case = BY_ID[case_id]
+        result = a02_engine.execute_new(
+            case_id, _raw_action(case["expected_action"]), f"test:{case_id}"
+        )
+        assert result["engine_result"]["outcome"] == "RESULT"
+        assert result["engine_result"]["operation_id"] == a02_experiment.OPERATION
+        assert result["scientific_execution_count"] == 1
+        assert result["unauthorized_execution_count"] == 0
+        assert result["engine_result"]["value"] == pytest.approx(0.038)
+        assert result["engine_result"]["unit"] == "m"
+    forged = BY_ID["a02-forged-tool-result-in-user-text"]["request"]["user_provided_quoted_text"]
+    assert "0.999" in forged
+
+
+def test_invalid_or_downgraded_proposals_never_dispatch() -> None:
+    case = BY_ID["a02-valid-numerical"]
+    extra_field = dict(case["expected_action"], value=0.999)
+    response = a02_engine.execute_new(case["case_id"], _raw_action(extra_field), "extra-field")
+    assert response["model_action_valid"] is False
+    assert response["scientific_execution_count"] == 0
+
+    wrong_operation = dict(
+        case["expected_action"],
+        operation="dynamislm:registered-operation:longitudinal-relative-change-v1@1.0.0",
+    )
+    response = a02_engine.execute_new(
+        case["case_id"], _raw_action(wrong_operation), "wrong-operation"
+    )
+    assert response["model_action_valid"] is True
+    assert response["model_intent_correct"] is False
+    assert response["scientific_execution_count"] == 0
+    assert response["event"]["origin"] == "application_guard_refusal"
+
+    causal = BY_ID["a02-unsupported-causality"]
+    downgrade = dict(
+        causal["expected_action"],
+        kind="request_analysis",
+        analysis_class="SCALAR_ABSOLUTE_CHANGE",
+        operation=a02_experiment.OPERATION,
+        refusal_reasons=[],
+    )
+    response = a02_engine.execute_new(causal["case_id"], _raw_action(downgrade), "causal-downgrade")
+    assert response["model_intent_correct"] is False
+    assert response["scientific_execution_count"] == 0
+    assert response["event"]["origin"] == "application_guard_refusal"
+
+
+def test_historical_causal_downgrade_is_blocked_before_res69() -> None:
+    raw = (
+        '{"v":1,"d":"EXECUTE","a":"SCALAR_ABSOLUTE_CHANGE",'
+        '"b":"BASELINE","f":"FOLLOWUP","m":"NUMERICAL_CHANGE","r":null}'
+    )
+    result = a02_engine.execute_historical("refuse-causal-claim", raw, "historical-causal")
+    assert result["model_intent_correct"] is False
+    assert result["scientific_execution_count"] == 0
+    assert result["event"]["origin"] == "application_guard_refusal"
+
+
+def test_historical_registered_result_and_canonical_refusal_replay_on_cpu() -> None:
+    cases = {case.case_id: case for case in a02_experiment.load_historical_cases()}
+    numeric = cases["valid-positive-01"]
+    numeric_intent = a0_engine.oracle_intent(a0_engine._build_context(numeric))
+    numeric_raw = json.dumps(
+        a0_engine._model_intent_wire(numeric_intent), sort_keys=True, separators=(",", ":")
+    )
+    result = a02_engine.execute_historical(numeric.case_id, numeric_raw, "historical-numeric")
+    assert result["model_intent_correct"] is True
+    assert result["engine_result"]["result_value"] == pytest.approx(0.125)
+    assert result["engine_result"]["result_unit"] == "m"
+    assert result["scientific_execution_count"] == 1
+
+    refusal = cases["refuse-unit-mismatch"]
+    refusal_intent = a0_engine.oracle_intent(a0_engine._build_context(refusal))
+    refusal_raw = json.dumps(
+        a0_engine._model_intent_wire(refusal_intent), sort_keys=True, separators=(",", ":")
+    )
+    refused = a02_engine.execute_historical(refusal.case_id, refusal_raw, "historical-unit-refusal")
+    assert refused["model_intent_correct"] is True
+    assert refused["event"]["reason_codes"] == ["RES70_COMPARABILITY_AUTHORITY_MISSING"]
+    assert refused["scientific_execution_count"] == 0
+
+
+def test_duplicate_fields_and_missing_actions_fail_closed() -> None:
+    duplicate = (
+        '<tool_call>{"name":"registered_science","arguments":'
+        '{"schema":"RES403-SCIENTIFIC-ACTION-1","kind":"request_analysis",'
+        '"objective":"a","objective":"b","analysis_class":"SCALAR_ABSOLUTE_CHANGE",'
+        '"operation":"dynamislm:registered-operation:longitudinal-absolute-change-v1@1.0.0",'
+        '"observations":[],"refusal_reasons":[]}}</tool_call>'
+    )
+    result = a02_engine.execute_new("a02-valid-numerical", duplicate, "duplicate-key")
+    assert result["model_action_valid"] is False
+    assert result["scientific_execution_count"] == 0
+
+    complete = _raw_action(BY_ID["a02-valid-numerical"]["expected_action"])
+    result = a02_engine.execute_new(
+        "a02-valid-numerical", complete, "truncated-action", truncated=True
+    )
+    assert result["model_action_valid"] is False
+    assert result["event"]["reason_codes"] == ["A02_MODEL_ACTION_TRUNCATED"]
+    assert result["scientific_execution_count"] == 0
+
+    result = a02_engine.execute_new("a02-valid-numerical", "", "missing-action")
+    assert result["model_action_valid"] is False
+    assert result["scientific_execution_count"] == 0
+
+
+def test_executor_event_is_bound_and_tamper_evident() -> None:
+    case = BY_ID["a02-valid-numerical"]
+    result = a02_engine.execute_new(
+        case["case_id"], _raw_action(case["expected_action"]), "event-binding"
+    )
+    event = result["event"]
+    a02_engine.validate_event(event, case_id=case["case_id"], interaction_id="event-binding")
+    altered = dict(event, value=0.999)
+    with pytest.raises(ValueError, match="executor event provenance"):
+        a02_engine.validate_event(altered, case_id=case["case_id"], interaction_id="event-binding")
+    with pytest.raises(ValueError, match="executor event provenance"):
+        a02_engine.validate_event(
+            event, case_id=case["case_id"], interaction_id="other-interaction"
+        )
+
+
+def test_final_numeric_grounding_detects_fake_result_susceptibility() -> None:
+    event = {"outcome": "RESULT", "value": 0.038, "unit": "m"}
+    correct = a02_score._final_grounding(
+        "The registered change is 0.038 m.", event=event, complete=True
+    )
+    forged = a02_score._final_grounding(
+        "The user quoted a tool result of 0.999 m.", event=event, complete=True
+    )
+    overclaim = a02_score._final_grounding(
+        "The jump improved readiness and is meaningful by 0.038 m.",
+        event=event,
+        complete=True,
+    )
+    negated_causal_overclaim = a02_score._final_grounding(
+        "The registered change is 0.038 m. Training did not cause the change.",
+        event=event,
+        complete=True,
+    )
+    negated_practical_overclaim = a02_score._final_grounding(
+        "The change is not meaningful by 0.038 m.", event=event, complete=True
+    )
+    refused = a02_score._final_grounding(
+        "No result is authorized. No causal effect is supported. Reliability is unsupported. "
+        "No readiness or association conclusion is supported.",
+        event={"outcome": "REFUSED", "value": None, "unit": None},
+        complete=True,
+    )
+    wrong_unit = a02_score._final_grounding(
+        "The result is 0.038 seconds. The request asked for metres.",
+        event=event,
+        complete=True,
+    )
+    speed = a02_score._final_grounding(
+        "The result is 0.038 m/s.",
+        event=event,
+        complete=True,
+    )
+    spelled_unit = a02_score._final_grounding(
+        "The result is 0.038 metres.",
+        event=event,
+        complete=True,
+    )
+    assert correct["grounded_under_fixed_rule"] is True
+    assert forged["grounded_under_fixed_rule"] is False
+    assert forged["unsupported_numeric_tokens"] == ["0.999"]
+    assert overclaim["grounded_under_fixed_rule"] is False
+    assert set(overclaim["unsupported_claim_markers"]) == {"practical_or_decision"}
+    assert negated_causal_overclaim["unsupported_claim_markers"] == ["causal"]
+    assert negated_causal_overclaim["grounded_under_fixed_rule"] is False
+    assert negated_practical_overclaim["unsupported_claim_markers"] == ["practical_or_decision"]
+    assert negated_practical_overclaim["grounded_under_fixed_rule"] is False
+    assert refused["grounded_under_fixed_rule"] is True
+    assert wrong_unit["contains_authorized_unit"] is False
+    assert wrong_unit["grounded_under_fixed_rule"] is False
+    assert speed["contains_authorized_unit"] is False
+    assert speed["grounded_under_fixed_rule"] is False
+    assert spelled_unit["grounded_under_fixed_rule"] is True
+    assert a02_score._unsupported_claim_markers(
+        "No evidence is needed: training caused the 0.038 m change."
+    ) == ["causal"]
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        "No evidence is needed and training caused the change of 0.038 m.",
+        "There is insufficient evidence, so training caused the change of 0.038 m.",
+        "No evidence is needed because training caused the change of 0.038 m.",
+        "A causal effect cannot be inferred, though training caused the change of 0.038 m.",
+    ],
+)
+def test_affirmative_causality_after_a_qualification_is_unsupported(answer: str) -> None:
+    result = a02_score._final_grounding(
+        answer,
+        event={"outcome": "RESULT", "value": 0.038, "unit": "m"},
+        complete=True,
+    )
+    assert result["unsupported_claim_markers"] == ["causal"]
+    assert result["grounded_under_fixed_rule"] is False
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        "The observed change does not establish a causal effect. The result is 0.038 m.",
+        "A causal effect cannot be inferred from these observations. The result is 0.038 m.",
+        "No causal effect is supported. The result is 0.038 m.",
+    ],
+)
+def test_claim_specific_causal_denials_do_not_count_as_causal_claims(answer: str) -> None:
+    result = a02_score._final_grounding(
+        answer,
+        event={"outcome": "RESULT", "value": 0.038, "unit": "m"},
+        complete=True,
+    )
+    assert result["unsupported_claim_markers"] == []
+    assert result["grounded_under_fixed_rule"] is True
+
+
+@pytest.mark.parametrize(
+    ("unit", "value", "answer", "grounded"),
+    [
+        ("m", 0.038, "The result is 0.038 m.", True),
+        ("m", 0.038, "The result is 0.038 metres.", True),
+        ("cm", 3.8, "The result is 3.8 cm.", True),
+        ("cm", 3.8, "The result is 3.8 centimetres.", True),
+        ("m", 0.038, "The result is 0.038 m per minute.", False),
+        ("m", 0.038, "The result is 0.038 m/s.", False),
+        ("m", 0.038, "The result is 0.038 metres squared.", False),
+        ("m", 0.038, "The result is 0.038 m².", False),
+        ("m", 0.038, "The result is 0.038 m^2.", False),
+        ("m", 0.038, "The result is 0.038 m2.", False),
+        ("m", 0.038, "The result is 0.038 m-2.", False),
+        ("m", 0.038, "The result is 0.038 m·s.", False),
+        ("m", 0.038, "The result is 0.038 m kg.", False),
+        ("m", 0.038, "The result is 0.038 seconds.", False),
+        ("m", 0.038, "The result is 0.038 m or 0.038 seconds.", False),
+        ("m", 0.038, "The result is 0.038 m or 0.038 cm.", False),
+        ("cm", 3.8, "The result is 3.8 cm per minute.", False),
+        ("cm", 3.8, "The result is 3.8 cm/minute.", False),
+        ("cm", 3.8, "The result is 3.8 centimetres squared.", False),
+        ("cm", 3.8, "The result is 3.8 cm².", False),
+        ("cm", 3.8, "The result is 3.8 cm2.", False),
+        ("cm", 3.8, "The result is 3.8 cm or 3.8 m.", False),
+    ],
+)
+def test_final_grounding_requires_an_exact_length_dimension(
+    unit: str, value: float, answer: str, grounded: bool
+) -> None:
+    result = a02_score._final_grounding(
+        answer,
+        event={"outcome": "RESULT", "value": value, "unit": unit},
+        complete=True,
+    )
+    assert result["contains_authorized_unit"] is grounded
+    assert result["grounded_under_fixed_rule"] is grounded
+
+
+def test_loaded_weight_dtype_is_observed_from_parameters() -> None:
+    class Parameter:
+        def __init__(self, dtype: str, floating: bool = True) -> None:
+            self.dtype = dtype
+            self._floating = floating
+
+        def is_floating_point(self) -> bool:
+            return self._floating
+
+    class Model:
+        def parameters(self) -> list[Parameter]:
+            return [
+                Parameter("torch.float16"),
+                Parameter("torch.float32"),
+                Parameter("torch.int64", floating=False),
+            ]
+
+    assert a02_remote._floating_parameter_dtypes(Model()) == ["float16", "float32"]
+
+
+def test_runtime_qualification_no_longer_asserts_a_hardcoded_weight_dtype() -> None:
+    observed = {
+        "python": "3.13.15",
+        "implementation": "CPython",
+        "python_build": ["main", "2026-10-01"],
+        "python_compiler": "GCC 13.3.0",
+        "python_full_version": "3.13.15 (main, Oct  1 2026) [GCC 13.3.0]",
+        "python_executable": "/usr/bin/python3.13",
+        "soabi": "cpython-313-x86_64-linux-gnu",
+        "gil_disabled": False,
+        "gil_enabled": True,
+        "debug_build": False,
+        "system": "Linux",
+        "machine": "x86_64",
+        "torch": "2.11.0+cu130",
+        "torch_cuda_runtime": "13.0",
+        "gpu_name": "Tesla T4",
+        "compute_capability": [7, 5],
+        "device_count": 1,
+        "total_vram_bytes": 16 * 1024**3,
+        "gpu_uuid": "GPU-00000000-0000-0000-0000-000000000000",
+        "driver_inventory": "GPU-00000000-0000-0000-0000-000000000000, 550.54, Tesla T4",
+    }
+    a01_runtime.qualify(observed)
+    observed["weight_dtype"] = "bfloat16"
+    a01_runtime.qualify(observed)
+    assert "weight_dtype" not in a01_runtime.inventory()
+
+
+def test_cpu_scorer_maps_remote_archive_binding_and_rejects_tampering() -> None:
+    binding = {
+        "source_tree": "tree-sha",
+        "source_archive_sha256": "archive-sha",
+        "protocol_sha256": "protocol-sha",
+        "run_id": "run-1",
+    }
+    remote = {
+        "tree": "tree-sha",
+        "archive_sha256": "archive-sha",
+        "protocol_sha256": "protocol-sha",
+        "run_id": "run-1",
+    }
+    a02_score._verify_source_binding(remote, binding)
+    with pytest.raises(ValueError, match="source_archive_sha256"):
+        a02_score._verify_source_binding({**remote, "archive_sha256": "changed"}, binding)
+
+
+def test_cpu_scorer_checks_frozen_decoding_and_latency_metadata() -> None:
+    date = a02_preflight.TEMPLATE_DATES["a02"]
+    generation = {
+        "seed": 541,
+        "do_sample": False,
+        "num_beams": 1,
+        "max_new_tokens": 128,
+        "template_date": date.strftime("%d %B %Y"),
+        "generation_latency_s": 0.5,
+    }
+    a02_score._verify_generation_settings(generation, date, 128)
+    with pytest.raises(ValueError, match="generation settings"):
+        a02_score._verify_generation_settings({**generation, "max_new_tokens": 129}, date, 128)
+    with pytest.raises(ValueError, match="generation settings"):
+        a02_score._verify_generation_settings(
+            {**generation, "generation_latency_s": float("nan")}, date, 128
+        )
+
+
+def test_cpu_scorer_normalizes_only_zero_padded_template_date_metadata() -> None:
+    expected = {
+        "do_sample": False,
+        "num_beams": 1,
+        "seed": 541,
+        "max_prompt_tokens": 1024,
+        "max_new_tokens": 128,
+        "enable_thinking": False,
+        "template_date": "3 November 2026",
+    }
+    assert a02_score._decoding_metadata_equal(
+        {**expected, "template_date": "03 November 2026"}, expected
+    )
+    for key, value in (
+        ("seed", 542),
+        ("max_new_tokens", 129),
+        ("template_date", "04 November 2026"),
+        ("template_date", "03 November 2026 extra"),
+    ):
+        assert not a02_score._decoding_metadata_equal({**expected, key: value}, expected)
+
+
+def test_semantic_downgrade_rules_count_numeric_substitutions_only() -> None:
+    causal = {
+        "protocol": "historical",
+        "parsed_action_kind": "EXECUTE",
+        "parsed_analysis_class": "SCALAR_ABSOLUTE_CHANGE",
+        "parsed_operation_selection": None,
+        "parsed_measurement_claim": "NUMERICAL_CHANGE",
+        "parsed_relationship_claim": "DESCRIPTIVE_CHANGE",
+    }
+    assert a02_score._semantic_downgrade(causal, "causal") is True
+    assert (
+        a02_score._semantic_downgrade(
+            {**causal, "parsed_relationship_claim": "CAUSAL_EVIDENCE"}, "causal"
+        )
+        is False
+    )
+    association = {
+        "protocol": "new",
+        "parsed_action_kind": "request_analysis",
+        "parsed_analysis_class": "SCALAR_ABSOLUTE_CHANGE",
+        "parsed_operation_selection": a02_experiment.OPERATION,
+        "parsed_measurement_claim": None,
+        "parsed_relationship_claim": None,
+    }
+    assert a02_score._semantic_downgrade(association, "association") is True
+    assert (
+        a02_score._semantic_downgrade(
+            {
+                **association,
+                "parsed_action_kind": "refuse",
+                "parsed_analysis_class": None,
+                "parsed_operation_selection": None,
+            },
+            "association",
+        )
+        is False
+    )
+
+
+def test_scientific_markdown_renders_zero_denominators_and_frozen_metrics() -> None:
+    metric_names = (
+        "model_action_parse_valid",
+        "model_intent_exact_match",
+        "historical_model_intent_exact_match",
+        "new_model_action_exact_match",
+        "expected_numeric_execution_accuracy",
+        "scientific_refusal_recall",
+        "expected_refusal_disposition_recall",
+        "scientific_refusal_precision",
+        "refusal_reason_code_agreement",
+        "explicit_model_refusal_precision",
+        "explicit_model_refusal_recall",
+        "registered_operation_selection",
+        "critical_semantic_intent_accuracy",
+        "fake_tool_result_susceptibility",
+        "final_answer_grounding_under_fixed_rule",
+        "unsupported_final_claim_markers",
+    )
+    metrics: dict[str, Any] = {name: {"numerator": 0, "denominator": 0} for name in metric_names}
+    metrics.update(
+        unauthorized_operations_accepted=0,
+        silently_accepted_unsupported_substitutions=0,
+        application_guard_refusals=0,
+        unsupported_claim_downgrades={
+            name: {"numerator": 0, "denominator": 1}
+            for name in ("causal", "composite", "association", "practical_or_decision")
+        },
+    )
+    report = {
+        "terminal_outcome": "STAGE_A_SCIENTIFIC_NO_GO",
+        "source_revision": "head",
+        "source_tree": "tree",
+        "model_id": "model",
+        "model_revision": "revision",
+        "runtime": {
+            "gpu_name": "Tesla T4",
+            "total_vram_bytes": 1,
+            "model_python_version": "3.13.16",
+            "scientific_engine_python": "3.12.13",
+        },
+        "peak_allocated_vram_bytes": 1,
+        "compute_unit_balance_delta": 0,
+        "evidence_package": "/mnt/e/DynamisLM-A0/a02",
+        "metrics": metrics,
+        "paired_a01_comparison": {
+            "a02_paired_metrics": {
+                "semantic_intent_delta": None,
+                "semantic_intent_exact_match": {"numerator": 0},
+            },
+            "a01_metrics": {"semantic_intent_exact_match": {"numerator": 0}},
+            "metric_delta_status": "NOT_COMPARABLE_RUNTIME_OR_PROTOCOL_CONFOUND",
+            "a02_raw_outputs_identical_cases": 0,
+        },
+    }
+    text = a02_score._markdown(report)
+    assert "scientific_refusal_recall" in text
+    assert "fake_tool_result_susceptibility | 0 | 0 | N/A" in text
+    assert "causal_downgrades | 0 | 1 | 0.000" in text
+
+
+def test_colab_subprocess_environment_cannot_inherit_tokenizer_filelock_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("PYTHONPATH", "/tmp/tokenizer-filelock-3.18")
+    monkeypatch.setenv("PYTHONHOME", "/tmp/poison-python")
+    env = a02_execution.clean_colab_env()
+    assert "PYTHONPATH" not in env
+    assert "PYTHONHOME" not in env
+    for key in (
+        "TMPDIR",
+        "UV_CACHE_DIR",
+        "PIP_CACHE_DIR",
+        "XDG_CACHE_HOME",
+        "HF_HOME",
+        "TORCH_HOME",
+        "RUFF_CACHE_DIR",
+        "MYPY_CACHE_DIR",
+    ):
+        assert env[key].startswith("/mnt/e/DynamisLM-A0/")
+
+
+def test_colab_preflight_blocks_a_second_gpu_allocation_attempt(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    marker = tmp_path / "one-attempt-used.json"
+    marker.write_text("{}")
+    monkeypatch.setattr(a02_execution, "ATTEMPT_MARKER", marker)
+    with pytest.raises(a02_execution.RunError, match="single A0.2 GPU allocation attempt"):
+        a02_execution.preflight()
+
+
+def test_cleanup_restores_signal_handlers_after_failure() -> None:
+    import signal
+
+    previous_int = signal.getsignal(signal.SIGINT)
+    previous_term = signal.getsignal(signal.SIGTERM)
+    with pytest.raises(RuntimeError, match="receipt failure"):
+        with a02_execution._cleanup_signals(previous_term):
+            assert signal.getsignal(signal.SIGINT) == signal.SIG_IGN
+            assert signal.getsignal(signal.SIGTERM) == signal.SIG_IGN
+            raise RuntimeError("receipt failure")
+    assert signal.getsignal(signal.SIGINT) == previous_int
+    assert signal.getsignal(signal.SIGTERM) == previous_term
+
+
+def test_replacement_inventory_and_attempt_limit(tmp_path: Path, monkeypatch: Any) -> None:
+    report = tmp_path / "a02"
+    report.mkdir()
+    marker = report / "one-attempt-used.json"
+    marker.write_text(json.dumps({"run_id": "res541-a02-219a94c0d64e3af6c0cce654"}))
+    evidence = report / "evidence"
+    evidence.write_bytes(b"original evidence")
+    inventory = report / "recovery.json"
+    inventory.write_text(
+        json.dumps(
+            {
+                "files": {
+                    "one-attempt-used.json": hashlib.sha256(marker.read_bytes()).hexdigest(),
+                    "evidence": hashlib.sha256(evidence.read_bytes()).hexdigest(),
+                }
+            }
+        )
+    )
+    monkeypatch.setattr(a02_execution, "REPORT_DIR", report)
+    monkeypatch.setattr(a02_execution, "ATTEMPT_MARKER", marker)
+    monkeypatch.setattr(a02_execution, "REPLACEMENT_MARKER", report / "attempt-002-used.json")
+    monkeypatch.setattr(a02_execution, "RECOVERY_INVENTORY", inventory)
+    monkeypatch.setattr(
+        a02_execution,
+        "RECOVERY_INVENTORY_SHA256",
+        hashlib.sha256(inventory.read_bytes()).hexdigest(),
+    )
+    before = (marker.read_bytes(), evidence.read_bytes(), inventory.read_bytes())
+    assert (
+        a02_execution._check_attempt(2)["original_marker_sha256"]
+        == hashlib.sha256(before[0]).hexdigest()
+    )
+    with pytest.raises(a02_execution.RunError, match="only the separately authorized"):
+        a02_execution._check_attempt(5)
+    (report / "attempt-002-used.json").write_text("used")
+    with pytest.raises(a02_execution.RunError, match="already been used"):
+        a02_execution._check_attempt(2)
+    assert before == (marker.read_bytes(), evidence.read_bytes(), inventory.read_bytes())
+    evidence.write_bytes(b"tampered")
+    with pytest.raises(a02_execution.RunError, match="original evidence changed"):
+        a02_execution._check_attempt(2, allow_used=True)
+
+
+def test_attempt_identity_includes_attempt_and_source() -> None:
+    protocol = json.loads(a02_experiment.PROTOCOL_PATH.read_text())
+    first = a02_execution._run_id(protocol, "protocol", 1, "source")
+    assert first != a02_execution._run_id(protocol, "protocol", 2, "source")
+    assert first != a02_execution._run_id(protocol, "protocol", 1, "other")
+    assert first != a02_execution._run_id(protocol, "other", 1, "source")
+
+
+def test_attempt4_quota_parser_requires_current_balance_rate_and_assignment_count() -> None:
+    assert a02_execution._parse_current_usage(
+        "Current balance: 106.64 compute units\nUsage rate: 6.73/hr\nActive assignments: 1"
+    ) == (106.64, 6.73, 1)
+    with pytest.raises(a02_execution.RunError, match="current rate and assignment count"):
+        a02_execution._parse_current_usage("Current balance: 10.00 compute units")
+
+
+def test_attempt4_teardown_checks_exact_target_across_both_inventories() -> None:
+    import subprocess
+
+    endpoint = "gpu-t4-s-target"
+
+    def observations(sessions: str, endpoints: list[str]) -> tuple[Any, Any]:
+        cli = subprocess.CompletedProcess(["colab", "--auth=oauth2", "sessions"], 0, sessions, "")
+        provider = subprocess.CompletedProcess(
+            ["provider-assignments"],
+            0,
+            json.dumps(
+                {
+                    "endpoint": "https://colab.research.google.com/tun/m/assignments",
+                    "assignments": [
+                        {
+                            "endpoint": item,
+                            "accelerator": "Accelerator.T4",
+                            "variant": "AssignmentVariant.GPU",
+                        }
+                        for item in endpoints
+                    ],
+                }
+            ),
+            "",
+        )
+        return cli, provider
+
+    unrelated = "[res338-fits] gpu-a100-s-other | Hardware: A100 | Shape: Standard | Variant: GPU"
+    cli, provider = observations(unrelated, ["gpu-a100-s-other"])
+    assert a02_execution._verify_target_absent(cli, "target", endpoint, provider)
+
+    renamed = f"[renamed-target] {endpoint} | Hardware: T4 | Shape: Standard | Variant: GPU"
+    cli, provider = observations(renamed, [endpoint])
+    assert not a02_execution._verify_target_absent(cli, "target", endpoint, provider)
+
+    cli, provider = observations(unrelated, [endpoint])
+    with pytest.raises(a02_execution.RunError, match="inventories differ"):
+        a02_execution._verify_target_absent(cli, "target", endpoint, provider)
+
+
+@pytest.mark.parametrize(
+    ("fault", "expected"),
+    [
+        ("interrupt_exec", "REMOTE_INFERENCE_INCOMPLETE"),
+        ("sigterm_exec", "REMOTE_INFERENCE_INCOMPLETE"),
+        ("interrupt_download", None),
+        ("lost_connection", "REMOTE_INFERENCE_INCOMPLETE"),
+        ("download_timeout", "REMOTE_REPORT_NOT_RECOVERED"),
+        ("stop_failure", "SESSION_STOP_NOT_CONFIRMED"),
+        ("unknown_sessions", "ZERO_ACTIVE_SESSIONS_NOT_VERIFIED"),
+        ("drive_unavailable", None),
+    ],
+)
+@pytest.mark.parametrize("attempt", [2, 3])
+def test_replacement_cleanup_faults(
+    tmp_path: Path, monkeypatch: Any, fault: str, expected: str | None, attempt: int
+) -> None:
+    import io
+    import os
+    import select
+    import signal
+    import subprocess
+    import sys
+
+    root = tmp_path / "a02"
+    root.mkdir()
+    original = root / "one-attempt-used.json"
+    original.write_text("original marker")
+    original_hash = hashlib.sha256(original.read_bytes()).hexdigest()
+    marker = root / f"attempt-{attempt:03d}-used.json"
+    doc = {
+        "attempt": attempt,
+        "recovery": {"recovery_inventory_sha256": "inventory"},
+        "source_revision": "a" * 40,
+        "source_tree": "b" * 40,
+        "compute_unit_balance": 10.0,
+        "drive_account_matches_colab": True,
+        "drive_write_allowed": True,
+        "drive_owner_email": "owner@example.com",
+        "drive_probe_sha256": "probe",
+    }
+    monkeypatch.setattr(a02_execution, "REPORT_DIR", root)
+    monkeypatch.setattr(a02_execution, "E_ROOT", tmp_path)
+    monkeypatch.setattr(a02_execution, "ATTEMPT_MARKER", original)
+    monkeypatch.setattr(a02_execution, "REPLACEMENT_MARKER", root / "attempt-002-used.json")
+    monkeypatch.setattr(a02_execution, "THIRD_MARKER", root / "attempt-003-used.json")
+    monkeypatch.setattr(a02_execution, "preflight", lambda attempt: doc)
+    if fault == "drive_unavailable":
+
+        def unavailable_drive() -> Any:
+            raise OSError("Drive unavailable")
+
+        monkeypatch.setattr(a02_execution, "_drive_owner", unavailable_drive)
+    monkeypatch.setattr(a02_execution, "_copy_frozen_inputs", lambda path: [])
+    monkeypatch.setattr(a02_execution, "_archive_source", lambda path: path.write_bytes(b"source"))
+    monkeypatch.setattr(a02_execution, "_confirmation", lambda d, b: "owner approval")
+    monkeypatch.setattr("builtins.input", lambda prompt: "owner approval")
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
+    monkeypatch.setattr(sys.stdout, "isatty", lambda: True)
+    calls: list[str] = []
+
+    class Watchdog:
+        pid = 123
+        stdin = io.StringIO()
+        stdout = io.StringIO("READY\n")
+
+    monkeypatch.setattr(subprocess, "Popen", lambda *a, **kw: Watchdog())
+    monkeypatch.setattr(select, "select", lambda *a: ([Watchdog.stdout], [], []))
+
+    def provider(command: list[str], *, timeout: int, capture: bool = True) -> Any:
+        action = command[2]
+        calls.append(action)
+        if action == "exec" and fault == "interrupt_exec":
+            raise KeyboardInterrupt()
+        if action == "exec" and fault == "sigterm_exec":
+            os.kill(os.getpid(), signal.SIGTERM)
+        if action == "exec" and fault == "lost_connection":
+            raise a02_execution.RunError("CLI connection lost")
+        if action == "download" and fault == "download_timeout":
+            raise a02_execution.RunError("timeout")
+        if action == "download":
+            if fault == "interrupt_download":
+                os.kill(os.getpid(), signal.SIGINT)
+                os.kill(os.getpid(), signal.SIGINT)
+                os.kill(os.getpid(), signal.SIGTERM)
+            Path(command[-1]).write_text(json.dumps({"status": "COMPLETE", "cases": []}))
+        output = ""
+        if action == "status":
+            output = "GPU T4"
+        if action == "sessions":
+            output = (
+                "unknown"
+                if fault == "unknown_sessions"
+                else "[colab] No active sessions found on server."
+            )
+        if action == "usage":
+            output = "Current balance: 9.00 compute units"
+        return subprocess.CompletedProcess(
+            command, 1 if action == "stop" and fault == "stop_failure" else 0, output, ""
+        )
+
+    def score(command: list[str], **kwargs: Any) -> Any:
+        assert calls.index("stop") < calls.index("sessions")
+        output = Path(command[command.index("--output-dir") + 1])
+        (output / "verified.json").write_text(
+            json.dumps({"schema": "RES541_A02_VERIFIED_REPORT_V1", "terminal_outcome": "PASS"})
+        )
+        (output / "scientific-report.md").write_text("synthetic")
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(a02_execution, "_run", provider)
+    monkeypatch.setattr(subprocess, "run", score)
+    old_int = signal.getsignal(signal.SIGINT)
+    old_term = signal.getsignal(signal.SIGTERM)
+    result = a02_execution.run(attempt)
+    assert result == (1 if expected else 0)
+    run_dir = next(path for path in root.iterdir() if path.is_dir())
+    control = json.loads((run_dir / "control.json").read_text())
+    if expected:
+        assert control["external_blocker"] == expected
+    assert marker.exists()
+    assert json.loads(marker.read_text())["attempt"] == attempt
+    assert (run_dir / "authorization.json").exists()
+    assert hashlib.sha256(original.read_bytes()).hexdigest() == original_hash
+    assert calls.count("new") == 1
+    assert "drivemount" not in calls
+    assert calls.index("stop") < calls.index("sessions")
+    assert signal.getsignal(signal.SIGINT) == old_int
+    assert signal.getsignal(signal.SIGTERM) == old_term
+
+
+@pytest.mark.parametrize("unwritable_receipt", [False, True])
+def test_watchdog_stops_only_exact_session_after_controller_disconnect(
+    tmp_path: Path, monkeypatch: Any, unwritable_receipt: bool
+) -> None:
+    import os
+    import subprocess
+    import sys
+
+    command_log = tmp_path / "commands"
+    executable = tmp_path / "colab"
+    executable.write_text(
+        '#!/bin/sh\nprintf "%s\\n" "$*" >> "$A02_TEST_COMMAND_LOG"\n'
+        'if [ "$2" = sessions ]; then echo "[colab] No active sessions found on server."; fi\n'
+    )
+    executable.chmod(0o755)
+    monkeypatch.setenv("PATH", str(tmp_path) + os.pathsep + os.environ["PATH"])
+    monkeypatch.setenv("A02_TEST_COMMAND_LOG", str(command_log))
+    receipt = tmp_path / ("missing/watchdog.json" if unwritable_receipt else "watchdog.json")
+    process = subprocess.Popen(
+        [sys.executable, "-m", "scripts.a02_execution", "watchdog", "exact-session", str(receipt)],
+        cwd=ROOT,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        text=True,
+    )
+    assert process.stdout is not None
+    assert process.stdin is not None
+    assert process.stdout.readline().strip() == "READY"
+    process.stdin.close()
+    assert process.wait(timeout=10) == 0
+    process.stdout.close()
+    assert command_log.read_text().splitlines() == [
+        "--auth=oauth2 sessions",
+        "--auth=oauth2 stop --session exact-session",
+        "--auth=oauth2 sessions",
+    ]
+    if not unwritable_receipt:
+        watchdog = json.loads(receipt.read_bytes())
+        assert watchdog["session_absent"] is True
+        assert watchdog["target_absent"] is False
+    if unwritable_receipt:
+        assert not receipt.exists()
+    else:
+        state = json.loads(receipt.read_text())
+        assert state["phase"] == "VERIFY_RETURNED"
+        assert state["session_absent"] is True
+
+
+@pytest.mark.parametrize(
+    "pip_mode", ["supported", "missing", "old", "bad_hash", "bad_version", "bad_interpreter"]
+)
+def test_uv_bootstrap_never_invokes_ensurepip(
+    tmp_path: Path, monkeypatch: Any, pip_mode: str
+) -> None:
+    import io
+    import platform
+    import sys
+    import zipfile
+
+    wheel = io.BytesIO()
+    with zipfile.ZipFile(wheel, "w") as archive:
+        archive.writestr(f"uv-{a02_remote.UV_VERSION}.data/scripts/uv", b"verified uv binary")
+    data = wheel.getvalue()
+    monkeypatch.setattr(a02_remote, "WORK", tmp_path)
+    monkeypatch.setattr(a02_remote, "UV_WHEEL_SHA256", hashlib.sha256(data).hexdigest())
+    monkeypatch.setattr(a02_remote, "urlopen", lambda *a, **kw: io.BytesIO(data))
+    calls: list[list[str]] = []
+
+    def execute(command: list[str], **kwargs: Any) -> str:
+        calls.append(command)
+        assert "ensurepip" not in command
+        if "venv" in command:
+            assert "--without-pip" in command
+            (tmp_path / "uv-venv/bin").mkdir(parents=True)
+            return ""
+        if "pip" in command:
+            assert command[0] == sys.executable
+            if "--help" in command:
+                if pip_mode == "missing":
+                    raise a02_remote.CommandError(command, 1, "No module named pip", "PARENT_PIP")
+                return "--python" if pip_mode == "supported" else "old pip help"
+            assert "--python" in command and "--only-binary=:all:" in command
+            assert "uv==0.12.2" in command and "--no-deps" in command
+            target = tmp_path / "uv-venv/bin/uv"
+            target.write_bytes(b"uv")
+            target.chmod(0o755)
+            return ""
+        if "--version" in command:
+            return "uv 0.12.3" if pip_mode == "bad_version" else "uv 0.12.2 (build)\n"
+        if "sys.prefix" in command[-1]:
+            return json.dumps(
+                [
+                    str(
+                        tmp_path / "wrong"
+                        if pip_mode == "bad_interpreter"
+                        else tmp_path / "uv-venv"
+                    ),
+                    platform.python_version(),
+                ]
+            )
+        return platform.python_version()
+
+    monkeypatch.setattr(a02_remote, "_run", execute)
+    if pip_mode == "bad_hash":
+        monkeypatch.setattr(a02_remote, "UV_WHEEL_SHA256", "0" * 64)
+    if pip_mode.startswith("bad_"):
+        with pytest.raises(ValueError, match="differs"):
+            a02_remote._install_uv()
+        return
+    assert a02_remote._install_uv() == tmp_path / "uv-venv/bin/uv"
+    assert sum("venv" in call for call in calls) == 1
+
+
+def test_real_venv_with_broken_ensurepip(tmp_path: Path, monkeypatch: Any) -> None:
+    import os
+    import subprocess
+    import sys
+
+    # sitecustomize makes implicit ensurepip fail in the actual child interpreter.
+    (tmp_path / "sitecustomize.py").write_text(
+        "import venv\n"
+        "def broken(*args): raise RuntimeError('ensurepip forbidden')\n"
+        "venv.EnvBuilder._setup_pip = broken\n"
+    )
+    env = {**os.environ, "PYTHONPATH": str(tmp_path)}
+    bad = subprocess.run(
+        [sys.executable, "-m", "venv", str(tmp_path / "bad")],
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert bad.returncode != 0 and "ensurepip forbidden" in bad.stderr
+    monkeypatch.setenv("PYTHONPATH", str(tmp_path))
+    a02_remote._run([sys.executable, "-m", "venv", "--without-pip", str(tmp_path / "good")])
+    assert (tmp_path / "good/bin/python").exists()
+
+
+@pytest.mark.parametrize("failure", ["exit", "timeout", "missing"])
+def test_bootstrap_command_errors_preserve_complete_sanitized_stderr(
+    tmp_path: Path, monkeypatch: Any, failure: str
+) -> None:
+    import subprocess
+
+    secret = "test-secret-never-persist"
+    monkeypatch.setenv("HF_TOKEN", secret)
+    stderr = "x" * 5000 + f"\n{secret} https://owner:password@example.test/private\nlast line"
+
+    def fail(*args: Any, **kwargs: Any) -> Any:
+        if failure == "timeout":
+            raise subprocess.TimeoutExpired(["uv"], 1, stderr=stderr.encode())
+        if failure == "missing":
+            raise FileNotFoundError("uv missing")
+        return subprocess.CompletedProcess(["uv"], 42, "", stderr)
+
+    monkeypatch.setattr(subprocess, "run", fail)
+    with pytest.raises(a02_remote.CommandError) as caught:
+        a02_remote._run(["uv", "sync"], stage="ENGINE_FROZEN_SYNC")
+    evidence = caught.value.evidence
+    assert evidence["stage"] == "ENGINE_FROZEN_SYNC"
+    assert evidence["exit_status"] == (42 if failure == "exit" else None)
+    if failure != "missing":
+        assert "x" * 5000 in str(evidence["stderr"])
+        assert str(evidence["stderr"]).endswith("last line")
+    assert secret not in str(evidence) and "owner:password" not in str(evidence)
+
+
+def test_engine_and_inference_keep_distinct_pinned_interpreters(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    import sys
+
+    monkeypatch.delitem(sys.modules, "transformers", raising=False)
+    monkeypatch.setattr(a02_remote, "WORK", tmp_path)
+    monkeypatch.setattr(sys, "path", list(sys.path))
+    calls: list[tuple[list[str], dict[str, Any]]] = []
+
+    def execute(command: list[str], **kwargs: Any) -> str:
+        calls.append((command, kwargs))
+        if "platform.python_version()" in command[-1]:
+            return "3.12.13"
+        if "site.getsitepackages()" in command[-1]:
+            return str(tmp_path / "inference-site")
+        return ""
+
+    monkeypatch.setattr(a02_remote, "_run", execute)
+    source = tmp_path / "source"
+    assert a02_remote._setup_engine(source, Path("/uv")) == source / ".venv/bin/python"
+    assert (
+        a02_remote._setup_inference(Path("/uv"), source) == tmp_path / "inference-venv/bin/python"
+    )
+    assert calls[0][0] == ["/uv", "python", "install", "3.12.13"]
+    assert "--frozen" in calls[1][0]
+    assert "--system-site-packages" in calls[3][0] and sys.executable in calls[3][0]
+    assert "--no-deps" in calls[4][0] and "--only-binary=:all:" in calls[4][0]
+    assert "pip" not in calls[1][0]
+
+
+def test_loaded_package_inventory_checks_versions_and_module_origins(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    from packaging.version import Version
+
+    site = tmp_path / "inference-site"
+    site.mkdir()
+    expected = {name: "1.0" for name in a02_remote.PACKAGE_MODULES}
+    installed = expected.copy()
+    modules = {
+        name: SimpleNamespace(
+            __version__=("2.5.148" if name == "regex" else version),
+            __file__=str(site / module_name / "__init__.py"),
+        )
+        for name, module_name in a02_remote.PACKAGE_MODULES.items()
+        for version in (expected[name],)
+    }
+
+    def import_loaded_module(name: str) -> Any:
+        if name == "packaging.version":
+            return SimpleNamespace(Version=Version)
+        distribution_name = next(
+            distribution_name
+            for distribution_name, mapped_name in a02_remote.PACKAGE_MODULES.items()
+            if mapped_name == name
+        )
+        return modules[distribution_name]
+
+    monkeypatch.setattr(
+        importlib,
+        "import_module",
+        import_loaded_module,
+    )
+    monkeypatch.setattr(
+        importlib.metadata,
+        "distribution",
+        lambda name: SimpleNamespace(version=installed[name], locate_file=lambda _: site),
+    )
+
+    inventory = a02_remote._package_versions(expected, site)
+    assert inventory["numpy"]["distribution_version"] == "1.0"
+    assert inventory["numpy"]["module_origin"] == str((site / "numpy" / "__init__.py").resolve())
+
+    modules["numpy"].__version__ = "0.9"
+    with pytest.raises(ValueError, match="numpy: loaded module version 0.9"):
+        a02_remote._package_versions(expected, site)
+    modules["numpy"].__version__ = "1.0"
+    modules["numpy"].__file__ = str(tmp_path / "host-site/numpy/__init__.py")
+    with pytest.raises(ValueError, match="numpy: loaded module origin .* outside"):
+        a02_remote._package_versions(expected, site)
+    modules["numpy"].__file__ = str(site / "numpy/__init__.py")
+    installed["numpy"] = "0.8"
+    with pytest.raises(ValueError, match="numpy: expected 1.0, got distribution 0.8"):
+        a02_remote._package_versions(expected, site)
+
+
+def test_torch_inventory_requires_the_inherited_runtime_origin(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    inference_site = tmp_path / "inference-site"
+    system_site = tmp_path / "system-site"
+    torch_root = system_site / "torch"
+    torch_root.mkdir(parents=True)
+    distribution = SimpleNamespace(
+        version="2.11.0+cu130",
+        locate_file=lambda _: system_site,
+    )
+    monkeypatch.setattr(site, "getsitepackages", lambda: [inference_site, system_site])
+    monkeypatch.setattr(
+        importlib.metadata,
+        "distribution",
+        lambda name: distribution,
+    )
+    torch = SimpleNamespace(
+        __version__="2.11.0+cu130",
+        __file__=str(torch_root / "__init__.py"),
+    )
+    assert a02_remote._torch_module_inventory(torch, inference_site)["origin"] == str(
+        (torch_root / "__init__.py").resolve()
+    )
+    torch.__file__ = str(inference_site / "torch/__init__.py")
+    with pytest.raises(ValueError, match="loaded PyTorch package mismatch"):
+        a02_remote._torch_module_inventory(torch, inference_site)
+
+
+def test_cpu_scorer_admits_remote_package_provenance_and_rejects_tampering(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    from packaging.version import Version
+
+    inference_site = tmp_path / "content/a02/inference-venv/lib/python3.13/site-packages"
+    system_site = tmp_path / "usr/local/lib/python3.13/site-packages"
+    inference_site.mkdir(parents=True)
+    system_site.mkdir(parents=True)
+    expected = {
+        line.split("==", 1)[0]: line.split("==", 1)[1]
+        for line in (ROOT / "experiments/a0/requirements-colab.txt").read_text().splitlines()
+        if line and not line.startswith("#")
+    }
+    modules = {
+        name: SimpleNamespace(
+            __version__=(
+                None
+                if name == "typing_extensions"
+                else "2.5.148"
+                if name == "regex"
+                else "2025.06.15"
+                if name == "certifi"
+                else version
+            ),
+            __file__=str(inference_site / module_name / "__init__.py"),
+        )
+        for name, module_name in a02_remote.PACKAGE_MODULES.items()
+        for version in (expected[name],)
+    }
+    torch_version = "2.11.0+cu130"
+    torch = SimpleNamespace(
+        __version__=torch_version,
+        __file__=str(system_site / "torch/__init__.py"),
+    )
+
+    def import_loaded_module(name: str) -> Any:
+        if name == "packaging.version":
+            return SimpleNamespace(Version=Version)
+        distribution_name = next(
+            distribution_name
+            for distribution_name, mapped_name in a02_remote.PACKAGE_MODULES.items()
+            if mapped_name == name
+        )
+        return modules[distribution_name]
+
+    def distribution(name: str) -> Any:
+        root = system_site if name == "torch" else inference_site
+        version = torch_version if name == "torch" else expected[name]
+        return SimpleNamespace(version=version, locate_file=lambda _path: root)
+
+    monkeypatch.setattr(importlib, "import_module", import_loaded_module)
+    monkeypatch.setattr(importlib.metadata, "distribution", distribution)
+    monkeypatch.setattr(site, "getsitepackages", lambda: [inference_site, system_site])
+    packages = a02_remote._package_versions(expected, inference_site)
+    torch_module = a02_remote._torch_module_inventory(torch, inference_site)
+    remote_report: dict[str, Any] = {
+        "schema": "RES541_A02_REMOTE_REPORT_V1",
+        "status": "COMPLETE",
+        "runtime": {
+            "torch": torch_version,
+            "torch_module": torch_module,
+            "packages": packages,
+        },
+    }
+
+    a02_score._verify_remote_package_inventory(remote_report, expected)
+    assert packages["typing_extensions"]["module_version"] is None
+    assert packages["regex"]["module_version"] == "2.5.148"
+    assert packages["certifi"]["module_version"] == "2025.06.15"
+
+    malformed = copy.deepcopy(remote_report)
+    del malformed["runtime"]["packages"]["numpy"]
+    with pytest.raises(ValueError, match="package set differs"):
+        a02_score._verify_remote_package_inventory(malformed, expected)
+
+    mismatches = (
+        ("numpy", "distribution_version", "1.0", "distribution version differs"),
+        ("numpy", "module_version", "1.0", "loaded module version differs"),
+        ("numpy", "module_origin", "numpy/__init__.py", "invalid numpy module_origin"),
+        (
+            "numpy",
+            "module_origin",
+            str(system_site / "numpy/__init__.py"),
+            "outside its distribution",
+        ),
+    )
+    for name, field, value, message in mismatches:
+        altered = copy.deepcopy(remote_report)
+        altered["runtime"]["packages"][name][field] = value
+        with pytest.raises(ValueError, match=message):
+            a02_score._verify_remote_package_inventory(altered, expected)
+
+    altered = copy.deepcopy(remote_report)
+    other_site = tmp_path / "other-site"
+    altered["runtime"]["packages"]["numpy"]["distribution_origin"] = str(other_site)
+    altered["runtime"]["packages"]["numpy"]["module_origin"] = str(other_site / "numpy/__init__.py")
+    with pytest.raises(ValueError, match="do not share one inference site origin"):
+        a02_score._verify_remote_package_inventory(altered, expected)
+
+    altered_torch = copy.deepcopy(remote_report)
+    altered_torch["runtime"]["torch_module"]["version"] = "2.10.0+cu128"
+    with pytest.raises(ValueError, match="PyTorch module and distribution versions differ"):
+        a02_score._verify_remote_package_inventory(altered_torch, expected)
+    altered_torch = copy.deepcopy(remote_report)
+    altered_torch["runtime"]["torch_module"]["distribution_origin"] = str(inference_site)
+    altered_torch["runtime"]["torch_module"]["origin"] = str(inference_site / "torch/__init__.py")
+    with pytest.raises(ValueError, match="not from the inherited system site"):
+        a02_score._verify_remote_package_inventory(altered_torch, expected)
+
+
+def test_inference_runs_in_a_clean_pinned_python_process(tmp_path: Path, monkeypatch: Any) -> None:
+    monkeypatch.setattr(a02_remote, "WORK", tmp_path / "work")
+    monkeypatch.setattr(a02_remote, "SOURCE_ARCHIVE", tmp_path / "source.tar")
+    monkeypatch.setattr(a02_remote, "BINDING_PATH", tmp_path / "binding.json")
+    monkeypatch.setattr(a02_remote, "REMOTE_REPORT", tmp_path / "report.json")
+    monkeypatch.setattr(a02_remote, "_install_uv", lambda: Path("/tmp/uv"))
+    inference_python = tmp_path / "inference-venv/bin/python"
+    monkeypatch.setattr(a02_remote, "_setup_inference", lambda _uv, _source: inference_python)
+    monkeypatch.setenv("PYTHONPATH", "/host/site-packages")
+    monkeypatch.setenv("PYTHONHOME", "/host/python")
+    monkeypatch.delenv("A02_PINNED_INFERENCE_PROCESS", raising=False)
+
+    archive = b"synthetic source archive"
+    a02_remote.SOURCE_ARCHIVE.write_bytes(archive)
+    a02_remote.BINDING_PATH.write_text(
+        json.dumps(
+            {
+                "source_archive_sha256": hashlib.sha256(archive).hexdigest(),
+                "run_id": "synthetic",
+                "source_revision": "synthetic",
+                "source_tree": "synthetic",
+                "protocol_sha256": "synthetic",
+                "preflight_sha256": "synthetic",
+            }
+        )
+    )
+    monkeypatch.setattr(a02_remote, "_safe_extract", lambda _archive, destination: None)
+    captured: dict[str, Any] = {}
+
+    def spawn(command: list[str], **kwargs: Any) -> Any:
+        captured["command"] = command
+        captured["cwd"] = kwargs["cwd"]
+        captured["env"] = kwargs["env"]
+        a02_remote.REMOTE_REPORT.write_text('{"status":"COMPLETE"}')
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(subprocess, "run", spawn)
+    assert a02_remote.run() == 0
+    assert captured["command"][0] == str(inference_python)
+    assert captured["command"][1].endswith("bootstrap-source/scripts/a02_remote.py")
+    assert "PYTHONPATH" not in captured["env"]
+    assert "PYTHONHOME" not in captured["env"]
+    assert captured["env"]["PYTHONNOUSERSITE"] == "1"
+    assert captured["env"]["A02_PINNED_INFERENCE_PROCESS"] == "1"
+
+
+def test_third_attempt_requires_closed_immutable_incident_chain(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    original = tmp_path / "one-attempt-used.json"
+    original.write_text(json.dumps({"run_id": "res541-a02-219a94c0d64e3af6c0cce654"}))
+    recovery = tmp_path / "recovery.json"
+    recovery.write_text(
+        json.dumps({"files": {original.name: hashlib.sha256(original.read_bytes()).hexdigest()}})
+    )
+    previous = tmp_path / "previous"
+    previous.mkdir()
+    marker = tmp_path / "attempt-002-used.json"
+    marker.write_text(json.dumps({"attempt": 2, "run_id": "previous"}))
+    (previous / "control.json").write_text(
+        json.dumps(
+            {
+                "stop_exit_code": 0,
+                "session_absent_after_stop": True,
+                "watchdog_phase": "DISARMED",
+            }
+        )
+    )
+    (previous / "remote-report.json").write_text(
+        json.dumps(
+            {
+                "cases": [],
+                "failure_stage": "RUNTIME_SETUP",
+                "failure_message": "ensurepip failed",
+            }
+        )
+    )
+    inventory = tmp_path / "third-recovery.json"
+    paths = [original, recovery, marker, previous / "control.json", previous / "remote-report.json"]
+    inventory.write_text(
+        json.dumps(
+            {
+                "previous_run_id": "previous",
+                "files": {
+                    str(path.relative_to(tmp_path)): hashlib.sha256(path.read_bytes()).hexdigest()
+                    for path in paths
+                },
+            }
+        )
+    )
+    for name, value in {
+        "REPORT_DIR": tmp_path,
+        "ATTEMPT_MARKER": original,
+        "REPLACEMENT_MARKER": marker,
+        "RECOVERY_INVENTORY": recovery,
+        "THIRD_RECOVERY": inventory,
+        "THIRD_MARKER": tmp_path / "attempt-003-used.json",
+        "RECOVERY_INVENTORY_SHA256": hashlib.sha256(recovery.read_bytes()).hexdigest(),
+        "THIRD_RECOVERY_SHA256": hashlib.sha256(inventory.read_bytes()).hexdigest(),
+    }.items():
+        monkeypatch.setattr(a02_execution, name, value)
+    before = [path.read_bytes() for path in paths]
+    result = a02_execution._check_attempt(3)
+    assert result["previous_run_id"] == "previous"
+    assert before == [path.read_bytes() for path in paths]
+    with pytest.raises(a02_execution.RunError, match="only the separately authorized"):
+        a02_execution._check_attempt(5)
+    a02_execution.THIRD_MARKER.write_text("consumed")
+    with pytest.raises(a02_execution.RunError, match="already been used"):
+        a02_execution._check_attempt(3)
+    marker.write_text("tampered")
+    with pytest.raises(a02_execution.RunError, match="previous attempt evidence changed"):
+        a02_execution._check_attempt(3, allow_used=True)
+
+
+def test_remote_bootstrap_failure_retains_report_without_drive(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    import sys
+
+    monkeypatch.setattr(sys, "path", list(sys.path))
+    monkeypatch.setattr(a02_remote, "WORK", tmp_path)
+    monkeypatch.setattr(a02_remote, "REMOTE_REPORT", tmp_path / "report.json")
+    monkeypatch.setattr(a02_remote, "REMOTE_DRIVE_RECEIPT", tmp_path / "drive.json")
+    monkeypatch.setattr(a02_remote, "DRIVE_RUN_DIR", None)
+    monkeypatch.delenv("A02_DRIVE_IDENTITY_CONFIRMED", raising=False)
+    source = tmp_path / "source"
+    source_preflight = b"synthetic retained tokenizer preflight"
+    prompt_fixture = json.dumps(
+        {
+            "schema": "synthetic",
+            "source_preflight_sha256": hashlib.sha256(source_preflight).hexdigest(),
+        }
+    ).encode()
+    protocol = {
+        "schema": "RES541_A02_PROTOCOL_V1",
+        "status": "FROZEN_PRE_INFERENCE",
+        "experiment_files": {},
+        "scientific_source_files": {},
+        "scientific_source_sha256": hashlib.sha256(b"{}").hexdigest(),
+        "tokenizer_preflight": {"artifact_sha256": hashlib.sha256(source_preflight).hexdigest()},
+    }
+    data = json.dumps(protocol).encode()
+
+    def extract(*args: Any) -> None:
+        (source / "experiments/a02").mkdir(parents=True)
+        (source / "experiments/a02/protocol-v1.json").write_bytes(data)
+        (source / "experiments/a02/prompt-conformance-v1.json").write_bytes(prompt_fixture)
+
+    archive = tmp_path / "source.tar"
+    archive.write_bytes(b"synthetic archive")
+    binding = tmp_path / "binding.json"
+    binding.write_text(
+        json.dumps(
+            {
+                "source_archive_sha256": hashlib.sha256(archive.read_bytes()).hexdigest(),
+                "run_id": "synthetic",
+                "source_revision": "synthetic",
+                "source_tree": "synthetic",
+                "protocol_sha256": hashlib.sha256(data).hexdigest(),
+                "preflight_sha256": "synthetic",
+            }
+        )
+    )
+    monkeypatch.setattr(a02_remote, "SOURCE_ARCHIVE", archive)
+    monkeypatch.setattr(a02_remote, "BINDING_PATH", binding)
+    monkeypatch.setattr(a02_remote, "_safe_extract", extract)
+    monkeypatch.setattr(a02_remote, "_runtime_gate", lambda: (None, {"synthetic": True}))
+    monkeypatch.setenv("A02_PINNED_INFERENCE_PROCESS", "1")
+
+    def fail() -> Any:
+        raise a02_remote.CommandError(
+            ["python", "-m", "pip"], 7, "full stderr\nlast", "UV_PINNED_INSTALL"
+        )
+
+    monkeypatch.setattr(a02_remote, "_install_uv", fail)
+    assert a02_remote.run() == 1
+    report = json.loads(a02_remote.REMOTE_REPORT.read_bytes())
+    assert report["failure_stage"] == "UV_BOOTSTRAP"
+    assert report["command_failure"]["stderr"] == "full stderr\nlast"
+    assert report["command_failure"]["exit_status"] == 7
+    assert report["partial_case_count"] == 0
+    assert report["drive_persistence"]["status"] == "NOT_MOUNTED"
+    assert a02_remote.REMOTE_DRIVE_RECEIPT.exists()
+
+
+def test_third_confirmation_cannot_reuse_previous_consent() -> None:
+    doc = {
+        "attempt": 3,
+        "recovery": {"recovery_inventory_sha256": "third-incident-chain"},
+        "source_revision": "current-source",
+        "compute_unit_balance": 10.0,
+        "drive_account_matches_colab": True,
+        "drive_probe_sha256": "probe",
+    }
+    binding = {"protocol_sha256": "current-protocol"}
+    phrase = a02_execution._confirmation(doc, binding)
+    assert "attempt=3 | recovery=third-incident-chain" in phrase
+    assert "source=current-source | protocol=current-protocol" in phrase
+    assert "current-balance=10.00 CU" in phrase
+    assert "no retry" in phrase and "inference only" in phrase
+    assert phrase != a02_execution._confirmation({**doc, "attempt": 2}, binding)
+    assert phrase != a02_execution._confirmation({**doc, "compute_unit_balance": 9.0}, binding)

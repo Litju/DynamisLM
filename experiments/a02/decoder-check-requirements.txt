@@ -1,0 +1,7 @@
+# RES-541 V3 real-decoder CPU qualification overlay.
+# Used with: uv run --group tokenizer-check --with-requirements <this file>
+#   --index https://download.pytorch.org/whl/cpu --index-strategy unsafe-best-match
+#   pytest tests/test_res541_a02_v3_real_decoder.py
+# Kept outside pyproject.toml/uv.lock because those files are bound by the frozen V1 A0.2
+# protocol. torch matches the session-004 Colab runtime version (2.14.1).
+torch==2.14.1+cpu

@@ -15,12 +15,18 @@ updates and deletions, then runs `./scripts/ci.sh` on the clean committed head.
 Hooks are developer feedback and can be bypassed.
 
 `./scripts/ci.sh` runs frozen uv synchronization, Ruff lint/format, mypy,
-repository policy and pytest, and checks that QA did not mutate tracked files.
+repository policy and every pytest module, and checks that QA did not mutate
+tracked files. `./scripts/ci-shard.sh fast|controller|integration` runs one
+hosted shard with the same checks; static checks run in the fast shard. `scripts/test_shards.py`
+assigns every test module to exactly one shard and every shard re-checks that
+partition. The invariant-to-test inventory is
+[RES-541-TEST-COVERAGE.md](RES-541-TEST-COVERAGE.md).
 Stage reviewed changes before full QA: policy compares index and working bytes.
 Ignored local data are never scanned or imported by these gates.
 
-One pinned GitHub-hosted `ubuntu-24.04` workflow/job produces required `ci`.
-It runs on PR opening, commit synchronization, reopening, metadata editing and
+One pinned GitHub-hosted `ubuntu-24.04` workflow produces required `ci`. Its
+mission-policy job and three QA shard jobs run concurrently on separate runners;
+the `ci` job passes only when all four succeeded. The workflow runs on PR opening, commit synchronization, reopening, metadata editing and
 ready-for-review events, plus pushes to main. Full history is fetched for exact
 baseline evidence and new-commit checks. The event payload is read as data,
 never interpolated into shell commands. The PR gate validates mission naming,

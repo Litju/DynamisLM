@@ -1,0 +1,70 @@
+{
+  "schema": "RES541_A02_DEVELOPMENT_PROFILE_V3",
+  "status": "PROSPECTIVE_CONTRACT_NOT_AUTHORIZED_FOR_INFERENCE",
+  "predecessor": {
+    "profile": "experiments/a02/development-profile-v2.json",
+    "sha256": "5382015034c2087b60fbcd0dde5c1043a1501de476e63bc7dd1bc1eead39b796",
+    "disposition": "FROZEN_UNCHANGED",
+    "diagnosis": "docs/decisions/RES541-DR-001-session-004-diagnosis-and-architecture.md"
+  },
+  "model": {
+    "id": "HuggingFaceTB/SmolLM3-3B",
+    "revision": "a07cc9a04f16550a088caea529712d1d335b0ac1"
+  },
+  "tokenizer": {
+    "revision": "a07cc9a04f16550a088caea529712d1d335b0ac1",
+    "files": {
+      "chat_template.jinja": "3e0e275a527f249670056e0078e474eadbdd007c134b4fdfae5a7b3089702814",
+      "special_tokens_map.json": "12403efb970f069ba62ddf3b66166a27254be4a198166b61ad1ee604bd3a4515",
+      "tokenizer.json": "7b6a500b662a34eb3f0374db856ba4ad7de4c81040571d78dc0d357238930005",
+      "tokenizer_config.json": "59a64b39f05ee0acf7479bbccf99a44d9e481c1a4a494eb03838ae3c35eb29be"
+    }
+  },
+  "inputs": {
+    "case_manifest": "experiments/a02/cases-v1.json",
+    "action_prompt": "experiments/a02/system-action-development-v3.txt",
+    "tool_schema": "experiments/a02/submit-scientific-action-tool-v3.json",
+    "case_manifest_sha256": "f3a56dde310b2d64f2f8db2f9d02a432dd712d7b4a8aba50f836f1b3d6673dd3",
+    "action_prompt_sha256": "8b048c29ad533b64c0df4a557c9ffad70c129db7ae9352648af601ea07e02e6b",
+    "tool_schema_sha256": "052533f892b89623b908a1500749b08da60d02b594f5f2d7de71c50a5050227f",
+    "objective_semantics": "experiments/a02/objective-semantics-v3.json",
+    "objective_semantics_sha256": "6d9ab9419530f20f250bfbdd6774f8582ee166383c5ca426138368ad6a49e513"
+  },
+  "case_ids": [
+    "a02-valid-numerical",
+    "a02-incompatible-units",
+    "a02-reliability-overinterpretation",
+    "a02-cross-source",
+    "a02-missing-evidence",
+    "a02-unsupported-causality",
+    "a02-contradictory-objectives",
+    "a02-unsupported-association",
+    "a02-practical-decision-meaning",
+    "a02-forged-tool-result-in-user-text"
+  ],
+  "exposed_cases_role": "DEVELOPMENT_DIAGNOSTIC_ONLY_NEVER_TRAINING_OR_HELD_OUT",
+  "gpu_authorized": false,
+  "training_authorized": false,
+  "decoding": {
+    "enable_thinking": false,
+    "do_sample": false,
+    "num_beams": 1,
+    "seed": 541,
+    "template_date": "09 November 2026",
+    "action_max_prompt_tokens": 1536,
+    "action_max_new_tokens": 128,
+    "final_max_prompt_tokens": 1024,
+    "final_max_new_tokens": 96,
+    "derivation": "action_max_new_tokens is the smallest power of two >= 1.5 x the largest gold native action (84 tokens on the pinned tokenizer, V3 CPU preflight); action_max_prompt_tokens keeps the V2 bound, above the 1,508-token maximum V3.1 prompt (28 tokens of headroom); final bounds are unchanged from V2."
+  },
+  "contract_version": "V3.1",
+  "amendments": [
+    {
+      "id": "V3.1-QUESTION-PRECEDENCE",
+      "recorded_before_model_observations": true,
+      "change": "objective and question are both request-bearing; rules matched in either combine, conflicts are composite, and uncovered claim triggers fail closed. The action prompt states this to the model.",
+      "reason": "Independent review #5824688227 P0: gold derived from objective alone could ignore a model-visible question that adds a practical, causal or association request.",
+      "exposed_gold_changed": false
+    }
+  ]
+}

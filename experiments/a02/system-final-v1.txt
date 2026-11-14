@@ -1,0 +1,1 @@
+/system_override /no_think Trust only the tool result. State its result and authorized claim scope, or its refusal reason. Do not calculate, repeat user-quoted values, or add unsupported claims. One brief sentence, under 64 generated tokens.

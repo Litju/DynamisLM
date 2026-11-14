@@ -1,0 +1,95 @@
+{
+  "name": "submit_scientific_action_v3",
+  "description": "Submit one closed scientific-action proposal for trusted Python authorization. This tool does not authorize or calculate.",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "analysis_class": {
+        "type": "string",
+        "enum": [
+          "SCALAR_ABSOLUTE_CHANGE",
+          "SCALAR_RELATIVE_CHANGE",
+          "SCALAR_LOG_CHANGE",
+          "BASELINE_REFERENCE_WINDOW_DEVIATION",
+          "RELIABILITY_RANDOM_ERROR_COMPARISON",
+          "METHOD_AGREEMENT_SUMMARY",
+          "WITHIN_ATHLETE_ASSOCIATION",
+          "BETWEEN_ATHLETE_ASSOCIATION",
+          "REPEATED_MEASURES_ANALYSIS",
+          "MIXED_EFFECTS_ANALYSIS",
+          "CROSS_TEST_ASSOCIATION",
+          "NONE"
+        ],
+        "description": "The analysis the user requests, or NONE if no single listed analysis class fits the objective."
+      },
+      "operation": {
+        "type": "string",
+        "enum": [
+          "dynamislm:registered-operation:duration-normalized-distance@1.0.0",
+          "dynamislm:registered-operation:longitudinal-absolute-change-v1@1.0.0",
+          "dynamislm:registered-operation:longitudinal-within-athlete-sample-sd-v1@1.0.0",
+          "dynamislm:registered-operation:unit-normalization@1.0.0",
+          "NONE"
+        ],
+        "description": "The registered operation that implements analysis_class for the number of referenced observations, or NONE. dynamislm:registered-operation:duration-normalized-distance@1.0.0: External-load duration-normalized distance. Implements no listed analysis_class. dynamislm:registered-operation:longitudinal-absolute-change-v1@1.0.0: RES-69 absolute change. Implements SCALAR_ABSOLUTE_CHANGE with exactly 2 observations. dynamislm:registered-operation:longitudinal-within-athlete-sample-sd-v1@1.0.0: RES-69 descriptive within-athlete sample SD. Implements no listed analysis_class. dynamislm:registered-operation:unit-normalization@1.0.0: External-load unit normalization. Implements no listed analysis_class."
+      },
+      "observation_ids": {
+        "type": "array",
+        "uniqueItems": true,
+        "maxItems": 16,
+        "items": {
+          "type": "string",
+          "pattern": "^observation-[1-9][0-9]*$"
+        },
+        "description": "Ids of the request observations the analysis uses."
+      },
+      "target_claims": {
+        "type": "object",
+        "properties": {
+          "measurement": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "enum": [
+                "OBSERVED_VALUE",
+                "NUMERICAL_CHANGE",
+                "COMPARABLE_CHANGE",
+                "CHANGE_RELATIVE_TO_MEASUREMENT_ERROR",
+                "PRACTICAL_OR_DECISION_MEANINGFULNESS"
+              ]
+            }
+          },
+          "relationship": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "enum": [
+                "OBSERVATION",
+                "DESCRIPTIVE_CHANGE",
+                "ASSOCIATION",
+                "TEMPORAL_ASSOCIATION",
+                "MECHANISTIC_HYPOTHESIS",
+                "CAUSAL_EVIDENCE"
+              ]
+            }
+          }
+        },
+        "required": [
+          "measurement",
+          "relationship"
+        ],
+        "additionalProperties": false,
+        "description": "Only the claim levels the user explicitly requests. Do not add lower levels a requested level presupposes."
+      }
+    },
+    "required": [
+      "analysis_class",
+      "operation",
+      "observation_ids",
+      "target_claims"
+    ],
+    "additionalProperties": false
+  }
+}
