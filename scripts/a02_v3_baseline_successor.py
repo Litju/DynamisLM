@@ -36,6 +36,16 @@ PREDECESSOR = (
 MANIFEST_SHA256 = "b17615b81b30f63e23f0ff86379948d02910049f842d7216aa6fe453a015f949"
 CHECKPOINT_SHA256 = "ab3e6bd176d3081dca66bac87a210c62c75f83b1876544f549822c30bc949eb8"
 PREDECESSOR_HEAD = "441f30562d8a006909e3d6750ff5fa5f06a1d35d"
+CI_COMPATIBILITY_HEAD = "2ecc8e5a4d3f002bb00e15cdf51a62abf8ee76b1"
+CI_COMPATIBILITY_PATHS = (
+    ".github/workflows/ci.yml",
+    ".repo-policy/noncode-inventory.tsv",
+    "docs/operations/HOSTED_CI.md",
+    "docs/operations/RES-541-TEST-COVERAGE.md",
+    "scripts/ci-shard.sh",
+    "scripts/test_shards.py",
+    "tests/conftest.py",
+)
 SCHEMA = "RES541_BASELINE_PREPARATION_SUCCESSOR_V1"
 START = 307  # qualification plus153 genuine evaluations per arm
 
@@ -64,8 +74,9 @@ def verify_manifest(root: Path, expected: str) -> dict[str, str]:
 
 
 def scientific_compatibility() -> dict[str, str]:
-    # Only orchestration, tests and the prospective recovery note may change.
+    # Admit the reviewed CI/harness bytes, not arbitrary future changes to these paths.
     allowed = {
+        *CI_COMPATIBILITY_PATHS,
         "scripts/a02_v3_execution.py",
         "scripts/a02_v3_automatic.py",
         # Session supervision, cost accounting and provider-inventory typing: orchestration
@@ -83,6 +94,12 @@ def scientific_compatibility() -> dict[str, str]:
     ).splitlines()
     if any(name not in allowed and not name.startswith("tests/") for name in changed):
         raise ValueError("successor changes scientific or dependency sources")
+    for name in CI_COMPATIBILITY_PATHS:
+        approved = subprocess.check_output(
+            ["git", "show", f"{CI_COMPATIBILITY_HEAD}:{name}"], cwd=execution.ROOT
+        )
+        if (execution.ROOT / name).read_bytes() != approved:
+            raise ValueError(f"successor changed approved CI/harness bytes: {name}")
     # Only the baseline campaign orchestration may differ in the automatic pipeline.
     automatic_path = "scripts/a02_v3_automatic.py"
     old_automatic = subprocess.check_output(
@@ -107,6 +124,11 @@ def scientific_compatibility() -> dict[str, str]:
         ["git", "show", f"{PREDECESSOR_HEAD}:{inventory}"], cwd=execution.ROOT, text=True
     ).splitlines()
     new_rows = (execution.ROOT / inventory).read_text().splitlines()
+    # The entire inventory is byte-pinned above; remove only its approved coverage row
+    # before applying the unchanged predecessor-prefix and recovery-note checks.
+    new_rows = [
+        row for row in new_rows if not row.startswith("docs/operations/RES-541-TEST-COVERAGE.md\t")
+    ]
     if (
         new_rows[: len(old_rows)] != old_rows
         or len(new_rows) != len(old_rows) + 1

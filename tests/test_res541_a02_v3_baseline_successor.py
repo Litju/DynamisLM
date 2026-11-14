@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import shutil
+import subprocess
 from dataclasses import asdict
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -93,6 +94,100 @@ def test_sealed_manifest_detects_changed_bytes_and_unsafe_paths(tmp_path: Path) 
         successor.verify_manifest(tmp_path, successor.digest(manifest))
     with pytest.raises(ValueError, match="manifest changed"):
         successor.verify_manifest(tmp_path, bound)
+
+
+@pytest.fixture
+def compatibility_repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    # Real Git history, isolated files: no sealed evidence or provider access is needed.
+    root = tmp_path / "compatibility-repo"
+    subprocess.run(
+        ["git", "clone", "--shared", "--quiet", "--no-checkout", str(execution.ROOT), str(root)],
+        check=True,
+    )
+    subprocess.run(
+        ["git", "checkout", "--quiet", "--detach", successor.CI_COMPATIBILITY_HEAD],
+        cwd=root,
+        check=True,
+    )
+    monkeypatch.setattr(execution, "ROOT", root)
+    return root
+
+
+def test_scientific_compatibility_admits_exact_ci_head(compatibility_repo: Path) -> None:
+    certificate = successor.scientific_compatibility()
+    assert certificate["scripts/a02_v3_worker.py"] == successor.digest(
+        compatibility_repo / "scripts/a02_v3_worker.py"
+    )
+    assert len(certificate["unchanged_remote_child_ast"]) == 64
+
+
+@pytest.mark.parametrize(
+    ("name", "edit", "error"),
+    [
+        *[
+            (name, "append", "approved CI/harness bytes")
+            for name in successor.CI_COMPATIBILITY_PATHS
+        ],
+        ("scripts/a02_v3_worker.py", "append", "scientific or dependency"),
+        ("scripts/a02_v3_score.py", "append", "scientific or dependency"),
+        ("experiments/a02/model-comparison-protocol-v3.json", "append", "scientific or dependency"),
+        ("uv.lock", "append", "scientific or dependency"),
+        ("scripts/a02_v3_automatic.py", "append", "beyond campaign orchestration"),
+        ("scripts/a02_v3_remote.py", "child", "beyond progress metadata"),
+        ("experiments/a02/preparation-successor-v1.md", "append", "inventory authority"),
+        (".repo-policy/noncode-inventory.tsv", "historical", "approved CI/harness bytes"),
+        (".repo-policy/noncode-inventory.tsv", "remove_coverage", "approved CI/harness bytes"),
+        (".repo-policy/noncode-inventory.tsv", "duplicate_coverage", "approved CI/harness bytes"),
+        (".repo-policy/noncode-inventory.tsv", "coverage_authority", "approved CI/harness bytes"),
+    ],
+)
+def test_scientific_compatibility_rejects_committed_tampering(
+    compatibility_repo: Path, name: str, edit: str, error: str
+) -> None:
+    path = compatibility_repo / name
+    text = path.read_text()
+    if edit == "child":
+        lines = text.splitlines(keepends=True)
+        start = next(i for i, line in enumerate(lines) if line.startswith("def child("))
+        body = next(i for i in range(start + 1, len(lines)) if lines[i].startswith("    "))
+        lines.insert(body, "    synthetic_tamper = True\n")
+        text = "".join(lines)
+    elif edit == "historical":
+        text = text.replace("\tauthority\t", "\tdocumentation\t", 1)
+    elif "coverage" in edit:
+        row = next(
+            line
+            for line in text.splitlines(keepends=True)
+            if line.startswith("docs/operations/RES-541-TEST-COVERAGE.md\t")
+        )
+        replacement = {
+            "remove_coverage": "",
+            "duplicate_coverage": row * 2,
+            "coverage_authority": row.replace("\tdocumentation\t-\t", "\tauthority\t-\t"),
+        }[edit]
+        text = text.replace(row, replacement)
+    else:
+        text += "\nSYNTHETIC_TAMPER = True\n" if path.suffix == ".py" else "\nsynthetic tamper\n"
+    assert text != path.read_text()
+    path.write_text(text)
+    subprocess.run(["git", "add", name], cwd=compatibility_repo, check=True)
+    subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.name=Synthetic Test",
+            "-c",
+            "user.email=synthetic@example.invalid",
+            "commit",
+            "--quiet",
+            "-m",
+            "Synthetic compatibility tamper",
+        ],
+        cwd=compatibility_repo,
+        check=True,
+    )
+    with pytest.raises(ValueError, match=error):
+        successor.scientific_compatibility()
 
 
 @pytest.fixture
