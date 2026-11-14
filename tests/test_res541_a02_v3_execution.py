@@ -568,7 +568,30 @@ def _campaign(tmp_path: Path, client: FakeColab, allowance: Any = "default") -> 
     )
 
 
-def test_interrupted_sessions_resume_to_completion_and_score_on_cpu(tmp_path: Path) -> None:
+def _content(path: Path) -> list[Any]:
+    """Checkpoint evidence without per-item timing; scoring reads only this content."""
+    return [
+        (e["item"], {k: v for k, v in e["record"].items() if k != "seconds"})
+        for e in worker.read_checkpoint(path, ITEMS)["entries"]
+    ]
+
+
+@pytest.fixture(scope="session")
+def uninterrupted(tmp_path_factory: pytest.TempPathFactory) -> list[Any]:
+    """One read-only uninterrupted 581-item run, shared by every resume/equivalence check."""
+    single = tmp_path_factory.mktemp("uninterrupted") / "single.jsonl"
+    worker.run_worker(
+        protocol=PROTOCOL, items=ITEMS, checkpoint=single, backend=_Backend(),
+        deadline=float("inf"), item_cost_bounds=COSTS,
+    )  # fmt: skip
+    content = _content(single)
+    assert [item for item, _ in content] == [item.id for item in ITEMS]
+    return content
+
+
+def test_interrupted_sessions_resume_to_completion_and_score_on_cpu(
+    tmp_path: Path, uninterrupted: list[Any]
+) -> None:
     client = FakeColab(tmp_path / "remote", items_per_session=200, tear_after=True)
     states = [_session(tmp_path, client, i) for i in (1, 2, 3)]
     for state in states:
@@ -578,8 +601,9 @@ def test_interrupted_sessions_resume_to_completion_and_score_on_cpu(tmp_path: Pa
         assert state["unrelated_sessions_after"] == ["res338-fits"]
     assert [s["merge"]["committed_after"] for s in states] == [200, 400, 581]
     assert "res338-fits" not in client.stopped
-    report = worker.score_checkpoint(PROTOCOL, tmp_path / "run" / "checkpoint.jsonl")
-    assert report["decision"]["decision"] == "ADOPT_REPAIRED_CONTRACT_WITH_CONSTRAINED_DECODING"
+    # Torn-write resumption reproduces the uninterrupted evidence exactly; the full-campaign
+    # integrity test scores that identical content on CPU.
+    assert _content(tmp_path / "run" / "checkpoint.jsonl") == uninterrupted
     ledger = json.loads((tmp_path / "ledger.json").read_text())
     assert [s["committed_items"] for s in ledger["sessions"]] == [200, 400, 581]
     # displayed delta 0.29 + one display step of rounding uncertainty + operational reserve
@@ -687,7 +711,10 @@ def _drift_revision(remote: Path) -> None:
     remote.write_text("\n".join(lines) + "\n")
 
 
-def test_nine_session_campaign_covers_every_item_exactly_once(tmp_path: Path) -> None:
+def test_nine_session_campaign_covers_every_item_exactly_once(
+    tmp_path: Path, uninterrupted: list[Any]
+) -> None:
+    """The one full-scale 581-item checkpoint, order, identity, cost and scoring integrity test."""
     client = FakeColab(tmp_path / "remote")
     result = _campaign(tmp_path, client)
     assert result["status"] == "COMPLETE" and result["committed"] == len(ITEMS) == 581
@@ -712,38 +739,28 @@ def test_nine_session_campaign_covers_every_item_exactly_once(tmp_path: Path) ->
     assert report["decision"]["decision"] == "ADOPT_REPAIRED_CONTRACT_WITH_CONSTRAINED_DECODING"
     heldout = [e for e in entries if e["item"].startswith("HELDOUT:")]
     assert len(heldout) == 560 and len({e["record"]["example_id"] for e in heldout}) == 280
+    # The nine-session result equals one uninterrupted run.
+    assert _content(tmp_path / "run" / "checkpoint.jsonl") == uninterrupted
 
 
-def test_the_nine_session_result_equals_one_uninterrupted_run(tmp_path: Path) -> None:
-    client = FakeColab(tmp_path / "remote")
-    _campaign(tmp_path, client)
-    single = tmp_path / "single.jsonl"
-    worker.run_worker(
-        protocol=PROTOCOL, items=ITEMS, checkpoint=single, backend=_Backend(),
-        deadline=float("inf"), item_cost_bounds=COSTS,
-    )  # fmt: skip
-
-    def content(path: Path) -> list[Any]:
-        return [
-            (e["item"], {k: v for k, v in e["record"].items() if k != "seconds"})
-            for e in worker.read_checkpoint(path, ITEMS)["entries"]
-        ]
-
-    assert content(tmp_path / "run" / "checkpoint.jsonl") == content(single)
-
-
-def test_campaign_stops_at_a_torn_write_then_a_new_invocation_resumes(tmp_path: Path) -> None:
+def test_campaign_stops_at_a_torn_write_then_a_new_invocation_resumes(
+    tmp_path: Path, uninterrupted: list[Any]
+) -> None:
     client = FakeColab(tmp_path / "remote", tear_after=True)
     first = _campaign(tmp_path, client)
     assert first["status"] == "STOPPED_ON_ANOMALY" and len(first["sessions"]) == 1
     assert "work stage did not finish cleanly" in first["anomaly"]
     assert len(client.created) == 1  # the failed session was not retried
+    assert first["committed"] == BOUNDARIES[0]  # the torn tail was discarded, the rest kept
     client.tear_after = False
-    resumed = _campaign(tmp_path, client)
-    assert resumed["status"] == "COMPLETE" and resumed["committed"] == 581
-    assert len(client.created) == 1 + 8  # 46 items were already safe; 8 more sessions finish
-    entries = worker.read_checkpoint(tmp_path / "run" / "checkpoint.jsonl", ITEMS)["entries"]
-    assert [e["item"] for e in entries] == [item.id for item in ITEMS]
+    # One more admitted session shows the new invocation resumes exactly at the safe boundary;
+    # resumption through torn writes to the complete checkpoint is owned by the interrupted-
+    # sessions test, and the complete nine-session run by the full-scale integrity test.
+    resumed = _campaign(tmp_path, client, _allowance(max_sessions=2))
+    assert resumed["status"] == "NOT_ADMITTED" and resumed["committed"] == BOUNDARIES[1]
+    assert len(client.created) == 2
+    local = _content(tmp_path / "run" / "checkpoint.jsonl")
+    assert local == uninterrupted[: BOUNDARIES[1]]  # none skipped, none doubled, same evidence
 
 
 @pytest.mark.parametrize(
@@ -891,7 +908,7 @@ def test_one_lost_session_is_absorbed_by_the_reserve_and_the_run_still_completes
 
 
 def test_two_lost_sessions_exhaust_the_allowance_before_completion(tmp_path: Path) -> None:
-    client = FakeColab(tmp_path / "remote")
+    client = FakeColab(tmp_path / "remote", items_per_session=1)  # count, not workload, binds
     client.fail_new = True
     assert _campaign(tmp_path, client)["status"] == "STOPPED_ON_ANOMALY"
     assert _campaign(tmp_path, client)["status"] == "STOPPED_ON_ANOMALY"

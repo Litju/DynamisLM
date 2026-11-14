@@ -28,6 +28,7 @@ class Supervised(FakeColab):
         self.stop_script: list[Any] = []  # True/False/Exception per stop call; empty -> normal
         self.verify_script: list[Any] = []
         self.block_work = threading.Event()
+        self.hang_seconds = 5.0  # a blocked work stage gives up only after this long
         self.rate_spike_on_work = False
 
     def finish_watchdog(self, watchdog: Any, verified: bool) -> None:
@@ -61,7 +62,7 @@ class Supervised(FakeColab):
     def exec_stage(self, name: str, stage: str, timeout: int) -> dict[str, Any]:
         if stage == "work" and self.block_work.is_set():
             self.rate_after_prepare = 2.0 if self.rate_spike_on_work else None
-            deadline = time.monotonic() + 5
+            deadline = time.monotonic() + self.hang_seconds
             while name in self.active and time.monotonic() < deadline:
                 time.sleep(0.005)
             return {"returncode": None, "timed_out": True}

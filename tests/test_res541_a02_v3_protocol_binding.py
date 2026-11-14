@@ -185,3 +185,16 @@ def test_amendment_p5_preserves_the_original_rule_and_precedes_observations() ->
         PROTOCOL["decision_rule"]["stage_1_otherwise"] == "ADAPTATION_STUDY_ELIGIBLE_NOT_AUTHORIZED"
     )
     assert rule["inconclusive_decision"] == "INCONCLUSIVE_INSUFFICIENT_INDEPENDENT_EVIDENCE"
+
+
+def test_reused_protocol_verification_is_invalidated_by_in_place_tampering(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The test-harness reuse of ``load_protocol`` never answers for different bytes or code."""
+    copied = tmp_path / "protocol.json"
+    copied.write_bytes(decision.PROTOCOL_PATH.read_bytes())
+    monkeypatch.setattr(decision, "PROTOCOL_PATH", copied)
+    assert decision.load_protocol() == PROTOCOL  # verified and remembered for these bytes
+    copied.write_text(copied.read_text().replace('"count": 280', '"count": 279', 1))
+    with pytest.raises(ValueError, match="manifest differs"):
+        decision.load_protocol()  # same path, new bytes: verified again, not reused

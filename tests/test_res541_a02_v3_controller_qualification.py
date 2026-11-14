@@ -95,7 +95,10 @@ def _faults() -> dict[str, Any]:
         c.download = download  # type: ignore[method-assign]
 
     def work_hangs(c: Supervised) -> None:
+        # Nothing stops this target, so the stage returns timed out when the hang ends; its
+        # length only sets wall-clock cost, not the controller path under test.
         c.block_work.set()
+        c.hang_seconds = 0.2
         c.rate_spike_on_work = False
 
     def over_budget(c: Supervised) -> None:
