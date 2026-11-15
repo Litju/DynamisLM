@@ -13,10 +13,12 @@ from typing import Any
 import pytest
 from scripts import a02_v3_baseline_successor as successor
 from scripts import a02_v3_contract as v3
+from scripts import a02_v3_cost as costing
 from scripts import a02_v3_decision as decision
 from scripts import a02_v3_execution as execution
 from scripts import a02_v3_worker as worker
 
+from test_res541_a02_v3_cost import OBSERVED_POLICY
 from test_res541_a02_v3_execution import COST_POLICY
 
 PROTOCOL = decision.load_protocol()
@@ -191,7 +193,9 @@ def test_scientific_compatibility_rejects_committed_tampering(
 
 
 @pytest.fixture
-def prepared(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, dict[str, Any]]:
+def prepared(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest
+) -> tuple[Path, dict[str, Any]]:
     # Dataset/gold qualification has its own full regression; do it once for these CPU controls.
     monkeypatch.setattr(decision, "load_protocol", lambda: PROTOCOL)
     parent = tmp_path / "synthetic-predecessor"
@@ -273,7 +277,7 @@ def prepared(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, dic
             "contract_profile_sha256": protocol["contract_profile_sha256"],
             "protocol_sha256": decision.protocol_sha256(),
             "arm": item.arm,
-            "seconds": 10.0,
+            "seconds": getattr(request, "param", 10.0),
             "scorer_calls": 33,
         }
         entry = {
@@ -407,6 +411,114 @@ def approval(proposal: dict[str, Any]) -> dict[str, Any]:
         "owner_statement": "SYNTHETIC CPU TEST APPROVAL ONLY",
         "recorded_utc": datetime.now(UTC).isoformat(),
     }
+
+
+@pytest.fixture
+def observed_proposal(prepared: Any) -> tuple[Path, dict[str, Any]]:
+    directory, proposal = prepared
+    proposal["cost_policy"] = OBSERVED_POLICY
+    proposal["cost_policy_sha256"] = costing.policy_sha256(OBSERVED_POLICY)
+    proposal["spending_limit_basis"] = "MODELED_NOT_GUARANTEED_ACTUAL_CHARGES"
+    proposal["proposal_sha256"] = v3.sha256(
+        v3.canonical({k: v for k, v in proposal.items() if k != "proposal_sha256"}).encode()
+    )
+    (directory / "proposal.json").write_text(json.dumps(proposal))
+    return directory, proposal
+
+
+@pytest.mark.parametrize("prepared", [6.0], indirect=True)
+def test_risk_acceptance_does_not_replace_exact_proposal_approval(observed_proposal: Any) -> None:
+    directory, proposal = observed_proposal
+    path = directory / "risk-acceptance-only.json"
+    path.write_text(json.dumps(proposal["cost_policy"]["owner_acceptance"]))
+    with pytest.raises(ValueError, match="owner approval"):
+        successor.run(directory, path, ReadonlyClient())
+    assert not (directory / "execution-used.json").exists()
+
+
+@pytest.mark.parametrize("prepared", [6.0], indirect=True)
+def test_observed_proposal_cannot_relabel_its_financial_assurance(observed_proposal: Any) -> None:
+    directory, proposal = observed_proposal
+    proposal["spending_limit_basis"] = "VERIFIED_PROVIDER_BOUND"
+    proposal["proposal_sha256"] = v3.sha256(
+        v3.canonical({k: v for k, v in proposal.items() if k != "proposal_sha256"}).encode()
+    )
+    (directory / "proposal.json").write_text(json.dumps(proposal))
+    with pytest.raises(ValueError, match="financial assurance"):
+        successor.validate(directory)
+
+
+def test_observed_cost_refuses_the_slower_synthetic_plan_over_five_sessions(
+    observed_proposal: Any,
+) -> None:
+    # The unchanged default synthetic timings need six slots; the 6-second cases need five.
+    directory, proposal = observed_proposal
+    assert proposal["maximum_new_sessions"] > 5
+    with pytest.raises(ValueError, match="owner-authorized remaining baseline"):
+        successor.validate(directory)
+
+
+@pytest.mark.parametrize("prepared", [6.0], indirect=True)
+@pytest.mark.parametrize("anomaly", [False, True])
+def test_observed_successor_continues_and_scores_only_clean_completion(
+    observed_proposal: Any, monkeypatch: Any, anomaly: bool
+) -> None:
+    directory, proposal = observed_proposal
+    owner_path = directory / "exact-proposal-approval.json"
+    owner_path.write_text(json.dumps(approval(proposal)))
+    prefix = (successor.PREDECESSOR / "baseline/checkpoint.jsonl").read_bytes()
+    called: list[int] = []
+    scored: list[bool] = []
+
+    def session(**kwargs: Any) -> dict[str, Any]:
+        index = kwargs["session_index"]
+        called.append(index)
+        checkpoint = directory / "checkpoint.jsonl"
+        assert checkpoint.read_bytes().startswith(prefix)
+        items = worker.work_items(decision.load_protocol())
+        extend_synthetic_checkpoint(checkpoint, items, 309 if index == 3 else len(items))
+        accounting = costing.conservative_charge(
+            policy=kwargs["cost_policy"],
+            balance_before=100,
+            balance_after=99.9,
+            elapsed_seconds=600,
+            observed_rates=[1.15],
+            teardown_verified=True,
+        )
+        record_ledger_charge(kwargs["ledger_path"], index, accounting["conservative_cu"])
+        ledger = json.loads(kwargs["ledger_path"].read_text())
+        ledger["sessions"][-1].update(cost_status="MODELED", cost_accounting=accounting)
+        kwargs["ledger_path"].write_text(json.dumps(ledger))
+        state = {
+            "target_absent_after_stop": True,
+            "stopped": True,
+            "sessions_before": [],
+            "unrelated_sessions_after": [],
+            "work": {"returncode": 0, "timed_out": False},
+            "merge": {"torn_tail_discarded": False},
+        }
+        if anomaly:
+            state["failure"] = "synthetic provider anomaly"
+        (directory / f"session-{index:03d}-control.json").write_text(json.dumps(state))
+        return state
+
+    monkeypatch.setattr(execution, "run_session", session)
+
+    def score(*args: Any) -> dict[str, Any]:
+        scored.append(True)
+        return {"synthetic": True}
+
+    monkeypatch.setattr(worker, "score_checkpoint", score)
+    result = successor.run(directory, owner_path, ReadonlyClient())
+    assert result["complete"] is (not anomaly)
+    assert called == ([3] if anomaly else [3, 4])
+    assert scored == ([] if anomaly else [True])
+    assert result["actual_spending_bound_guaranteed"] is False
+    assert "additional_modeled_cu" in result and "additional_conservative_cu" not in result
+    assert all("modeled_cu" in row and "conservative_cu" not in row for row in result["sessions"])
+    assert (successor.PREDECESSOR / "baseline/checkpoint.jsonl").read_bytes() == prefix
+    with pytest.raises(ValueError, match="consumed"):
+        successor.run(directory, owner_path, ReadonlyClient())
 
 
 def test_explicit_new_owner_receipt_required_before_any_allocation(prepared: Any) -> None:

@@ -454,7 +454,7 @@ def continuation_plan(root: Path, predecessor: dict[str, Any], rate: float) -> d
 def prepare(directory: Path, client: Any, cost_policy: dict[str, Any]) -> dict[str, Any]:
     if directory.exists():
         raise ValueError("successor directory already exists; no overwrite")
-    costing.validate_policy(cost_policy)  # owner-verified pricing evidence, never invented here
+    costing.validate_policy(cost_policy)  # verified terms or separately accepted observed-cost risk
     predecessor = verify_predecessor()
     compatibility = scientific_compatibility()
     snapshot = automatic.quiet(client)
@@ -493,6 +493,8 @@ def prepare(directory: Path, client: Any, cost_policy: dict[str, Any]) -> dict[s
         "no_retry": True,
         "training_authorized": False,
     }
+    if costing.is_observed_policy(cost_policy):
+        value["spending_limit_basis"] = "MODELED_NOT_GUARANTEED_ACTUAL_CHARGES"
     value["proposal_sha256"] = v3.sha256(v3.canonical(value).encode())
     execution._write_exclusive(directory / "proposal.json", value)
     return value
@@ -539,9 +541,24 @@ def validate(directory: Path, *, required_seconds: float | None = 0) -> dict[str
     try:
         costing.validate_policy(value.get("cost_policy"))
     except costing.CostPolicyError as exc:
-        raise ValueError(f"successor cost policy is not verified: {exc}") from exc
+        raise ValueError(f"successor cost policy is not authorized: {exc}") from exc
     if value.get("cost_policy_sha256") != costing.policy_sha256(value["cost_policy"]):
         raise ValueError("successor cost policy hash differs")
+    modeled = costing.is_observed_policy(value["cost_policy"])
+    if value.get("spending_limit_basis") != (
+        "MODELED_NOT_GUARANTEED_ACTUAL_CHARGES" if modeled else None
+    ):
+        raise ValueError("successor financial assurance differs from its cost policy")
+    if modeled and (
+        value["maximum_additional_cu"] > 8.1875
+        or value["maximum_new_sessions"] > 5
+        or value["plan"]["compute_units"]["per_session_cap"] > 1.6375
+        or value["plan"]["bounds"]["session_seconds"] > 3600
+        or value["plan"]["bounds"]["admission_rate_ceiling_cu_per_hour"] > 1.4375
+        or value["plan"]["bounds"]["cost_buffer_cu"] != 0.20
+        or len(value["predecessor"]["remaining_worklist"]) != 274
+    ):
+        raise ValueError("observed-cost successor exceeds the owner-authorized remaining baseline")
     if (
         value["scope"] != "REMAINING_BASELINE_ONLY_NO_TRAINING"
         or value["training_authorized"] is not False
@@ -636,14 +653,19 @@ def run(directory: Path, approval_path: Path, client: Any) -> dict[str, Any]:
     )
     protocol = decision.load_protocol()
     items = worker.work_items(protocol)
+    modeled = costing.is_observed_policy(proposal["cost_policy"])
+    cost_key = "additional_modeled_cu" if modeled else "additional_conservative_cu"
     result: dict[str, Any] = {
         "complete": False,
         "proposal_sha256": proposal["proposal_sha256"],
-        "additional_conservative_cu": 0.0,
+        cost_key: 0.0,
         "inherited_task_evaluations": START - 1,
         "new_task_evaluations": 0,
         "sessions": [],
     }
+    if modeled:
+        result["actual_spending_bound_guaranteed"] = False
+        result["spending_limit_basis"] = proposal["spending_limit_basis"]
 
     def checked_checkpoint() -> dict[str, Any]:
         # Completed observations remain valid after the paid-allocation window closes.
@@ -666,7 +688,7 @@ def run(directory: Path, approval_path: Path, client: Any) -> dict[str, Any]:
             validate_window(proposal, required_seconds=plan["bounds"]["session_seconds"] + 90)
             automatic.quiet(client)
             if (
-                result["additional_conservative_cu"] + plan["compute_units"]["per_session_cap"]
+                result[cost_key] + plan["compute_units"]["per_session_cap"]
                 > proposal["maximum_additional_cu"] + 1e-9
             ):
                 raise ValueError("successor additional cap exhausted")
@@ -688,8 +710,11 @@ def run(directory: Path, approval_path: Path, client: Any) -> dict[str, Any]:
             charged = json.loads(ledger_path.read_text())["sessions"][-1]
             spent = (
                 charged["compute_units_spent"]
-                if charged.get("cost_status") == "KNOWN"
+                if charged.get("cost_status") == ("MODELED" if modeled else "KNOWN")
                 and charged.get("teardown_verified") is True
+                and (
+                    not modeled or execution._verified_accounting(charged, proposal["cost_policy"])
+                )
                 else None
             )
             after = worker.read_checkpoint(checkpoint, items)
@@ -708,13 +733,13 @@ def run(directory: Path, approval_path: Path, client: Any) -> dict[str, Any]:
             result["sessions"].append(
                 {
                     "index": index,
-                    "conservative_cu": spent,
+                    "modeled_cu" if modeled else "conservative_cu": spent,
                     "control_sha256": digest(directory / f"session-{index:03d}-control.json"),
                     "problem": problem,
                 }
             )
             if spent is not None:
-                result["additional_conservative_cu"] += spent
+                result[cost_key] += spent
             result["new_task_evaluations"] = len(after["entries"]) - START
             _write_json(directory / "progress.json", result)
             if problem:
@@ -725,10 +750,11 @@ def run(directory: Path, approval_path: Path, client: Any) -> dict[str, Any]:
         result["scientific_score"] = worker.score_checkpoint(decision.load_protocol(), checkpoint)
         result["complete"] = True
         result["training_started"] = False
-        result["total_new_campaign_cu"] = (
-            proposal["predecessor"]["new_campaign_spent_cu"] + result["additional_conservative_cu"]
+        total_key = "total_modeled_new_campaign_cu" if modeled else "total_new_campaign_cu"
+        result[total_key] = proposal["predecessor"]["new_campaign_spent_cu"] + result[cost_key]
+        result["total_modeled_with_historical_cu" if modeled else "total_with_historical_cu"] = (
+            0.2537 + result[total_key]
         )
-        result["total_with_historical_cu"] = 0.2537 + result["total_new_campaign_cu"]
     except Exception as exc:
         result["error"] = str(exc)
         execution._write_exclusive(

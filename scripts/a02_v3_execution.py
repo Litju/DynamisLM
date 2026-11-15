@@ -609,7 +609,7 @@ def _finite_non_negative(value: Any) -> bool:
 
 
 def _verified_accounting(session: dict[str, Any], policy: dict[str, Any] | None) -> bool:
-    """A recorded charge counts as verified only if it recomputes under the authorized policy.
+    """Verify recorded arithmetic under its policy; MODELED never verifies actual provider cost.
 
     The ledger is controller-written, so this guards against malformed or inconsistent
     records (negative or non-finite amounts, a different policy, understated inputs): the
@@ -618,13 +618,16 @@ def _verified_accounting(session: dict[str, Any], policy: dict[str, Any] | None)
     """
     accounting = session.get("cost_accounting")
     recorded = session.get("compute_units_spent")
+    modeled = costing.is_observed_policy(policy)
+    expected_status = "MODELED" if modeled else "KNOWN"
     if (
         policy is None
         or not isinstance(accounting, dict)
         or not _finite_non_negative(recorded)
         or session.get("teardown_verified") is not True
         or accounting.get("schema") != costing.ACCOUNTING_SCHEMA
-        or accounting.get("cost_status") != "KNOWN"
+        or session.get("cost_status") != expected_status
+        or accounting.get("cost_status") != expected_status
         or accounting.get("cost_policy_sha256") != costing.policy_sha256(policy)
         or accounting.get("conservative_cu") != recorded
     ):
@@ -636,7 +639,8 @@ def _verified_accounting(session: dict[str, Any], policy: dict[str, Any] | None)
         "elapsed_seconds": accounting.get("elapsed_seconds"),
         "teardown_verified": True,
     }
-    if accounting.get("cost_confidence") == "CONSERVATIVE_BOUND":
+    confidence = "OWNER_ACCEPTED_OBSERVED_COST" if modeled else "CONSERVATIVE_BOUND"
+    if accounting.get("cost_confidence") == confidence:
         again = costing.conservative_charge(
             **common, observed_rates=[accounting.get("rate_used_cu_per_hour")]
         )
@@ -644,7 +648,7 @@ def _verified_accounting(session: dict[str, Any], policy: dict[str, Any] | None)
             policy,
             observed_delta=0.0,
             elapsed_seconds=0.0,
-            rate=float(policy["verified_rate_cu_per_hour"]),
+            rate=costing.rate_floor(policy),
         )
         if cast(float, recorded) < floor - 1e-9:
             return False
@@ -652,7 +656,12 @@ def _verified_accounting(session: dict[str, Any], policy: dict[str, Any] | None)
         # NO_ALLOCATION cannot be verified from the ledger alone (nothing independent shows no
         # allocation was attempted), so it is never trusted: it counts at a full session bound.
         return False
-    return again.get("cost_status") == "KNOWN" and abs(again["conservative_cu"] - recorded) < 1e-9
+    if modeled and any(accounting.get(key) != value for key, value in again.items()):
+        return False
+    return (
+        again.get("cost_status") == expected_status
+        and abs(again["conservative_cu"] - recorded) < 1e-9
+    )
 
 
 def _ledger_charge(
@@ -721,7 +730,29 @@ def admit(
     if session_index > allowance["max_sessions"]:
         raise AdmissionError("campaign allowance session count is exhausted")
     per_session = plan["compute_units"]["per_session_cap"]
-    if any(s.get("cost_status") != "KNOWN" for s in used):
+    modeled = costing.is_observed_policy(cost_policy)
+    if modeled:
+        try:
+            costing.validate_policy(cost_policy)
+        except costing.CostPolicyError as exc:
+            raise AdmissionError(f"invalid observed-cost policy: {exc}") from exc
+        if (
+            plan["bounds"]["admission_rate_ceiling_cu_per_hour"] > 1.4375
+            or plan["bounds"]["session_seconds"] > 3600
+            or per_session > 1.6375
+        ):
+            raise AdmissionError("observed-cost session exceeds owner controls")
+    if any(
+        not (
+            (s.get("cost_status") == "KNOWN" and (not modeled or _sealed_historical(s, ledger)))
+            or (
+                modeled
+                and s.get("cost_status") == "MODELED"
+                and _verified_accounting(s, cost_policy)
+            )
+        )
+        for s in used
+    ):
         raise AdmissionError("a prior session has unknown cost; owner review required")
     if any(
         s.get("teardown_verified") is not True and not _sealed_historical(s, ledger) for s in used
@@ -749,7 +780,7 @@ def admit(
             rate=float(plan["bounds"]["admission_rate_ceiling_cu_per_hour"]),
         )
         if full > per_session + 1e-9:
-            raise AdmissionError("verified pricing makes one full session exceed its bound")
+            raise AdmissionError("policy pricing makes one full session exceed its bound")
         if spent + full > cap + 1e-9:
             raise AdmissionError("cumulative V3 compute-unit cap would be exceeded by pricing")
     if float(allowance["max_cu_per_session"]) + 1e-9 < per_session:
@@ -1009,8 +1040,8 @@ def run_session(
 ) -> dict[str, Any]:
     """Run one admitted session end to end; teardown is unconditional.
 
-    ``cost_policy`` carries the owner-verified pricing components used for the conservative
-    ledger charge; without a valid one the session cost is UNKNOWN and nothing further runs.
+    ``cost_policy`` carries verified pricing or explicitly accepted observed-cost estimates;
+    without a valid policy nothing may be allocated. Observed-cost receipts stay MODELED.
     """
     protocol = decision.load_protocol()
     items = worker.work_items(protocol)
@@ -1028,7 +1059,7 @@ def run_session(
     try:
         policy = costing.validate_policy(cost_policy)
     except costing.CostPolicyError as exc:
-        raise AdmissionError(f"no verified cost policy; nothing may be allocated: {exc}") from exc
+        raise AdmissionError(f"no authorized cost policy; nothing may be allocated: {exc}") from exc
     if (run_dir / "TEARDOWN-UNVERIFIED.json").exists():
         raise AdmissionError("an earlier session left an unverified target; owner review required")
     before = client.snapshot()
@@ -1589,8 +1620,9 @@ def run_session(
             if name in {row["name"] for row in o.get("active_sessions", [])}
         ]
         if not rates and attempted and isinstance(cost_policy, dict):
-            # The target was never observed live: bound by the verified rate, not by zero.
-            rates = [cost_policy.get("verified_rate_cu_per_hour", math.nan)]
+            # An unobserved allocation is uncertain under observed-cost authority.
+            if not costing.is_observed_policy(cost_policy):
+                rates = [cost_policy.get("verified_rate_cu_per_hour", math.nan)]
         precise = getattr(client, "precise_charge", None)
         try:
             precise_cu = precise(name) if callable(precise) and attempted else None
@@ -1626,7 +1658,7 @@ def run_session(
             "index": session_index,
             "name": name,
             "compute_units_spent": spent,
-            "cost_status": "KNOWN" if spent is not None else "UNKNOWN",
+            "cost_status": accounting["cost_status"],
             "cost_accounting": accounting,
             "teardown_verified": state["target_absent_after_stop"] is True,
             "committed_items": len(worker.read_checkpoint(local, items)["entries"])

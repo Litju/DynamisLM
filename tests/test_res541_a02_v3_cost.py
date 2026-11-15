@@ -20,6 +20,18 @@ POLICY: dict[str, Any] = {
         "verified_at_utc": "2026-11-13T00:00:00+00:00",
     },
 }
+OBSERVED_POLICY: dict[str, Any] = {
+    "schema": cost.OBSERVED_COST_POLICY_SCHEMA,
+    "balance_display_resolution_cu": 0.01,
+    "observed_rate_floor_cu_per_hour": 1.15,
+    "maximum_observed_rate_cu_per_hour": 1.4375,
+    "risk_reserve_cu": 0.20,
+    "owner_acceptance": {
+        "accepted": True,
+        "owner_statement": "SYNTHETIC TEST ONLY: accept unknown provider billing risk",
+        "recorded_utc": "2026-11-13T00:00:00+00:00",
+    },
+}
 
 
 def charge(**overrides: Any) -> dict[str, Any]:
@@ -148,3 +160,62 @@ def test_live_projection_and_final_charge_use_one_formula() -> None:
     assert cost.projected_bound(POLICY, observed_delta=0, elapsed_seconds=0, rate=1.15) >= (
         POLICY["startup_charge_cu"] + POLICY["operational_reserve_cu"]
     )
+
+
+def test_observed_cost_is_a_labeled_model_without_invented_billing_terms() -> None:
+    result = charge(policy=OBSERVED_POLICY)
+    assert result["cost_status"] == "MODELED"
+    assert result["cost_confidence"] == "OWNER_ACCEPTED_OBSERVED_COST"
+    assert result["actual_spending_bound_guaranteed"] is False
+    assert result["conservative_cu"] == 0.3917  # 600 actual seconds at 1.15/hr, plus risk reserve
+    assert "billed_seconds" not in result
+    assert not (
+        {"startup_charge_cu", "posting_delay_seconds", "billing_granularity_seconds"}
+        & set(OBSERVED_POLICY)
+    )
+    assert (
+        cost.projected_bound(OBSERVED_POLICY, observed_delta=0, elapsed_seconds=3600, rate=1.4375)
+        == 1.6375
+    )
+    # A large observed charge or rate is never clipped to the modeled allowance.
+    assert charge(policy=OBSERVED_POLICY, balance_after=80)["conservative_cu"] == 7.29
+    assert (
+        charge(policy=OBSERVED_POLICY, elapsed_seconds=3600, observed_rates=[2])["conservative_cu"]
+        == 2.2
+    )
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda p: p["owner_acceptance"].update(accepted=False),
+        lambda p: p["owner_acceptance"].update(owner_statement=" "),
+        lambda p: p["owner_acceptance"].update(recorded_utc="2999-01-01T00:00:00+00:00"),
+        lambda p: p["owner_acceptance"].update(recorded_utc="2026-11-13T00:00:00"),
+        lambda p: p.pop("owner_acceptance"),
+        lambda p: p.update(risk_reserve_cu=0.19),
+        lambda p: p.update(maximum_observed_rate_cu_per_hour=1.5),
+        lambda p: p.update(billing_granularity_seconds=1),
+        lambda p: p.update(schema=cost.COST_POLICY_SCHEMA),
+    ],
+)
+def test_observed_cost_needs_exact_controls_and_explicit_risk_acceptance(mutate: Any) -> None:
+    policy = copy.deepcopy(OBSERVED_POLICY)
+    mutate(policy)
+    assert charge(policy=policy)["cost_status"] == "UNKNOWN"
+
+
+@pytest.mark.parametrize(
+    "fault",
+    [
+        {"balance_after": math.nan},
+        {"balance_after": 100},
+        {"elapsed_seconds": -1},
+        {"observed_rates": []},
+        {"observed_rates": [0]},
+        {"observed_rates": [1e308], "elapsed_seconds": 1e308},
+        {"teardown_verified": False},
+    ],
+)
+def test_accepted_billing_risk_does_not_accept_untrustworthy_observations(fault: Any) -> None:
+    assert charge(policy=OBSERVED_POLICY, **fault)["cost_status"] == "UNKNOWN"

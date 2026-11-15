@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import json
 from pathlib import Path
 from typing import Any
@@ -9,6 +10,7 @@ from scripts import a02_v3_contract as v3
 from scripts import a02_v3_cost as cost
 from scripts import a02_v3_execution as execution
 
+from test_res541_a02_v3_cost import OBSERVED_POLICY
 from test_res541_a02_v3_execution import (
     COST_POLICY,
     NOW,
@@ -336,3 +338,74 @@ def test_no_allocation_claims_are_never_trusted_from_the_ledger(tmp_path: Path) 
     assert not execution._verified_accounting(forged, COST_POLICY)
     ledger = {"schema": execution.LEDGER_SCHEMA}
     assert execution._ledger_charge(forged, ledger, PER_SESSION, COST_POLICY) >= PER_SESSION
+
+
+def _observed_kwargs(tmp_path: Path, client: FakeColab) -> dict[str, Any]:
+    kwargs = _kwargs(tmp_path, client)
+    plan = copy.deepcopy(PLAN)
+    plan["bounds"].update(admission_rate_ceiling_cu_per_hour=1.4375, cost_buffer_cu=0.20)
+    plan["compute_units"].update(per_session_cap=1.6375, cumulative_cap=8.1875)
+    plan["session_count"] = 5
+    plan["plan_sha256"] = v3.sha256(
+        v3.canonical({k: v for k, v in plan.items() if k != "plan_sha256"}).encode()
+    )
+    kwargs.update(plan=plan, cost_policy=copy.deepcopy(OBSERVED_POLICY))
+    kwargs["authorization"].update(
+        plan_sha256=plan["plan_sha256"],
+        max_sessions=5,
+        cumulative_cap_cu=8.1875,
+        max_cu_per_session=1.6375,
+    )
+    kwargs["binding"]["plan_sha256"] = plan["plan_sha256"]
+    return kwargs
+
+
+def test_observed_cost_continues_clean_sessions_without_relabeling_estimates(
+    tmp_path: Path,
+) -> None:
+    client = FakeColab(tmp_path / "remote", items_per_session=3, cost_per_session=0)
+    kwargs = _observed_kwargs(tmp_path, client)
+    for index in (1, 2):
+        state = execution.run_session(**kwargs, session_index=index)
+        assert "failure" not in state
+        entry = _ledger(tmp_path)["sessions"][-1]
+        assert entry["cost_status"] == "MODELED"
+        assert entry["cost_accounting"]["actual_spending_bound_guaranteed"] is False
+        assert execution._verified_accounting(entry, OBSERVED_POLICY)
+        assert not execution._verified_accounting(entry, COST_POLICY)
+        assert entry["compute_units_spent"] >= 0.20
+    assert len(client.created) == 2 and len(client.stopped) == 2
+    assert _ledger(tmp_path)["sessions"][-1]["committed_items"] == 6
+
+
+@pytest.mark.parametrize("fault", ["relabel", "guarantee", "amount", "policy", "teardown"])
+def test_observed_cost_tampering_blocks_the_next_allocation(tmp_path: Path, fault: str) -> None:
+    client = FakeColab(tmp_path / "remote", items_per_session=3, cost_per_session=0)
+    kwargs = _observed_kwargs(tmp_path, client)
+    execution.run_session(**kwargs, session_index=1)
+    ledger = _ledger(tmp_path)
+    entry = ledger["sessions"][0]
+    if fault == "relabel":
+        entry["cost_status"] = entry["cost_accounting"]["cost_status"] = "KNOWN"
+    elif fault == "guarantee":
+        entry["cost_accounting"]["actual_spending_bound_guaranteed"] = True
+    elif fault == "amount":
+        entry["compute_units_spent"] = entry["cost_accounting"]["conservative_cu"] = 0
+    elif fault == "policy":
+        kwargs["cost_policy"] = COST_POLICY
+    else:
+        entry["teardown_verified"] = False
+    kwargs["ledger_path"].write_text(json.dumps(ledger))
+    with pytest.raises(execution.AdmissionError, match="unknown cost"):
+        execution.run_session(**kwargs, session_index=2)
+    assert len(client.created) == 1
+
+
+def test_observed_rate_above_owner_ceiling_stops_before_model_work(tmp_path: Path) -> None:
+    client = FakeColab(tmp_path / "remote", items_per_session=3)
+    client.rate_when_allocated = 1.5
+    kwargs = _observed_kwargs(tmp_path, client)
+    state = execution.run_session(**kwargs, session_index=1)
+    assert "failure" in state and "work" not in state
+    assert len(client.created) == 1 and len(client.stopped) == 1
+    assert not (kwargs["run_dir"] / "checkpoint.jsonl").exists()

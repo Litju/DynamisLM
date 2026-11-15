@@ -14,6 +14,9 @@ If authenticated precise billing is supplied it replaces the estimate. If any ne
 component is missing, unverified, non-finite or untrustworthy the session cost is ``UNKNOWN``
 and no further allocation is admitted. The policy values are owner-verified at authorization
 time and bound by hash into the ledger; this module invents none of them.
+
+The separately owner-accepted observed-cost policy reports MODELED estimates instead.
+Its risk reserve is not a provider billing term or a guaranteed upper bound on actual charges.
 """
 
 from __future__ import annotations
@@ -26,6 +29,7 @@ from datetime import datetime
 from typing import Any
 
 COST_POLICY_SCHEMA = "RES541_A02_V3_COST_POLICY_V1"
+OBSERVED_COST_POLICY_SCHEMA = "RES541_BASELINE_OBSERVED_COST_POLICY_V1"
 ACCOUNTING_SCHEMA = "RES541_A02_V3_SESSION_COST_V1"
 POLICY_KEYS = frozenset(
     {
@@ -37,6 +41,16 @@ POLICY_KEYS = frozenset(
         "verified_rate_cu_per_hour",
         "operational_reserve_cu",
         "verification",
+    }
+)
+OBSERVED_POLICY_KEYS = frozenset(
+    {
+        "schema",
+        "balance_display_resolution_cu",
+        "observed_rate_floor_cu_per_hour",
+        "maximum_observed_rate_cu_per_hour",
+        "risk_reserve_cu",
+        "owner_acceptance",
     }
 )
 
@@ -53,7 +67,44 @@ def _non_negative(value: Any) -> bool:
     return isinstance(value, int | float) and not isinstance(value, bool) and 0 <= value < math.inf
 
 
+def is_observed_policy(policy: Any) -> bool:
+    return isinstance(policy, dict) and policy.get("schema") == OBSERVED_COST_POLICY_SCHEMA
+
+
+def rate_floor(policy: dict[str, Any]) -> float:
+    key = (
+        "observed_rate_floor_cu_per_hour"
+        if is_observed_policy(policy)
+        else "verified_rate_cu_per_hour"
+    )
+    return float(policy[key])
+
+
 def validate_policy(policy: Any) -> dict[str, Any]:
+    if isinstance(policy, dict) and is_observed_policy(policy):
+        acceptance = policy.get("owner_acceptance")
+        if (
+            set(policy) != OBSERVED_POLICY_KEYS
+            or policy.get("balance_display_resolution_cu") != 0.01
+            or policy.get("observed_rate_floor_cu_per_hour") != 1.15
+            or policy.get("maximum_observed_rate_cu_per_hour") != 1.4375
+            or policy.get("risk_reserve_cu") != 0.20
+            or not isinstance(acceptance, dict)
+            or set(acceptance) != {"accepted", "owner_statement", "recorded_utc"}
+            or acceptance.get("accepted") is not True
+            or not isinstance(acceptance.get("owner_statement"), str)
+            or not acceptance["owner_statement"].strip()
+        ):
+            raise CostPolicyError("observed-cost controls or explicit owner risk acceptance differ")
+        try:
+            stamp = datetime.fromisoformat(str(acceptance["recorded_utc"]))
+            if stamp.tzinfo is None or stamp > datetime.now(stamp.tzinfo):
+                raise ValueError("naive or future acceptance timestamp")
+        except ValueError as exc:
+            raise CostPolicyError(
+                "observed-cost owner acceptance needs a timezone timestamp"
+            ) from exc
+        return policy
     if not isinstance(policy, dict) or set(policy) != POLICY_KEYS:
         raise CostPolicyError("cost policy fields differ from the contract")
     verification = policy["verification"]
@@ -90,11 +141,16 @@ def policy_sha256(policy: dict[str, Any]) -> str:
 def projected_bound(
     policy: dict[str, Any], *, observed_delta: float, elapsed_seconds: float, rate: float
 ) -> float:
-    """Conservative charge if the session ended after ``elapsed_seconds`` (policy must be valid).
+    """Policy charge if the session ended after ``elapsed_seconds`` (policy must be valid).
 
-    This is the single formula used for admission, live monitoring and final accounting.
+    Observed-cost results are estimates. This formula serves admission and live monitoring.
     """
     resolution = float(policy["balance_display_resolution_cu"])
+    if is_observed_policy(policy):
+        return max(
+            max(observed_delta, 0.0) + resolution,
+            max(rate_floor(policy), rate) * max(elapsed_seconds, 0.0) / 3600,
+        ) + float(policy["risk_reserve_cu"])
     granularity = int(policy["billing_granularity_seconds"])
     billed = (
         math.ceil(
@@ -161,7 +217,6 @@ def conservative_charge(
     delta = max(delta, 0.0)
     delta_upper = delta + resolution
     observed["delta_upper_bound_cu"] = round(delta_upper, 6)
-    reserve = float(policy["operational_reserve_cu"])
     if not allocation_attempted:
         # No allocation was issued: only a displayed movement beyond rounding is unexplained.
         if delta > resolution:
@@ -173,7 +228,7 @@ def conservative_charge(
             "conservative_cu": 0.0,
             **observed,
         }
-    if precise_charge_cu is not None:
+    if precise_charge_cu is not None and not is_observed_policy(policy):
         if not _non_negative(precise_charge_cu):
             return _unknown("precise provider charge is negative or non-finite", **observed)
         precise = max(float(precise_charge_cu), delta)
@@ -190,7 +245,26 @@ def conservative_charge(
     rates = [r for r in observed_rates if _positive(r)]
     if len(rates) != len(list(observed_rates)) or not rates:
         return _unknown("no verified positive live rate; time charge is unbounded", **observed)
-    rate = max(float(policy["verified_rate_cu_per_hour"]), *(float(r) for r in rates))
+    rate = max(rate_floor(policy), *(float(r) for r in rates))
+    if is_observed_policy(policy):
+        estimate = projected_bound(
+            policy, observed_delta=delta, elapsed_seconds=float(elapsed_seconds), rate=rate
+        )
+        if not math.isfinite(estimate):
+            return _unknown("observed-cost estimate is not finite", **observed)
+        return {
+            "schema": ACCOUNTING_SCHEMA,
+            "cost_status": "MODELED",
+            "cost_confidence": "OWNER_ACCEPTED_OBSERVED_COST",
+            "actual_spending_bound_guaranteed": False,
+            "rate_used_cu_per_hour": rate,
+            "time_estimated_cu": round(rate * float(elapsed_seconds) / 3600, 6),
+            "risk_reserve_cu": policy["risk_reserve_cu"],
+            # Keep the shared ledger's numeric field; MODELED explicitly qualifies its meaning.
+            "conservative_cu": _ceil4(estimate),
+            **observed,
+        }
+    reserve = float(policy["operational_reserve_cu"])
     granularity = int(policy["billing_granularity_seconds"])
     billed = (
         math.ceil((float(elapsed_seconds) + float(policy["posting_delay_seconds"])) / granularity)
