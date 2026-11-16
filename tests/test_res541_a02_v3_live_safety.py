@@ -16,7 +16,7 @@ from scripts import a02_execution
 from scripts import a02_v3_execution as execution
 
 
-@pytest.mark.parametrize("diagnostic", [False, True, "successor"])
+@pytest.mark.parametrize("diagnostic", [False, True, "successor", "training"])
 @pytest.mark.parametrize("exit_kind", ["death", "disconnect"])
 def test_independent_watchdog_survives_parent_death(
     tmp_path: Path, exit_kind: str, diagnostic: bool | str
@@ -42,10 +42,11 @@ client.finish_watchdog(watchdog, False)
             "from scripts.a02_v3_execution import ColabCLI",
             "from scripts.a02_v3_diagnostic_session import DiagnosticCLI as ColabCLI",
         )
-    elif diagnostic == "successor":
+    elif diagnostic in {"successor", "training"}:
+        seconds = 7020 if diagnostic == "training" else 3420
         script = script.replace(
             "watchdog = client.start_watchdog(",
-            "client.watchdog_seconds = 3420\nwatchdog = client.start_watchdog(",
+            f"client.watchdog_seconds = {seconds}\nwatchdog = client.start_watchdog(",
         )
     env = {
         **os.environ,
@@ -231,3 +232,48 @@ def test_diagnostic_watchdog_disarms_after_verified_teardown(tmp_path: Path) -> 
     assert json.loads(receipt.read_bytes())["phase"] == "READY"
     client.finish_watchdog(watchdog, True)
     assert json.loads(receipt.read_bytes())["phase"] == "DISARMED"
+
+
+@pytest.mark.parametrize("seconds", [3420, 7020])
+def test_real_campaign_watchdog_starts_and_disarms_without_provider_commands(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, seconds: int
+) -> None:
+    cli = tmp_path / "colab"
+    calls = tmp_path / "calls"
+    cli.write_text('#!/bin/sh\nprintf "%s\\n" "$*" >> "$TEST_CALLS"\nexit 99\n')
+    cli.chmod(0o755)
+    monkeypatch.setenv("PATH", str(tmp_path) + os.pathsep + os.environ["PATH"])
+    monkeypatch.setenv("TEST_CALLS", str(calls))
+    client = execution.ColabCLI()
+    client.watchdog_seconds = seconds
+    receipt = tmp_path / "watchdog.json"
+    watchdog = client.start_watchdog("synthetic-campaign-target", receipt)
+    assert client.watchdog_alive(watchdog)
+    assert json.loads(receipt.read_bytes())["phase"] == "READY"
+    client.finish_watchdog(watchdog, True)
+    assert json.loads(receipt.read_bytes())["phase"] == "DISARMED"
+    assert not calls.exists()
+
+
+@pytest.mark.parametrize("seconds", ["0", "-1", "7021", "7200", "70200", "nan"])
+def test_real_campaign_watchdog_rejects_unapproved_durations(tmp_path: Path, seconds: str) -> None:
+    receipt = tmp_path / "watchdog.json"
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "scripts.a02_v3_execution",
+            "watchdog",
+            "synthetic",
+            str(receipt),
+            seconds,
+        ],
+        input="D",
+        capture_output=True,
+        text=True,
+        cwd=execution.ROOT,
+        timeout=20,
+    )
+    assert result.returncode != 0
+    assert "watchdog duration is outside the successor policy" in result.stderr
+    assert not receipt.exists()

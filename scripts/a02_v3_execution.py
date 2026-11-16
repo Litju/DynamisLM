@@ -2184,9 +2184,9 @@ if __name__ == "__main__":  # pragma: no cover
         from scripts import a02_execution
 
         if len(sys.argv) == 5:
-            if sys.argv[4] != "3420":
+            if sys.argv[4] not in {"3420", "7020"}:
                 raise ValueError("watchdog duration is outside the successor policy")
-            a02_execution.MAX_SESSION_SECONDS = 3420
+            a02_execution.MAX_SESSION_SECONDS = int(sys.argv[4])
 
         receipt = Path(sys.argv[3])
         receipt.write_text(json.dumps({"session": sys.argv[2], "phase": "READY"}))
