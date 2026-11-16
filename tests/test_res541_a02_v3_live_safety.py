@@ -245,7 +245,7 @@ def test_real_campaign_watchdog_starts_and_disarms_without_provider_commands(
     monkeypatch.setenv("PATH", str(tmp_path) + os.pathsep + os.environ["PATH"])
     monkeypatch.setenv("TEST_CALLS", str(calls))
     client = execution.ColabCLI()
-    client.watchdog_seconds = seconds
+    monkeypatch.setattr(client, "watchdog_seconds", seconds, raising=False)
     receipt = tmp_path / "watchdog.json"
     watchdog = client.start_watchdog("synthetic-campaign-target", receipt)
     assert client.watchdog_alive(watchdog)
