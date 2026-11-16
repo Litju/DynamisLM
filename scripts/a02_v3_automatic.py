@@ -19,11 +19,13 @@ from pathlib import Path
 from typing import Any
 
 from scripts import a02_v3_contract as v3
+from scripts import a02_v3_cost as costing
 from scripts import a02_v3_decision as decision
 from scripts import a02_v3_diagnostic_session as diagnostic_session
 from scripts import a02_v3_execution as execution
 from scripts import a02_v3_gpu_diagnostic as diagnostic
 from scripts import a02_v3_remote as remote
+from scripts import a02_v3_score as score
 from scripts import a02_v3_training as training
 from scripts import a02_v3_worker as worker
 from scripts.a02_execution import _write_json
@@ -32,6 +34,435 @@ ROOT = execution.E_ROOT / "a02/owner-automatic-v1"
 TOTAL_CAP_CU = 50.0
 TRAINING_SECONDS = 7200
 TRAINING_CLEANUP_SECONDS = 600
+STAGE2_SCHEMA = "RES541_FINAL_LORA_STUDY_PROPOSAL_V1"
+BASELINE_SUCCESSOR = (
+    execution.E_ROOT / "a02/v3-baseline-successor-v1/observed-cost-5a32900-20261115T032155Z"
+)
+
+
+def completed_baseline() -> dict[str, Any]:
+    """Verify the frozen observation and its receipts, without running model inference."""
+    from scripts import a02_v3_baseline_successor as successor
+
+    root = BASELINE_SUCCESSOR
+    proposal = read(root / "proposal.json")
+    result = read(root / "result.json")
+    if (
+        proposal["proposal_sha256"]
+        != "364b732a45bec172de4b1122d86933e3c274e7c24cb6625b3c330fc4581e4d5a"
+        or proposal["proposal_sha256"]
+        != v3.sha256(
+            v3.canonical({k: v for k, v in proposal.items() if k != "proposal_sha256"}).encode()
+        )
+        or successor.digest(root / "checkpoint.jsonl")
+        != "5764f1a9a149c8603363ea00315786ffc5e3040bc1f4b56ea6ccbc7c98071887"
+        or result.get("complete") is not True
+        or result.get("training_started") is not False
+        or result.get("new_task_evaluations") != 274
+        or result.get("inherited_task_evaluations") != 306
+        or result.get("proposal_sha256") != proposal["proposal_sha256"]
+        or result["scientific_score"]["decision"]["decision"]
+        != "ADAPTATION_STUDY_ELIGIBLE_NOT_AUTHORIZED"
+    ):
+        raise ValueError("completed baseline identity/result differs")
+    successor.validate_approval(proposal, read(root / "owner-approval.json"))
+    if proposal["predecessor"] != successor.verify_predecessor():
+        raise ValueError("sealed predecessor evidence differs")
+    archive = subprocess.check_output(
+        ["git", "archive", "--format=tar", proposal["source_identity"]["commit"]],
+        cwd=execution.ROOT,
+    )
+    if successor.digest(root / "source.tar") != v3.sha256(archive):
+        raise ValueError("baseline source archive differs")
+    state = worker.read_checkpoint(
+        root / "checkpoint.jsonl", worker.work_items(decision.load_protocol())
+    )
+    worker.check_identity(state["entries"], decision.load_protocol())
+    if v3.canonical(
+        worker.score_checkpoint(decision.load_protocol(), root / "checkpoint.jsonl")
+    ) != v3.canonical(result["scientific_score"]):
+        raise ValueError("baseline frozen score does not reproduce")
+    ledger = read(root / "ledger.json")
+    if len(result["sessions"]) != 1 or result["sessions"][0]["index"] != 3:
+        raise ValueError("completed baseline session set differs")
+    control = read(root / "session-003-control.json")
+    charged = ledger["sessions"][-1]
+    accounting = control["cost_accounting"]
+    expected = costing.conservative_charge(
+        policy=proposal["cost_policy"],
+        balance_before=accounting["displayed_balance_before"],
+        balance_after=accounting["displayed_balance_after"],
+        elapsed_seconds=accounting["elapsed_seconds"],
+        observed_rates=[accounting["rate_used_cu_per_hour"]],
+        teardown_verified=control.get("target_absent_after_stop") is True,
+    )
+    if (
+        result["sessions"][0]["control_sha256"]
+        != successor.digest(root / "session-003-control.json")
+        or result["sessions"][0]["control_sha256"]
+        != "f1c4d290fb60a0ae63d45b1c61402cd64402feafe79f3a967f671b4067fa996e"
+        or not control.get("stopped")
+        or not control.get("target_absent_after_stop")
+        or charged["cost_accounting"] != accounting
+        or charged.get("teardown_verified") is not True
+        or charged.get("committed_items") != 581
+        or ledger["sessions"][:-1] != successor.inherited_ledger(proposal)["sessions"]
+        or any(accounting.get(k) != v for k, v in expected.items())
+        or result["additional_modeled_cu"] != charged["compute_units_spent"]
+        or result["additional_modeled_cu"] != accounting["conservative_cu"]
+        or result["total_modeled_new_campaign_cu"]
+        != proposal["predecessor"]["new_campaign_spent_cu"] + accounting["conservative_cu"]
+        or read(root / "session-003-watchdog.json")["phase"] != "DISARMED"
+        or control["teardown_receipt"]["assignments"]["returncode"] != 0
+        or json.loads(control["teardown_receipt"]["assignments"]["stdout"])["assignments"]
+        or control["teardown_receipt"]["sessions"]["returncode"] != 0
+        or "No active sessions found" not in control["teardown_receipt"]["sessions"]["stdout"]
+    ):
+        raise ValueError("completed baseline financial/teardown evidence differs")
+    return {
+        "directory": str(root),
+        "files": {f.name: successor.digest(f) for f in sorted(root.iterdir()) if f.is_file()},
+        "evaluations": len(state["entries"]) - 1,
+        "new_campaign_modeled_cu": result["total_modeled_new_campaign_cu"],
+        "historical_cu_separate": 0.2537,
+        "last_session_modeled_cu": result["additional_modeled_cu"],
+        "last_session_observed_account_delta_cu": accounting["observed_displayed_delta_cu"],
+        "actual_final_provider_charge_cu": None,
+    }
+
+
+def stage2_plan() -> dict[str, Any]:
+    """Finite operational limits; unmeasured LoRA throughput is never a completion promise."""
+
+    old = read(BASELINE_SUCCESSOR / "proposal.json")["plan"]
+    bounds = execution.RuntimeBounds(**old["bounds"])
+    bounds = replace(bounds, prepare_seconds=840)
+    costs = {
+        k.replace("ZERO_SHOT", "ADAPTED"): v for k, v in old["item_cost_bounds_seconds"].items()
+    }
+    evaluation = execution.build_plan(
+        decision.load_protocol(),
+        {"max_constrained_scorer_calls": execution.workload_scorer_calls(decision.load_protocol())},
+        bounds,
+        measured_cost_bounds=costs,
+        adapted=True,
+    )
+    # 660 s predecessor recovery window plus 180 s for the existing pinned PEFT overlay.
+    train_cap = math.ceil(((TRAINING_SECONDS + 90) * 1.4375 / 3600 + 0.20) * 10000) / 10000
+    return {
+        "training_sessions": 8,
+        "training_session_seconds": TRAINING_SECONDS,
+        "training_prepare_seconds": 840,
+        "training_cleanup_seconds": TRAINING_CLEANUP_SECONDS,
+        "training_per_session_modeled_cu": train_cap,
+        "training_maximum_modeled_cu": train_cap * 8,
+        "training_throughput_measured": False,
+        "completion_guaranteed": False,
+        "evaluation": evaluation,
+        "maximum_additional_modeled_cu": train_cap * 8
+        + evaluation["compute_units"]["cumulative_cap"],
+        "retry_policy": "No anomaly retries; clean optimizer/item-boundary continuation only "
+        "within this finite allowance.",
+    }
+
+
+def prepare_stage2(directory: Path) -> dict[str, Any]:
+    if directory.exists():
+        raise ValueError("Stage 2 proposal directory exists; no overwrite")
+    source = execution.source_identity()
+    baseline = completed_baseline()
+    plan = stage2_plan()
+    if baseline["new_campaign_modeled_cu"] + plan["maximum_additional_modeled_cu"] > TOTAL_CAP_CU:
+        raise ValueError("Stage 2 would reset the original campaign spending ceiling")
+    snapshot = quiet(PipelineCLI())
+    directory.mkdir(parents=True)
+    archive, _ = execution.source_archive(directory / "source.tar")
+    now = datetime.now(UTC)
+    old_policy = read(BASELINE_SUCCESSOR / "proposal.json")["cost_policy"]
+    value = {
+        "schema": STAGE2_SCHEMA,
+        "status": "PROPOSED_NOT_AUTHORIZED",
+        "execution_directory": str(directory.resolve()),
+        "source_identity": source,
+        "source_archive_sha256": v3.sha256(archive.read_bytes()),
+        "baseline": baseline,
+        "training": training.specification(),
+        "protocol_sha256": decision.protocol_sha256(),
+        "scientific_decision_rule": decision.load_protocol()["decision_rule"],
+        "plan": plan,
+        "observed_cost_controls": {k: v for k, v in old_policy.items() if k != "owner_acceptance"},
+        "billing_risk": "Actual Colab charges may exceed modeled caps; startup charges, billing "
+        "granularity and posting delays remain unverified. Separate Stage 2 acceptance required.",
+        "actual_spending_bound_guaranteed": False,
+        "live_readonly_snapshot": snapshot,
+        "valid_from_utc": now.isoformat(),
+        "valid_until_utc": (now + timedelta(hours=48)).isoformat(),
+        "model_selection": "Only the final checkpoint after the fixed two epochs; evaluate once.",
+        "evaluation_work_list_sha256": worker.work_list_sha256(
+            training.adapted_work_items(decision.load_protocol())
+        ),
+        "training_t4_full_model_qualification": "NOT_YET_MEASURED; stop on OOM/nonfinite/failed "
+        "runtime checks; no automatic retry",
+    }
+    value["proposal_sha256"] = v3.sha256(v3.canonical(value).encode())
+    execution._write_exclusive(directory / "stage2-proposal.json", value)
+    return value
+
+
+def validate_stage2(directory: Path, required_seconds: float = 0) -> dict[str, Any]:
+    from scripts import a02_v3_baseline_successor as successor
+
+    value = read(directory / "stage2-proposal.json")
+    payload = {k: v for k, v in value.items() if k != "proposal_sha256"}
+    if (
+        value.get("schema") != STAGE2_SCHEMA
+        or value.get("execution_directory") != str(directory.resolve())
+        or value.get("proposal_sha256") != v3.sha256(v3.canonical(payload).encode())
+        or value["source_identity"] != execution.source_identity()
+        or value["source_archive_sha256"] != diagnostic_session.head_archive_sha256()
+        or value["source_archive_sha256"] != v3.sha256((directory / "source.tar").read_bytes())
+        or value["plan"] != stage2_plan()
+        or value["training"] != training.specification()
+        or value["protocol_sha256"] != decision.protocol_sha256()
+        or value["scientific_decision_rule"] != decision.load_protocol()["decision_rule"]
+    ):
+        raise ValueError("Stage 2 proposal/source/plan differs")
+    if any(
+        successor.digest(BASELINE_SUCCESSOR / name) != digest
+        for name, digest in value["baseline"]["files"].items()
+    ):
+        raise ValueError("frozen baseline evidence changed")
+    successor.validate_window(value, required_seconds)
+    return value
+
+
+def stage2_approval(proposed: dict[str, Any], approval: dict[str, Any]) -> dict[str, Any]:
+    if (
+        set(approval)
+        != {
+            "schema",
+            "proposal_sha256",
+            "approved",
+            "owner_statement",
+            "recorded_utc",
+            "accept_observed_billing_risk",
+        }
+        or approval.get("schema") != "RES541_FINAL_LORA_STUDY_OWNER_APPROVAL_V1"
+        or approval.get("proposal_sha256") != proposed["proposal_sha256"]
+        or approval.get("approved") is not True
+        or approval.get("accept_observed_billing_risk") is not True
+        or not isinstance(approval.get("owner_statement"), str)
+        or not approval["owner_statement"].strip()
+    ):
+        raise ValueError(
+            "separate exact-proposal Stage 2 approval and billing-risk acceptance required"
+        )
+    stamp = datetime.fromisoformat(approval["recorded_utc"])
+    if not datetime.fromisoformat(proposed["valid_from_utc"]) <= stamp <= datetime.now(UTC):
+        raise ValueError("Stage 2 approval timestamp differs from proposal window")
+    return costing.validate_policy(
+        {
+            **proposed["observed_cost_controls"],
+            "owner_acceptance": {
+                "accepted": True,
+                "owner_statement": approval["owner_statement"],
+                "recorded_utc": approval["recorded_utc"],
+            },
+        }
+    )
+
+
+def run_stage2(directory: Path, approval_path: Path) -> dict[str, Any]:
+    """Use the existing training sessions, budget, FP32 worker and frozen scorer."""
+    proposed = validate_stage2(directory, TRAINING_SECONDS + 90)
+    approval = read(approval_path)
+    policy = stage2_approval(proposed, approval)
+    if (directory / "study-consumed.json").exists():
+        raise ValueError("Stage 2 proposal already consumed; no retry")
+    os.environ["COLAB_CLI_ASSIGN_RETRIES"] = "0"
+    client = PipelineCLI()
+    client.watchdog_module = "scripts.a02_v3_execution"
+    quiet(client)
+    plan = proposed["plan"]
+    budget = Budget(
+        directory, proposed, maximum_cu=plan["maximum_additional_modeled_cu"], modeled=True
+    )
+    execution._write_exclusive(directory / "study-consumed.json", approval)
+    grant = {
+        **proposed,
+        "owner_receipt_sha256": v3.sha256(approval_path.read_bytes()),
+    }
+    baseline_dir = directory / "baseline"
+    baseline_dir.mkdir()
+    with (baseline_dir / "checkpoint.jsonl").open("xb") as stream:
+        stream.write((BASELINE_SUCCESSOR / "checkpoint.jsonl").read_bytes())
+    training_dir = directory / "training"
+    training_dir.mkdir()
+    result: dict[str, Any] = {"complete": False, "proposal_sha256": proposed["proposal_sha256"]}
+    try:
+        prior = None
+        for index in range(1, plan["training_sessions"] + 1):
+            validate_stage2(directory, TRAINING_SECONDS + 90)
+            key = f"training-{index:03d}"
+            cap = plan["training_per_session_modeled_cu"]
+            budget.reserve(key, "TRAINING", cap)
+            state = training_session(
+                training_dir,
+                grant,
+                index,
+                prior,
+                1.4375,
+                cap,
+                client,
+                cost_policy=policy,
+                prepare_seconds=plan["training_prepare_seconds"],
+            )
+            budget.close(
+                key,
+                state.get("conservative_cu"),
+                training_dir / f"session-{index:03d}/control.json",
+                passed=state.get("passed") is True,
+            )
+            prior = training_dir / f"session-{index:03d}/checkpoint.tar"
+            verified_training_prior(prior, grant)
+            if state["result"]["completed"]:
+                break
+        if prior is None or not state["result"]["completed"]:
+            raise ValueError("finite training allowance exhausted before both epochs completed")
+        export = directory / "final-adapter"
+        training.unpack(prior, export)
+        metadata = read(export / "metadata.json")
+        if (
+            not metadata["completed"]
+            or metadata["adapter_sha256"]
+            != v3.sha256((export / "adapter_model.safetensors").read_bytes())
+            or metadata["adapter_fingerprint"] == metadata["initial_adapter_fingerprint"]
+        ):
+            raise ValueError("final adapter is incomplete, unchanged or differs from training")
+        result["training"] = state["result"]
+        result["final_training_checkpoint_sha256"] = v3.sha256(prior.read_bytes())
+        evaluation = plan["evaluation"]
+        binding = execution.remote_binding(
+            evaluation,
+            directory / "source.tar",
+            proposed["source_identity"]["commit"],
+            precision="float32",
+            native_cache=True,
+        )
+        binding.update(
+            schema=remote.ADAPTED_BINDING_SCHEMA,
+            adapter_sha256=v3.sha256((export / "adapter_model.safetensors").read_bytes()),
+            adapter_config_sha256=v3.sha256((export / "adapter_config.json").read_bytes()),
+        )
+        execution._write_exclusive(export / "evaluation-binding.json", binding)
+        allowance = {
+            "schema": execution.ALLOWANCE_SCHEMA,
+            "plan_sha256": evaluation["plan_sha256"],
+            "source_identity": proposed["source_identity"],
+            "max_sessions": evaluation["session_count"],
+            "cumulative_cap_cu": evaluation["compute_units"]["cumulative_cap"],
+            "max_cu_per_session": evaluation["compute_units"]["per_session_cap"],
+            "valid_until_utc": proposed["valid_until_utc"],
+            "allow_concurrent_unrelated_usage": False,
+        }
+        evaluation_dir = directory / "evaluation"
+        evaluation_dir.mkdir()
+        protocol = decision.load_protocol()
+        items = training.adapted_work_items(protocol)
+        checkpoint = evaluation_dir / "checkpoint.jsonl"
+        for index in range(1, evaluation["session_count"] + 1):
+            before = worker.read_checkpoint(checkpoint, items)
+            if len(before["entries"]) == len(items):
+                break
+            validate_stage2(directory, evaluation["bounds"]["session_seconds"] + 90)
+            key = f"evaluation-{index:03d}"
+            budget.reserve(key, "FINAL_ADAPTER_EVALUATION", allowance["max_cu_per_session"])
+            client.watchdog_seconds = evaluation["bounds"]["session_seconds"] - 180
+            state = execution.run_session(
+                client=client,
+                plan=evaluation,
+                ledger_path=evaluation_dir / "ledger.json",
+                authorization=allowance,
+                session_index=index,
+                run_dir=evaluation_dir,
+                source_archive=directory / "source.tar",
+                binding=binding,
+                cost_policy=policy,
+                final_adapter=export,
+            )
+            after = worker.read_checkpoint(checkpoint, items)
+            problem = execution.session_anomaly(
+                state,
+                len(before["entries"]),
+                len(after["entries"]),
+                allowance["max_cu_per_session"],
+            )
+            amount = state.get("cost_accounting", {}).get("conservative_cu")
+            budget.close(
+                key,
+                amount,
+                evaluation_dir / f"session-{index:03d}-control.json",
+                passed=problem is None,
+            )
+        final = worker.read_checkpoint(checkpoint, items)
+        if (
+            len(final["entries"]) != len(items)
+            or final["torn_tail_discarded"]
+            or not final["entries"][0]["record"]["passed"]
+        ):
+            raise ValueError(
+                "finite evaluation allowance exhausted or adapter qualification failed"
+            )
+        if (
+            v3.sha256((baseline_dir / "checkpoint.jsonl").read_bytes())
+            != proposed["baseline"]["files"]["checkpoint.jsonl"]
+        ):
+            raise ValueError("copied baseline differs from the approved frozen observations")
+        baseline = worker.read_checkpoint(
+            baseline_dir / "checkpoint.jsonl", worker.work_items(protocol)
+        )
+        evidence = {
+            arm: [
+                e["record"]
+                for e in entries
+                if e["record"].get("arm") == arm and e["item"].startswith("HELDOUT:")
+            ]
+            for entries, arms in (
+                (baseline["entries"], worker.ARMS),
+                (final["entries"], ("ADAPTED_UNCONSTRAINED", "ADAPTED_CONSTRAINED")),
+            )
+            for arm in arms
+        }
+        result.update(
+            complete=True,
+            scientific_score=decision.decide(evidence, protocol),
+            final_adapter_sha256=binding["adapter_sha256"],
+            adapted_checkpoint_sha256=v3.sha256(checkpoint.read_bytes()),
+            additional_modeled_cu=plan["maximum_additional_modeled_cu"] - budget.remaining(),
+            actual_final_provider_charge_cu=None,
+            exposed_development_diagnostics={
+                arm: score.aggregate(
+                    [
+                        score.score_case(
+                            e["record"]["case_id"],
+                            e["record"]["raw_output"],
+                            action_truncated=bool(e["record"]["truncated"]),
+                        )
+                        for e in final["entries"]
+                        if e["item"].startswith("EXPOSED:") and e["record"]["arm"] == arm
+                    ]
+                )
+                for arm in ("ADAPTED_UNCONSTRAINED", "ADAPTED_CONSTRAINED")
+            },
+        )
+    except Exception as exc:
+        result["error"] = str(exc)
+        execution._write_exclusive(
+            directory / "terminal-anomaly.json",
+            {"error": str(exc), "automatic_retry_permitted": False},
+        )
+    _write_json(directory / "stage2-result.json", result)
+    return result
 
 
 def source_archive_path(directory: Path, grant: dict[str, Any]) -> Path:
@@ -181,10 +612,19 @@ def read(path: Path) -> dict[str, Any]:
 
 
 class Budget:
-    def __init__(self, directory: Path, grant: dict[str, Any]):
+    def __init__(
+        self,
+        directory: Path,
+        grant: dict[str, Any],
+        *,
+        maximum_cu: float = TOTAL_CAP_CU,
+        modeled: bool = False,
+    ):
         self.directory = directory
         self.path = directory / "budget-ledger.json"
         self.grant_hash = v3.sha256(v3.canonical(grant).encode())
+        self.maximum_cu = maximum_cu
+        self.cost_status = "MODELED" if modeled else "KNOWN"
         if not self.path.exists():
             if (
                 list(directory.glob("*-used.json"))
@@ -198,7 +638,7 @@ class Budget:
                 {
                     "schema": "RES541_FINITE_AUTOMATIC_BUDGET_V1",
                     "grant_sha256": self.grant_hash,
-                    "maximum_new_cu": TOTAL_CAP_CU,
+                    "maximum_new_cu": self.maximum_cu,
                     "historical_cu_separate": 0.2537,
                     "sessions": [],
                 },
@@ -208,11 +648,11 @@ class Budget:
         value = read(self.path)
         if (
             value.get("grant_sha256") != self.grant_hash
-            or value.get("maximum_new_cu") != TOTAL_CAP_CU
+            or value.get("maximum_new_cu") != self.maximum_cu
             or value.get("historical_cu_separate") != 0.2537
         ):
             raise ValueError("automatic budget authority differs")
-        if any(entry.get("cost_status") != "KNOWN" for entry in value["sessions"]):
+        if any(entry.get("cost_status") != self.cost_status for entry in value["sessions"]):
             raise ValueError("prior/open session cost is unknown or exceeded its cap")
         keys = [entry["key"] for entry in value["sessions"]]
         used = {path.name.removesuffix("-used.json") for path in self.directory.glob("*-used.json")}
@@ -224,7 +664,7 @@ class Budget:
         for index, entry in enumerate(value["sessions"]):
             amount = entry.get("conservative_cu")
             if (
-                entry.get("cost_status") != "KNOWN"
+                entry.get("cost_status") != self.cost_status
                 or isinstance(amount, bool)
                 or not isinstance(amount, int | float)
                 or not math.isfinite(amount)
@@ -262,13 +702,13 @@ class Budget:
                 or v3.sha256(Path(receipt["control_path"]).read_bytes()) != entry["control_sha256"]
             ):
                 raise ValueError("budget charge/control evidence differs")
-        if sum(entry["conservative_cu"] for entry in value["sessions"]) > TOTAL_CAP_CU:
+        if sum(entry["conservative_cu"] for entry in value["sessions"]) > self.maximum_cu:
             raise ValueError("cumulative automatic budget exceeded")
         return value
 
     def remaining(self) -> float:
         spent: float = sum(entry["conservative_cu"] for entry in self.state()["sessions"])
-        return TOTAL_CAP_CU - spent
+        return self.maximum_cu - spent
 
     def reserve(self, key: str, kind: str, cap: float) -> None:
         value = self.state()
@@ -323,7 +763,7 @@ class Budget:
                 if not isinstance(amount, bool) and amount is not None and math.isfinite(amount)
                 else None
             ),
-            cost_status="KNOWN" if known else "UNKNOWN_OR_OVERRUN",
+            cost_status=self.cost_status if known else "UNKNOWN_OR_OVERRUN",
             control_sha256=v3.sha256(control.read_bytes()) if control.exists() else None,
             execution_status="CLEAN" if passed is True else "FAILED",
         )
@@ -647,9 +1087,14 @@ def training_session(
     rate_ceiling: float,
     cap: float,
     client: PipelineCLI,
+    *,
+    cost_policy: dict[str, Any] | None = None,
+    prepare_seconds: int = 240,
 ) -> dict[str, Any]:
     """One training allocation, checkpoint recovery, unconditional exact-target teardown."""
     previous = verified_training_prior(prior, grant) if prior is not None else None
+    if cost_policy is not None:
+        costing.validate_policy(cost_policy)
     before = quiet(client)
     if before["balance"] < cap + 0.2:
         raise ValueError("quota cannot cover bounded training session")
@@ -692,9 +1137,11 @@ def training_session(
     rate = None
     initial_delta = None
     started = time.monotonic()
-    client.watchdog_seconds = TRAINING_SECONDS
+    client.watchdog_seconds = TRAINING_SECONDS - 180 if cost_policy else TRAINING_SECONDS
     try:
         watchdog = client.start_watchdog(name, jobdir / "watchdog.json")
+        if watchdog is None:
+            raise RuntimeError("no independent training watchdog; no allocation")
         attempted = True
         allocated = client.new(name)
         if not allocated or client.hardware(name) != "T4":
@@ -727,8 +1174,8 @@ def training_session(
             "spent_before": 0,
         }
         for stage, ceiling in (
-            ("prepare", 240),
-            ("work", TRAINING_SECONDS - TRAINING_CLEANUP_SECONDS - 240),
+            ("prepare", prepare_seconds),
+            ("work", TRAINING_SECONDS - TRAINING_CLEANUP_SECONDS - prepare_seconds),
         ):
             remaining = TRAINING_SECONDS - TRAINING_CLEANUP_SECONDS - (time.monotonic() - started)
             if remaining < 60:
@@ -745,6 +1192,11 @@ def training_session(
             )
             if state[stage].get("returncode") != 0:
                 raise RuntimeError(f"training {stage} failed; no retry")
+            if stage == "prepare" and cost_policy is not None:
+                path = jobdir / "prepare-status.json"
+                if not client.download(name, execution.REMOTE_STATUS, path):
+                    raise ValueError("training preparation receipt missing; no work")
+                execution.validate_prepared_status(read(path), binding, decision.load_protocol())
         state["remote_completed"] = True
     except Exception as exc:
         state.update(error_type=type(exc).__name__, error_detail=str(exc))
@@ -798,6 +1250,20 @@ def training_session(
             if not math.isfinite(spent) or not 0 <= spent <= cap:
                 raise ValueError("training cost cap exceeded")
             state["conservative_cu"] = spent
+            if cost_policy is not None:
+                accounting = costing.conservative_charge(
+                    policy=cost_policy,
+                    balance_before=before["balance"],
+                    balance_after=after["balance"],
+                    elapsed_seconds=time.monotonic() - started,
+                    observed_rates=[rate],
+                    teardown_verified=state.get("target_absent") is True,
+                )
+                state["cost_accounting"] = accounting
+                amount = accounting["conservative_cu"]
+                if amount is None or amount > cap:
+                    raise ValueError("training policy charge unknown or above session cap")
+                state["conservative_cu"] = amount
         except Exception as exc:
             state["cost_error"] = str(exc)
         try:
@@ -1126,19 +1592,38 @@ def run(directory: Path) -> dict[str, Any]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=("prepare", "prepare-native-cache", "run"))
+    parser.add_argument(
+        "command",
+        choices=(
+            "prepare",
+            "prepare-native-cache",
+            "run",
+            "prepare-stage2",
+            "validate-stage2",
+            "run-stage2",
+        ),
+    )
     parser.add_argument("--directory", type=Path, required=True)
+    parser.add_argument("--approval", type=Path)
     args = parser.parse_args()
     if not args.directory.resolve().is_relative_to(execution.E_ROOT):
         raise ValueError("persistent artifacts belong on E:")
-    if args.command == "prepare":
+    if args.command == "prepare-stage2":
+        output = prepare_stage2(args.directory)
+    elif args.command == "validate-stage2":
+        output = validate_stage2(args.directory)
+    elif args.command == "run-stage2":
+        if args.approval is None:
+            raise ValueError("separate Stage 2 --approval required before paid allocation")
+        output = run_stage2(args.directory, args.approval)
+    elif args.command == "prepare":
         output = prepare(args.directory)
     elif args.command == "prepare-native-cache":
         output = prepare_native_cache_continuation(args.directory)
     else:
         output = run(args.directory)
     print(json.dumps(output, sort_keys=True))
-    return 0 if args.command != "run" or output["complete"] else 1
+    return 0 if args.command not in {"run", "run-stage2"} or output["complete"] else 1
 
 
 if __name__ == "__main__":

@@ -5,6 +5,7 @@ from __future__ import annotations
 import io
 import json
 import tarfile
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -20,6 +21,271 @@ from scripts import a02_v3_training as training
 from scripts import a02_v3_worker as worker
 
 from test_res541_a02_v3_execution import COST_POLICY, write_authorized_policy
+
+
+def _stage2_proposal() -> dict[str, Any]:
+    now = datetime.now(UTC)
+    return {
+        "proposal_sha256": "a" * 64,
+        "source_identity": {"commit": "b" * 40, "tree": "c" * 40},
+        "source_archive_sha256": v3.sha256(b"SYNTHETIC source"),
+        "valid_from_utc": (now - timedelta(minutes=1)).isoformat(),
+        "valid_until_utc": (now + timedelta(hours=48)).isoformat(),
+        "protocol_sha256": decision.protocol_sha256(),
+        "training": training.specification(),
+        "observed_cost_controls": {
+            "schema": cost.OBSERVED_COST_POLICY_SCHEMA,
+            "balance_display_resolution_cu": 0.01,
+            "observed_rate_floor_cu_per_hour": 1.15,
+            "maximum_observed_rate_cu_per_hour": 1.4375,
+            "risk_reserve_cu": 0.20,
+        },
+    }
+
+
+def _stage2_approval(proposal: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "schema": "RES541_FINAL_LORA_STUDY_OWNER_APPROVAL_V1",
+        "proposal_sha256": proposal["proposal_sha256"],
+        "approved": True,
+        "accept_observed_billing_risk": True,
+        "recorded_utc": datetime.now(UTC).isoformat(),
+        "owner_statement": "SYNTHETIC Stage 2 owner acceptance, not real GPU authority",
+    }
+
+
+@pytest.mark.parametrize("fault", ["baseline_approval", "risk", "proposal", "timestamp"])
+def test_stage2_requires_fresh_exact_training_and_billing_approval(fault: str) -> None:
+    proposed = _stage2_proposal()
+    approval = _stage2_approval(proposed)
+    assert automatic.stage2_approval(proposed, approval)["owner_acceptance"]["accepted"]
+    if fault == "baseline_approval":
+        approval["schema"] = "RES541_BASELINE_SUCCESSOR_OWNER_APPROVAL_V1"
+    elif fault == "risk":
+        approval["accept_observed_billing_risk"] = False
+    elif fault == "proposal":
+        approval["proposal_sha256"] = "f" * 64
+    else:
+        approval["recorded_utc"] = (datetime.now(UTC) + timedelta(hours=1)).isoformat()
+    with pytest.raises(ValueError):
+        automatic.stage2_approval(proposed, approval)
+
+
+def test_stage2_budget_is_separate_finite_and_modeled(tmp_path: Path) -> None:
+    budget = automatic.Budget(tmp_path, {"SYNTHETIC Stage 2": True}, maximum_cu=1, modeled=True)
+    control = tmp_path / "control.json"
+    control.write_text('{"synthetic":true}')
+    budget.reserve("training-001", "TRAINING", 0.7)
+    budget.close("training-001", 0.6, control, passed=True)
+    assert budget.remaining() == pytest.approx(0.4)
+    assert budget.state()["sessions"][0]["cost_status"] == "MODELED"
+    with pytest.raises(ValueError, match="ceiling"):
+        budget.reserve("evaluation-001", "EVALUATION", 0.5)
+    with pytest.raises(ValueError, match="authority differs"):
+        automatic.Budget(tmp_path, {"SYNTHETIC Stage 2": True}).state()
+
+
+def test_stage2_refuses_before_provider_access_without_approval(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(automatic, "validate_stage2", lambda *a: _stage2_proposal())
+    monkeypatch.setattr(
+        automatic, "PipelineCLI", lambda: pytest.fail("provider must not be accessed")
+    )
+    receipt = tmp_path / "approval.json"
+    receipt.write_text("{}")
+    with pytest.raises(ValueError, match="Stage 2 approval"):
+        automatic.run_stage2(tmp_path, receipt)
+
+
+@pytest.mark.parametrize("fault", ["baseline", "archive", "expired", "source"])
+def test_stage2_preparation_is_readonly_and_validation_rejects_drift(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fault: str
+) -> None:
+    baseline = tmp_path / "baseline"
+    baseline.mkdir()
+    (baseline / "checkpoint.jsonl").write_bytes(b"SYNTHETIC sealed observations")
+    controls = _stage2_proposal()["observed_cost_controls"]
+    (baseline / "proposal.json").write_text(json.dumps({"cost_policy": controls}))
+    descriptor = {
+        "new_campaign_modeled_cu": 1,
+        "files": {"checkpoint.jsonl": v3.sha256((baseline / "checkpoint.jsonl").read_bytes())},
+    }
+    source = {"commit": "a" * 40, "tree": "b" * 40}
+    archive_bytes = b"SYNTHETIC source"
+
+    def archive(path: Path) -> tuple[Path, str]:
+        path.write_bytes(archive_bytes)
+        return path, source["commit"]
+
+    client = TrainingClient()
+    monkeypatch.setattr(automatic, "BASELINE_SUCCESSOR", baseline)
+    monkeypatch.setattr(automatic, "completed_baseline", lambda: descriptor)
+    monkeypatch.setattr(automatic, "stage2_plan", lambda: {"maximum_additional_modeled_cu": 1})
+    monkeypatch.setattr(execution, "source_identity", lambda: source)
+    monkeypatch.setattr(execution, "source_archive", archive)
+    monkeypatch.setattr(diagnostic_session, "head_archive_sha256", lambda: v3.sha256(archive_bytes))
+    monkeypatch.setattr(automatic, "PipelineCLI", lambda: client)
+    directory = tmp_path / "study"
+    proposal = automatic.prepare_stage2(directory)
+    assert automatic.validate_stage2(directory) == proposal
+    assert "owner_acceptance" not in proposal["observed_cost_controls"]
+    assert not client.calls  # no GPU or owner approval is fabricated by preparation
+    if fault == "baseline":
+        (baseline / "checkpoint.jsonl").write_bytes(b"SYNTHETIC changed observations")
+    elif fault == "archive":
+        (directory / "source.tar").write_bytes(b"SYNTHETIC wrong source")
+    else:
+        if fault == "expired":
+            proposal["valid_until_utc"] = (datetime.now(UTC) - timedelta(seconds=1)).isoformat()
+        else:
+            proposal["source_identity"] = {"commit": "f" * 40, "tree": "b" * 40}
+        proposal["proposal_sha256"] = v3.sha256(
+            v3.canonical({k: v for k, v in proposal.items() if k != "proposal_sha256"}).encode()
+        )
+        (directory / "stage2-proposal.json").write_text(json.dumps(proposal))
+    with pytest.raises(ValueError):
+        automatic.validate_stage2(directory)
+
+
+def _synthetic_study_checkpoint(path: Path, *, adapted: bool) -> None:
+    protocol = decision.load_protocol()
+    examples = {decision.example_id(e): e for e in decision.heldout_examples(protocol)}
+    items = training.adapted_work_items(protocol) if adapted else worker.work_items(protocol)
+    head = worker.GENESIS
+    model = protocol["candidate_model"]
+    for seq, item in enumerate(items):
+        record: dict[str, Any]
+        if item.key == "QUALIFICATION":
+            record = {
+                "schema": worker.QUALIFICATION_SCHEMA,
+                "passed": True,
+                "model_id": model["id"],
+                "model_revision": model["revision"],
+            }
+        elif item.key.startswith("HELDOUT:"):
+            example = examples[item.key]
+            action = {**example["gold_action"]}
+            if not adapted:
+                action["analysis_class"] = (
+                    "SCALAR_ABSOLUTE_CHANGE"
+                    if action["analysis_class"] != "SCALAR_ABSOLUTE_CHANGE"
+                    else "RELIABILITY_RANDOM_ERROR_COMPARISON"
+                )
+            record = decision.make_record(
+                protocol=protocol,
+                arm=item.arm,
+                example=example,
+                raw_output=v3.format_action(action),
+                truncated=False,
+                model=model,
+            )
+        else:
+            record = {
+                "arm": item.arm,
+                "case_id": item.key.removeprefix("EXPOSED:"),
+                "raw_output": "SYNTHETIC invalid output",
+                "truncated": False,
+            }
+        head = worker._append(
+            path,
+            {
+                "schema": worker.CHECKPOINT_SCHEMA,
+                "seq": seq,
+                "prev_sha256": head,
+                "item": item.id,
+                "record": record,
+            },
+        )
+
+
+@pytest.mark.parametrize("training_failure", [False, True])
+def test_stage2_sequence_never_replays_baseline_or_evaluates_partial_adapter(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, training_failure: bool
+) -> None:
+    # Explicitly synthetic orchestration evidence; no model, provider, or real grant is used.
+    baseline = tmp_path / "sealed-baseline"
+    baseline.mkdir()
+    _synthetic_study_checkpoint(baseline / "checkpoint.jsonl", adapted=False)
+    sealed = (baseline / "checkpoint.jsonl").read_bytes()
+    root = tmp_path / "study"
+    root.mkdir()
+    (root / "source.tar").write_bytes(b"SYNTHETIC source")
+    proposed = _stage2_proposal()
+    proposed["baseline"] = {"files": {"checkpoint.jsonl": v3.sha256(sealed)}}
+    proposed["plan"] = {
+        "maximum_additional_modeled_cu": 3,
+        "training_sessions": 2,
+        "training_per_session_modeled_cu": 1,
+        "training_prepare_seconds": 840,
+        "evaluation": {
+            "plan_sha256": "d" * 64,
+            "protocol_sha256": decision.protocol_sha256(),
+            "session_count": 1,
+            "bounds": {"session_seconds": 3600},
+            "compute_units": {"cumulative_cap": 1, "per_session_cap": 1},
+            "item_cost_bounds_seconds": {
+                "QUALIFICATION": 10,
+                "ADAPTED_UNCONSTRAINED": 1,
+                "ADAPTED_CONSTRAINED": 1,
+            },
+        },
+    }
+    receipt = root / "approval.json"
+    receipt.write_text(json.dumps(_stage2_approval(proposed)))
+    calls: list[str] = []
+    monkeypatch.setattr(automatic, "BASELINE_SUCCESSOR", baseline)
+    monkeypatch.setattr(automatic, "validate_stage2", lambda *a: proposed)
+    monkeypatch.setattr(execution, "source_identity", lambda: proposed["source_identity"])
+    monkeypatch.setattr(automatic, "PipelineCLI", TrainingClient)
+
+    def train(directory: Path, grant: dict[str, Any], *a: Any, **kw: Any) -> dict[str, Any]:
+        calls.append("training")
+        client = TrainingClient()
+        client.binding = {
+            "source_identity": grant["source_identity"],
+            "source_archive_sha256": grant["source_archive_sha256"],
+            "plan_sha256": "e" * 64,
+            "training_spec": grant["training"],
+        }
+        files = client._files()
+        job = directory / "session-001"
+        job.mkdir()
+        (job / "checkpoint.tar").write_bytes(files["checkpoint.tar"])
+        state = {
+            "passed": not training_failure,
+            "conservative_cu": 0.3,
+            "result": json.loads(files["status.json"])["training_result"],
+            "binding": client.binding,
+            "recovered": {"checkpoint.tar": v3.sha256(files["checkpoint.tar"])},
+        }
+        (job / "control.json").write_text(json.dumps(state))
+        return state
+
+    def evaluate(**kw: Any) -> dict[str, Any]:
+        calls.append("evaluation")
+        assert calls == ["training", "evaluation"]
+        assert kw["binding"]["adapter_sha256"] == v3.sha256(
+            (kw["final_adapter"] / "adapter_model.safetensors").read_bytes()
+        )
+        _synthetic_study_checkpoint(kw["run_dir"] / "checkpoint.jsonl", adapted=True)
+        state = {"cost_accounting": {"conservative_cu": 0.4}}
+        (kw["run_dir"] / "session-001-control.json").write_text(json.dumps(state))
+        return state
+
+    monkeypatch.setattr(automatic, "training_session", train)
+    monkeypatch.setattr(execution, "run_session", evaluate)
+    monkeypatch.setattr(execution, "session_anomaly", lambda *a: None)
+    result = automatic.run_stage2(root, receipt)
+    assert (baseline / "checkpoint.jsonl").read_bytes() == sealed
+    assert result["complete"] is (not training_failure), result
+    assert calls == (["training"] if training_failure else ["training", "evaluation"])
+    if not training_failure:
+        assert result["scientific_score"]["decision"] == "ADAPTATION_BENEFIT_DEMONSTRATED"
+        assert result["additional_modeled_cu"] == pytest.approx(0.7)
+        assert result["actual_final_provider_charge_cu"] is None
+    with pytest.raises(ValueError, match="already consumed"):
+        automatic.run_stage2(root, receipt)
 
 
 def test_one_budget_counts_all_stages_and_never_erases_unknown_cost(tmp_path: Path) -> None:
@@ -278,6 +544,65 @@ def test_training_session_recovers_weights_or_stops_with_verified_teardown(
         assert "evidence_error" in result
     if fault is None:
         assert (directory / "session-001/verified-checkpoint/adapter_model.safetensors").is_file()
+
+
+@pytest.mark.parametrize("bad_prepare_binding", [False, True])
+def test_stage2_training_checks_prepare_receipt_before_work_and_models_cost(
+    tmp_path: Path, bad_prepare_binding: bool
+) -> None:
+    class Client(TrainingClient):
+        def start_watchdog(self, name: str, receipt: Path) -> bool:
+            assert self.watchdog_seconds == 7020
+            self.calls.append("watchdog")
+            return True
+
+        def snapshot(self) -> dict[str, Any]:
+            value = super().snapshot()
+            value["usage_rate_cu_per_hour"] = 1.15 if self.active else 0.0
+            return value
+
+        def download(self, name: str, remote_path: str, local: Path) -> bool:
+            if local.name != "prepare-status.json":
+                return super().download(name, remote_path, local)
+            value = {
+                "status": "READY",
+                "binding": self.binding,
+                "plan_sha256": self.binding["plan_sha256"],
+                "runtime_qualification": {"qualified": True},
+                "snapshot_path": "/SYNTHETIC/snapshot",
+                "stages": [{"stage": "prepare", "returncode": 0, "timed_out": False}],
+                "weights": {
+                    "model_revision": decision.load_protocol()["candidate_model"]["revision"],
+                    "weight_files": [{"SYNTHETIC": True}],
+                    "support_files": {
+                        name: {"sha256": digest}
+                        for name, digest in v3.load_profile()["tokenizer"]["files"].items()
+                    },
+                },
+            }
+            if bad_prepare_binding:
+                value["binding"] = {"SYNTHETIC wrong binding": True}
+            local.write_text(json.dumps(value))
+            return True
+
+    (tmp_path / "source.tar").write_bytes(b"SYNTHETIC source")
+    (tmp_path / "baseline").mkdir()
+    (tmp_path / "baseline/checkpoint.jsonl").write_bytes(b"SYNTHETIC sealed baseline")
+    directory = tmp_path / "training"
+    directory.mkdir()
+    proposed = _stage2_proposal()
+    grant = {**proposed, "owner_receipt_sha256": "d" * 64}
+    policy = automatic.stage2_approval(proposed, _stage2_approval(proposed))
+    client = Client()
+    result = automatic.training_session(
+        directory, grant, 1, None, 1.4375, 3.111, client, cost_policy=policy, prepare_seconds=840
+    )
+    assert result["passed"] is (not bad_prepare_binding), result
+    assert ("work" in client.calls) is (not bad_prepare_binding)
+    assert result["cost_accounting"]["cost_status"] == "MODELED"
+    assert result["cost_accounting"]["actual_spending_bound_guaranteed"] is False
+    assert client.calls.count("new") == 1
+    assert client.calls[-3:] == ["stop", "both_inventories", ("disarm", True)]
 
 
 def test_fixed_owner_directory_source_and_window_cannot_reset_budget(
