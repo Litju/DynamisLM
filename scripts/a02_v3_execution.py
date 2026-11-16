@@ -46,6 +46,7 @@ from scripts import a02_v3_cost as costing
 from scripts import a02_v3_decision as decision
 from scripts import a02_v3_score as score
 from scripts import a02_v3_supervision as supervision
+from scripts import a02_v3_training as training
 from scripts import a02_v3_worker as worker
 
 ROOT = v3.ROOT
@@ -162,12 +163,15 @@ def build_plan(
     *,
     live_rate_cu_per_hour: float | None = None,
     measured_cost_bounds: dict[str, float] | None = None,
+    adapted: bool = False,
 ) -> dict[str, Any]:
     """Deterministic worst-case session packing and compute-unit admission plan."""
     profile = v3.load_profile()
-    items = worker.work_items(protocol)
+    items = training.adapted_work_items(protocol) if adapted else worker.work_items(protocol)
     calls = max(preflight["max_constrained_scorer_calls"], workload_scorer_calls(protocol))
     costs = item_cost_bounds(profile, {**preflight, "max_constrained_scorer_calls": calls}, bounds)
+    if adapted:
+        costs = {k.replace("ZERO_SHOT", "ADAPTED"): v for k, v in costs.items()}
     if measured_cost_bounds is not None:
         if set(measured_cost_bounds) != set(costs) or any(
             isinstance(value, bool) or not math.isfinite(value) or value <= 0
@@ -1037,6 +1041,7 @@ def run_session(
     binding: dict[str, Any],
     now: datetime | None = None,
     cost_policy: dict[str, Any] | None = None,
+    final_adapter: Path | None = None,
 ) -> dict[str, Any]:
     """Run one admitted session end to end; teardown is unconditional.
 
@@ -1044,7 +1049,17 @@ def run_session(
     without a valid policy nothing may be allocated. Observed-cost receipts stay MODELED.
     """
     protocol = decision.load_protocol()
-    items = worker.work_items(protocol)
+    adapted = "adapter_sha256" in binding
+    items = training.adapted_work_items(protocol) if adapted else worker.work_items(protocol)
+    if adapted != (final_adapter is not None):
+        raise AdmissionError("final adapter and evaluation binding must be supplied together")
+    if final_adapter is not None:
+        for filename, key in (
+            ("adapter_model.safetensors", "adapter_sha256"),
+            ("adapter_config.json", "adapter_config_sha256"),
+        ):
+            if v3.sha256((final_adapter / filename).read_bytes()) != binding[key]:
+                raise AdmissionError("final adapter bytes differ before allocation")
     ledger = json.loads(ledger_path.read_text()) if ledger_path.exists() else ledger_new(plan)
     if authorization is not None and binding.get("source_identity") != authorization.get(
         "source_identity"
@@ -1355,6 +1370,11 @@ def run_session(
         binding_path = run_dir / f"session-{session_index:03d}-binding.json"
         binding_path.write_text(json.dumps({**binding, "session_index": session_index}))
         uploads = [(source_archive, REMOTE_SOURCE), (binding_path, REMOTE_BINDING)]
+        if final_adapter is not None:
+            uploads.extend(
+                (final_adapter / filename, f"/content/{filename}")
+                for filename in ("adapter_config.json", "adapter_model.safetensors")
+            )
         if local.exists():
             uploads.append((local, REMOTE_CHECKPOINT))
         for path, remote in uploads:

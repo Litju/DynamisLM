@@ -11,6 +11,7 @@ from scripts import a02_v3_contract as v3
 from scripts import a02_v3_decision as decision
 from scripts import a02_v3_gold as gold
 from scripts import a02_v3_score as score
+from scripts import a02_v3_training as training
 from scripts import a02_v3_worker as worker
 
 PROTOCOL = decision.load_protocol()
@@ -405,3 +406,35 @@ def test_a_newline_terminated_corrupt_tail_is_not_mistaken_for_a_torn_write(
 def test_a_checkpoint_longer_than_the_work_list_is_refused(tmp_path: Path, complete: Path) -> None:
     with pytest.raises(worker.CheckpointError, match="not the preregistered next item"):
         worker.read_checkpoint(complete, ITEMS[:50])
+
+
+def test_adapted_arms_use_existing_worker_and_resume_without_baseline_replay(
+    tmp_path: Path, complete: Path
+) -> None:
+    original = complete.read_bytes()
+    items = training.adapted_work_items(PROTOCOL)
+    path = tmp_path / "adapted.jsonl"
+    kwargs: dict[str, Any] = {
+        "protocol": PROTOCOL,
+        "items": items,
+        "checkpoint": path,
+        "backend": _Backend(),
+        "deadline": float("inf"),
+        "item_cost_bounds": {k.replace("ZERO_SHOT", "ADAPTED"): v for k, v in COSTS.items()},
+    }
+    assert worker.run_worker(**kwargs, stop_after=11)["status"] == "STOPPED"
+    prefix = path.read_bytes()
+    assert worker.run_worker(**kwargs)["status"] == "COMPLETE"
+    assert path.read_bytes().startswith(prefix)
+    entries = worker.read_checkpoint(path, items)["entries"]
+    assert entries[0]["record"]["passed"]
+    for arm in ("ADAPTED_UNCONSTRAINED", "ADAPTED_CONSTRAINED"):
+        records = [
+            e["record"]
+            for e in entries
+            if e["item"].startswith("HELDOUT:") and e["record"]["arm"] == arm
+        ]
+        assert len(decision.bind_arm(PROTOCOL, arm, records)) == 280
+    assert complete.read_bytes() == original
+    with pytest.raises(worker.CheckpointError, match="preregistered next item"):
+        worker.read_checkpoint(complete, items)

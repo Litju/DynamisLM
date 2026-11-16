@@ -26,8 +26,17 @@ from scripts import a02_v3_contract as v3
 from scripts import a02_v3_decision as decision
 from scripts import a02_v3_precision as precision
 from scripts import a02_v3_synthetic as synthetic
+from scripts import a02_v3_worker as worker
 
 SCHEMA = "RES541_LORA_TRAINING_CHECKPOINT_V1"
+
+
+def adapted_work_items(protocol: dict[str, Any]) -> list[worker.WorkItem]:
+    """Qualify the final adapter anew, then evaluate the same registered cases and decoders."""
+    return [
+        worker.WorkItem(item.key, item.arm.replace("ZERO_SHOT", "ADAPTED"))
+        for item in worker.work_items(protocol)
+    ]
 
 
 def specification() -> dict[str, Any]:

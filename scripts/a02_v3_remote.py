@@ -39,6 +39,7 @@ BINDING_SCHEMA = "RES541_A02_V3_REMOTE_BINDING_V1"
 FP32_BINDING_SCHEMA = "RES541_A1_FP32_CAMPAIGN_REMOTE_BINDING_V1"
 NATIVE_CACHE_BINDING_SCHEMA = "RES541_A1_NATIVE_CACHE_CAMPAIGN_REMOTE_BINDING_V1"
 TRAINING_BINDING_SCHEMA = "RES541_OWNER_LORA_REMOTE_BINDING_V1"
+ADAPTED_BINDING_SCHEMA = "RES541_FINAL_LORA_EVALUATION_REMOTE_BINDING_V1"
 CHILD_MARGIN_SECONDS = 30
 _BINDING_KEYS = {
     "schema",
@@ -57,12 +58,14 @@ def load_binding(path: Path | None = None) -> dict[str, Any]:
     diagnostic = isinstance(binding, dict) and binding.get("schema") == (
         "RES541_A1_DIAGNOSTIC_REMOTE_BINDING_V1"
     )
-    native_cache = (
-        isinstance(binding, dict) and binding.get("schema") == NATIVE_CACHE_BINDING_SCHEMA
-    )
+    native_cache = isinstance(binding, dict) and binding.get("schema") in {
+        NATIVE_CACHE_BINDING_SCHEMA,
+        ADAPTED_BINDING_SCHEMA,
+    }
     fp32 = isinstance(binding, dict) and binding.get("schema") in {
         FP32_BINDING_SCHEMA,
         NATIVE_CACHE_BINDING_SCHEMA,
+        ADAPTED_BINDING_SCHEMA,
     }
     training = isinstance(binding, dict) and binding.get("schema") == TRAINING_BINDING_SCHEMA
     keys = _BINDING_KEYS | {"numerical_diagnostic"} if diagnostic else _BINDING_KEYS
@@ -70,6 +73,9 @@ def load_binding(path: Path | None = None) -> dict[str, Any]:
         keys = keys | {"precision", "numerical_amendment_sha256"}
     if native_cache:
         keys = keys | {"native_cache"}
+    adapted = isinstance(binding, dict) and binding.get("schema") == ADAPTED_BINDING_SCHEMA
+    if adapted:
+        keys = keys | {"adapter_sha256", "adapter_config_sha256"}
     if training:
         keys = (_BINDING_KEYS - {"item_cost_bounds"}) | {
             "training_spec",
@@ -96,12 +102,22 @@ def load_binding(path: Path | None = None) -> dict[str, Any]:
         raise ValueError("V3 source identity differs")
     if not training:
         costs = binding["item_cost_bounds"]
-        if set(costs) != {
+        expected_costs = {
             "QUALIFICATION",
             "ZERO_SHOT_UNCONSTRAINED",
             "ZERO_SHOT_CONSTRAINED",
-        } or any(not isinstance(v, int | float) or v <= 0 for v in costs.values()):
+        }
+        if adapted:
+            expected_costs = {k.replace("ZERO_SHOT", "ADAPTED") for k in expected_costs}
+        if set(costs) != expected_costs or any(
+            not isinstance(v, int | float) or v <= 0 for v in costs.values()
+        ):
             raise ValueError("V3 remote binding cost bounds are invalid")
+    if adapted and any(
+        re.fullmatch(r"[0-9a-f]{64}", str(binding[k])) is None
+        for k in ("adapter_sha256", "adapter_config_sha256")
+    ):
+        raise ValueError("final adapter identity is invalid")
     return binding
 
 
@@ -207,7 +223,7 @@ def outer(stage: str, timeout: int, helpers: Any = None) -> int:
         _write_status({"status": "PREPARING", "plan_sha256": binding["plan_sha256"]})
         if not bootstrap_test:
             helpers.setup()
-            if "training_spec" in binding:
+            if "training_spec" in binding or "adapter_sha256" in binding:
                 from scripts import a02_remote
 
                 # The training overlay must preserve inherited torch.
@@ -445,6 +461,18 @@ def child(stage: str, timeout: int) -> int:  # pragma: no cover - pinned GPU pro
         from scripts.a02_v3_precision import PrecisionAudit, load_model
 
         lm = load_model(snapshot, "float32")
+        if "adapter_sha256" in binding:
+            from peft import PeftModel  # type: ignore[import-not-found]
+
+            adapter = CONTENT_ROOT
+            for filename, key in (
+                ("adapter_model.safetensors", "adapter_sha256"),
+                ("adapter_config.json", "adapter_config_sha256"),
+            ):
+                if _sha256_file(adapter / filename) != binding[key]:
+                    raise ValueError("final adapter bytes differ from evaluation binding")
+            lm = PeftModel.from_pretrained(lm, adapter, is_trainable=False)
+            lm.eval()
         audit = PrecisionAudit(lm, "float32")
     else:
         lm = AutoModelForCausalLM.from_pretrained(
@@ -467,13 +495,20 @@ def child(stage: str, timeout: int) -> int:  # pragma: no cover - pinned GPU pro
             "prompt_sha256": prompt["rendered_prompt_sha256"],
         }
         _write_status(status)
-        if measured["seconds"] > binding["item_cost_bounds"]["ZERO_SHOT_UNCONSTRAINED"]:
+        native_arm = (
+            "ADAPTED_UNCONSTRAINED" if "adapter_sha256" in binding else "ZERO_SHOT_UNCONSTRAINED"
+        )
+        if measured["seconds"] > binding["item_cost_bounds"][native_arm]:
             raise ValueError(
                 "cached native calibration exceeds projected bound; no held-out evaluation"
             )
+    from scripts import a02_v3_training as training
+
     result = worker.run_worker(
         protocol=protocol,
-        items=worker.work_items(protocol),
+        items=training.adapted_work_items(protocol)
+        if "adapter_sha256" in binding
+        else worker.work_items(protocol),
         checkpoint=CHECKPOINT,
         backend=backend,
         deadline=deadline,
