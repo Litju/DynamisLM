@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import io
 import json
+import shutil
+import subprocess
+import sys
 import tarfile
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -21,6 +24,55 @@ from scripts import a02_v3_training as training
 from scripts import a02_v3_worker as worker
 
 from test_res541_a02_v3_execution import COST_POLICY, write_authorized_policy
+
+
+@pytest.mark.parametrize("fault", [None, "corrupt_part", "zero_without_receipt"])
+def test_large_checkpoint_upload_is_exact_atomic_and_requires_remote_receipt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fault: str | None
+) -> None:
+    monkeypatch.setattr(automatic, "UPLOAD_DIRECT_LIMIT_BYTES", 16)
+    monkeypatch.setattr(automatic, "UPLOAD_PART_BYTES", 8)
+    monkeypatch.setattr(execution, "E_ROOT", tmp_path / "evidence")
+    source = tmp_path / "source.tar"
+    data = b"SYNTHETIC binary checkpoint\x00\xff\n" * 3
+    source.write_bytes(data)
+    remote = tmp_path / "remote"
+    remote.mkdir()
+    target = remote / "checkpoint.tar"
+    target.write_bytes(b"SYNTHETIC original target")
+    uploads: list[int] = []
+
+    def run(command: list[str], *, timeout: int) -> subprocess.CompletedProcess[str]:
+        assert 0 < timeout <= 240
+        if "upload" in command:
+            part, destination = Path(command[-2]), Path(command[-1])
+            body = part.read_bytes()
+            uploads.append(len(body))
+            if fault == "corrupt_part" and len(uploads) == 2:
+                body = b"X" + body[1:]
+            destination.write_bytes(body)
+            return subprocess.CompletedProcess(command, 0, "", "")
+        if "exec" in command:
+            if fault == "zero_without_receipt":
+                return subprocess.CompletedProcess(command, 0, "", "")
+            return subprocess.run(
+                [sys.executable, command[command.index("--file") + 1]],
+                capture_output=True,
+                text=True,
+                timeout=20,
+            )
+        assert "download" in command
+        if not Path(command[-2]).exists():
+            return subprocess.CompletedProcess(command, 1, "", "missing receipt")
+        shutil.copyfile(command[-2], command[-1])
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    client = automatic.PipelineCLI()
+    monkeypatch.setattr(client, "_run", run)
+    assert client.upload("SYNTHETIC no provider", source, str(target)) is (fault is None)
+    assert uploads and max(uploads) <= 8 and sum(uploads) == len(data)
+    assert source.read_bytes() == data
+    assert target.read_bytes() == (data if fault is None else b"SYNTHETIC original target")
 
 
 def _stage2_proposal() -> dict[str, Any]:

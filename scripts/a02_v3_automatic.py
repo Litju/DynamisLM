@@ -8,10 +8,12 @@ from __future__ import annotations
 
 import argparse
 import ast
+import hashlib
 import json
 import math
 import os
 import subprocess
+import tempfile
 import time
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
@@ -34,6 +36,8 @@ ROOT = execution.E_ROOT / "a02/owner-automatic-v1"
 TOTAL_CAP_CU = 50.0
 TRAINING_SECONDS = 7200
 TRAINING_CLEANUP_SECONDS = 600
+UPLOAD_DIRECT_LIMIT_BYTES = 16 * 1024 * 1024
+UPLOAD_PART_BYTES = 8 * 1024 * 1024
 STAGE2_SCHEMA = "RES541_FINAL_LORA_STUDY_PROPOSAL_V1"
 BASELINE_SUCCESSOR = (
     execution.E_ROOT / "a02/v3-baseline-successor-v1/observed-cost-5a32900-20261115T032155Z"
@@ -783,6 +787,122 @@ class Budget:
 
 
 class PipelineCLI(diagnostic_session.DiagnosticCLI):
+    def upload(self, name: str, local: Path, remote: str) -> bool:
+        if local.stat().st_size <= UPLOAD_DIRECT_LIMIT_BYTES:
+            return bool(super().upload(name, local, remote))
+        if not Path(remote).is_absolute() or ".." in Path(remote).parts:
+            raise ValueError("large transfers require an absolute, traversal-free remote path")
+        # Colab's Contents API sends the whole file as base64; bound each request instead.
+        temporary_root = execution.E_ROOT / "tmp"
+        temporary_root.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix="res541-upload-", dir=temporary_root) as folder:
+            deadline = time.monotonic() + 240
+            directory = Path(folder)
+            parts: list[tuple[str, str]] = []
+            digest = hashlib.sha256()
+            size = 0
+            with local.open("rb") as source:
+                while data := source.read(UPLOAD_PART_BYTES):
+                    part = directory / f"part-{len(parts):04d}"
+                    part.write_bytes(data)
+                    remote_part = f"{remote}.{directory.name}-{part.name}"
+                    remaining = math.floor(deadline - time.monotonic())
+                    if (
+                        remaining <= 0
+                        or self._run(
+                            [
+                                "colab",
+                                "--auth=oauth2",
+                                "upload",
+                                "--session",
+                                name,
+                                str(part),
+                                remote_part,
+                            ],
+                            timeout=min(120, remaining),
+                        ).returncode
+                        != 0
+                    ):
+                        return False
+                    parts.append((remote_part, hashlib.sha256(data).hexdigest()))
+                    digest.update(data)
+                    size += len(data)
+            receipt_path = f"{remote}.{directory.name}-receipt.json"
+            manifest = {
+                "target": remote,
+                "parts": parts,
+                "size": size,
+                "sha256": digest.hexdigest(),
+                "receipt": receipt_path,
+            }
+            script = directory / "assemble.py"
+            script.write_text(
+                "import hashlib, json, os\nfrom pathlib import Path\n"
+                f"manifest = {manifest!r}\n"
+                "target = Path(manifest['target'])\n"
+                "temporary = Path(manifest['receipt'] + '.assembling')\n"
+                "try:\n"
+                "    digest = hashlib.sha256()\n    size = 0\n"
+                "    with temporary.open('xb') as output:\n"
+                "        for filename, expected in manifest['parts']:\n"
+                "            data = Path(filename).read_bytes()\n"
+                "            if hashlib.sha256(data).hexdigest() != expected:\n"
+                "                raise ValueError('upload part digest differs')\n"
+                "            output.write(data)\n            digest.update(data)\n"
+                "            size += len(data)\n"
+                "        output.flush()\n        os.fsync(output.fileno())\n"
+                "    if size != manifest['size'] or digest.hexdigest() != manifest['sha256']:\n"
+                "        raise ValueError('assembled upload differs')\n"
+                "    os.replace(temporary, target)\n"
+                "    with target.open('rb') as source:\n"
+                "        actual = hashlib.file_digest(source, 'sha256').hexdigest()\n"
+                "    if actual != manifest['sha256']:\n"
+                "        raise ValueError('installed upload differs')\n"
+                "    Path(manifest['receipt']).write_text(\n"
+                "        json.dumps({'sha256': actual, 'size': size}))\n"
+                "finally:\n    temporary.unlink(missing_ok=True)\n"
+                "    for filename, _ in manifest['parts']:\n"
+                "        Path(filename).unlink(missing_ok=True)\n"
+            )
+            remaining = math.floor(deadline - time.monotonic())
+            if remaining <= 10:
+                return False
+            result = self._run(
+                [
+                    "colab",
+                    "--auth=oauth2",
+                    "exec",
+                    "--session",
+                    name,
+                    "--file",
+                    str(script),
+                    "--timeout",
+                    str(min(120, remaining - 5)),
+                ],
+                timeout=min(150, remaining),
+            )
+            if result.returncode != 0:
+                return False
+            receipt = directory / "receipt.json"
+            remaining = math.floor(deadline - time.monotonic())
+            return bool(
+                remaining > 0
+                and self._run(
+                    [
+                        "colab",
+                        "--auth=oauth2",
+                        "download",
+                        "--session",
+                        name,
+                        receipt_path,
+                        str(receipt),
+                    ],
+                    timeout=min(30, remaining),
+                ).returncode
+                == 0
+                and read(receipt) == {"sha256": digest.hexdigest(), "size": size}
+            )
+
     def download(self, name: str, remote_path: str, local: Path) -> bool:
         timeout = 240 if remote_path.endswith(".tar") else 30
         return (
