@@ -234,7 +234,7 @@ def test_diagnostic_watchdog_disarms_after_verified_teardown(tmp_path: Path) -> 
     assert json.loads(receipt.read_bytes())["phase"] == "DISARMED"
 
 
-@pytest.mark.parametrize("seconds", [3420, 7020])
+@pytest.mark.parametrize("seconds", [3420, 7020, 14220])
 def test_real_campaign_watchdog_starts_and_disarms_without_provider_commands(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, seconds: int
 ) -> None:

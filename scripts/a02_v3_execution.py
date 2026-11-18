@@ -2184,7 +2184,7 @@ if __name__ == "__main__":  # pragma: no cover
         from scripts import a02_execution
 
         if len(sys.argv) == 5:
-            if sys.argv[4] not in {"3420", "7020"}:
+            if sys.argv[4] not in {"3420", "7020", "14220"}:
                 raise ValueError("watchdog duration is outside the successor policy")
             a02_execution.MAX_SESSION_SECONDS = int(sys.argv[4])
 

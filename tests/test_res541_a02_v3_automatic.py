@@ -657,6 +657,13 @@ def test_stage2_training_checks_prepare_receipt_before_work_and_models_cost(
     assert client.calls[-3:] == ["stop", "both_inventories", ("disarm", True)]
 
 
+def test_extended_training_window_rejects_a_fresh_run(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="final Stage 2 continuation"):
+        automatic.training_session(
+            tmp_path, {}, 8, None, 1.4375, 5.9856, TrainingClient(), session_seconds=14400
+        )
+
+
 def test_fixed_owner_directory_source_and_window_cannot_reset_budget(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

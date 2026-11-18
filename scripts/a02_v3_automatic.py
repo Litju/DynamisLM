@@ -35,6 +35,7 @@ from scripts.a02_execution import _write_json
 ROOT = execution.E_ROOT / "a02/owner-automatic-v1"
 TOTAL_CAP_CU = 50.0
 TRAINING_SECONDS = 7200
+STAGE2_FINAL_TRAINING_SECONDS = 14400
 TRAINING_CLEANUP_SECONDS = 600
 UPLOAD_DIRECT_LIMIT_BYTES = 16 * 1024 * 1024
 UPLOAD_PART_BYTES = 8 * 1024 * 1024
@@ -1210,9 +1211,20 @@ def training_session(
     *,
     cost_policy: dict[str, Any] | None = None,
     prepare_seconds: int = 240,
+    session_seconds: int = TRAINING_SECONDS,
 ) -> dict[str, Any]:
     """One training allocation, checkpoint recovery, unconditional exact-target teardown."""
     previous = verified_training_prior(prior, grant) if prior is not None else None
+    if session_seconds != TRAINING_SECONDS and (
+        session_seconds != STAGE2_FINAL_TRAINING_SECONDS
+        or index != 8
+        or previous is None
+        or previous["next_step"] != 175
+        or previous["total_steps"] != 510
+        or cost_policy is None
+        or client.watchdog_module != "scripts.a02_v3_execution"
+    ):
+        raise ValueError("extended training window requires the final Stage 2 continuation")
     if cost_policy is not None:
         costing.validate_policy(cost_policy)
     before = quiet(client)
@@ -1257,7 +1269,7 @@ def training_session(
     rate = None
     initial_delta = None
     started = time.monotonic()
-    client.watchdog_seconds = TRAINING_SECONDS - 180 if cost_policy else TRAINING_SECONDS
+    client.watchdog_seconds = session_seconds - 180 if cost_policy else session_seconds
     try:
         watchdog = client.start_watchdog(name, jobdir / "watchdog.json")
         if watchdog is None:
@@ -1295,9 +1307,9 @@ def training_session(
         }
         for stage, ceiling in (
             ("prepare", prepare_seconds),
-            ("work", TRAINING_SECONDS - TRAINING_CLEANUP_SECONDS - prepare_seconds),
+            ("work", session_seconds - TRAINING_CLEANUP_SECONDS - prepare_seconds),
         ):
-            remaining = TRAINING_SECONDS - TRAINING_CLEANUP_SECONDS - (time.monotonic() - started)
+            remaining = session_seconds - TRAINING_CLEANUP_SECONDS - (time.monotonic() - started)
             if remaining < 60:
                 raise TimeoutError("training session has no remaining bounded work window")
             state[stage] = execution.monitored_stage(
