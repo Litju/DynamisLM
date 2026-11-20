@@ -69,3 +69,19 @@ def test_aliases_ties_eos_and_no_unsupported_transition() -> None:
         mask.decode(grammar, [], lambda _: [float("-inf")] * 10, 7)
     with pytest.raises(ValueError, match="no supported token"):
         TokenMask(Vocabulary({0: b"!"}, EOS)).decode(grammar, [], lambda _: [], 7)
+
+
+def test_d0_replay_fails_at_first_invalid_token_and_requires_terminal_eos() -> None:
+    from scripts.a03_d0_static import token_replay
+
+    grammar = Grammar(REQUEST)
+    mask = TokenMask(Vocabulary({**dict(enumerate(PARTS)), 6: b'"wrong"]'}, EOS))
+    expected = list(range(len(PARTS)))
+    assert token_replay(mask, grammar, [*expected, EOS], TEXT) == (True, None)
+    accepted, first = token_replay(mask, grammar, [0, 1, 6], TEXT)
+    assert not accepted
+    assert first == {"position": 2, "token_id": 6, "accepted_prefix": b"".join(PARTS[:2]).decode()}
+    assert token_replay(mask, grammar, expected, TEXT) == (
+        False,
+        {"position": len(expected), "token_id": None, "reason": "recorded EOS absent"},
+    )
