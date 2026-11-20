@@ -10,7 +10,6 @@ from pathlib import Path
 from typing import Any
 
 from scripts import a02_v3_contract as v3
-from scripts.a02_v3_preflight import load_pinned_tokenizer
 
 State = frozenset[int]
 
@@ -22,6 +21,8 @@ class Vocabulary:
 
     @classmethod
     def from_pinned(cls, path: Path) -> Vocabulary:
+        from scripts.a02_v3_preflight import load_pinned_tokenizer
+
         tokenizer = load_pinned_tokenizer(path)
         spec = json.loads(tokenizer.backend_tokenizer.to_str())
         if spec["model"]["type"] != "BPE" or spec["decoder"]["type"] != "ByteLevel":
