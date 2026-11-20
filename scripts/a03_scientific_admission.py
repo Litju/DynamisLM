@@ -59,7 +59,8 @@ from dynamislm.measurement.identity import (
 )
 from dynamislm.measurement.observation import ScientificMeasurementObservation
 from dynamislm.measurement.result import ScalarValue
-from dynamislm.qualification import OperationDisposition, build_registered_operation_inventory
+from dynamislm.qualification import OperationDisposition
+from dynamislm.qualification.inventory import _metadata, _metadata_for_id
 from dynamislm.refusal import RefusalResult
 from scripts import a02_v3_contract as v3
 
@@ -330,10 +331,13 @@ def submit_scientific_action_v3(bound: BoundRequest, raw: object) -> Admission:
     operation = authorization.operation_reference
     if operation is None or proposal.operation != operation.stable_id:
         return replace(trace, reason_codes=("V3_OPERATION_ANALYSIS_MISMATCH",))
-    if operation != RES69_ABSOLUTE_CHANGE_OPERATION or not any(
-        row.operation_id == operation.stable_id
-        and row.disposition is OperationDisposition.IMPLEMENTED
-        for row in build_registered_operation_inventory()
+    if operation != RES69_ABSOLUTE_CHANGE_OPERATION:
+        return replace(trace, reason_codes=("COMPUTATION_NOT_REGISTERED",))
+    # Full inventory discovery imports checkout-only empirical adapters.
+    registered = _metadata_for_id(operation.stable_id, _metadata())
+    if (
+        registered.version != operation.identifier.version
+        or registered.disposition is not OperationDisposition.IMPLEMENTED
     ):
         return replace(trace, reason_codes=("COMPUTATION_NOT_REGISTERED",))
 

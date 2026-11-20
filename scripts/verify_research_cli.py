@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -39,9 +40,14 @@ def verify(directory: Path) -> None:
         subprocess.run(["uv", "venv", "--python", sys.executable, str(cwd / "venv")], check=True)
         subprocess.run(["uv", "pip", "install", "--python", str(python), str(wheel)], check=True)
         cli = cwd / "venv/bin/dynamislm-research"
+        env = {
+            key: value
+            for key, value in os.environ.items()
+            if key not in {"PYTHONPATH", "PYTHONHOME", "VIRTUAL_ENV"}
+        }
 
         def invoke(*args: str, status: int = 0) -> bytes:
-            out = subprocess.run([str(cli), *args], cwd=cwd, capture_output=True)
+            out = subprocess.run([str(cli), *args], cwd=cwd, capture_output=True, env=env)
             if out.returncode != status or out.stderr:
                 raise ValueError(f"unexpected result for {args}: {out.returncode} {out.stderr!r}")
             return out.stdout
@@ -93,6 +99,7 @@ def verify(directory: Path) -> None:
                 "assert all(u.find_spec(n) is None for n in ('torch','transformers','peft'))",
             ],
             cwd=cwd,
+            env=env,
             check=True,
         )
         receipt = {
