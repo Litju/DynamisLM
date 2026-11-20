@@ -15,8 +15,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  ci:
-    name: ci
+  mission:
+    name: mission policy
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -36,5 +36,48 @@ jobs:
           enable-cache: "false"
       - name: Validate mission and new commits
         run: uv run --no-project python scripts/mission_policy.py --event "$GITHUB_EVENT_PATH"
-      - name: Run full QA
-        run: ./scripts/ci.sh
+
+  qa:
+    # Independent shards, run concurrently on separate runners with no shared state. The
+    # exhaustive module partition lives in scripts/test_shards.py and is checked by every shard.
+    name: qa (${{ matrix.shard }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [fast, controller, integration]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - name: Set up uv
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          version: "0.12.2"
+          enable-cache: "false"
+      - name: Run QA shard
+        run: ./scripts/ci-shard.sh "${{ matrix.shard }}"
+
+  ci:
+    # The single required status check: passes only when every job above succeeded.
+    name: ci
+    if: ${{ always() }}
+    needs: [mission, qa]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Require every mission and QA job
+        env:
+          MISSION_RESULT: ${{ needs.mission.result }}
+          QA_RESULT: ${{ needs.qa.result }}
+        run: |
+          printf 'mission=%s qa=%s\n' "$MISSION_RESULT" "$QA_RESULT"
+          test "$MISSION_RESULT" = success
+          test "$QA_RESULT" = success

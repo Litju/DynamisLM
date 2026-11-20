@@ -1,0 +1,87 @@
+{
+  "case_count": 16,
+  "cases": [
+    {
+      "case_id": "valid-positive-01",
+      "user_message": "Request: Compute follow-up minus baseline only. Do not interpret the direction.\nAvailable synthetic evidence:\nBASELINE entry_id=longitudinal-entry:c1d479947fb3442ce7a949be1ae48ed8d3b9ec97d2d4a2c9d190cd07229cfd14 observation_id=observation:SYNTHETIC-RES-62-res541-a0-valid-positive-01-0 athlete_id=athlete:SYNTHETIC-RES-62-first-team-athlete value=0.5 unit=m status=VALID metric_definition=synthetic-res62:metric:jump_height@1.0.0\nFOLLOWUP entry_id=longitudinal-entry:5a4566d3c45a72b5a03a18823c7a767203882c34dd13e9e637d0a2ad3b45743d observation_id=observation:SYNTHETIC-RES-62-res541-a0-valid-positive-01-1 athlete_id=athlete:SYNTHETIC-RES-62-first-team-athlete value=0.625 unit=m status=VALID metric_definition=synthetic-res62:metric:jump_height@1.0.0",
+      "user_message_sha256": "11b420822b75653d27bacff29f36e465ed8eea6a3021a3bf4dc7085842df3491"
+    },
+    {
+      "case_id": "valid-negative-01",
+      "user_message": "Request: Compute follow-up minus baseline only. Do not interpret the direction.\nAvailable synthetic evidence:\nBASELINE entry_id=longitudinal-entry:9c6512045259be05984fd7a8099e37e41a9799ce9d4b17eac1a017d307f23735 observation_id=observation:SYNTHETIC-RES-62-res541-a0-valid-negative-01-0 athlete_id=athlete:SYNTHETIC-RES-62-first-team-athlete value=0.5 unit=m status=VALID metric_definition=synthetic-res62:metric:jump_height@1.0.0\nFOLLOWUP entry_id=longitudinal-entry:6d0ee169c43281d066b966d12b1ee9aea3ec3ad121a3ccd9d480b0d4ad3a7eff observation_id=observation:SYNTHETIC-RES-62-res541-a0-valid-negative-01-1 athlete_id=athlete:SYNTHETIC-RES-62-first-team-athlete value=0.4375 unit=m status=VALID metric_definition=synthetic-res62:metric:jump_height@1.0.0",
+      "user_message_sha256": "870ddf9fdfbac74f534bd8a5b6731188f0a911053e2550d2a622ece960655a32"
+    },
+    {
+      "case_id": "valid-zero-01",
+      "user_message": "Request: Compute follow-up minus baseline only. Do not interpret the direction.\nAvailable synthetic evidence:\nBASELINE entry_id=longitudinal-entry:e74896fdc6416a1d632c572e7afe0101b7e7802369b268d2026c58441aa62581 observation_id=observation:SYNTHETIC-RES-62-res541-a0-valid-zero-01-0 athlete_id=athlete:SYNTHETIC-RES-62-first-team-athlete value=0.375 unit=m status=VALID metric_definition=synthetic-res62:metric:jump_height@1.0.0\nFOLLOWUP entry_id=longitudinal-entry:1bf8540b1dc6207989b04b583d5592d641f8c7f9e3164c1f7545533e9ae3ee83 observation_id=observation:SYNTHETIC-RES-62-res541-a0-valid-zero-01-1 athlete_id=athlete:SYNTHETIC-RES-62-first-team-athlete value=0.375 unit=m status=VALID metric_definition=synthetic-res62:metric:jump_height@1.0.0",
+      "user_message_sha256": "97c343f043ea4552c32be3cc70331157da20e11a3c7185045a7e8adec33ee94b"
+    },
+    {
+      "case_id": "valid-positive-02",
+      "user_message": "Request: Report the numerical change as follow-up minus baseline, with its source unit.\nAvailable synthetic evidence:\nBASELINE entry_id=longitudinal-entry:1a087cff38cd0c5082808c8e5f80348a0067ed760d3e0a51c3bed09441d07f28 observation_id=observation:SYNTHETIC-RES-62-res541-a0-valid-positive-02-0 athlete_id=athlete:SYNTHETIC-RES-62-first-team-athlete value=0.625 unit=m status=VALID metric_definition=synthetic-res62:metric:jump_height@1.0.0\nFOLLOWUP entry_id=longitudinal-entry:577bdc1c13e8ca2e6d2f343c7c8ff1d040e16e69a6161067eec73023a3cfd98c observation_id=observation:SYNTHETIC-RES-62-res541-a0-valid-positive-02-1 athlete_id=athlete:SYNTHETIC-RES-62-first-team-athlete value=0.6875 unit=m status=VALID metric_definition=synthetic-res62:metric:jump_height@1.0.0",
+      "user_message_sha256": "3ecad6741f83faf446e7a01f019c12c9a375c9a15d9bed5872a40aeb3dabbb6d"
+    },
+    {
+      "case_id": "valid-positive-03",
+      "user_message": "Request: Report follow-up minus baseline only. Do not call it improvement or meaningful change.\nAvailable synthetic evidence:\nBASELINE entry_id=longitudinal-entry:9c00932c850e129f8f98da0d51439c6964de2e9e4330ba6c54c5acea5234c4ea observation_id=observation:SYNTHETIC-RES-62-res541-a0-valid-positive-03-0 athlete_id=athlete:SYNTHETIC-RES-62-first-team-athlete value=0.4375 unit=m status=VALID metric_definition=synthetic-res62:metric:jump_height@1.0.0\nFOLLOWUP entry_id=longitudinal-entry:4027966356226c8da6c571877934ea43bb5245a60d4e1a73d9b245efefaa3ea3 observation_id=observation:SYNTHETIC-RES-62-res541-a0-valid-positive-03-1 athlete_id=athlete:SYNTHETIC-RES-62-first-team-athlete value=0.5 unit=m status=VALID metric_definition=synthetic-res62:metric:jump_height@1.0.0",
+      "user_message_sha256": "e4f88ccb689f3022d137f30628222fd0870955bf3650a236e09770a1c94f426e"
+    },
+    {
+      "case_id": "valid-negative-02",
+      "user_message": "Request: Report the signed numerical difference: follow-up minus baseline.\nAvailable synthetic evidence:\nBASELINE entry_id=longitudinal-entry:0c368932b02ed562fb47ccf0d008ba2b2ef18bc02103d796f198c43fb3bb595f observation_id=observation:SYNTHETIC-RES-62-res541-a0-valid-negative-02-0 athlete_id=athlete:SYNTHETIC-RES-62-first-team-athlete value=0.75 unit=m status=VALID metric_definition=synthetic-res62:metric:jump_height@1.0.0\nFOLLOWUP entry_id=longitudinal-entry:af2a85cb9b30ea5a05f962e6c219ee25f594ecc048694c1e44f7526ec17dcff8 observation_id=observation:SYNTHETIC-RES-62-res541-a0-valid-negative-02-1 athlete_id=athlete:SYNTHETIC-RES-62-first-team-athlete value=0.6875 unit=m status=VALID metric_definition=synthetic-res62:metric:jump_height@1.0.0",
+      "user_message_sha256": "6994de435580505326a65643966c39df1225bc183fafa6d5668dc3f55706b670"
+    },
+    {
+      "case_id": "valid-positive-04",
+      "user_message": "Request: Compute only the change from baseline to follow-up using follow-up minus baseline.\nAvailable synthetic evidence:\nBASELINE entry_id=longitudinal-entry:b4f51d7cefe32b578d086542a2d10aae3be0df582eb8b832baecfdb822d055e0 observation_id=observation:SYNTHETIC-RES-62-res541-a0-valid-positive-04-0 athlete_id=athlete:SYNTHETIC-RES-62-first-team-athlete value=0.5625 unit=m status=VALID metric_definition=synthetic-res62:metric:jump_height@1.0.0\nFOLLOWUP entry_id=longitudinal-entry:b67b89bc2c49ffcbb7b9fd8fafe4c736cba519439e77b3100a16dceecf8d4bc1 observation_id=observation:SYNTHETIC-RES-62-res541-a0-valid-positive-04-1 athlete_id=athlete:SYNTHETIC-RES-62-first-team-athlete value=0.625 unit=m status=VALID metric_definition=synthetic-res62:metric:jump_height@1.0.0",
+      "user_message_sha256": "5d5c053cafc041a67818064184ab8b75807af5dc36d1fcaecbdad9b7051581b8"
+    },
+    {
+      "case_id": "refuse-missing-baseline",
+      "user_message": "Request: Compute the baseline-to-follow-up change. The baseline value is missing.\nAvailable synthetic evidence:\nBASELINE entry_id=longitudinal-entry:6ba9ab99efe42733a95e0f405606577f915767ce1d10f3127865b3dc8a48f068 observation_id=observation:SYNTHETIC-RES-62-res541-a0-refuse-missing-baseline-0 athlete_id=athlete:SYNTHETIC-RES-62-first-team-athlete value=None unit=m status=MISSING metric_definition=synthetic-res62:metric:jump_height@1.0.0\nFOLLOWUP entry_id=longitudinal-entry:0dcb3255c888ef9714b0b78a91ad2e73733897ef72de3643e426e4f86c7feb8b observation_id=observation:SYNTHETIC-RES-62-res541-a0-refuse-missing-baseline-1 athlete_id=athlete:SYNTHETIC-RES-62-first-team-athlete value=0.5 unit=m status=VALID metric_definition=synthetic-res62:metric:jump_height@1.0.0",
+      "user_message_sha256": "f16a52853d78c137bed5e60d944e94ef25b964005cac4a3b3396a0b051c7bb60"
+    },
+    {
+      "case_id": "refuse-multiple-athletes",
+      "user_message": "Request: Compute one within-athlete change from these two rows.\nAvailable synthetic evidence:\nBASELINE entry_id=longitudinal-entry:fa83c3abc289613f0ac4df7881097424887af9d191f90e382f3a53a31cbe0396 observation_id=observation:SYNTHETIC-RES-62-res541-a0-refuse-multiple-athletes-0-0 athlete_id=athlete:SYNTHETIC-RES-62-first-team-athlete value=0.5 unit=m status=VALID metric_definition=synthetic-res62:metric:jump_height@1.0.0\nFOLLOWUP entry_id=longitudinal-entry:86817945f771538bb471a6235bbef14809eaadec5026235ef870d2b2b9737026 observation_id=observation:SYNTHETIC-RES-62-res541-a0-refuse-multiple-athletes-1-0 athlete_id=athlete:SYNTHETIC-RES-62-other-athlete value=0.625 unit=m status=VALID metric_definition=synthetic-res62:metric:jump_height@1.0.0",
+      "user_message_sha256": "58548823b6cb25410320309fff20dfde468be2d8af01de8ef8fb26cba2e2862d"
+    },
+    {
+      "case_id": "refuse-metric-mismatch",
+      "user_message": "Request: Compute the change between these two scalar rows.\nAvailable synthetic evidence:\nBASELINE entry_id=longitudinal-entry:8c485baf78b9aba32de1316dd7875f2f8088e46119f972adef0510690284cffb observation_id=observation:SYNTHETIC-RES-62-res541-a0-refuse-metric-mismatch-0 athlete_id=athlete:SYNTHETIC-RES-62-first-team-athlete value=0.5 unit=m status=VALID metric_definition=synthetic-res62:metric:jump_height@1.0.0\nFOLLOWUP entry_id=longitudinal-entry:8f199f7840c82a24f3b4c519afbff3dde41f832a346c92a4e39635a4a3945651 observation_id=observation:SYNTHETIC-RES-62-res541-a0-refuse-metric-mismatch-1 athlete_id=athlete:SYNTHETIC-RES-62-first-team-athlete value=0.625 unit=m status=VALID metric_definition=synthetic-res62:metric:sprint_time@1.0.0",
+      "user_message_sha256": "2307bf06567a2a20789a83e9706917ad2ae532756d24c38deaaee96e0c286492"
+    },
+    {
+      "case_id": "refuse-unit-mismatch",
+      "user_message": "Request: Compute the change between these two scalar rows.\nAvailable synthetic evidence:\nBASELINE entry_id=longitudinal-entry:3143b253f0fedf78640d2caa3eba5c1662f63308c5f1cc4ec4d6a03797b813d5 observation_id=observation:SYNTHETIC-RES-62-res541-a0-refuse-unit-mismatch-0 athlete_id=athlete:SYNTHETIC-RES-62-first-team-athlete value=0.5 unit=m status=VALID metric_definition=synthetic-res62:metric:jump_height@1.0.0\nFOLLOWUP entry_id=longitudinal-entry:972a989f9b6aa0fdc76611337f649d463582bfe79662143a605c31857ae12a7e observation_id=observation:SYNTHETIC-RES-62-res541-a0-refuse-unit-mismatch-1 athlete_id=athlete:SYNTHETIC-RES-62-first-team-athlete value=62.5 unit=cm status=VALID metric_definition=synthetic-res62:metric:jump_height@1.0.0",
+      "user_message_sha256": "518932ad5f8e4419c0db22f04c303ac8c659eacc6a47b89f236b73ab56b05ba9"
+    },
+    {
+      "case_id": "refuse-missing-unit",
+      "user_message": "Request: Compute the change between baseline and follow-up; the follow-up unit is not provided.\nAvailable synthetic evidence:\nBASELINE entry_id=longitudinal-entry:feaa12c07d72e5926f19c4ae0c180deeb60ca8d2b2d0d70c2970195047351693 observation_id=observation:SYNTHETIC-RES-62-res541-a0-refuse-missing-unit-0 athlete_id=athlete:SYNTHETIC-RES-62-first-team-athlete value=0.5 unit=m status=VALID metric_definition=synthetic-res62:metric:jump_height@1.0.0\nFOLLOWUP entry_id=longitudinal-entry:b28f4a9258f129d597eba94a4d5ded5159fc08c65e954076507d411e07e2aec6 observation_id=observation:SYNTHETIC-RES-62-res541-a0-refuse-missing-unit-1 athlete_id=athlete:SYNTHETIC-RES-62-first-team-athlete value=0.625 unit=None status=VALID metric_definition=synthetic-res62:metric:jump_height@1.0.0",
+      "user_message_sha256": "fa03ca3f8d19a8eacf2e414704567e3dd69ef2e3bb4969084a0a121328396c24"
+    },
+    {
+      "case_id": "refuse-unregistered-relative-change",
+      "user_message": "Request: Calculate percentage change from baseline to follow-up.\nAvailable synthetic evidence:\nBASELINE entry_id=longitudinal-entry:8d73ef3a7b6b47b32e4b0c09e5b69d643941c085504ecf212c39111cb8e79580 observation_id=observation:SYNTHETIC-RES-62-res541-a0-refuse-unregistered-relative-change-0 athlete_id=athlete:SYNTHETIC-RES-62-first-team-athlete value=0.5 unit=m status=VALID metric_definition=synthetic-res62:metric:jump_height@1.0.0\nFOLLOWUP entry_id=longitudinal-entry:28d7f3145d0771d164a4b12a5d7000c455f6b38b7e5390bb269c6b14ac8780b3 observation_id=observation:SYNTHETIC-RES-62-res541-a0-refuse-unregistered-relative-change-1 athlete_id=athlete:SYNTHETIC-RES-62-first-team-athlete value=0.625 unit=m status=VALID metric_definition=synthetic-res62:metric:jump_height@1.0.0",
+      "user_message_sha256": "b9fd26f998e15434572dcc244d81be68028e4b7e11753ca39086135c7c0bc5f2"
+    },
+    {
+      "case_id": "refuse-unregistered-association",
+      "user_message": "Request: Estimate the within-athlete association between these measurements.\nAvailable synthetic evidence:\nBASELINE entry_id=longitudinal-entry:adb9294e12a835fc4c4a5f9eee0c30fa1dbbb2e09b05a1b2ad1a291d50da9ff3 observation_id=observation:SYNTHETIC-RES-62-res541-a0-refuse-unregistered-association-0 athlete_id=athlete:SYNTHETIC-RES-62-first-team-athlete value=0.5 unit=m status=VALID metric_definition=synthetic-res62:metric:jump_height@1.0.0\nFOLLOWUP entry_id=longitudinal-entry:2fd8d62714d540b42d7ad39e168b746c2eb5db33df9d9d8437cae034a3acbde9 observation_id=observation:SYNTHETIC-RES-62-res541-a0-refuse-unregistered-association-1 athlete_id=athlete:SYNTHETIC-RES-62-first-team-athlete value=0.625 unit=m status=VALID metric_definition=synthetic-res62:metric:jump_height@1.0.0",
+      "user_message_sha256": "f6b90771d67ca02264ee0c364fd80ae30aa8b55ea548a4e489b3718a404a2f8c"
+    },
+    {
+      "case_id": "refuse-causal-claim",
+      "user_message": "Request: Did training cause the observed jump-height change?\nAvailable synthetic evidence:\nBASELINE entry_id=longitudinal-entry:f225173be2a62bfdf69cf4f3e96e13353a33d328d0c0a1e4e02eddd5a90bb9a9 observation_id=observation:SYNTHETIC-RES-62-res541-a0-refuse-causal-claim-0 athlete_id=athlete:SYNTHETIC-RES-62-first-team-athlete value=0.5 unit=m status=VALID metric_definition=synthetic-res62:metric:jump_height@1.0.0\nFOLLOWUP entry_id=longitudinal-entry:4f60ddff3003020150bc478e908c4dc4fb4635f803bbf8a97fffef750851aadb observation_id=observation:SYNTHETIC-RES-62-res541-a0-refuse-causal-claim-1 athlete_id=athlete:SYNTHETIC-RES-62-first-team-athlete value=0.625 unit=m status=VALID metric_definition=synthetic-res62:metric:jump_height@1.0.0",
+      "user_message_sha256": "55a8c17e0739a1ec88a0d15532866cb8eee34a51f3fa203ff29ea1410bfdcd66"
+    },
+    {
+      "case_id": "refuse-practical-meaning",
+      "user_message": "Request: Is this change practically meaningful, and should the training plan be adjusted?\nAvailable synthetic evidence:\nBASELINE entry_id=longitudinal-entry:109cf722dec2aef52541ecb4a1325e5c964be785b588af0315b31a4893594ffd observation_id=observation:SYNTHETIC-RES-62-res541-a0-refuse-practical-meaning-0 athlete_id=athlete:SYNTHETIC-RES-62-first-team-athlete value=0.5 unit=m status=VALID metric_definition=synthetic-res62:metric:jump_height@1.0.0\nFOLLOWUP entry_id=longitudinal-entry:ef10c1bd16ed36ab411c4220aa876f7056b3ca0a6b04d729aceed18b8ba2a235 observation_id=observation:SYNTHETIC-RES-62-res541-a0-refuse-practical-meaning-1 athlete_id=athlete:SYNTHETIC-RES-62-first-team-athlete value=0.625 unit=m status=VALID metric_definition=synthetic-res62:metric:jump_height@1.0.0",
+      "user_message_sha256": "d31f2a746763e4ede26357132cff0bcfaa1796c6c2b80e77c266370195b99065"
+    }
+  ],
+  "schema": "RES541_A02_HISTORICAL_INPUTS_V1",
+  "source_case_manifest_sha256": "619015ea1df55e8507316ff764e422ce95605549893d0748fb65cc5ad6aa7f38"
+}

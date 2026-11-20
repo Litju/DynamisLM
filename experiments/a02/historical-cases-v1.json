@@ -1,0 +1,150 @@
+{
+  "schema": "RES541_A0_CASES_V1",
+  "population": "SYNTHETIC_DEVELOPMENT_ONLY",
+  "cases": [
+    {
+      "case_id": "valid-positive-01",
+      "request": "Compute follow-up minus baseline only. Do not interpret the direction.",
+      "observations": [
+        {"role": "BASELINE", "athlete": "A", "value": 0.5, "unit": "m", "metric": "jump_height"},
+        {"role": "FOLLOWUP", "athlete": "A", "value": 0.625, "unit": "m", "metric": "jump_height"}
+      ],
+      "expectation": {"outcome": "RESULT", "analysis_class": "SCALAR_ABSOLUTE_CHANGE", "measurement_claim_level": "NUMERICAL_CHANGE", "relationship_claim_level": null, "value": 0.125, "unit": "m", "reason_code": null}
+    },
+    {
+      "case_id": "valid-negative-01",
+      "request": "Compute follow-up minus baseline only. Do not interpret the direction.",
+      "observations": [
+        {"role": "BASELINE", "athlete": "A", "value": 0.5, "unit": "m", "metric": "jump_height"},
+        {"role": "FOLLOWUP", "athlete": "A", "value": 0.4375, "unit": "m", "metric": "jump_height"}
+      ],
+      "expectation": {"outcome": "RESULT", "analysis_class": "SCALAR_ABSOLUTE_CHANGE", "measurement_claim_level": "NUMERICAL_CHANGE", "relationship_claim_level": null, "value": -0.0625, "unit": "m", "reason_code": null}
+    },
+    {
+      "case_id": "valid-zero-01",
+      "request": "Compute follow-up minus baseline only. Do not interpret the direction.",
+      "observations": [
+        {"role": "BASELINE", "athlete": "A", "value": 0.375, "unit": "m", "metric": "jump_height"},
+        {"role": "FOLLOWUP", "athlete": "A", "value": 0.375, "unit": "m", "metric": "jump_height"}
+      ],
+      "expectation": {"outcome": "RESULT", "analysis_class": "SCALAR_ABSOLUTE_CHANGE", "measurement_claim_level": "NUMERICAL_CHANGE", "relationship_claim_level": null, "value": 0.0, "unit": "m", "reason_code": null}
+    },
+    {
+      "case_id": "valid-positive-02",
+      "request": "Report the numerical change as follow-up minus baseline, with its source unit.",
+      "observations": [
+        {"role": "BASELINE", "athlete": "A", "value": 0.625, "unit": "m", "metric": "jump_height"},
+        {"role": "FOLLOWUP", "athlete": "A", "value": 0.6875, "unit": "m", "metric": "jump_height"}
+      ],
+      "expectation": {"outcome": "RESULT", "analysis_class": "SCALAR_ABSOLUTE_CHANGE", "measurement_claim_level": "NUMERICAL_CHANGE", "relationship_claim_level": null, "value": 0.0625, "unit": "m", "reason_code": null}
+    },
+    {
+      "case_id": "valid-positive-03",
+      "request": "Report follow-up minus baseline only. Do not call it improvement or meaningful change.",
+      "observations": [
+        {"role": "BASELINE", "athlete": "A", "value": 0.4375, "unit": "m", "metric": "jump_height"},
+        {"role": "FOLLOWUP", "athlete": "A", "value": 0.5, "unit": "m", "metric": "jump_height"}
+      ],
+      "expectation": {"outcome": "RESULT", "analysis_class": "SCALAR_ABSOLUTE_CHANGE", "measurement_claim_level": "NUMERICAL_CHANGE", "relationship_claim_level": null, "value": 0.0625, "unit": "m", "reason_code": null}
+    },
+    {
+      "case_id": "valid-negative-02",
+      "request": "Report the signed numerical difference: follow-up minus baseline.",
+      "observations": [
+        {"role": "BASELINE", "athlete": "A", "value": 0.75, "unit": "m", "metric": "jump_height"},
+        {"role": "FOLLOWUP", "athlete": "A", "value": 0.6875, "unit": "m", "metric": "jump_height"}
+      ],
+      "expectation": {"outcome": "RESULT", "analysis_class": "SCALAR_ABSOLUTE_CHANGE", "measurement_claim_level": "NUMERICAL_CHANGE", "relationship_claim_level": null, "value": -0.0625, "unit": "m", "reason_code": null}
+    },
+    {
+      "case_id": "valid-positive-04",
+      "request": "Compute only the change from baseline to follow-up using follow-up minus baseline.",
+      "observations": [
+        {"role": "BASELINE", "athlete": "A", "value": 0.5625, "unit": "m", "metric": "jump_height"},
+        {"role": "FOLLOWUP", "athlete": "A", "value": 0.625, "unit": "m", "metric": "jump_height"}
+      ],
+      "expectation": {"outcome": "RESULT", "analysis_class": "SCALAR_ABSOLUTE_CHANGE", "measurement_claim_level": "NUMERICAL_CHANGE", "relationship_claim_level": null, "value": 0.0625, "unit": "m", "reason_code": null}
+    },
+    {
+      "case_id": "refuse-missing-baseline",
+      "request": "Compute the baseline-to-follow-up change. The baseline value is missing.",
+      "observations": [
+        {"role": "BASELINE", "athlete": "A", "value": null, "unit": "m", "metric": "jump_height", "status": "MISSING"},
+        {"role": "FOLLOWUP", "athlete": "A", "value": 0.5, "unit": "m", "metric": "jump_height"}
+      ],
+      "expectation": {"outcome": "REFUSED", "analysis_class": "SCALAR_ABSOLUTE_CHANGE", "measurement_claim_level": "NUMERICAL_CHANGE", "relationship_claim_level": null, "value": null, "unit": null, "reason_code": "RES70_STATISTICAL_AUTHORITY_INSUFFICIENT"}
+    },
+    {
+      "case_id": "refuse-multiple-athletes",
+      "request": "Compute one within-athlete change from these two rows.",
+      "observations": [
+        {"role": "BASELINE", "athlete": "A", "value": 0.5, "unit": "m", "metric": "jump_height"},
+        {"role": "FOLLOWUP", "athlete": "B", "value": 0.625, "unit": "m", "metric": "jump_height"}
+      ],
+      "expectation": {"outcome": "REFUSED", "analysis_class": "SCALAR_ABSOLUTE_CHANGE", "measurement_claim_level": "NUMERICAL_CHANGE", "relationship_claim_level": null, "value": null, "unit": null, "reason_code": "RES70_WRONG_LEVEL_OF_ANALYSIS"}
+    },
+    {
+      "case_id": "refuse-metric-mismatch",
+      "request": "Compute the change between these two scalar rows.",
+      "observations": [
+        {"role": "BASELINE", "athlete": "A", "value": 0.5, "unit": "m", "metric": "jump_height"},
+        {"role": "FOLLOWUP", "athlete": "A", "value": 0.625, "unit": "m", "metric": "sprint_time"}
+      ],
+      "expectation": {"outcome": "REFUSED", "analysis_class": "SCALAR_ABSOLUTE_CHANGE", "measurement_claim_level": "NUMERICAL_CHANGE", "relationship_claim_level": null, "value": null, "unit": null, "reason_code": "RES70_COMPARABILITY_AUTHORITY_MISSING"}
+    },
+    {
+      "case_id": "refuse-unit-mismatch",
+      "request": "Compute the change between these two scalar rows.",
+      "observations": [
+        {"role": "BASELINE", "athlete": "A", "value": 0.5, "unit": "m", "metric": "jump_height"},
+        {"role": "FOLLOWUP", "athlete": "A", "value": 62.5, "unit": "cm", "metric": "jump_height"}
+      ],
+      "expectation": {"outcome": "REFUSED", "analysis_class": "SCALAR_ABSOLUTE_CHANGE", "measurement_claim_level": "NUMERICAL_CHANGE", "relationship_claim_level": null, "value": null, "unit": null, "reason_code": "RES70_COMPARABILITY_AUTHORITY_MISSING"}
+    },
+    {
+      "case_id": "refuse-missing-unit",
+      "request": "Compute the change between baseline and follow-up; the follow-up unit is not provided.",
+      "observations": [
+        {"role": "BASELINE", "athlete": "A", "value": 0.5, "unit": "m", "metric": "jump_height"},
+        {"role": "FOLLOWUP", "athlete": "A", "value": 0.625, "unit": null, "metric": "jump_height"}
+      ],
+      "expectation": {"outcome": "REFUSED", "analysis_class": "SCALAR_ABSOLUTE_CHANGE", "measurement_claim_level": "NUMERICAL_CHANGE", "relationship_claim_level": null, "value": null, "unit": null, "reason_code": "RES70_UNRESOLVED_IDENTITY"}
+    },
+    {
+      "case_id": "refuse-unregistered-relative-change",
+      "request": "Calculate percentage change from baseline to follow-up.",
+      "observations": [
+        {"role": "BASELINE", "athlete": "A", "value": 0.5, "unit": "m", "metric": "jump_height"},
+        {"role": "FOLLOWUP", "athlete": "A", "value": 0.625, "unit": "m", "metric": "jump_height"}
+      ],
+      "expectation": {"outcome": "REFUSED", "analysis_class": "SCALAR_RELATIVE_CHANGE", "measurement_claim_level": "NUMERICAL_CHANGE", "relationship_claim_level": null, "value": null, "unit": null, "reason_code": "RES70_STATISTICAL_AUTHORITY_INSUFFICIENT"}
+    },
+    {
+      "case_id": "refuse-unregistered-association",
+      "request": "Estimate the within-athlete association between these measurements.",
+      "observations": [
+        {"role": "BASELINE", "athlete": "A", "value": 0.5, "unit": "m", "metric": "jump_height"},
+        {"role": "FOLLOWUP", "athlete": "A", "value": 0.625, "unit": "m", "metric": "jump_height"}
+      ],
+      "expectation": {"outcome": "REFUSED", "analysis_class": "WITHIN_ATHLETE_ASSOCIATION", "measurement_claim_level": null, "relationship_claim_level": "ASSOCIATION", "value": null, "unit": null, "reason_code": "COMPUTATION_NOT_REGISTERED"}
+    },
+    {
+      "case_id": "refuse-causal-claim",
+      "request": "Did training cause the observed jump-height change?",
+      "observations": [
+        {"role": "BASELINE", "athlete": "A", "value": 0.5, "unit": "m", "metric": "jump_height"},
+        {"role": "FOLLOWUP", "athlete": "A", "value": 0.625, "unit": "m", "metric": "jump_height"}
+      ],
+      "expectation": {"outcome": "REFUSED", "analysis_class": "SCALAR_ABSOLUTE_CHANGE", "measurement_claim_level": null, "relationship_claim_level": "CAUSAL_EVIDENCE", "value": null, "unit": null, "reason_code": "RES70_UNSUPPORTED_CAUSAL_CLAIM"}
+    },
+    {
+      "case_id": "refuse-practical-meaning",
+      "request": "Is this change practically meaningful, and should the training plan be adjusted?",
+      "observations": [
+        {"role": "BASELINE", "athlete": "A", "value": 0.5, "unit": "m", "metric": "jump_height"},
+        {"role": "FOLLOWUP", "athlete": "A", "value": 0.625, "unit": "m", "metric": "jump_height"}
+      ],
+      "expectation": {"outcome": "REFUSED", "analysis_class": "SCALAR_ABSOLUTE_CHANGE", "measurement_claim_level": "PRACTICAL_OR_DECISION_MEANINGFULNESS", "relationship_claim_level": null, "value": null, "unit": null, "reason_code": "RES70_COMPARABILITY_AUTHORITY_MISSING"}
+    }
+  ]
+}

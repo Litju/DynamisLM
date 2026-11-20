@@ -1,0 +1,2 @@
+# Add only to the pinned inference environment with --no-deps. Never replace Colab torch.
+peft==0.16.0

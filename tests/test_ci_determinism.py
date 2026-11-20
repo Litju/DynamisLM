@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any
 
 _HASH_SEED_HELPER = """
 from dynamislm import (
@@ -66,7 +68,47 @@ def test_canonical_hashes_are_independent_of_python_hash_seed() -> None:
 
 def test_setup_uv_cache_is_explicitly_disabled() -> None:
     workflow = (Path(__file__).resolve().parents[1] / ".github/workflows/ci.yml").read_text()
-    setup_uv_start = workflow.index("uses: astral-sh/setup-uv@")
-    setup_uv_end = workflow.index("\n      - name:", setup_uv_start)
+    blocks = workflow.split("uses: astral-sh/setup-uv@")[1:]
+    assert len(blocks) == 2  # the mission job and the QA shard job
+    assert all('enable-cache: "false"' in b[: b.index("\n      - name:")] for b in blocks)
 
-    assert 'enable-cache: "false"' in workflow[setup_uv_start:setup_uv_end]
+
+def test_required_ci_check_needs_every_job_and_every_shard() -> None:
+    workflow = (Path(__file__).resolve().parents[1] / ".github/workflows/ci.yml").read_text()
+    body = workflow[workflow.index("\njobs:\n") :].splitlines()
+    jobs = [line[2:-1] for line in body if re.fullmatch(r"  [a-z]+:", line)]
+    assert jobs == ["mission", "qa", "ci"]
+    required = workflow[workflow.index("\n  ci:\n") :]
+    assert "    name: ci\n" in required and "    if: ${{ always() }}\n" in required
+    assert "    needs: [mission, qa]\n" in required
+    assert 'test "$MISSION_RESULT" = success' in required
+    assert 'test "$QA_RESULT" = success' in required
+    assert "      fail-fast: false\n" in workflow
+    assert "        shard: [fast, controller, integration]\n" in workflow
+    assert './scripts/ci-shard.sh "${{ matrix.shard }}"' in workflow
+
+
+def test_required_ci_shards_partition_every_test_module_exactly_once(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    import pytest
+    from scripts import test_shards
+
+    shards = test_shards.partition()
+    flat = [name for files in shards.values() for name in files]
+    assert sorted(flat) == test_shards.modules() and len(flat) == len(set(flat))
+    assert set(shards) == {"fast", "controller", "integration"} and all(shards.values())
+    # The full-scale integrity test and the real-child integration stay in a required shard.
+    assert "test_res541_a02_v3_execution.py" in shards["integration"]
+
+    (tmp_path / "tests").mkdir()
+    for name in [*test_shards.modules(), "test_new_module.py"]:
+        (tmp_path / "tests" / name).touch()
+    assert "test_new_module.py" in test_shards.partition(tmp_path)["fast"]  # never unowned
+    (tmp_path / "tests" / "test_res541_a02_v3_execution.py").unlink()
+    with pytest.raises(ValueError, match="missing"):
+        test_shards.partition(tmp_path)  # a listed module that vanished is not ignored
+    shared = test_shards.INTEGRATION[0]
+    monkeypatch.setitem(test_shards.SHARDS, "controller", (*test_shards.CONTROLLER, shared))
+    with pytest.raises(ValueError, match="duplicated"):
+        test_shards.partition()  # one module in two jobs would hide nothing but is ambiguous

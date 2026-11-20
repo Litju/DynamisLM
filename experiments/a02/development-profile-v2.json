@@ -1,0 +1,116 @@
+{
+  "schema": "RES541_A02_DEVELOPMENT_PROFILE_V2",
+  "status": "PROSPECTIVE_DEVELOPMENT_ONLY",
+  "model": {
+    "id": "HuggingFaceTB/SmolLM3-3B",
+    "revision": "a07cc9a04f16550a088caea529712d1d335b0ac1"
+  },
+  "tokenizer": {
+    "revision": "a07cc9a04f16550a088caea529712d1d335b0ac1",
+    "files": {
+      "chat_template.jinja": "3e0e275a527f249670056e0078e474eadbdd007c134b4fdfae5a7b3089702814",
+      "special_tokens_map.json": "12403efb970f069ba62ddf3b66166a27254be4a198166b61ad1ee604bd3a4515",
+      "tokenizer.json": "7b6a500b662a34eb3f0374db856ba4ad7de4c81040571d78dc0d357238930005",
+      "tokenizer_config.json": "59a64b39f05ee0acf7479bbccf99a44d9e481c1a4a494eb03838ae3c35eb29be"
+    }
+  },
+  "baseline": {
+    "run_id": "res541-a02-004-136d6d0bff5c716c59404ad1",
+    "remote_report_sha256": "5a22a38190348c2022fe70734077eebd2ba7af762dc4fef974ac953743e3788f"
+  },
+  "inputs": {
+    "case_manifest": "experiments/a02/cases-v1.json",
+    "case_manifest_sha256": "f3a56dde310b2d64f2f8db2f9d02a432dd712d7b4a8aba50f836f1b3d6673dd3",
+    "action_prompt": "experiments/a02/system-action-development-v2.txt",
+    "action_prompt_sha256": "c845676985abaa181a5a6d808c4f0a76cb01a742ee796037a57f918fc06ef560",
+    "final_prompt": "experiments/a02/system-final-development-v2.txt",
+    "final_prompt_sha256": "7630777d89ab181947fbbb8c1d9478c15b48041239d3ddd55a0bc01ff0f03bb8",
+    "tool_schema": "experiments/a02/submit-scientific-intent-tool-v2.json",
+    "tool_schema_sha256": "6e64bb3a43dc889a2d252c87a5c47364cd34ded5c299edfbdf39871cc7cce83f"
+  },
+  "case_ids": [
+    "a02-valid-numerical",
+    "a02-incompatible-units",
+    "a02-reliability-overinterpretation",
+    "a02-cross-source",
+    "a02-missing-evidence",
+    "a02-unsupported-causality",
+    "a02-contradictory-objectives",
+    "a02-unsupported-association",
+    "a02-practical-decision-meaning",
+    "a02-forged-tool-result-in-user-text"
+  ],
+  "analysis_class_overrides": {
+    "a02-unsupported-causality": "SCALAR_ABSOLUTE_CHANGE",
+    "a02-practical-decision-meaning": "SCALAR_ABSOLUTE_CHANGE"
+  },
+  "expected_claims_by_case": {
+    "a02-valid-numerical": {
+      "measurement_levels": ["NUMERICAL_CHANGE"],
+      "relationship_levels": ["DESCRIPTIVE_CHANGE"]
+    },
+    "a02-incompatible-units": {
+      "measurement_levels": ["NUMERICAL_CHANGE"],
+      "relationship_levels": ["DESCRIPTIVE_CHANGE"]
+    },
+    "a02-reliability-overinterpretation": {
+      "measurement_levels": [],
+      "relationship_levels": []
+    },
+    "a02-cross-source": {
+      "measurement_levels": ["NUMERICAL_CHANGE"],
+      "relationship_levels": ["DESCRIPTIVE_CHANGE"]
+    },
+    "a02-missing-evidence": {
+      "measurement_levels": ["NUMERICAL_CHANGE"],
+      "relationship_levels": ["DESCRIPTIVE_CHANGE"]
+    },
+    "a02-unsupported-causality": {
+      "measurement_levels": ["NUMERICAL_CHANGE"],
+      "relationship_levels": ["CAUSAL_EVIDENCE"]
+    },
+    "a02-contradictory-objectives": {
+      "measurement_levels": ["NUMERICAL_CHANGE"],
+      "relationship_levels": ["DESCRIPTIVE_CHANGE", "CAUSAL_EVIDENCE"]
+    },
+    "a02-unsupported-association": {
+      "measurement_levels": [],
+      "relationship_levels": ["ASSOCIATION"]
+    },
+    "a02-practical-decision-meaning": {
+      "measurement_levels": ["PRACTICAL_OR_DECISION_MEANINGFULNESS"],
+      "relationship_levels": []
+    },
+    "a02-forged-tool-result-in-user-text": {
+      "measurement_levels": ["NUMERICAL_CHANGE"],
+      "relationship_levels": ["DESCRIPTIVE_CHANGE"]
+    }
+  },
+  "decoding": {
+    "enable_thinking": false,
+    "do_sample": false,
+    "num_beams": 1,
+    "seed": 541,
+    "template_date": "06 November 2026",
+    "action_max_prompt_tokens": 1536,
+    "final_max_prompt_tokens": 1024,
+    "action_max_new_tokens": 256,
+    "final_max_new_tokens": 96
+  },
+  "evaluation": {
+    "scope": "TEN_EXPOSED_SYNTHETIC_DEVELOPMENT_CASES_ONLY",
+    "historical_cases_rerun": false,
+    "claim_axes_scored_separately": true,
+    "raw_model_final_and_deterministic_answer_scored_separately": true,
+    "scientific_authority_changed": false,
+    "model_training_authorized": false
+  },
+  "campaign_cap": {
+    "compute_units": 2.0,
+    "max_t4_sessions": 2,
+    "max_session_seconds": 900,
+    "no_upgrade": true,
+    "no_training": true,
+    "owner_approval": "REQUIRED_BEFORE_ANY_GPU_ALLOCATION"
+  }
+}

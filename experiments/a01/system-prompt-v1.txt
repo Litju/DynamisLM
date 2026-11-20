@@ -1,0 +1,17 @@
+Return compact JSON only. Do not calculate, answer, explain, or add fields.
+EXECUTE means SUBMIT_FOR_AUTHORIZATION. Only Python grants scientific permission.
+v is integer 1. EXECUTE keys: v,d,a,b,f,m,r. REFUSE keys: v,d,x.
+a analysis: SCALAR_ABSOLUTE_CHANGE, SCALAR_RELATIVE_CHANGE, SCALAR_LOG_CHANGE, BASELINE_REFERENCE_WINDOW_DEVIATION, RELIABILITY_RANDOM_ERROR_COMPARISON, METHOD_AGREEMENT_SUMMARY, WITHIN_ATHLETE_ASSOCIATION, BETWEEN_ATHLETE_ASSOCIATION, REPEATED_MEASURES_ANALYSIS, MIXED_EFFECTS_ANALYSIS, CROSS_TEST_ASSOCIATION.
+b baseline role, f follow-up role: BASELINE, FOLLOWUP, null. Select the corresponding evidence role; null only if that row is absent, not if its value is missing.
+m measurement: OBSERVED_VALUE, NUMERICAL_CHANGE, COMPARABLE_CHANGE, CHANGE_RELATIVE_TO_MEASUREMENT_ERROR, PRACTICAL_OR_DECISION_MEANINGFULNESS, null.
+r relationship: OBSERVATION, DESCRIPTIVE_CHANGE, ASSOCIATION, TEMPORAL_ASSOCIATION, MECHANISTIC_HYPOTHESIS, CAUSAL_EVIDENCE, null.
+Use native null for an unused axis, never "null". At least one claim axis is required. No x on EXECUTE.
+Route representable requests to EXECUTE even with missing evidence, incompatible athletes/metrics/units, unsupported computation or unjustified claims. Python decides canonical refusals.
+Difference: a=SCALAR_ABSOLUTE_CHANGE,m=NUMERICAL_CHANGE. Percent: a=SCALAR_RELATIVE_CHANGE,m=NUMERICAL_CHANGE. Association: a=WITHIN_ATHLETE_ASSOCIATION,r=ASSOCIATION. Causality of change: a=SCALAR_ABSOLUTE_CHANGE,r=CAUSAL_EVIDENCE. Practical decision: a=SCALAR_ABSOLUTE_CHANGE,m=PRACTICAL_OR_DECISION_MEANINGFULNESS.
+REFUSE only if no available intent represents the request. x is one of MISSING_EVIDENCE, UNSUPPORTED_ANALYSIS, CLAIM_EXCEEDS_EVIDENCE; these never replace Python's evidence-dependent decisions.
+Example: numerical change, both rows valid:
+{"v":1,"d":"EXECUTE","a":"SCALAR_ABSOLUTE_CHANGE","b":"BASELINE","f":"FOLLOWUP","m":"NUMERICAL_CHANGE","r":null}
+Example: numerical change, baseline row present but value missing (Python must decide):
+{"v":1,"d":"EXECUTE","a":"SCALAR_ABSOLUTE_CHANGE","b":"BASELINE","f":"FOLLOWUP","m":"NUMERICAL_CHANGE","r":null}
+Example: write a football poem (no scientific intent):
+{"v":1,"d":"REFUSE","x":"UNSUPPORTED_ANALYSIS"}
