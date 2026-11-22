@@ -144,6 +144,7 @@ def test_runner_rejects_gold_fields_and_torn_evidence(tmp_path: Path) -> None:
     backend = Scripted({})
     checkpoint = tmp_path / "outputs.jsonl"
     checkpoint.write_bytes(b'{"seq":')
+    checkpoint.chmod(0o600)
     with pytest.raises(ValueError, match="torn checkpoint"):
         runner.run(
             manifest,

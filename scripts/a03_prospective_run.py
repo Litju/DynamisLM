@@ -5,10 +5,13 @@ from __future__ import annotations
 import argparse
 import fcntl
 import math
+import os
 import random
 import subprocess
 import time
+from collections.abc import Sequence
 from dataclasses import dataclass
+from importlib.metadata import version
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -43,6 +46,8 @@ def object_hash(value: object) -> str:
 
 
 def verified_bytes(path: Path, expected: str) -> bytes:
+    if path.is_symlink() or not path.is_file():
+        raise ValueError(f"bound input must be a regular file: {path.name}")
     data = path.read_bytes()
     if v3.sha256(data) != expected:
         raise ValueError(f"bound bytes differ: {path.name}")
@@ -89,6 +94,7 @@ def model_identity() -> dict[str, Any]:
         "greedy": True,
         "precision": "float32",
         "attention": "sdpa:MATH",
+        "runtime_packages": d0.RUNTIME,
         "max_new_tokens": d0.MAX_NEW,
         "max_prompt_tokens": MAX_PROMPT,
         "eos_token_id": d0.EOS,
@@ -235,7 +241,9 @@ class PinnedBackend:
     """Local CPU-only loader. No allocation, downloads, or training entry points."""
 
     def __init__(self, snapshot: Path, adapter: Path):
-        from peft import PeftModel
+        if {name: version(name) for name in d0.RUNTIME} != d0.RUNTIME:
+            raise ValueError("pinned runtime packages differ from D0")
+        from peft import PeftModel  # type: ignore[import-not-found]
 
         d0.verify_files(snapshot, d0.MODEL_FILES)
         d0.verify_files(adapter, d0.ADAPTER_FILES)
@@ -250,6 +258,7 @@ class PinnedBackend:
         verify_parameters(self.model, "float32")
         if (
             self.mask.eos != d0.EOS
+            or self.model.generation_config.eos_token_id != d0.EOS
             or self.model.config._attn_implementation != "sdpa"
             or any(p.requires_grad or p.device.type != "cpu" for p in self.model.parameters())
         ):
@@ -263,7 +272,7 @@ class PinnedBackend:
         if arm == "C0":
             score = c0.CachedSequenceLogprob(c0.HFIncrementalBackend(self.model))
 
-            def bounded_score(ids: list[int], start: int) -> float:
+            def bounded_score(ids: Sequence[int], start: int) -> float:
                 if time.monotonic() >= deadline or len(ids) > len(prompt) + d0.MAX_NEW:
                     raise TimeoutError("C0 scoring limit reached")
                 return score(ids, start)
@@ -332,7 +341,9 @@ def diagnostics(
         )
     except (ValueError, TypeError):
         action = None
-    scoped = action is not None and set(action["observation_ids"]) <= set(item.ids)
+    scoped = action is not None and set(action["observation_ids"]) <= set(
+        v3.observation_ids(item.bound.model_request())
+    )
     accepted, first = (
         token_replay(mask, Grammar(item.bound.model_request()), ids, raw)
         if arm != "C0"
@@ -452,6 +463,8 @@ def run(
             raise ValueError("incomplete run requires the exact externally retained prefix digest")
         if not path.exists():
             path.touch(mode=0o600, exist_ok=False)
+        if path.stat().st_mode & 0o077:
+            raise ValueError("checkpoint must be private")
         state, prompts = verify_output_records(
             path, manifest, items, work, backend.tokenizer, backend.mask
         )
@@ -507,7 +520,10 @@ def run(
             "head": head,
             "outputs_sha256": d0.digest(path),
         }
-        d0.write(commit, result)
+        with commit.open("x", encoding="utf-8") as stream:
+            stream.write(v3.canonical(result) + "\n")
+            stream.flush()
+            os.fsync(stream.fileno())
         return result
 
 

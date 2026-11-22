@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, replace
 from itertools import combinations
 from typing import Any, Literal
@@ -210,7 +211,9 @@ def _allows(decision: ClaimAuthorityResult, proposal: Proposal) -> bool:
     ).issubset(decision.allowed_relationship_levels)
 
 
-def submit_scientific_action_v3(bound: BoundRequest, raw: object) -> Admission:
+def submit_scientific_action_v3(
+    bound: BoundRequest, raw: object, *, permit_dispatch: Callable[[str], bool] | None = None
+) -> Admission:
     """Adjudicate this interaction's generated tool call. All dispatch is local and registered."""
     try:
         proposal = bound.parse(raw)
@@ -374,6 +377,8 @@ def submit_scientific_action_v3(bound: BoundRequest, raw: object) -> Admission:
 
     if entries[0].observed_at == entries[1].observed_at:
         return replace(trace, reason_codes=("RES69_DUPLICATE_TIMESTAMP",))
+    if permit_dispatch is not None and not permit_dispatch(operation.stable_id):
+        return replace(trace, reason_codes=("V3_DISPATCH_VETOED",))
     trace = replace(trace, execution_authorized=True, operation_executed=True)
     result = calculate_absolute_change(support)
     if isinstance(result, RefusalResult):
