@@ -84,6 +84,7 @@ def inputs() -> tuple[bytes, bytes]:
     request_bytes, source_bytes = (
         "".join(v3.canonical(row) + "\n" for row in rows).encode() for rows in (requests, sources)
     )
+    return request_bytes, source_bytes
 
 
 def authority_controls(bound: admission.BoundRequest) -> dict[str, Any]:

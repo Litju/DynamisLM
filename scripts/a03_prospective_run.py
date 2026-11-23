@@ -302,9 +302,16 @@ class PinnedBackend:
             ):
                 raise ValueError(f"D0 T4 qualification failed: {qualified}")
             self.runtime["cuda"] = {
-                "provenance": qualified["provenance_only"],
+                "provenance": {
+                    name: value
+                    for name, value in qualified["provenance_only"].items()
+                    if name != "driver_inventory"
+                },
                 "requirements": {row["name"]: row["passed"] for row in qualified["requirements"]},
                 "name": inventory["cuda"]["name"],
+                "driver_version": ",".join(inventory["driver_inventory"].split(",")[:2])
+                if inventory["driver_inventory"]
+                else None,
                 "compute_capability": inventory["cuda"]["compute_capability"],
                 "total_vram_bytes": inventory["cuda"]["total_vram_bytes"],
             }
