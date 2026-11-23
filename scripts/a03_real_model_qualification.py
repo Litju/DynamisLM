@@ -81,7 +81,7 @@ def inputs() -> tuple[bytes, bytes]:
             }
         )
         sources.append({"item_id": item_id, "bound": canonical_json(binding)})
-    return tuple(  # type: ignore[return-value]
+    request_bytes, source_bytes = (
         "".join(v3.canonical(row) + "\n" for row in rows).encode() for rows in (requests, sources)
     )
 

@@ -157,3 +157,20 @@ def test_runner_rejects_gold_fields_and_torn_evidence(tmp_path: Path) -> None:
         )
     assert checkpoint.read_bytes() == b'{"seq":'
     assert not backend.calls
+
+
+def test_fixed_real_model_workload_cannot_enter_the_prospective_denominator() -> None:
+    from scripts import a03_real_model_qualification as qualification
+
+    requests, sources = qualification.inputs()
+    items = runner.load_items(requests, sources, mode=runner.QUALIFICATION)
+    assert len(runner.work_items(items)) == 6
+    assert len(items[0].bound.entries) == 2
+    assert items[1].ids == ["observation-1"] and not items[1].bound.entries
+    for request, source in zip(runner.jsonl(requests), runner.jsonl(sources), strict=True):
+        with pytest.raises(ValueError, match="exposed A0.2 or development"):
+            runner.load_items(as_jsonl(request), as_jsonl(source), mode=runner.PROSPECTIVE)
+    assert set(qualification.authority_controls(items[0].bound)) == {
+        "RES70_UNSUPPORTED_CAUSAL_CLAIM",
+        "RES70_UNSUPPORTED_CLAIM_ESCALATION",
+    }

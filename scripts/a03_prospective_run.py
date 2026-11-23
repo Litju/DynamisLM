@@ -95,6 +95,16 @@ def model_identity(mode: str, device: str = "cpu") -> dict[str, Any]:
     if device not in ("cpu", "cuda"):
         raise ValueError("inference device must be cpu or cuda")
     packages = dict(d0.RUNTIME)
+    if mode == QUALIFICATION or device == "cuda":
+        for requirement in (
+            "experiments/a0/requirements-colab.txt",
+            "experiments/a02/training-requirements-v1.txt",
+        ):
+            packages.update(
+                line.split("==", 1)
+                for line in (ROOT / requirement).read_text().splitlines()
+                if line and not line.startswith("#")
+            )
     if mode == QUALIFICATION and device == "cpu":
         packages["torch"] = "2.14.1+cpu"
     return {
@@ -272,6 +282,14 @@ class PinnedBackend:
             "torch_threads": torch.get_num_threads(),
             "torch_interop_threads": torch.get_num_interop_threads(),
         }
+        if device == "cpu" and mode == QUALIFICATION:
+            if sys.version_info[:2] != (3, 13) or torch.version.cuda is not None:
+                raise ValueError("CPU qualification requires CPython 3.13 and the CPU torch build")
+            self.runtime["cpu_model"] = next(
+                line.split(":", 1)[1].strip()
+                for line in Path("/proc/cpuinfo").read_text().splitlines()
+                if line.startswith("model name")
+            )
         if device == "cuda":
             inventory = a02_dev_runtime.inventory(torch, Path(site.getsitepackages()[0]))
             qualified = a02_dev_runtime.qualify(
@@ -332,8 +350,10 @@ class PinnedBackend:
             score = c0.CachedSequenceLogprob(c0.HFIncrementalBackend(self.model))
 
             def bounded_score(ids: Sequence[int], start: int) -> float:
-                if time.monotonic() >= deadline or len(ids) > len(prompt) + d0.MAX_NEW:
-                    raise TimeoutError("C0 scoring limit reached")
+                if time.monotonic() >= deadline:
+                    raise TimeoutError("C0 scoring deadline reached")
+                if len(ids) > len(prompt) + d0.MAX_NEW:
+                    raise ValueError("C0 candidate exceeded the scoring token bound")
                 return score(ids, start)
 
             import torch
@@ -341,6 +361,8 @@ class PinnedBackend:
             def audit(_module: Any, _inputs: Any, logits: Any) -> None:
                 if not torch.isfinite(logits).all().item():
                     raise ValueError("C0 model logits must be finite")
+                if time.monotonic() >= deadline:
+                    raise TimeoutError("C0 scoring deadline reached")
 
             hook = self.model.lm_head.register_forward_hook(audit)
             try:

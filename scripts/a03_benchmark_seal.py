@@ -103,7 +103,7 @@ def _request(row: dict[str, Any], exposed: set[str]) -> list[str]:
     _subset(row["critical_families"], FAMILIES)
     _claims(row["requested_claims"])
     if _normalize_question(_text(row["question"])) in exposed:
-        raise ValueError("exposed development phrasing appears in the prospective packet")
+        raise ValueError("exposed A0.2 or development phrasing appears in the prospective packet")
     ids = []
     for index, value in enumerate(_items(row["observations"]), 1):
         observation = _fields(
