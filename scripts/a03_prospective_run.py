@@ -7,7 +7,10 @@ import fcntl
 import math
 import os
 import random
+import resource
+import site
 import subprocess
+import sys
 import time
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -16,6 +19,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from dynamislm.serialization import canonical_hash, canonical_json, from_canonical_json
+from scripts import a02_dev_runtime
 from scripts import a02_v3_constrained as c0
 from scripts import a02_v3_contract as v3
 from scripts import a02_v3_decision as historical
@@ -23,7 +27,7 @@ from scripts import a02_v3_worker as checkpoint
 from scripts import a03_benchmark_seal as sealer
 from scripts import a03_d0_runtime as d0
 from scripts import a03_scientific_admission as admission
-from scripts.a02_v3_precision import load_model, verify_parameters
+from scripts.a02_v3_precision import PrecisionAudit, load_model
 from scripts.a02_v3_preflight import load_pinned_tokenizer
 from scripts.a03_d0_sample import tokens_sha256
 from scripts.a03_d0_static import token_replay
@@ -37,6 +41,7 @@ C0_BLOB = "f92bbb42035ab6702ced71b95f9561c27c57d2ce"
 ROOT = Path(__file__).resolve().parents[1]
 BLIND_FIELDS = "item_id question observations requested_claims"
 DEV = "DEVELOPMENT_ONLY"
+QUALIFICATION = "REAL_MODEL_DEVELOPMENT_ONLY"
 PROSPECTIVE = "PROSPECTIVE"
 MAX_PROMPT = 1536
 
@@ -65,17 +70,19 @@ def _git(*args: str) -> str:
 
 
 def source_identity(mode: str) -> dict[str, str]:
-    if mode not in (DEV, PROSPECTIVE):
+    if mode not in (DEV, QUALIFICATION, PROSPECTIVE):
         raise ValueError("unknown evaluation mode")
-    if mode == PROSPECTIVE and _git("status", "--porcelain", "--untracked-files=all"):
-        raise ValueError("prospective execution requires an exact clean source checkout")
+    if mode != DEV and _git("status", "--porcelain", "--untracked-files=all"):
+        raise ValueError("real-model execution requires an exact clean source checkout")
     if _git("hash-object", "scripts/a02_v3_constrained.py") != C0_BLOB:
         raise ValueError("frozen C0 source differs")
-    tracked = _git("ls-files", "src", "scripts", "experiments", "uv.lock", "pyproject.toml")
-    # Include the prospective modules while developing the CPU fixture before its commit.
-    files = set(tracked.splitlines()) | {
-        path.relative_to(ROOT).as_posix() for path in (ROOT / "scripts").glob("a03_prospective*.py")
-    }
+    files = set(_git("ls-files").splitlines())
+    if mode == DEV:
+        # Scripted QA also imports uncommitted runner modules during local development.
+        files.update(
+            path.relative_to(ROOT).as_posix()
+            for path in (ROOT / "scripts").glob("a03_prospective*.py")
+        )
     return {
         "commit": _git("rev-parse", "HEAD"),
         "tree": _git("rev-parse", "HEAD^{tree}"),
@@ -84,8 +91,25 @@ def source_identity(mode: str) -> dict[str, str]:
     }
 
 
-def model_identity() -> dict[str, Any]:
+def model_identity(mode: str, device: str = "cpu") -> dict[str, Any]:
+    if device not in ("cpu", "cuda"):
+        raise ValueError("inference device must be cpu or cuda")
+    packages = dict(d0.RUNTIME)
+    if mode == QUALIFICATION or device == "cuda":
+        # The historical sample imports the source checkout's fixture builders.
+        packages.update({"pytest": "8.4.2", "openpyxl": "3.1.5"})
+        for requirement in (
+            "experiments/a0/requirements-colab.txt",
+            "experiments/a02/training-requirements-v1.txt",
+        ):
+            for line in (ROOT / requirement).read_text().splitlines():
+                if line and not line.startswith("#"):
+                    name, pinned_version = line.split("==", 1)
+                    packages[name] = pinned_version
+    if mode == QUALIFICATION and device == "cpu":
+        packages["torch"] = "2.14.1+cpu"
     return {
+        "device": device,
         "model": historical.load_protocol()["candidate_model"],
         "model_files": d0.MODEL_FILES,
         "adapter_step": 510,
@@ -94,11 +118,23 @@ def model_identity() -> dict[str, Any]:
         "greedy": True,
         "precision": "float32",
         "attention": "sdpa:MATH",
-        "runtime_packages": d0.RUNTIME,
+        "runtime_packages": packages,
+        "autocast": False,
+        "tf32": False,
         "max_new_tokens": d0.MAX_NEW,
         "max_prompt_tokens": MAX_PROMPT,
         "eos_token_id": d0.EOS,
     }
+
+
+def require_file_inventory(directory: Path, allowed: dict[str, str]) -> None:
+    extra = sorted(
+        path.name
+        for path in directory.iterdir()
+        if path.name not in allowed and not (path.name == ".cache" and path.is_dir())
+    )
+    if extra:
+        raise ValueError(f"unbound files in inference directory: {extra}")
 
 
 def blind_request(row: dict[str, Any]) -> dict[str, Any]:
@@ -143,14 +179,14 @@ class Item:
     ids: list[str]
 
 
-def load_items(requests: bytes, sources: bytes) -> list[Item]:
+def load_items(requests: bytes, sources: bytes, *, mode: str = PROSPECTIVE) -> list[Item]:
     source_rows = jsonl(sources)
     by_id = {row["item_id"]: sealer._fields(row, "item_id bound")["bound"] for row in source_rows}
     if len(by_id) != len(source_rows):
         raise ValueError("duplicate source item")
     items = []
     seen = set()
-    exposed = sealer._exposed_questions()
+    exposed = sealer._exposed_questions() if mode != QUALIFICATION else set()
     for row in jsonl(requests):
         sealer._fields(row, BLIND_FIELDS)
         item_id = sealer._key(row["item_id"])
@@ -205,13 +241,15 @@ def work_items(items: list[Item]) -> list[checkpoint.WorkItem]:
     ]
 
 
-def run_manifest(mode: str, requests: bytes, sources: bytes) -> dict[str, Any]:
-    items = load_items(requests, sources)
+def run_manifest(
+    mode: str, requests: bytes, sources: bytes, *, device: str = "cpu"
+) -> dict[str, Any]:
+    items = load_items(requests, sources, mode=mode)
     return {
         "schema": SCHEMA,
         "mode": mode,
         "source": source_identity(mode),
-        "model_identity": model_identity() if mode == PROSPECTIVE else None,
+        "model_identity": model_identity(mode, device) if mode != DEV else None,
         "protocol_sha256": d0.digest(ROOT / "experiments/a03/prospective-protocol.md"),
         "blind_requests_sha256": v3.sha256(requests),
         "sources_sha256": v3.sha256(sources),
@@ -238,31 +276,96 @@ class Backend(Protocol):
 
 
 class PinnedBackend:
-    """Local CPU-only loader. No allocation, downloads, or training entry points."""
+    """Local frozen D0 loader with explicit FP32 CPU or T4 placement."""
 
-    def __init__(self, snapshot: Path, adapter: Path):
-        if {name: version(name) for name in d0.RUNTIME} != d0.RUNTIME:
-            raise ValueError("pinned runtime packages differ from D0")
+    def __init__(self, snapshot: Path, adapter: Path, *, mode: str, device: str):
+        import torch  # type: ignore[import-not-found]
         from peft import PeftModel  # type: ignore[import-not-found]
 
+        started = time.monotonic()
+        self.identity = model_identity(mode, device)
+        packages = self.identity["runtime_packages"]
+        if {name: version(name) for name in packages} != packages:
+            raise ValueError("pinned runtime packages differ")
+        self.runtime: dict[str, Any] = {
+            "python": sys.version,
+            "device": device,
+            "torch_threads": torch.get_num_threads(),
+            "torch_interop_threads": torch.get_num_interop_threads(),
+        }
+        if device == "cpu" and mode == QUALIFICATION:
+            if sys.version_info[:2] != (3, 13) or torch.version.cuda is not None:
+                raise ValueError("CPU qualification requires CPython 3.13 and the CPU torch build")
+            self.runtime["cpu_model"] = next(
+                line.split(":", 1)[1].strip()
+                for line in Path("/proc/cpuinfo").read_text().splitlines()
+                if line.startswith("model name")
+            )
+        if device == "cuda":
+            inventory = a02_dev_runtime.inventory(torch, Path(site.getsitepackages()[0]))
+            qualified = a02_dev_runtime.qualify(
+                inventory, a02_dev_runtime.cuda_smoke(torch, inventory)
+            )
+            if (
+                not qualified["qualified"]
+                or torch.version.cuda != "13.0"
+                or torch.cuda.mem_get_info(0)[0] < d0.MIN_FREE_VRAM
+            ):
+                raise ValueError(f"D0 T4 qualification failed: {qualified}")
+            self.runtime["cuda"] = {
+                "provenance": {
+                    name: value
+                    for name, value in qualified["provenance_only"].items()
+                    if name != "driver_inventory"
+                },
+                "requirements": {row["name"]: row["passed"] for row in qualified["requirements"]},
+                "name": inventory["cuda"]["name"],
+                "driver_version": ",".join(inventory["driver_inventory"].split(",")[:2])
+                if inventory["driver_inventory"]
+                else None,
+                "compute_capability": inventory["cuda"]["compute_capability"],
+                "total_vram_bytes": inventory["cuda"]["total_vram_bytes"],
+            }
+        # Transformers can prefer a single safetensors file over the verified shards.
+        snapshot_files = d0.MODEL_FILES | self.identity["tokenizer"]["files"]
+        require_file_inventory(snapshot, snapshot_files)
+        require_file_inventory(adapter, d0.ADAPTER_FILES)
         d0.verify_files(snapshot, d0.MODEL_FILES)
         d0.verify_files(adapter, d0.ADAPTER_FILES)
         self.tokenizer = load_pinned_tokenizer(snapshot)
         self.mask = TokenMask(Vocabulary.from_pinned(snapshot))
+        # PEFT otherwise redispatches a CPU-resident base with its automatic offload map.
         self.model = PeftModel.from_pretrained(
-            load_model(snapshot, "float32", device="cpu"), adapter, is_trainable=False
+            load_model(snapshot, "float32", device=device),
+            adapter,
+            is_trainable=False,
+            device_map={"": device},
         ).eval()
         self.model.generation_config = type(self.model.generation_config).from_model_config(
             self.model.config
         )
-        verify_parameters(self.model, "float32")
+        self.audit = PrecisionAudit(self.model, "float32")
         if (
             self.mask.eos != d0.EOS
             or self.model.generation_config.eos_token_id != d0.EOS
             or self.model.config._attn_implementation != "sdpa"
-            or any(p.requires_grad or p.device.type != "cpu" for p in self.model.parameters())
+            or any(p.requires_grad or p.device.type != device for p in self.model.parameters())
         ):
-            raise ValueError("pinned CPU inference conditions differ")
+            raise ValueError("pinned inference conditions differ")
+        self.runtime["parameters"] = self.audit.identity
+        self.setup_seconds = time.monotonic() - started
+
+    def measurements(self) -> dict[str, Any]:
+        import torch
+
+        return {
+            "setup_seconds": self.setup_seconds,
+            "peak_host_rss_bytes": resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * 1024,
+            "peak_cuda_reserved_bytes": (
+                torch.cuda.max_memory_reserved() if self.identity["device"] == "cuda" else None
+            ),
+            "precision": self.audit.report() if self.audit.logit_dtypes else self.audit.identity,
+        }
 
     def generate(
         self, arm: str, request: dict[str, Any], prompt: list[int], deadline: float
@@ -273,16 +376,30 @@ class PinnedBackend:
             score = c0.CachedSequenceLogprob(c0.HFIncrementalBackend(self.model))
 
             def bounded_score(ids: Sequence[int], start: int) -> float:
-                if time.monotonic() >= deadline or len(ids) > len(prompt) + d0.MAX_NEW:
-                    raise TimeoutError("C0 scoring limit reached")
+                if time.monotonic() >= deadline:
+                    raise TimeoutError("C0 scoring deadline reached")
+                if len(ids) > len(prompt) + d0.MAX_NEW:
+                    raise ValueError("C0 candidate exceeded the scoring token bound")
                 return score(ids, start)
 
-            result = c0.decode(
-                request=request,
-                prompt_ids=prompt,
-                encode=lambda text: self.tokenizer.encode(text, add_special_tokens=False),
-                chooser=c0.model_chooser(bounded_score),
-            )
+            import torch
+
+            def audit(_module: Any, _inputs: Any, logits: Any) -> None:
+                if not torch.isfinite(logits).all().item():
+                    raise ValueError("C0 model logits must be finite")
+                if time.monotonic() >= deadline:
+                    raise TimeoutError("C0 scoring deadline reached")
+
+            hook = self.model.lm_head.register_forward_hook(audit)
+            try:
+                result = c0.decode(
+                    request=request,
+                    prompt_ids=prompt,
+                    encode=lambda text: self.tokenizer.encode(text, add_special_tokens=False),
+                    chooser=c0.model_chooser(bounded_score),
+                )
+            finally:
+                hook.remove()
             return Generation(result["token_ids"], result["text"], "C0_GRAMMAR_COMPLETE")
         callback = (
             partial(hf_prefix_mask, self.mask, Grammar(request), prompt) if arm == "C1" else None
@@ -382,10 +499,12 @@ def verify_run(
         "sources_sha256"
     ) != v3.sha256(sources):
         raise ValueError("bound request or source bytes differ")
-    expected = run_manifest(manifest["mode"], requests, sources)
+    mode = manifest["mode"]
+    device = manifest["model_identity"]["device"] if mode != DEV else "cpu"
+    expected = run_manifest(mode, requests, sources, device=device)
     if manifest != expected:
         raise ValueError("source, inputs or execution manifest differ")
-    items = load_items(requests, sources)
+    items = load_items(requests, sources, mode=mode)
     return items, work_items(items)
 
 
@@ -440,18 +559,28 @@ def run(
     *,
     seconds: float,
     resume_sha256: str | None = None,
+    stop_after: int | None = None,
 ) -> dict[str, Any]:
     """Only blinded request/source bytes can enter this interface."""
     if not math.isfinite(seconds) or seconds <= 0:
         raise ValueError("a finite positive time bound is required")
-    if manifest["mode"] == PROSPECTIVE and type(backend) is not PinnedBackend:
-        raise ValueError("prospective work requires the pinned backend")
+    mode = manifest["mode"]
+    pinned = backend if isinstance(backend, PinnedBackend) else None
+    if mode != DEV and (
+        pinned is None
+        or type(pinned) is not PinnedBackend
+        or pinned.identity != manifest["model_identity"]
+    ):
+        raise ValueError("real-model work requires the exact manifest backend")
+    if stop_after is not None and (mode != QUALIFICATION or not 0 < stop_after):
+        raise ValueError("only real-model development can request a checkpoint stop")
     directory = restricted(output)
     items, work = verify_run(manifest, requests, sources)
     by_id = {item.item_id: item for item in items}
     path = directory / "outputs.jsonl"
     commit = directory / "output-commit.json"
-    if any(p.is_symlink() for p in (path, commit, directory / ".writer.lock")):
+    runtime = directory / "runtime.json"
+    if any(p.is_symlink() for p in (path, commit, runtime, directory / ".writer.lock")):
         raise ValueError("output state must not use symlinks")
     with (directory / ".writer.lock").open("a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -461,6 +590,13 @@ def run(
             resume_sha256 is not None and d0.digest(path) != resume_sha256
         ):
             raise ValueError("incomplete run requires the exact externally retained prefix digest")
+        if pinned is not None:
+            receipt = {"run_sha256": object_hash(manifest), **pinned.runtime}
+            if path.exists() or runtime.exists():
+                if runtime.read_bytes() != (v3.canonical(receipt) + "\n").encode():
+                    raise ValueError("resumed inference runtime differs")
+            else:
+                d0.write(runtime, receipt)
         if not path.exists():
             path.touch(mode=0o600, exist_ok=False)
         if path.stat().st_mode & 0o077:
@@ -470,8 +606,11 @@ def run(
         )
         deadline = time.monotonic() + seconds
         head = state["head"]
-        for seq in range(len(state["entries"]), len(work)):
-            if time.monotonic() >= deadline:
+        first = len(state["entries"])
+        for seq in range(first, len(work)):
+            if time.monotonic() >= deadline or (
+                stop_after is not None and seq - first >= stop_after
+            ):
                 return {"status": "INCOMPLETE", "entries": seq, "prefix_sha256": d0.digest(path)}
             scheduled = work[seq]
             item = by_id[scheduled.key]
@@ -485,7 +624,16 @@ def run(
                 generation = backend.generate(
                     scheduled.arm, item.bound.model_request(), ids, deadline
                 )
+                if time.monotonic() >= deadline:
+                    raise TimeoutError("generation finished after its deadline")
             except (RuntimeError, TimeoutError, ValueError) as exc:
+                if isinstance(exc, TimeoutError) and mode == QUALIFICATION:
+                    return {
+                        "status": "INCOMPLETE",
+                        "entries": seq,
+                        "prefix_sha256": d0.digest(path),
+                        "reason": "GENERATION_DEADLINE",
+                    }
                 failure = type(exc).__name__
                 generation = Generation([], "", "MODEL_ERROR")
             record = {
@@ -520,6 +668,8 @@ def run(
             "head": head,
             "outputs_sha256": d0.digest(path),
         }
+        if pinned is not None:
+            result["runtime_sha256"] = d0.digest(runtime)
         with commit.open("x", encoding="utf-8") as stream:
             stream.write(v3.canonical(result) + "\n")
             stream.flush()
@@ -535,26 +685,35 @@ def main() -> None:
     parser.add_argument("--snapshot", type=Path, required=True)
     parser.add_argument("--adapter", type=Path, required=True)
     parser.add_argument("--seconds", type=float, required=True)
+    parser.add_argument("--device", choices=("cpu", "cuda"), required=True)
+    parser.add_argument("--stop-after", type=int)
     parser.add_argument("--resume-sha256")
     args = parser.parse_args()
     blind = restricted(args.blind_directory)
     manifest = v3.json_object(verified_bytes(blind / "run.json", args.manifest_sha256).decode())
     requests = verified_bytes(blind / "requests.jsonl", manifest["blind_requests_sha256"])
     sources = verified_bytes(blind / "sources.jsonl", manifest["sources_sha256"])
-    if manifest["mode"] != PROSPECTIVE:
-        raise ValueError("the real-model CLI requires a prospective manifest")
+    if manifest["mode"] not in (QUALIFICATION, PROSPECTIVE):
+        raise ValueError("the CLI requires a real-model manifest")
     verify_run(manifest, requests, sources)
+    if manifest["model_identity"]["device"] != args.device:
+        raise ValueError("requested device differs from run manifest")
+    backend = PinnedBackend(args.snapshot, args.adapter, mode=manifest["mode"], device=args.device)
     print(
         v3.canonical(
-            run(
-                manifest,
-                requests,
-                sources,
-                args.output_directory,
-                PinnedBackend(args.snapshot, args.adapter),
-                seconds=args.seconds,
-                resume_sha256=args.resume_sha256,
-            )
+            {
+                **run(
+                    manifest,
+                    requests,
+                    sources,
+                    args.output_directory,
+                    backend,
+                    seconds=args.seconds,
+                    resume_sha256=args.resume_sha256,
+                    stop_after=args.stop_after,
+                ),
+                "measurements": backend.measurements(),
+            }
         )
     )
 
