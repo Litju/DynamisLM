@@ -102,11 +102,10 @@ def model_identity(mode: str, device: str = "cpu") -> dict[str, Any]:
             "experiments/a0/requirements-colab.txt",
             "experiments/a02/training-requirements-v1.txt",
         ):
-            packages.update(
-                line.split("==", 1)
-                for line in (ROOT / requirement).read_text().splitlines()
-                if line and not line.startswith("#")
-            )
+            for line in (ROOT / requirement).read_text().splitlines():
+                if line and not line.startswith("#"):
+                    name, pinned_version = line.split("==", 1)
+                    packages[name] = pinned_version
     if mode == QUALIFICATION and device == "cpu":
         packages["torch"] = "2.14.1+cpu"
     return {
