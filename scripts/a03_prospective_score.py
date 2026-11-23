@@ -519,6 +519,15 @@ def _output_commit(
     )
     if committed.get("status") != "COMMITTED" or committed.get("entries") != len(work):
         raise ValueError("output commitment is incomplete")
+    if manifest["mode"] != runner.DEV:
+        runtime = v3.json_object(
+            runner.verified_bytes(directory / "runtime.json", committed["runtime_sha256"]).decode()
+        )
+        if (
+            runtime["run_sha256"] != runner.object_hash(manifest)
+            or runtime["device"] != manifest["model_identity"]["device"]
+        ):
+            raise ValueError("committed inference runtime differs")
     path = directory / "outputs.jsonl"
     runner.verified_bytes(path, committed["outputs_sha256"])
     state, _ = runner.verify_output_records(path, manifest, items, work, tokenizer, mask)
@@ -542,6 +551,8 @@ def score(
     tokenizer: Any,
     mask: TokenMask,
 ) -> dict[str, Any]:
+    if manifest["mode"] not in (runner.DEV, runner.PROSPECTIVE):
+        raise ValueError("real-model qualification outputs cannot enter adjudicated scoring")
     items, work = runner.verify_run(manifest, requests, sources)
     entries = _output_commit(
         runner.restricted(output), manifest, output_commit_sha256, items, work, tokenizer, mask
