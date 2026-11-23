@@ -168,9 +168,18 @@ def test_fixed_real_model_workload_cannot_enter_the_prospective_denominator() ->
     assert len(items[0].bound.entries) == 2
     assert items[1].ids == ["observation-1"] and not items[1].bound.entries
     for request, source in zip(runner.jsonl(requests), runner.jsonl(sources), strict=True):
-        with pytest.raises(ValueError, match="exposed A0.2 or development"):
+        with pytest.raises(ValueError, match=r"exposed A0.2 or development"):
             runner.load_items(as_jsonl(request), as_jsonl(source), mode=runner.PROSPECTIVE)
     assert set(qualification.authority_controls(items[0].bound)) == {
         "RES70_UNSUPPORTED_CAUSAL_CLAIM",
         "RES70_UNSUPPORTED_CLAIM_ESCALATION",
     }
+
+
+def test_unbound_snapshot_file_cannot_override_pinned_shards(tmp_path: Path) -> None:
+    (tmp_path / ".cache").mkdir()
+    (tmp_path / "model.safetensors.index.json").touch()
+    runner.require_file_inventory(tmp_path, {"model.safetensors.index.json": "bound"})
+    (tmp_path / "model.safetensors").touch()
+    with pytest.raises(ValueError, match=r"unbound files.*model.safetensors"):
+        runner.require_file_inventory(tmp_path, {"model.safetensors.index.json": "bound"})

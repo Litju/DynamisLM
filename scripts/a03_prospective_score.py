@@ -697,6 +697,9 @@ def main() -> None:
         raise ValueError("the prospective CLI requires a prospective manifest")
     requests = runner.verified_bytes(blind / "requests.jsonl", manifest["blind_requests_sha256"])
     sources = runner.verified_bytes(blind / "sources.jsonl", manifest["sources_sha256"])
+    runner.require_file_inventory(
+        args.tokenizer, d0.MODEL_FILES | manifest["model_identity"]["tokenizer"]["files"]
+    )
     result = score(
         manifest,
         requests,

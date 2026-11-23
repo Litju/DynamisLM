@@ -127,6 +127,16 @@ def model_identity(mode: str, device: str = "cpu") -> dict[str, Any]:
     }
 
 
+def require_file_inventory(directory: Path, allowed: dict[str, str]) -> None:
+    extra = sorted(
+        path.name
+        for path in directory.iterdir()
+        if path.name not in allowed and not (path.name == ".cache" and path.is_dir())
+    )
+    if extra:
+        raise ValueError(f"unbound files in inference directory: {extra}")
+
+
 def blind_request(row: dict[str, Any]) -> dict[str, Any]:
     return {field: row[field] for field in BLIND_FIELDS.split()}
 
@@ -316,6 +326,10 @@ class PinnedBackend:
                 "compute_capability": inventory["cuda"]["compute_capability"],
                 "total_vram_bytes": inventory["cuda"]["total_vram_bytes"],
             }
+        # Transformers can prefer a single safetensors file over the verified shards.
+        snapshot_files = d0.MODEL_FILES | self.identity["tokenizer"]["files"]
+        require_file_inventory(snapshot, snapshot_files)
+        require_file_inventory(adapter, d0.ADAPTER_FILES)
         d0.verify_files(snapshot, d0.MODEL_FILES)
         d0.verify_files(adapter, d0.ADAPTER_FILES)
         self.tokenizer = load_pinned_tokenizer(snapshot)

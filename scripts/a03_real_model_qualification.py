@@ -129,6 +129,9 @@ def verify(
     if (requests, sources) != inputs():
         raise ValueError("exposed qualification workload differs")
     items, work = runner.verify_run(manifest, requests, sources)
+    runner.require_file_inventory(
+        snapshot, d0.MODEL_FILES | manifest["model_identity"]["tokenizer"]["files"]
+    )
     tokenizer = load_pinned_tokenizer(snapshot)
     mask = TokenMask(Vocabulary.from_pinned(snapshot))
     entries = _output_commit(output, manifest, commit_sha256, items, work, tokenizer, mask)

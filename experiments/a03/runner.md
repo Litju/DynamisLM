@@ -69,8 +69,9 @@ In a clean exact checkout, use a private directory outside Git with `blind` and 
 subdirectories of mode 0700. Set `PYTHONPATH` to the checkout's `src` and
 `PYTHONNOUSERSITE=1`. Set `PY` to the runtime interpreter and `SNAPSHOT` and
 `ADAPTER` to local directories containing the individually verified files in
-`a03_d0_runtime.py` and `experiments/a02/tokenizer-files-v1.json`. Download only the
-pinned Hugging Face revision and files. There is one unquantized numerical profile,
+`a03_d0_runtime.py` and `experiments/a02/tokenizer-files-v1.json`. Stage only those
+files and Hugging Face download metadata in `.cache`, since other model and tokenizer
+files can override the loader's selection. There is one unquantized numerical profile,
 FP32 with MATH SDPA and TF32/autocast disabled. CPU qualification uses CPython 3.13,
 `torch==2.14.1+cpu` from the PyTorch CPU index and the existing pinned D0
 requirements from `experiments/a0/requirements-colab.txt` and
