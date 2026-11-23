@@ -320,8 +320,12 @@ class PinnedBackend:
         d0.verify_files(adapter, d0.ADAPTER_FILES)
         self.tokenizer = load_pinned_tokenizer(snapshot)
         self.mask = TokenMask(Vocabulary.from_pinned(snapshot))
+        # PEFT otherwise redispatches a CPU-resident base with its automatic offload map.
         self.model = PeftModel.from_pretrained(
-            load_model(snapshot, "float32", device=device), adapter, is_trainable=False
+            load_model(snapshot, "float32", device=device),
+            adapter,
+            is_trainable=False,
+            device_map={"": device},
         ).eval()
         self.model.generation_config = type(self.model.generation_config).from_model_config(
             self.model.config
