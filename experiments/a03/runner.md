@@ -74,7 +74,9 @@ pinned Hugging Face revision and files. There is one unquantized numerical profi
 FP32 with MATH SDPA and TF32/autocast disabled. CPU qualification uses CPython 3.13,
 `torch==2.14.1+cpu` from the PyTorch CPU index and the existing pinned D0
 requirements from `experiments/a0/requirements-colab.txt` and
-`experiments/a02/training-requirements-v1.txt`. Record the runtime package
+`experiments/a02/training-requirements-v1.txt`. Install `pytest==8.4.2` and
+`openpyxl==3.1.5` for the repository modules imported by the historical sample.
+Record the runtime package
 inventory, CPU model and the thread settings. A CPU run establishes only CPU behavior.
 
 ```sh
@@ -120,7 +122,8 @@ Do not invoke the historical D0 launcher for this workload.
   watchdog check or an incomplete budget. No retry allocation or extension.
 - Use an isolated CPython 3.13 inference environment inheriting the provider's
   `torch==2.14.1+cu130`. Follow the existing setup commands in
-  `a03_d0_colab_bootstrap.py` through the requirements installation. Check CUDA 13.0,
+  `a03_d0_colab_bootstrap.py` through the requirements installation. Install the
+  same pinned pytest and openpyxl as on CPU. Check CUDA 13.0,
   T4 compute capability 7.5 and at least 14 GiB free VRAM before load. Stage at most
   20 GiB of local disk for pinned weights, libraries and evidence. D0 measured
   12.56 GiB peak CUDA reserve for N/C1, which informs planning for C0.

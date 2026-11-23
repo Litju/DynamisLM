@@ -76,13 +76,13 @@ def source_identity(mode: str) -> dict[str, str]:
         raise ValueError("real-model execution requires an exact clean source checkout")
     if _git("hash-object", "scripts/a02_v3_constrained.py") != C0_BLOB:
         raise ValueError("frozen C0 source differs")
-    tracked = _git(
-        "ls-files", "src", "scripts", "experiments", "registries", "uv.lock", "pyproject.toml"
-    )
-    # Include the prospective modules while developing the CPU fixture before its commit.
-    files = set(tracked.splitlines()) | {
-        path.relative_to(ROOT).as_posix() for path in (ROOT / "scripts").glob("a03_prospective*.py")
-    }
+    files = set(_git("ls-files").splitlines())
+    if mode == DEV:
+        # Scripted QA also imports uncommitted runner modules during local development.
+        files.update(
+            path.relative_to(ROOT).as_posix()
+            for path in (ROOT / "scripts").glob("a03_prospective*.py")
+        )
     return {
         "commit": _git("rev-parse", "HEAD"),
         "tree": _git("rev-parse", "HEAD^{tree}"),
@@ -96,6 +96,8 @@ def model_identity(mode: str, device: str = "cpu") -> dict[str, Any]:
         raise ValueError("inference device must be cpu or cuda")
     packages = dict(d0.RUNTIME)
     if mode == QUALIFICATION or device == "cuda":
+        # The historical sample imports the source checkout's fixture builders.
+        packages.update({"pytest": "8.4.2", "openpyxl": "3.1.5"})
         for requirement in (
             "experiments/a0/requirements-colab.txt",
             "experiments/a02/training-requirements-v1.txt",
