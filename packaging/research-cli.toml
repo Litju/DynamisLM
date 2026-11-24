@@ -4,10 +4,10 @@ build-backend = "hatchling.build"
 
 [project]
 name = "dynamislm-research"
-version = "0.1.0a1"
-description = "DynamisLM synthetic research CLI using the registered scientific authority."
+version = "0.1.0a2"
+description = "DynamisLM synthetic research CLI with offline model-backed scientific inference."
 readme = "RESEARCH-CLI.md"
-requires-python = ">=3.12,<3.13"
+requires-python = ">=3.13,<3.14"
 license = "AGPL-3.0-only"
 license-files = ["LICENSE", "NOTICE.md"]
 dependencies = ["openpyxl==3.1.5", "et-xmlfile==2.0.0"]
@@ -15,11 +15,22 @@ classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Science/Research",
     "Operating System :: POSIX :: Linux",
-    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+]
+
+[project.optional-dependencies]
+model = [
+    "torch==2.14.1",
+    "transformers==4.53.0",
+    "tokenizers==0.21.1",
+    "peft==0.16.0",
+    "accelerate==1.8.1",
+    "safetensors==0.5.3",
+    "jinja2==3.1.6",
 ]
 
 [project.scripts]
 dynamislm-research = "scripts.research_cli:main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/dynamislm", "scripts"]
+packages = ["src/dynamislm", "scripts", "experiments"]

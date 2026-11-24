@@ -160,3 +160,5 @@ docs/operations/RES-747-RESEARCH-CLI.md	documentation	-	Synthetic research CLI b
 packaging/research-cli.toml	configuration	-	Standalone synthetic CLI candidate packaging without modifying frozen A0.2 build files
 experiments/a03/runner.md	documentation	-	Operational invocation and custody handoff for the RES-746 prospective evaluator
 docs/operations/ALPHA-ADAPTER-BUNDLE.md	documentation	-	RES-772 offline adapter packaging and verification runbook; no model artifacts stored in Git
+docs/operations/RESEARCH-ASK.md	documentation	-	RES-430 installed research inference operations and claim boundaries
+packaging/research-model-constraints.txt	configuration	-	RES-430 pinned CPython 3.13 CPU inference dependency versions

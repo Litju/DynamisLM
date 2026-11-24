@@ -23,7 +23,10 @@ class Vocabulary:
     def from_pinned(cls, path: Path) -> Vocabulary:
         from scripts.a02_v3_preflight import load_pinned_tokenizer
 
-        tokenizer = load_pinned_tokenizer(path)
+        return cls.from_tokenizer(load_pinned_tokenizer(path))
+
+    @classmethod
+    def from_tokenizer(cls, tokenizer: Any) -> Vocabulary:
         spec = json.loads(tokenizer.backend_tokenizer.to_str())
         if spec["model"]["type"] != "BPE" or spec["decoder"]["type"] != "ByteLevel":
             raise ValueError("unsupported V3 tokenizer decoder")
