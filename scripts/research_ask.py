@@ -80,6 +80,7 @@ def open_runtime(bundle_path: Path, base_dir: Path, device: str) -> ResearchRunt
         raise ValueError("bundle archive must be a regular file")
     payload, report = bundle.verified_payload(bundle_path)
     base = verify_base(base_dir)
+    report["base_snapshot_verified"] = True
     manifest = v3.json_object(payload["MANIFEST.json"].decode())
     # Read only deployed prompt assets. The historical case manifest stays out of the wheel.
     profile = v3.json_object(v3.PROFILE_PATH.read_text(encoding="utf-8"))
@@ -289,6 +290,7 @@ def human_report(receipt: dict[str, Any]) -> str:
             [
                 f"Base model: {base['id']}@{base['revision']}",
                 f"Adapter SHA-256: {identity['adapter']['weights_sha256']}",
+                f"Distribution: {identity['bundle']['distribution']}",
                 f"Runtime: {v3.canonical(identity['runtime'])}",
             ]
         )

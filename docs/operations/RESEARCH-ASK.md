@@ -33,11 +33,35 @@ installed runtime is qualified only on CPU. `ask --device cuda` exits 4 pending 
 CUDA qualification.
 
 Obtain the authorized exact snapshot of
-`HuggingFaceTB/SmolLM3-3B@a07cc9a04f16550a088caea529712d1d335b0ac1` out of band. Stage real
-regular copies of the nine files listed in the RES-772 manifest into a dedicated read-only
-directory with no cache metadata, snapshots, symlinks or extra files. Put the original RES-772 tar
-in a directory by itself, or pass its file path. The archive and snapshot should remain stable
-through the entire command. Inference uses local-only model loading and offline Hub flags.
+`HuggingFaceTB/SmolLM3-3B@a07cc9a04f16550a088caea529712d1d335b0ac1`. If it is already cached,
+copy the nine files named by the RES-772 manifest into a dedicated directory,
+dereferencing cache symlinks. For an operator-authorized acquisition, run this separately from
+inference with the model-extra interpreter and the source checkout as the current directory.
+
+```bash
+"$python" - /path/to/new-snapshot <<'PYCODE'
+import shutil
+import sys
+from pathlib import Path
+
+from huggingface_hub import snapshot_download
+from scripts.alpha_adapter_bundle import base_reference
+
+base = base_reference()
+cache = Path(snapshot_download(
+    repo_id=base["id"], revision=base["revision"], allow_patterns=list(base["files"])
+))
+destination = Path(sys.argv[1])
+destination.mkdir(mode=0o700)
+for name in base["files"]:
+    shutil.copyfile(cache / name, destination / name)
+PYCODE
+```
+
+Check the new directory with `verify-base`. Keep only those nine regular files in the read-only
+snapshot. Put the original RES-772 tar in a directory by itself, or pass its file path. Keep the
+archive and snapshot stable through the entire command. Inference uses local-only model loading
+and offline Hub flags.
 
 The bundle passes structural verification for authorized internal use.
 `LICENSE_DECISION_REQUIRED` blocks public distribution pending RES-771 D2.

@@ -197,3 +197,45 @@ def test_ask_verifies_archive_before_loading(
     archive.write_bytes(b"tampered")
     with pytest.raises(ValueError, match="invalid archive member"):
         research.open_runtime(tmp_path, tmp_path, "cpu")
+
+
+def test_runtime_receipt_tracks_verified_base_and_stages_only_peft_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    base = bundle.base_reference()
+    manifest = {
+        "runtime": {"torch": "2.14.1", "python": "CPython 3.13"},
+        "adapter": {"weights_sha256": "synthetic"},
+    }
+    payload = {
+        "MANIFEST.json": v3.canonical(manifest).encode(),
+        bundle.CONFIG: b"synthetic config",
+        bundle.WEIGHTS: b"synthetic adapter",
+        "provenance/metadata.json": b"never staged",
+    }
+    report = {
+        "base_snapshot_verified": False,
+        "publication_qualified": False,
+        "distribution": "LICENSE_DECISION_REQUIRED",
+        "files": {name: v3.sha256(data) for name, data in payload.items()},
+    }
+    archive = tmp_path / "verified-by-stub.tar"
+    archive.touch()
+    monkeypatch.setattr(research, "validate_device", lambda device: None)
+    monkeypatch.setattr(bundle, "verified_payload", lambda path: (payload, report))
+    monkeypatch.setattr(research, "verify_base", lambda path: base)
+    monkeypatch.setattr(research, "version", lambda name: "2.14.1+cpu")
+
+    class LoaderStub:
+        def __init__(self, snapshot: Path, adapter: Path, **kwargs: Any) -> None:
+            self.runtime: dict[str, Any] = {}
+            assert {p.name: p.read_bytes() for p in adapter.iterdir()} == {
+                Path(name).name: payload[name] for name in (bundle.CONFIG, bundle.WEIGHTS)
+            }
+            assert kwargs["cpu_qualification"] is True
+
+    monkeypatch.setattr(research, "PinnedModel", LoaderStub)
+    runtime = research.open_runtime(archive, tmp_path, "cpu")
+    assert runtime.identity["base"] == base
+    assert runtime.identity["bundle"]["base_snapshot_verified"] is True
+    assert runtime.identity["bundle"]["publication_qualified"] is False
