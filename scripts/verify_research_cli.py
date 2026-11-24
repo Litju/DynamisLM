@@ -63,7 +63,7 @@ def verify(directory: Path) -> None:
             raise ValueError("source or artifact content identity differs")
         with zipfile.ZipFile(wheel) as archive:
             for name, expected in identity_files.items():
-                if name.startswith(("src/dynamislm/", "scripts/")):
+                if name.startswith(("src/dynamislm/", "scripts/", "experiments/")):
                     packaged = name.removeprefix("src/")
                     if hashlib.sha256(archive.read(packaged)).hexdigest() != expected:
                         raise ValueError(f"packaged source byte drift: {name}")

@@ -13,15 +13,29 @@ import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-DOC = "docs/operations/RES-747-RESEARCH-CLI.md"
+DOC = "docs/operations/RESEARCH-ASK.md"
 CONFIG = "packaging/research-cli.toml"
 PATHS = (
     "src/dynamislm",
     "scripts/__init__.py",
     "scripts/research_cli.py",
+    "scripts/research_ask.py",
+    "scripts/research_scenarios.py",
+    "scripts/alpha_adapter_bundle.py",
+    "scripts/a02_dev_runtime.py",
     "scripts/a02_v3_contract.py",
+    "scripts/a02_v3_precision.py",
+    "scripts/a03_model_core.py",
+    "scripts/a03_model_runtime.py",
+    "scripts/a03_hf_token_mask.py",
     "scripts/a03_scientific_admission.py",
     "scripts/a03_token_decoder.py",
+    "experiments/a0/requirements-colab.txt",
+    "experiments/a02/development-profile-v3.json",
+    "experiments/a02/model-comparison-protocol-v3.json",
+    "experiments/a02/submit-scientific-action-tool-v3.json",
+    "experiments/a02/system-action-development-v3.txt",
+    "experiments/a02/tokenizer-files-v1.json",
     "LICENSE",
     "NOTICE.md",
     DOC,
@@ -60,7 +74,7 @@ def build(out: Path) -> None:
             "source_selection_archive_sha256": hashlib.sha256(archive).hexdigest(),
             "artifact_content_sha256": hashlib.sha256(canonical(files)).hexdigest(),
             "included_source_file_sha256": files,
-            "mode": "SYNTHETIC_DETERMINISTIC_CPU",
+            "mode": "SYNTHETIC_RESEARCH_CLI",
         }
         (source / "scripts/_research_identity.json").write_bytes(canonical(identity))
         subprocess.run(
