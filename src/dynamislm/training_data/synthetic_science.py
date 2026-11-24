@@ -1,6 +1,5 @@
 """Original RES-402 fictional support; no empirical or evaluation cases are consumed."""
 
-from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
 import dynamislm as d
@@ -20,15 +19,9 @@ def instance(kind: str, key: str) -> d.InstanceIdentifier:
     return d.InstanceIdentifier(kind, f"SYNTHETIC-RES402-{key}")
 
 
-def make_record(
-    key: str,
-    values: tuple[float, ...],
-    *,
-    followup_unit: d.UnitReference | None = None,
-    different_method: bool = False,
-    different_protocol: bool = False,
-    different_source: bool = False,
-) -> d.LongitudinalAthletePerformanceRecord:
+def make_support(
+    key: str, values: tuple[float, ...], *, wrong_unit: bool = False, different_method: bool = False
+) -> StatisticalSupport:
     """Build exact synthetic observation/source/football lineage using RES-62 builders."""
     season = d.SeasonIdentity(reference("season", "2026-27").identifier, "SYNTHETIC season")
     athlete = d.AthleteIdentity(instance("athlete", key), f"SYNTHETIC athlete {key}")
@@ -71,13 +64,6 @@ def make_record(
         license_reuse=d.LicenseReuseMetadata(ReuseStatus.UNKNOWN),
     )
     decision = qualify_canonical_source(source)
-    alternate_decision = (
-        qualify_canonical_source(
-            replace(source, source_id=reference("source", "fictional-cmj-alternate"))
-        )
-        if different_source
-        else decision
-    )
     start = datetime(2026, 8, 12, 9, tzinfo=UTC)
     session = d.TestingSession(
         session_id=instance("session", key),
@@ -100,9 +86,7 @@ def make_record(
             semantic=d.SemanticIdentity(
                 construct=reference("construct", "jump"),
                 test_family=reference("test-family", "cmj"),
-                protocol=reference(
-                    "protocol", "cmj-alternate" if different_protocol and index else "cmj-standard"
-                ),
+                protocol=reference("protocol", "cmj-standard"),
                 measurand=reference("measurand", "jump-height"),
                 metric_definition=reference("metric", "cmj-height"),
             ),
@@ -149,7 +133,9 @@ def make_record(
             result=d.MeasurementResult(
                 result_id=instance("result", item),
                 value=d.ScalarValue(value),
-                unit=followup_unit if followup_unit is not None and index else METER,
+                unit=METER
+                if not wrong_unit or index == 0
+                else d.UnitReference(reference("unit", "wrong-seconds").identifier, "s"),
                 classification=d.ScientificClassification(d.ValueOrigin.DIRECT_MEASUREMENT, ()),
             ),
             provenance=d.Provenance(
@@ -182,30 +168,13 @@ def make_record(
             session=session,
             observation_context_id=context.context_id,
         )
-        binding = d.SourceArtifactQualificationBinding.from_decision(
-            alternate_decision if index else decision, (artifact_id,)
-        )
+        binding = d.SourceArtifactQualificationBinding.from_decision(decision, (artifact_id,))
         entries.append(d.build_longitudinal_observation_entry(observation, world, (binding,)))
     entry_tuple = tuple(entries)
-    return d.build_longitudinal_record(
+    record = d.build_longitudinal_record(
         athlete, entry_tuple, d.LongitudinalRecordOrigin.SYNTHETIC_DETERMINISTIC
     )
-
-
-def make_support(
-    key: str, values: tuple[float, ...], *, wrong_unit: bool = False, different_method: bool = False
-) -> StatisticalSupport:
-    record = make_record(
-        key,
-        values,
-        followup_unit=(
-            d.UnitReference(reference("unit", "wrong-seconds").identifier, "s")
-            if wrong_unit
-            else None
-        ),
-        different_method=different_method,
-    )
     analysis_input = d.build_multi_source_analysis_input(
-        record.athlete, record.entries, d.MultiSourceAnalysisScope.SAME_SESSION
+        athlete, entry_tuple, d.MultiSourceAnalysisScope.SAME_SESSION
     )
-    return build_statistical_support(analysis_input, record.entries, source_records=(record,))
+    return build_statistical_support(analysis_input, entry_tuple, source_records=(record,))

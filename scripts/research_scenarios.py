@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import dynamislm as d
-from dynamislm.training_data.synthetic_science import make_record, reference
+from dynamislm.training_data.synthetic_science import make_support, reference
 from scripts.a02_v3_contract import MAX_OBSERVATIONS
 
 SCENARIO_SCHEMA = "DYNAMISLM_RESEARCH_SYNTHETIC_SCENARIO_V1"
@@ -83,31 +83,67 @@ def validate_scenario(scenario: SyntheticScenario) -> None:
             seen.add(key)
 
 
+def _alternate_followup(
+    scenario_id: str, entry: d.LongitudinalObservationEntry
+) -> d.LongitudinalObservationEntry:
+    observation = entry.observation
+    (binding,) = entry.source_qualification_bindings
+    match scenario_id:
+        case "unit-incompatibility":
+            unit = d.UnitReference(reference("unit", "centimeter").identifier, "cm")
+            observation = replace(observation, result=replace(observation.result, unit=unit))
+        case "protocol-incompatibility":
+            semantic = replace(
+                observation.identity.semantic, protocol=reference("protocol", "cmj-alternate")
+            )
+            observation = replace(
+                observation, identity=replace(observation.identity, semantic=semantic)
+            )
+        case "cross-source-incompatibility":
+            source = replace(
+                binding.source_decision.source,
+                source_id=reference("source", "fictional-cmj-alternate"),
+            )
+            binding = d.SourceArtifactQualificationBinding.from_decision(
+                d.qualify_canonical_source(source), binding.artifact_ids
+            )
+        case _:
+            return entry
+    (artifact,) = observation.provenance.source_artifacts
+    artifact = replace(
+        artifact,
+        content_digest=d.canonical_hash(
+            (scenario_id, artifact.artifact_id, observation.identity, observation.result)
+        ),
+    )
+    observation = replace(
+        observation, provenance=replace(observation.provenance, source_artifacts=(artifact,))
+    )
+    return d.build_longitudinal_observation_entry(observation, entry.football_context, (binding,))
+
+
 def packaged_scenario(scenario_id: str) -> SyntheticScenario:
     if scenario_id not in CATALOGUE:
         raise ValueError("unknown packaged synthetic scenario")
-    values = (
-        (0.25,)
-        if scenario_id == "single-observation"
-        else ((0.25, 37.5) if scenario_id == "unit-incompatibility" else (0.25, 0.375))
-    )
-    record = make_record(
+    original = make_support(
         "research-cli" if scenario_id == "absolute-change" else f"research-{scenario_id}",
-        values,
-        followup_unit=(
-            d.UnitReference(reference("unit", "centimeter").identifier, "cm")
-            if scenario_id == "unit-incompatibility"
-            else None
-        ),
-        different_protocol=scenario_id == "protocol-incompatibility",
-        different_source=scenario_id == "cross-source-incompatibility",
+        (0.25, 37.5) if scenario_id == "unit-incompatibility" else (0.25, 0.375),
         different_method=scenario_id == "cross-source-incompatibility",
+    ).analysis_input
+    first, followup = original.entries
+    entries = (
+        (first,)
+        if scenario_id == "single-observation"
+        else (first, _alternate_followup(scenario_id, followup))
+    )
+    record = d.build_longitudinal_record(
+        original.athlete, entries, d.LongitudinalRecordOrigin.SYNTHETIC_DETERMINISTIC
     )
     source = (
         d.build_multi_source_analysis_input(
-            record.athlete, record.entries, d.MultiSourceAnalysisScope.SAME_SESSION
+            record.athlete, entries, d.MultiSourceAnalysisScope.SAME_SESSION
         )
-        if len(record.entries) > 1
+        if len(entries) > 1
         else None
     )
     scenario = SyntheticScenario(
