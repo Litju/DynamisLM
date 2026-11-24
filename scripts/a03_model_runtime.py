@@ -113,6 +113,7 @@ class PinnedModel:
             adapter,
             is_trainable=False,
             device_map={"": device},
+            local_files_only=True,
         ).eval()
         self.model.generation_config = type(self.model.generation_config).from_model_config(
             self.model.config

@@ -279,16 +279,17 @@ def build(adapter_dir: Path, archive: Path, license_file: Path | None = None) ->
         os.link(pending.name, archive)
 
 
-def verify(
+def verified_payload(
     archive: Path, base_dir: Path | None = None, license_file: Path | None = None
-) -> dict[str, Any]:
+) -> tuple[dict[str, bytes], dict[str, Any]]:
+    """Return payload bytes from the same verified archive read used by the CLI."""
     data = read_bounded(archive, MAX_ARCHIVE_BYTES)
     payload = read_archive(data)
     base = base_reference()
     validate_payload(payload, base, license_file)
     if base_dir is not None:
         verify_files(base_dir, base["files"])
-    return {
+    return payload, {
         "schema": SCHEMA,
         "structural_integrity": "PASS",
         "distribution": DISTRIBUTION,
@@ -297,6 +298,12 @@ def verify(
         "archive_sha256": sha256(data),
         "files": {name: sha256(content) for name, content in payload.items()},
     }
+
+
+def verify(
+    archive: Path, base_dir: Path | None = None, license_file: Path | None = None
+) -> dict[str, Any]:
+    return verified_payload(archive, base_dir, license_file)[1]
 
 
 def main(argv: list[str] | None = None) -> int:
