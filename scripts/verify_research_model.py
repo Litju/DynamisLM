@@ -34,6 +34,29 @@ def compare(reference: dict[str, Any], actual: dict[str, Any]) -> None:
         raise ValueError("installed C1 generation differs from the pinned RES-746 CPU reference")
 
 
+def retained_cpu_cases(
+    reference: Path, expected: str
+) -> tuple[dict[str, str], dict[str, dict[str, Any]]]:
+    from scripts import a02_v3_contract as v3
+
+    commitment = (reference / "out-cpu/output-commit.json").read_bytes()
+    if digest(commitment) != expected:
+        raise ValueError("RES-746 CPU output commitment differs")
+    commit = json.loads(commitment)
+    run = v3.json_object((reference / "blind-cpu/run.json").read_text(encoding="utf-8"))
+    requests = (reference / "blind-cpu/requests.jsonl").read_bytes()
+    outputs = (reference / "out-cpu/outputs.jsonl").read_bytes()
+    if (
+        digest(v3.canonical(run).encode()) != commit["run_sha256"]
+        or digest(requests) != run["blind_requests_sha256"]
+        or digest(outputs) != commit["outputs_sha256"]
+    ):
+        raise ValueError("retained CPU inputs or outputs differ from their commitment")
+    questions = {row["item_id"]: row["question"] for row in map(json.loads, requests.splitlines())}
+    records = {row["item"]: row["record"] for row in map(json.loads, outputs.splitlines())}
+    return questions, records
+
+
 def qualify(directory: Path, archive: Path, base: Path, reference: Path, output: Path) -> None:
     from scripts import research_ask as research
     from scripts.alpha_adapter_bundle import verified_payload
@@ -53,21 +76,8 @@ def qualify(directory: Path, archive: Path, base: Path, reference: Path, output:
     payload, _ = verified_payload(archive)
     manifest = json.loads(payload["MANIFEST.json"])
     expected = manifest["evaluation"]["res746"]["cpu_output_commit_sha256"]
-    commitment = (reference / "out-cpu/output-commit.json").read_bytes()
-    if digest(commitment) != expected:
-        raise ValueError("RES-746 CPU output commitment differs")
-    commit = json.loads(commitment)
-    run_data = (reference / "blind-cpu/run.json").read_bytes()
-    requests = (reference / "blind-cpu/requests.jsonl").read_bytes()
-    outputs = (reference / "out-cpu/outputs.jsonl").read_bytes()
-    if (
-        digest(run_data) != commit["run_sha256"]
-        or digest(requests) != json.loads(run_data)["blind_requests_sha256"]
-        or digest(outputs) != commit["outputs_sha256"]
-    ):
-        raise ValueError("retained CPU inputs or outputs differ from their commitment")
-    questions = {row["item_id"]: row["question"] for row in map(json.loads, requests.splitlines())}
-    records = {row["item"]: row["record"] for row in map(json.loads, outputs.splitlines())}
+    questions, records = retained_cpu_cases(reference, expected)
+    print("RES746_CPU_REFERENCE=PASS", flush=True)
     base_identity = json.loads(
         subprocess.check_output([str(cli), "verify-base", "--base", str(base)])
     )
@@ -87,9 +97,10 @@ def qualify(directory: Path, archive: Path, base: Path, reference: Path, output:
             "cpu",
         ],
         capture_output=True,
-        check=True,
         timeout=1500,
     )
+    if positive.returncode != 0:
+        raise ValueError(f"installed CLI exited {positive.returncode}: {positive.stderr!r}")
     report = json.loads(positive.stdout)
     compare(records["research-cli|C1"], report)
     estimate = report["result"]["estimates"][0]
@@ -102,6 +113,7 @@ def qualify(directory: Path, archive: Path, base: Path, reference: Path, output:
     ):
         raise ValueError("installed CLI did not ground the expected registered result")
 
+    print("INSTALLED_C1_POSITIVE_PARITY=PASS", flush=True)
     runtime = research.open_runtime(archive, base, "cpu")
     unresolved, code = research.ask(
         SyntheticScenario("d0-62-unresolved", None, ()), questions["d0-62-unresolved"], runtime
@@ -115,6 +127,7 @@ def qualify(directory: Path, archive: Path, base: Path, reference: Path, output:
         or unresolved["result"] is not None
     ):
         raise ValueError("installed runtime did not preserve the unresolved abstention")
+    print("INSTALLED_C1_UNRESOLVED_PARITY=PASS", flush=True)
     refusal, code = research.ask(
         packaged_scenario("missing-evidence"), questions["research-cli"], runtime
     )

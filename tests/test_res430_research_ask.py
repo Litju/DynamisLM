@@ -239,3 +239,35 @@ def test_runtime_receipt_tracks_verified_base_and_stages_only_peft_files(
     assert runtime.identity["base"] == base
     assert runtime.identity["bundle"]["base_snapshot_verified"] is True
     assert runtime.identity["bundle"]["publication_qualified"] is False
+
+
+def test_parity_reference_uses_the_registered_canonical_manifest_hash(tmp_path: Path) -> None:
+    from scripts.verify_research_model import retained_cpu_cases
+
+    blind = tmp_path / "blind-cpu"
+    out = tmp_path / "out-cpu"
+    blind.mkdir()
+    out.mkdir()
+    requests = b'{"item_id":"synthetic","question":"What changed?"}\n'
+    outputs = b'{"item":"synthetic|C1","record":{"raw":"synthetic-output"}}\n'
+    manifest = {"blind_requests_sha256": v3.sha256(requests), "mode": "SYNTHETIC"}
+    commit = (
+        v3.canonical(
+            {
+                "run_sha256": v3.sha256(v3.canonical(manifest).encode()),
+                "outputs_sha256": v3.sha256(outputs),
+            }
+        ).encode()
+        + b"\n"
+    )
+    (blind / "run.json").write_text(json.dumps(manifest, indent=4) + "\n")
+    (blind / "requests.jsonl").write_bytes(requests)
+    (out / "outputs.jsonl").write_bytes(outputs)
+    (out / "output-commit.json").write_bytes(commit)
+    assert retained_cpu_cases(tmp_path, v3.sha256(commit)) == (
+        {"synthetic": "What changed?"},
+        {"synthetic|C1": {"raw": "synthetic-output"}},
+    )
+    (out / "outputs.jsonl").write_bytes(outputs + b"\n")
+    with pytest.raises(ValueError, match="outputs differ"):
+        retained_cpu_cases(tmp_path, v3.sha256(commit))
