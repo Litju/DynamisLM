@@ -11,6 +11,7 @@ from typing import Any
 from scripts import a02_v3_contract as v3
 from scripts import a02_v3_decision as decision
 from scripts.a02_v3_preflight import TOKENIZER_DIR, load_pinned_tokenizer
+from scripts.a03_model_core import tokens_sha256 as tokens_sha256
 
 STATIC_SHA256 = "6f7d66fce2d48c6d76bef1d307ee3537b0d182258e7e9261374cd97be40d1cfe"
 CHECKPOINT_SHA256 = "20f914e836df3c14a34240769b8dda28360d96ebc8fbedb83685cd5963686ec8"
@@ -58,10 +59,6 @@ def inputs(tokenizer: Any) -> list[tuple[dict[str, Any], dict[str, Any], dict[st
             )
         )
     return rows
-
-
-def tokens_sha256(ids: list[int]) -> str:
-    return v3.sha256(v3.canonical(ids).encode())
 
 
 def seal(tokenizer: Any, static: bytes) -> dict[str, Any]:

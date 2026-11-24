@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from scripts.a02_v3_contract import json_object, sha256
-from scripts.a03_d0_runtime import ADAPTER_FILES, MODEL_FILES, RUNTIME, verify_files
+from scripts.a03_model_core import ADAPTER_FILES, MODEL_FILES, RUNTIME, verify_files
 
 ROOT = Path(__file__).resolve().parents[1]
 SCHEMA = "DYNAMISLM_ADAPTER_BUNDLE_V1"
