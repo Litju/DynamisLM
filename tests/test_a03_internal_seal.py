@@ -415,3 +415,17 @@ def test_gold_cannot_be_hidden_in_requests_or_use_unknown_references(tmp_path: P
     )
     refused(packet, tmp_path / "ref", "invalid gold judgment")
     assert CAUSAL_ABSTAIN and EXEC and PRACTICAL_FLAG
+
+
+def test_execution_gold_that_the_engine_cannot_execute_is_refused(tmp_path: Path) -> None:
+    packet = valid_packet()
+    item = next(
+        r
+        for r in packet.requests
+        if packet.gold_of(r["item_id"])["judgment"]["control"] == "EXECUTE"
+    )
+    # A single observation cannot satisfy the RES-69 two-entry support: valid V3 shape, no result.
+    gold = packet.gold_of(item["item_id"])["judgment"]
+    gold["acceptable_actions"] = [action(ids=("observation-1",))]
+    gold["preferred_action"] = gold["acceptable_actions"][0]
+    refused(packet, tmp_path, "not executable by the engine")

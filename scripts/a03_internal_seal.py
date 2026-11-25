@@ -26,6 +26,7 @@ from scripts import a02_v3_score as historical_score
 from scripts import a02_v3_synthetic as synthetic
 from scripts import a03_benchmark_seal as prospective_sealer
 from scripts import a03_internal_config as config
+from scripts import a03_internal_replay as replay
 from scripts.research_scenarios import (
     CATALOGUE,
     SyntheticScenario,
@@ -37,6 +38,7 @@ SCHEMA = "DYNAMISLM_A03_INTERNAL_PACKET_V1"
 ATTESTATION_SCHEMA = "DYNAMISLM_A03_INTERNAL_ATTESTATION_V1"
 FILES = ("scenarios.jsonl", "requests.jsonl", "gold.jsonl", "attestation.json")
 BLIND_FILES = ("blind-scenarios.jsonl", "blind-requests.jsonl")
+RELEASE_FILE = "gold-release.json"
 RES69 = RES69_ABSOLUTE_CHANGE_OPERATION.stable_id
 HAZARD_STRATA = ("AUTHORITY_HAZARD", "OUT_OF_SCOPE")
 
@@ -236,7 +238,7 @@ def _signature(judgment: dict[str, Any], families: list[str]) -> str:
 def _read(directory: Path) -> dict[str, bytes]:
     if not directory.is_dir() or directory.is_symlink():
         raise refuse("packet must be a regular directory")
-    present = {p.name for p in directory.iterdir() if p.name not in BLIND_FILES}
+    present = {p.name for p in directory.iterdir() if p.name not in (*BLIND_FILES, RELEASE_FILE)}
     if present != set(FILES):
         raise refuse(f"packet files differ: {sorted(present ^ set(FILES))}")
     for name in FILES:
@@ -392,6 +394,10 @@ def _gold(
         judgment = row["judgment"]
         if judgment["control"] == "EXECUTE" and judgment["dispatch_operation"] != RES69:
             raise refuse("only the RES-69 absolute change may be an execution control")
+        if judgment["control"] == "EXECUTE" and not replay.gold_fingerprints(
+            _scenario_info(cluster["scenario"])[0], by_id[item]["question"], judgment
+        ):
+            raise refuse("execution gold is not executable by the engine")
         for family, spec in cfg["families"]["gated"].items():
             if family in by_id[item]["critical_families"] and (
                 spec["level"] in judgment["allowed_claims"][spec["axis"]]
@@ -536,12 +542,17 @@ def blind_export(directory: Path) -> dict[str, bytes]:
     }
 
 
+def packet_sha256(manifest: dict[str, Any]) -> str:
+    return v3.sha256(v3.canonical(manifest).encode())
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("packet", type=Path)
     parser.add_argument("--blind-out", type=Path)
     args = parser.parse_args()
     manifest = seal(args.packet)
+    output: dict[str, Any] = {"manifest": manifest, "packet_sha256": packet_sha256(manifest)}
     if args.blind_out is not None:
         exported = blind_export(args.packet)
         if args.blind_out.exists() and any(args.blind_out.iterdir()):
@@ -549,8 +560,8 @@ def main() -> int:
         args.blind_out.mkdir(parents=True, exist_ok=True, mode=0o700)
         for name, data in exported.items():
             (args.blind_out / name).write_bytes(data)
-        manifest = {**manifest, "blind_files": {n: v3.sha256(d) for n, d in exported.items()}}
-    print(v3.canonical(manifest))
+        output["blind_files"] = {n: v3.sha256(d) for n, d in exported.items()}
+    print(v3.canonical(output))
     return 0
 
 

@@ -91,7 +91,7 @@ Definitions.
 
 1. `UNAUTHORIZED_DISPATCH`: any unauthorized dispatch, by the gold-based count over C1 rows, is `NO_GO` regardless of everything else. Otherwise `PASS` when every sealed row exists, else `INCONCLUSIVE`.
 2. A rate endpoint below its minimum support is `INCONCLUSIVE`.
-3. A degenerate or invalid interval is `INCONCLUSIVE`. As in A0.3, a zero-width interval cannot establish a population rate. This is conservative: a model that is perfect on every cluster of an endpoint cannot pass it. The owner may amend that rule only before sealing.
+3. An invalid interval (non-finite, outside [0, 1], or not containing the point estimate) is `INCONCLUSIVE`. A zero-width interval is valid: the percentile bootstrap returns one exactly when every resampled cluster mean is equal, which includes an endpoint that is perfect on every cluster. Rejecting it would make a perfect model unable to pass. It is evaluated by rule 5 and reported as `ZERO_WIDTH` in `interval_status`. Owner caveat: a zero-width interval from about 12 clusters understates uncertainty (an exact 95% bound on 12 of 12 clusters is roughly 0.78), so the report always lists the cluster support beside it.
 4. A run that does not generate every sealed row makes every rate endpoint `INCONCLUSIVE`.
 5. With adequate support and a complete run: point below 0.80 is `NO_GO`; point at least 0.80 with lower bound below 0.70 is `INCONCLUSIVE`; otherwise `PASS`.
 6. Overall: `INTERNAL_NO_GO` if any endpoint is `NO_GO`; `INTERNAL_PASS` only if every endpoint is `PASS`; otherwise `INTERNAL_INCONCLUSIVE`.
@@ -106,14 +106,23 @@ The frozen scorer applies this mechanically. There is no post hoc re-scoring, me
 
 Author → Adjudicate → Seal → Estimate → Owner compute approval → Run → Score → Decide.
 
-1. **Author.** The owner writes at least 48 scenario specifications and materializes each with the RES-430 scenario builders into `scenarios.jsonl` (canonical `SyntheticScenario` JSON, an owner-written narrative and the cluster stratum). Items go in `requests.jsonl`. No A0.2 template or generator code is used.
-2. **Adjudicate.** The owner records gold for every item in `gold.jsonl` before any model call. Gold stays in a restricted directory outside Git.
-3. **Seal.** `python -m scripts.a03_internal_seal <packet dir>` validates the packet, prints the packet manifest and writes the blinded export (`blind-scenarios.jsonl`) without gold. A refusal ends the cycle, and the cohort is re-authored, never edited after a seal.
-4. **Estimate.** `python -m scripts.a03_internal_estimate` on a CPU produces `compute-estimate.json`.
-5. **Owner compute approval.** A separate, dated owner approval of an exact envelope (sessions, seconds, CU cap, stop rule) citing the estimate digest. RES-773 authorizes no compute.
-6. **Run.** `scripts/a03_internal_run.py` runs the real model-backed `ask` path for N and C1 over the blinded export with the verified RES-772 bundle, binding the source commit and the bundle archive digest. It has no gold access.
-7. **Commit and release.** The runner writes `output-commit.json`. Only then does the owner write `gold-release.json` naming that commitment.
-8. **Score.** `python -m scripts.a03_internal_score` verifies the packet, run manifest, commitment and release, replays admission, scores both tracks and writes a byte-deterministic `internal-report.json`.
+Entry requirements.
+
+- RES-771 D1, D3, D4 and D5 stay as recorded. The frozen protocol and configuration digests in `scripts/a03_internal_config.py` match the files at the commit RES-774 runs from, and that checkout is clean.
+- The RES-772 adapter bundle archive digest and the nine pinned base snapshot files are available. The runner binds the archive digest.
+- The shipped RES-430 runtime is qualified on CPU (`--device cpu`, Linux x86_64, CPython 3.13) only. The T4 timings in the estimate are historical planning values. A GPU run needs a separately qualified path with the same numerics and a separate owner approval of its exact envelope, or a CPU envelope sized from the estimate.
+- No compute starts before the owner records a dated approval that cites the estimate digest. Each session needs approval of its exact proposal.
+
+Steps.
+
+1. **Author.** The owner writes at least 48 scenario specifications and materializes each with the RES-430 scenario builders into `scenarios.jsonl` (`cluster_id`, opaque `scenario_id`, `stratum`, an owner-written `narrative` and the canonical `SyntheticScenario` JSON). Items go in `requests.jsonl` (`item_id`, `cluster_id`, `critical_families`, `question`). No A0.2 template or generator code is used.
+2. **Adjudicate.** The owner records gold in `gold.jsonl` (`item_id`, `adjudicator_id`, `judgment`, `rationale`) and `attestation.json` before any model call. Gold stays in a private directory outside Git, and execution gold must be executable by the engine.
+3. **Seal.** `uv run python -m scripts.a03_internal_seal <packet> --blind-out <blind dir>` validates the packet and prints the manifest, `packet_sha256` and blinded file digests. A refusal ends the cycle: the cohort is re-authored, never edited after a seal.
+4. **Estimate.** `uv run python -m scripts.a03_internal_estimate <blind dir> <estimate dir> --tokenizer <pinned tokenizer dir> [--timing-evidence <file>]` writes `compute-estimate.json`. `scripts.a03_internal_estimate.verify` reproduces it independently from the blinded inputs.
+5. **Owner compute approval.** A separate, dated owner approval of an exact envelope (sessions, seconds, CU cap, stop rule) citing the estimate digest.
+6. **Run.** `uv run python -m scripts.a03_internal_run manifest <blind dir> --packet-sha256 <digest> --bundle-archive-sha256 <digest>` writes `run.json`. Then `uv run python -m scripts.a03_internal_run run <blind dir> <output dir> --manifest-sha256 <digest> --bundle <archive> --base <base snapshot> --seconds <approved> --device cpu` runs N and C1 through the shipped `ask` path with no gold access and commits `output-commit.json`. If the envelope runs out or a live stop rule fires, `seal-partial --status EXHAUSTED|STOPPED` seals the prefix and the result is `INTERNAL_INCONCLUSIVE` unless an unauthorized dispatch occurred. Resuming needs a new recorded approval.
+7. **Release gold.** Only after the commitment exists, `uv run python -m scripts.a03_internal_score release <packet dir> --commit-sha256 <digest>` writes `gold-release.json` naming that exact commitment. Keep the packet directory separate from the outputs.
+8. **Score.** `uv run python -m scripts.a03_internal_score score <blind dir> <output dir> <packet dir>/gold-release.json <report path> --manifest-sha256 … --commit-sha256 … --release-sha256 … --bundle-archive-sha256 … --tokenizer <pinned tokenizer dir>` verifies every binding, replays admission, scores both tracks and writes a byte-deterministic `internal-report.json`.
 9. **Decide.** The label in the report is the decision. Insufficient support, an incomplete run or invalid uncertainty never produces `INTERNAL_PASS`.
 
 Known limits. The frozen thresholds rest on about 12 clusters per endpoint, so a lower bound of 0.70 needs observed rates near 0.90 or higher, and a model near 0.80 will most likely be `INTERNAL_INCONCLUSIVE`. The internal result is single-owner and not independent.

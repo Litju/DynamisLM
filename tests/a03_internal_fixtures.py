@@ -238,3 +238,230 @@ def valid_packet() -> Packet:
             index += 1
     assert seal_module.FILES == tuple(packet.files())
     return packet
+
+
+# ---------------------------------------------------------------------------- run fixtures
+
+BUNDLE_SHA = "ab" * 32
+IDENTITY: dict[str, Any] = {
+    "bundle": {"archive_sha256": BUNDLE_SHA, "distribution": "FIXTURE"},
+    "adapter": {"weights_sha256": "cd" * 32},
+    "base": {"revision": "fixture"},
+}
+FIXTURE_SOURCE = {"commit": "f" * 40, "tree": "e" * 40, "checkout_sha256": "d" * 64}
+
+
+class FakeTokenizer:
+    """Satisfies the V3 prompt contract. It tokenizes nothing and carries no model."""
+
+    def apply_chat_template(self, messages: Any, *, tokenize: bool, **_: Any) -> Any:
+        return [1] if tokenize else "fixture prompt"
+
+    def encode(self, text: str, *, add_special_tokens: bool) -> list[int]:
+        return [1]
+
+
+def grammar_text(candidate: dict[str, Any], request: dict[str, Any]) -> str:
+    from scripts import a02_v3_constrained as c0
+
+    return str(
+        c0.decode(
+            request=request,
+            prompt_ids=[],
+            encode=lambda text: list(text.encode()),
+            chooser=c0.target_chooser(candidate),
+        )["text"]
+    )
+
+
+class Scripted:
+    """A scripted stand-in for the pinned model. `outputs` maps (question, arm) to raw text."""
+
+    def __init__(self, outputs: dict[tuple[str, str], str | Exception]) -> None:
+        self.outputs = outputs
+        self.tokenizer = FakeTokenizer()
+        self.calls: list[tuple[str, str]] = []
+
+    def generate(
+        self, arm: str, request: dict[str, Any], prompt: list[int], deadline: float
+    ) -> Any:
+        from scripts.a03_model_core import EOS
+        from scripts.a03_model_runtime import Generation
+
+        self.calls.append((request["question"], arm))
+        out = self.outputs[request["question"], arm]
+        if isinstance(out, Exception):
+            raise out
+        return Generation([5, EOS], out, "MODEL_EOS")
+
+
+def scenario_of(packet: Packet, cluster: str) -> Any:
+    row = next(s for s in packet.scenarios if s["cluster_id"] == cluster)
+    return seal_module._scenario_info(row["scenario"])[0]
+
+
+def scripted_outputs(packet: Packet, choose: Any = None) -> dict[tuple[str, str], str | Exception]:
+    """Raw output per (question, arm). `choose(item, gold, arm)` returns an action dict."""
+    from scripts import research_ask as research
+
+    outputs: dict[tuple[str, str], str | Exception] = {}
+    for item in packet.requests:
+        gold = packet.gold_of(item["item_id"])["judgment"]
+        bound = research.prepare_request(scenario_of(packet, item["cluster_id"]), item["question"])
+        for arm in ("N", "C1"):
+            picked = choose(item, gold, arm) if choose else gold["acceptable_actions"][0]
+            outputs[item["question"], arm] = (
+                picked
+                if isinstance(picked, Exception)
+                else grammar_text(picked, bound.model_request())
+                if isinstance(picked, dict)
+                else str(picked)
+            )
+    return outputs
+
+
+def prepare_run(tmp_path: Path, packet: Packet, backend: Any) -> dict[str, Any]:
+    """Seal, export blind inputs and build the manifest. Nothing is generated yet."""
+    import os
+
+    from scripts import a03_internal_run as run_module
+    from scripts import a03_prospective_run as prospective_run
+    from scripts import research_ask as research
+
+    os.chmod(tmp_path, 0o700)
+    protected = packet.write(tmp_path / "protected")
+    protected.chmod(0o700)
+    manifest_packet = seal_module.seal(protected)
+    blind = tmp_path / "blind"
+    blind.mkdir(mode=0o700)
+    exported = seal_module.blind_export(protected)
+    for name, data in exported.items():
+        (blind / name).write_bytes(data)
+    requests, scenarios = exported["blind-requests.jsonl"], exported["blind-scenarios.jsonl"]
+    manifest = run_module.run_manifest(
+        requests,
+        scenarios,
+        packet_sha256=prospective_run.object_hash(manifest_packet),
+        bundle_archive_sha256=BUNDLE_SHA,
+        source=FIXTURE_SOURCE,
+    )
+    output = tmp_path / "out"
+    output.mkdir(mode=0o700)
+    return {
+        "protected": protected,
+        "blind": blind,
+        "output": output,
+        "manifest": manifest,
+        "packet_manifest": manifest_packet,
+        "requests": requests,
+        "scenarios": scenarios,
+        "runtime": research.ResearchRuntime(backend, IDENTITY),
+    }
+
+
+def pack_and_run(
+    tmp_path: Path, packet: Packet, backend: Any, *, seconds: float = 3600.0
+) -> dict[str, Any]:
+    from scripts import a03_internal_run as run_module
+
+    prepared = prepare_run(tmp_path, packet, backend)
+    prepared["result"] = run_module.run(
+        prepared["manifest"],
+        prepared["requests"],
+        prepared["scenarios"],
+        prepared["output"],
+        prepared["runtime"],
+        seconds=seconds,
+        verify_source=False,
+    )
+    return prepared
+
+
+def release_gold(run: dict[str, Any], *, commit_sha256: str | None = None) -> tuple[Path, str]:
+    """The custodian step: release gold only after the output commitment exists."""
+    from scripts import a03_internal_run as run_module
+
+    commit = run["output"] / "output-commit.json"
+    digest = commit_sha256 or v3.sha256(commit.read_bytes())
+    release = {
+        "schema": "DYNAMISLM_A03_INTERNAL_GOLD_RELEASE_V1",
+        "mode": "INTERNAL_OWNER_ADJUDICATED",
+        "output_commit_sha256": digest,
+        "packet": run["packet_manifest"],
+    }
+    path = run["protected"] / seal_module.RELEASE_FILE
+    path.write_text(v3.canonical(release) + "\n")
+    del run_module
+    return path, v3.sha256(path.read_bytes())
+
+
+def score_run(run: dict[str, Any], **kw: Any) -> dict[str, Any]:
+    from scripts import a03_internal_run as run_module
+    from scripts import a03_internal_score as score_module
+
+    path, release_sha = release_gold(run)
+    return score_module.score(
+        run["manifest"],
+        run["requests"],
+        run["scenarios"],
+        run["output"],
+        v3.sha256((run["output"] / "output-commit.json").read_bytes()),
+        path,
+        release_sha,
+        FakeTokenizer(),
+        bundle_archive_sha256=kw.pop("bundle_archive_sha256", BUNDLE_SHA),
+        verify_source=False,
+        **kw,
+    ) | {"_run_module": run_module.SCHEMA}
+
+
+def install_memoization(monkeypatch: Any) -> None:
+    """Speed only: RES-70 admission and `seal` are deterministic functions of their inputs.
+
+    Both are tested directly elsewhere. Memoizing them here lets the runner and scorer tests
+    exercise many model behaviours without repeating identical engine work. A permissive permit
+    callback is replayed from the recorded attempts, so dispatch capture is still exercised.
+    """
+    import copy
+
+    from scripts import a03_internal_replay as replay_module
+    from scripts import research_ask as research
+    from scripts.a03_scientific_admission import submit_scientific_action_v3
+
+    real_submit = submit_scientific_action_v3
+    real_seal = seal_module.seal
+    submissions: dict[Any, Any] = {}
+    seals: dict[Any, Any] = {}
+
+    def submit(bound: Any, raw: Any, *, permit_dispatch: Any = None) -> Any:
+        key = (
+            type(bound).__name__,
+            bound.question,
+            id(bound.source),
+            id(bound.records),
+            v3.sha256(str(raw).encode()),
+        )
+        if key not in submissions:
+            attempts: list[str] = []
+
+            def record(operation: str) -> bool:
+                attempts.append(operation)
+                return True
+
+            submissions[key] = (real_submit(bound, raw, permit_dispatch=record), tuple(attempts))
+        decision, attempts_seen = submissions[key]
+        for operation in attempts_seen if permit_dispatch is not None else ():
+            assert permit_dispatch(operation), "memoization only supports permissive permits"
+        return decision
+
+    def cached_seal(directory: Path) -> Any:
+        key = tuple(
+            (name, v3.sha256((directory / name).read_bytes())) for name in seal_module.FILES
+        )
+        if key not in seals:
+            seals[key] = real_seal(directory)
+        return copy.deepcopy(seals[key])
+
+    monkeypatch.setattr(replay_module, "submit_scientific_action_v3", submit)
+    monkeypatch.setattr(research, "submit_scientific_action_v3", submit)
+    monkeypatch.setattr(seal_module, "seal", cached_seal)
