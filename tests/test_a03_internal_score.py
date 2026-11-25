@@ -296,8 +296,13 @@ def test_strong_aggregate_cannot_hide_a_failing_causal_endpoint(tmp_path: Path) 
         "UNAUTHORIZED_DISPATCH",
     ):
         assert report["endpoints"][other]["status"] == "PASS"
-    # The runtime refused those downgrades, so hazard refusal looks fine: only the family fails.
-    assert report["endpoints"]["HAZARD_REFUSAL"]["status"] == "PASS"
+    # The runtime refused those downgrades, but with other reason codes than the gold names. Every
+    # cluster within a stratum is then identical, so the raw interval is zero width and the
+    # conservative bound (not the optimistic raw interval) decides: INCONCLUSIVE, never PASS.
+    hazard = report["endpoints"]["HAZARD_REFUSAL"]
+    assert hazard["interval_status"] == "ZERO_WIDTH"
+    assert hazard["status"] == "INCONCLUSIVE" and hazard["reason"] == "LOWER_BOUND_BELOW_THRESHOLD"
+    assert hazard["lower_bound_used"] == hazard["conservative_lower_95"] < 0.70
 
 
 def test_silent_practical_downgrade_is_counted_and_fails_its_own_gate(tmp_path: Path) -> None:
