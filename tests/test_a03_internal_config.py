@@ -163,3 +163,19 @@ def test_degenerate_interval_treatment_and_pending_dispositions_are_prospectivel
     protocol = config.PROTOCOL_PATH.read_text()
     assert "pending owner disposition" in protocol
     assert "does not establish shape independence" in protocol
+
+
+def test_v2_identity_extends_the_exact_v1_policy(tmp_path: Path) -> None:
+    original = config.identity()
+    amendment = config.load_amendment()
+    assert amendment["base_config_sha256"] == original["config_sha256"]
+    assert amendment["base_protocol_sha256"] == original["protocol_sha256"]
+    assert config.version_for(original) == 1
+    versioned = config.identity(2)
+    assert config.version_for(versioned) == 2
+    assert versioned["mode"] == versioned["evidence_class"] == original["mode"]
+    assert versioned["independence"] == original["independence"] == "NONE"
+    modified = tmp_path / "config.json"
+    modified.write_bytes(config.V2_CONFIG.read_bytes() + b"\n")
+    with pytest.raises(ValueError, match="pinned identity"):
+        config.load_amendment(modified)
