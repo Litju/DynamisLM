@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import random
 import shutil
 from collections.abc import Callable, Iterator
@@ -131,12 +132,15 @@ def test_frozen_seed_and_draws_come_from_the_configuration() -> None:
 def stats(
     clusters: int, strata: int, items: int, estimate: float, low: float, status: str = "ESTIMATED"
 ) -> dict[str, Any]:
+    """`low` is the lower bound the gate uses (raw percentile, or the conservative fallback)."""
+    usable = status in ("ESTIMATED", "ZERO_WIDTH")
     return {
         "clusters": clusters,
         "strata": strata,
         "items": items,
         "estimate": estimate,
         "ci95": [low, 1.0],
+        "lower_bound_used": low if usable else None,
         "interval_status": status,
     }
 
@@ -149,7 +153,12 @@ def status(name: str, observed: dict[str, Any], *, complete: bool = True) -> tup
     ("name", "observed", "expected"),
     [
         ("NOVEL_INTENT", stats(12, 1, 24, 0.95, 0.85), ("PASS", "ALL_CRITERIA_MET")),
-        ("NOVEL_INTENT", stats(12, 1, 24, 1.0, 1.0, "ZERO_WIDTH"), ("PASS", "ALL_CRITERIA_MET")),
+        ("NOVEL_INTENT", stats(12, 1, 24, 1.0, 0.7354, "ZERO_WIDTH"), ("PASS", "ALL_CRITERIA_MET")),
+        (
+            "CAUSAL_OVERREACH",
+            stats(12, 2, 30, 0.8333, 0.455, "ZERO_WIDTH"),
+            ("INCONCLUSIVE", "LOWER_BOUND_BELOW_THRESHOLD"),
+        ),
         (
             "NOVEL_INTENT",
             stats(11, 1, 22, 1.0, 1.0),
@@ -233,6 +242,9 @@ def test_decision_rule_has_no_pooled_endpoint() -> None:
 def test_perfect_scripted_runtime_passes_and_labels_the_evidence_internal(tmp_path: Path) -> None:
     run, report = attempt(tmp_path)
     assert report["decision"] == "INTERNAL_PASS" and report["complete"] is True
+    assert report["endpoints"]["NOVEL_INTENT"]["lower_bound_used"] == pytest.approx(
+        0.025 ** (1 / 12)
+    )
     assert (report["evidence_class"], report["independence"], report["mode"]) == (
         "INTERNAL_OWNER_ADJUDICATED",
         "NONE",
@@ -244,6 +256,10 @@ def test_perfect_scripted_runtime_passes_and_labels_the_evidence_internal(tmp_pa
     for name in scoring.MEASURES:
         endpoint = report["endpoints"][name]
         assert endpoint["estimate"] == 1.0 and endpoint["interval_status"] == "ZERO_WIDTH"
+        assert endpoint["ci95"] == [1.0, 1.0]  # the raw interval is reported, never gated on
+        assert endpoint["lower_bound_method"] == "HOEFFDING_RELATIVE_ENTROPY_FALLBACK"
+        assert endpoint["conservative_lower_95"] == endpoint["lower_bound_used"] < 1.0
+        assert endpoint["effective_support"]["clusters"] == endpoint["clusters"]
     assert report["endpoints"]["EXECUTION_COVERAGE"]["items"] == 24
     assert report["silent_downgrades"] == {"causal": 0, "practical": 0}
     assert report["rows"] == {"sealed_items": 108, "scheduled": 216, "scored": 216}
@@ -638,3 +654,103 @@ def test_release_step_names_the_exact_commitment_and_is_single_use(
         scoring.write_release(run["protected"], commit_sha)
     with pytest.raises(ValueError, match="expected SHA-256 digest"):
         scoring.write_release(clone(committed, tmp_path / "x")["protected"], "not-a-digest")
+
+
+# ------------------------------------------------------------------ degenerate uncertainty (P1)
+
+
+def cluster_rows(layout: list[tuple[str, list[bool]]]) -> list[dict[str, Any]]:
+    return [
+        {"cluster": f"c{i}", "stratum": stratum, "measure": {"family_CAUSAL_OVERREACH": value}}
+        for i, (stratum, values) in enumerate(layout)
+        for value in values
+    ]
+
+
+def bounded(
+    layout: list[tuple[str, list[bool]]], name: str = "CAUSAL_OVERREACH"
+) -> tuple[dict[str, Any], tuple[str, str]]:
+    observed = scoring.endpoint_stats(
+        cluster_rows(layout), "family_CAUSAL_OVERREACH", seed=773001, draws=10_000, infer=True
+    )
+    return observed, scoring.endpoint_status(config.load_config(), name, observed, complete=True)
+
+
+def test_identical_within_stratum_clusters_with_different_stratum_rates_cannot_pass() -> None:
+    # The reviewed defect: six clusters at 100% in A, six at 2/3 in B, 30 items, estimate 83.3%.
+    layout = [("A", [True, True])] * 6 + [("B", [True, True, False])] * 6
+    observed, outcome = bounded(layout)
+    assert observed["items"] == 30 and observed["clusters"] == 12 and observed["strata"] == 2
+    assert observed["estimate"] == pytest.approx(5 / 6)
+    assert observed["ci95"][0] == observed["ci95"][1] == pytest.approx(5 / 6)  # raw: zero width
+    assert observed["interval_status"] == "ZERO_WIDTH"
+    assert observed["lower_bound_method"] == "HOEFFDING_RELATIVE_ENTROPY_FALLBACK"
+    assert observed["conservative_lower_95"] == observed["lower_bound_used"]
+    assert observed["conservative_lower_95"] == pytest.approx(0.4553, abs=1e-3)
+    assert observed["effective_support"] == {
+        "clusters": 12,
+        "per_stratum": {"A": 6, "B": 6},
+        "distinct_cluster_means": 2,
+    }
+    assert outcome == ("INCONCLUSIVE", "LOWER_BOUND_BELOW_THRESHOLD")
+
+
+def test_all_perfect_twelve_clusters_can_pass_through_the_conservative_bound() -> None:
+    layout = [("A", [True, True])] * 6 + [("B", [True, True])] * 6
+    observed, outcome = bounded(layout)
+    assert observed["ci95"] == [1.0, 1.0] and observed["interval_status"] == "ZERO_WIDTH"
+    assert observed["conservative_lower_95"] == pytest.approx(0.025 ** (1 / 12))
+    assert 0.7353 < observed["conservative_lower_95"] < 0.7354
+    assert outcome == ("PASS", "ALL_CRITERIA_MET")
+    # Eleven perfect clusters never reach the support minimum, so the bound cannot rescue them.
+    thin, thin_outcome = bounded([("A", [True, True])] * 6 + [("B", [True, True])] * 5)
+    assert thin["clusters"] == 11 and thin_outcome == (
+        "INCONCLUSIVE",
+        "INSUFFICIENT_CLUSTER_SUPPORT",
+    )
+
+
+def test_zero_width_below_the_point_threshold_is_no_go_not_inconclusive() -> None:
+    layout = [("A", [True, False])] * 6 + [("B", [True, False])] * 6
+    observed, outcome = bounded(layout)
+    assert observed["estimate"] == 0.5 and observed["interval_status"] == "ZERO_WIDTH"
+    assert outcome == ("NO_GO", "POINT_BELOW_THRESHOLD")
+
+
+def test_nondegenerate_intervals_still_gate_on_the_raw_percentile_bound() -> None:
+    layout = [("A", [True, True])] * 5 + [("A", [True, False])] + [("B", [True, True])] * 6
+    observed, _ = bounded(layout)
+    assert observed["interval_status"] == "ESTIMATED"
+    assert observed["lower_bound_method"] == "PERCENTILE_BOOTSTRAP"
+    assert observed["lower_bound_used"] == observed["ci95"][0]
+    assert observed["conservative_lower_95"] < observed["lower_bound_used"]  # reported, not gating
+
+
+def test_conservative_bound_is_deterministic_monotone_and_exact_at_the_extremes() -> None:
+    bound = scoring.conservative_lower_bound
+    assert bound(1.0, 12, 0.025) == pytest.approx(0.025 ** (1 / 12))
+    assert bound(1.0, 24, 0.025) == pytest.approx(0.025 ** (1 / 24))
+    assert bound(0.0, 12, 0.025) == 0.0
+    assert bound(5 / 6, 12, 0.025) == bound(5 / 6, 12, 0.025)
+    # More clusters tighten it, a higher mean raises it, and it never exceeds the mean.
+    assert bound(0.9, 12, 0.025) < bound(0.9, 24, 0.025) < 0.9
+    assert bound(0.8, 24, 0.025) < bound(0.9, 24, 0.025)
+    # It satisfies its defining equation: n * h1(m, L) = ln(1 / alpha).
+    lower = bound(0.9, 24, 0.025)
+    assert 24 * scoring.relative_entropy(0.9, lower) == pytest.approx(math.log(40), abs=1e-9)
+    # The feasibility the protocol states: about 0.99 at 12 clusters and about 0.93 at 24 clusters.
+    assert bound(0.99, 12, 0.025) >= 0.70 > bound(0.95, 12, 0.025)
+    assert bound(0.93, 24, 0.025) >= 0.70 > bound(0.90, 24, 0.025)
+    for bad in ((0.5, 0), (1.2, 12), (-0.1, 12)):
+        with pytest.raises(ValueError, match="needs clusters"):
+            bound(bad[0], bad[1], 0.025)
+
+
+@pytest.mark.parametrize("status", ["INVALID", "NOT_ESTIMATED"])
+def test_unusable_uncertainty_is_inconclusive(status: str) -> None:
+    observed = stats(24, 2, 60, 1.0, 1.0, status)
+    assert status_of(observed) == ("INCONCLUSIVE", f"UNCERTAINTY_{status}")
+
+
+def status_of(observed: dict[str, Any]) -> tuple[str, str]:
+    return scoring.endpoint_status(config.load_config(), "HAZARD_REFUSAL", observed, complete=True)

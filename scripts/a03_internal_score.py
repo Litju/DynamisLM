@@ -9,6 +9,7 @@ is canonical JSON with no timestamps or timings, so rescoring reproduces identic
 from __future__ import annotations
 
 import argparse
+import math
 import random
 from collections import defaultdict
 from pathlib import Path
@@ -227,6 +228,41 @@ def _clusters(rows: list[dict[str, Any]], key: str) -> dict[str, list[float]]:
     return dict(groups)
 
 
+def relative_entropy(observed: float, hypothesised: float) -> float:
+    """Binary relative entropy h1(a, b) with the convention 0 ln 0 = 0."""
+    total = 0.0
+    if observed > 0:
+        total += observed * math.log(observed / hypothesised)
+    if observed < 1:
+        total += (1 - observed) * math.log((1 - observed) / (1 - hypothesised))
+    return total
+
+
+def conservative_lower_bound(mean: float, clusters: int, alpha: float) -> float:
+    """One-sided lower confidence bound on the mean of independent [0, 1] cluster scores.
+
+    Hoeffding (1963, Theorem 1): P(sample mean <= a) <= exp(-n h1(a, mu)) for independent
+    variables in [0, 1] whose expectations average to mu. The bound is the smallest mu not
+    rejected at level alpha. It uses only the cluster count and mean, never the resampled
+    spread, so it stays meaningful when every cluster in a stratum is identical.
+    """
+    if clusters < 1 or not 0 <= mean <= 1:
+        raise ValueError("a conservative bound needs clusters and a mean in [0, 1]")
+    if mean == 0:
+        return 0.0
+    if mean == 1:
+        return alpha ** (1 / clusters)
+    target = math.log(1 / alpha) / clusters
+    low, high = 0.0, mean
+    for _ in range(200):
+        middle = (low + high) / 2
+        if middle > 0 and relative_entropy(mean, middle) > target:
+            low = middle
+        else:
+            high = middle
+    return low
+
+
 def endpoint_stats(
     rows: list[dict[str, Any]], key: str, *, seed: int, draws: int, infer: bool
 ) -> dict[str, Any]:
@@ -242,14 +278,23 @@ def endpoint_stats(
         "successes": int(sum(flat)),
         "clusters": len(means),
         "strata": len(buckets),
+        "effective_support": {
+            "clusters": len(means),
+            "per_stratum": {stratum: len(bucket) for stratum, bucket in sorted(buckets.items())},
+            "distinct_cluster_means": len({round(mean, 12) for mean in means.values()}),
+        },
         "estimate": fmean(means.values()) if means else None,
         "item_weighted": fmean(flat) if flat else None,
         "cluster_range": [min(means.values()), max(means.values())] if means else None,
         "ci95": None,
+        "conservative_lower_95": None,
+        "lower_bound_used": None,
+        "lower_bound_method": None,
         "interval_status": "NOT_ESTIMATED",
     }
     if not infer or not means:
         return report
+    cfg = config.load_config()["statistics"]["degenerate_interval"]
     rng = random.Random(seed)
     ordered = [buckets[stratum] for stratum in sorted(buckets)]
     sample = sorted(
@@ -260,9 +305,21 @@ def endpoint_stats(
     high = prospective_score._percentile(sample, 0.975)
     valid = 0.0 <= low <= high <= 1.0 and low <= report["estimate"] <= high
     report["ci95"] = [low, high]
-    report["interval_status"] = (
-        "INVALID" if not valid else "ZERO_WIDTH" if low == high else "ESTIMATED"
+    report["conservative_lower_95"] = round(
+        conservative_lower_bound(report["estimate"], len(means), cfg["alpha_one_sided"]), 12
     )
+    if not valid:
+        report["interval_status"] = "INVALID"
+    elif low == high:
+        # A zero-width resample says every resampled cluster mean is equal, not that unseen
+        # scenarios are certain. The gate uses the conservative bound instead.
+        report["interval_status"] = "ZERO_WIDTH"
+        report["lower_bound_used"] = report["conservative_lower_95"]
+        report["lower_bound_method"] = cfg["method"]
+    else:
+        report["interval_status"] = "ESTIMATED"
+        report["lower_bound_used"] = low
+        report["lower_bound_method"] = "PERCENTILE_BOOTSTRAP"
     return report
 
 
@@ -283,12 +340,14 @@ def endpoint_status(
         return "INCONCLUSIVE", "INSUFFICIENT_FAMILY_SUPPORT"
     if not complete:
         return "INCONCLUSIVE", "INCOMPLETE_RUN"
-    if stats["interval_status"] not in ("ESTIMATED", "ZERO_WIDTH"):
+    if stats["interval_status"] not in ("ESTIMATED", "ZERO_WIDTH") or (
+        stats["lower_bound_used"] is None
+    ):
         return "INCONCLUSIVE", f"UNCERTAINTY_{stats['interval_status']}"
     limits = cfg["thresholds"]
     if stats["estimate"] < limits["min_point"]:
         return "NO_GO", "POINT_BELOW_THRESHOLD"
-    if stats["ci95"][0] < limits["min_lower_95"]:
+    if stats["lower_bound_used"] < limits["min_lower_95"]:
         return "INCONCLUSIVE", "LOWER_BOUND_BELOW_THRESHOLD"
     return "PASS", "ALL_CRITERIA_MET"
 
