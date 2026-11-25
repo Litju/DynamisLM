@@ -1,0 +1,170 @@
+"""R3 accepts only authenticated and complete final adjudication."""
+
+from __future__ import annotations
+
+import json
+import shutil
+import subprocess
+from pathlib import Path
+from typing import Any
+
+import pytest
+from scripts import a02_v3_contract as v3
+from scripts import a03_internal_config as config
+from scripts import a03_internal_estimate as estimate
+from scripts import a03_internal_owner as owner
+from scripts import a03_internal_run as runner
+from scripts import a03_internal_score as scoring
+from scripts import a03_internal_seal as sealer
+
+from a03_internal_fixtures import BUNDLE_SHA, FIXTURE_SOURCE, FakeTokenizer, valid_packet
+
+
+def write(path: Path, data: dict[str, Any]) -> None:
+    path.write_text(v3.canonical(data) + "\n")
+
+
+def keypair(path: Path) -> Path:
+    subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(path)], check=True)
+    return path
+
+
+def sign(packet: Path, key: Path, work: Path) -> Path:
+    approval = work / "approval.json"
+    approval.write_bytes(owner.payload(sealer._read(packet, for_approval=True)))
+    subprocess.run(
+        ["ssh-keygen", "-Y", "sign", "-f", str(key), "-n", owner.NAMESPACE, str(approval)],
+        check=True,
+        capture_output=True,
+    )
+    (packet / owner.SIGNATURE).write_bytes(approval.with_suffix(".json.sig").read_bytes())
+    return key.with_suffix(".pub")
+
+
+@pytest.fixture(scope="module")
+def signed(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, Path]:
+    root = tmp_path_factory.mktemp("r3-owner")
+    original = valid_packet()
+    packet = original.write(root / "protected")
+    packet.chmod(0o700)
+    attestation = dict(original.attestation)
+    del attestation["owner_authored_all_items"]
+    attestation.update(schema=owner.ATTESTATION_SCHEMA, authorship=config.AUTHORSHIP)
+    write(packet / "attestation.json", attestation)
+    write(
+        packet / owner.PROVENANCE,
+        {
+            "authoring_model": {"provider": "synthetic", "identifier": "scripted"},
+            "generation_configuration": {"profile": "synthetic test only"},
+            "items": [
+                {
+                    "item_id": row["item_id"],
+                    "provenance": "Synthetic contract fixture",
+                    "proposed_gold": {"judgment": row["judgment"], "rationale": row["rationale"]},
+                    "critique": "Synthetic review fixture",
+                    "revision_history": [],
+                    "owner_disposition": "ACCEPTED",
+                }
+                for row in original.gold
+            ],
+        },
+    )
+    return packet, sign(packet, keypair(root / "owner"), root)
+
+
+def test_authenticated_r3_identity_survives_blinding_estimation_and_release(
+    signed: tuple[Path, Path],
+) -> None:
+    packet, pub = signed
+    sealed = sealer.seal(packet, owner_key=pub)
+    assert sealed["authorship"] == config.AUTHORSHIP
+    assert config.version_for(sealed) == 2
+    assert sealed["evidence_class"] == config.EVIDENCE_CLASS and sealed["independence"] == "NONE"
+    blind = sealer.blind_export(packet)
+    assert blind.keys() == set(sealer.BLIND_FILES)
+    requests, scenarios = blind["blind-requests.jsonl"], blind["blind-scenarios.jsonl"]
+    manifest = runner.run_manifest(
+        requests,
+        scenarios,
+        packet_sha256=sealer.packet_sha256(sealed),
+        bundle_archive_sha256=BUNDLE_SHA,
+        source=FIXTURE_SOURCE,
+        protocol_version=2,
+    )
+    runner.verify_manifest(
+        manifest, requests, scenarios, bundle_archive_sha256=BUNDLE_SHA, verify_source=False
+    )
+    one = estimate.estimate(requests, scenarios, FakeTokenizer())
+    two = estimate.estimate(requests, scenarios, FakeTokenizer(), protocol_version=2)
+    assert {key: value for key, value in one.items() if key not in config.identity()} == {
+        key: value for key, value in two.items() if key not in config.identity()
+    }
+    assert (
+        config.version_for(
+            estimate.verify(estimate.render(two), requests, scenarios, FakeTokenizer())
+        )
+        == 2
+    )
+    commit = "a" * 64
+    scoring.write_release(packet, commit, owner_key=pub)
+    release = packet / sealer.RELEASE_FILE
+    digest = v3.sha256(release.read_bytes())
+    assert (
+        scoring._released_packet(release, digest, commit, manifest, (requests, scenarios), pub)[1]
+        == sealed
+    )
+    mismatch = manifest | config.identity()
+    with pytest.raises(ValueError, match="protocol differs"):
+        scoring._released_packet(release, digest, commit, mismatch, (requests, scenarios), pub)
+
+
+@pytest.mark.parametrize(
+    "failure", ["no-key", "missing", "modified-gold", "wrong-key", "key-in-packet"]
+)
+def test_owner_authentication_fails_closed(
+    signed: tuple[Path, Path], tmp_path: Path, failure: str
+) -> None:
+    source, pub = signed
+    packet = Path(shutil.copytree(source, tmp_path / "packet"))
+    match = "trusted owner|files differ|does not authenticate"
+    if failure == "no-key":
+        with pytest.raises(sealer.PacketRefusalError, match=match):
+            sealer.seal(packet)
+        return
+    if failure == "missing":
+        (packet / owner.SIGNATURE).unlink()
+    if failure == "modified-gold":
+        with (packet / "gold.jsonl").open("ab") as file:
+            file.write(b" ")
+    if failure == "wrong-key":
+        pub = keypair(tmp_path / "other").with_suffix(".pub")
+    if failure == "key-in-packet":
+        target = packet / "owner.pub"
+        shutil.copyfile(pub, target)
+        pub = target
+    with pytest.raises(sealer.PacketRefusalError, match=match):
+        sealer.seal(packet, owner_key=pub)
+
+
+@pytest.mark.parametrize("failure", ["owner-only", "missing-row", "pending", "fabricated-revision"])
+def test_signature_cannot_override_incomplete_or_false_authority(
+    signed: tuple[Path, Path], tmp_path: Path, failure: str
+) -> None:
+    source, _ = signed
+    packet = Path(shutil.copytree(source, tmp_path / "packet"))
+    if failure == "owner-only":
+        path = packet / "attestation.json"
+        data = json.loads(path.read_text())
+        data["authorship"] = "OWNER_AUTHORED"
+        write(path, data)
+    else:
+        path = packet / owner.PROVENANCE
+        data = json.loads(path.read_text())
+        if failure == "missing-row":
+            data["items"].pop()
+        else:
+            data["items"][0]["owner_disposition"] = "PENDING" if failure == "pending" else "REVISED"
+        write(path, data)
+    pub = sign(packet, keypair(tmp_path / "fixture-owner"), tmp_path)
+    with pytest.raises(sealer.PacketRefusalError, match="authorship|final owner disposition"):
+        sealer.seal(packet, owner_key=pub)

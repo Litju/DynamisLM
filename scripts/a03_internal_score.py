@@ -370,6 +370,7 @@ def _released_packet(
     output_commit_sha256: str,
     manifest: dict[str, Any],
     blind: tuple[bytes, bytes],
+    owner_key: Path | None = None,
 ) -> tuple[Path, dict[str, Any]]:
     protected = prospective.restricted(release_path.parent)
     release = v3.json_object(prospective.verified_bytes(release_path, release_sha256).decode())
@@ -383,9 +384,13 @@ def _released_packet(
     packet = release["packet"]
     if prospective.object_hash(packet) != manifest["packet_sha256"]:
         raise ValueError("released packet differs from the packet bound to the run")
-    for name in sealer.FILES:
+    version = config.version_for(manifest)
+    identity = config.identity(version)
+    if any(packet.get(key) != value for key, value in identity.items()):
+        raise ValueError("released packet protocol differs from the run")
+    for name in sealer.V2_FILES if version == 2 else sealer.FILES:
         prospective.verified_bytes(protected / name, packet["files"][name])
-    if sealer.seal(protected) != packet:
+    if sealer.seal(protected, owner_key=owner_key) != packet:
         raise ValueError("released packet does not reproduce its seal")
     exported = sealer.blind_export(protected)
     if (
@@ -411,6 +416,7 @@ def score(
     *,
     bundle_archive_sha256: str,
     verify_source: bool = True,
+    owner_key: Path | None = None,
 ) -> dict[str, Any]:
     cfg = config.load_config()
     items = runner.verify_manifest(
@@ -450,7 +456,12 @@ def score(
     ):
         raise ValueError("outputs do not reproduce the committed checkpoint")
     protected, packet = _released_packet(
-        release_path, release_sha256, output_commit_sha256, manifest, (requests, scenarios)
+        release_path,
+        release_sha256,
+        output_commit_sha256,
+        manifest,
+        (requests, scenarios),
+        owner_key,
     )
     if protected == directory or protected.is_relative_to(directory):
         raise ValueError("gold release must be separate from inference outputs")
@@ -470,7 +481,11 @@ def _score_rows(
 ) -> dict[str, Any]:
     cluster_stratum = {
         row["cluster_id"]: row["stratum"]
-        for row in prospective.jsonl((protected / "scenarios.jsonl").read_bytes())
+        for row in prospective.jsonl(
+            prospective.verified_bytes(
+                protected / "scenarios.jsonl", packet["files"]["scenarios.jsonl"]
+            )
+        )
     }
     metas = {
         row["item_id"]: {
@@ -479,11 +494,17 @@ def _score_rows(
             "stratum": cluster_stratum[row["cluster_id"]],
             "families": row["critical_families"],
         }
-        for row in prospective.jsonl((protected / "requests.jsonl").read_bytes())
+        for row in prospective.jsonl(
+            prospective.verified_bytes(
+                protected / "requests.jsonl", packet["files"]["requests.jsonl"]
+            )
+        )
     }
     gold = {
         row["item_id"]: row["judgment"]
-        for row in prospective.jsonl((protected / "gold.jsonl").read_bytes())
+        for row in prospective.jsonl(
+            prospective.verified_bytes(protected / "gold.jsonl", packet["files"]["gold.jsonl"])
+        )
     }
     by_id = {item.item_id: item for item in items}
     results = {
@@ -560,7 +581,8 @@ def _score_rows(
     statuses = {name: value["status"] for name, value in endpoints.items()}
     return {
         "schema": REPORT_SCHEMA,
-        **config.identity(),
+        **config.identity(config.version_for(manifest)),
+        **({"authorship": packet["authorship"]} if "authorship" in packet else {}),
         "scope": SCOPE,
         "packet_sha256": manifest["packet_sha256"],
         "packet_files": packet["files"],
@@ -585,7 +607,9 @@ def render(report: dict[str, Any]) -> bytes:
     return (v3.canonical(report) + "\n").encode()
 
 
-def write_release(protected: Path, output_commit_sha256: str) -> dict[str, Any]:
+def write_release(
+    protected: Path, output_commit_sha256: str, *, owner_key: Path | None = None
+) -> dict[str, Any]:
     """The custodian step. Requires a sealed-valid packet and names the exact commitment."""
     directory = prospective.restricted(protected)
     prospective_sealer._digest(output_commit_sha256)
@@ -593,7 +617,7 @@ def write_release(protected: Path, output_commit_sha256: str) -> dict[str, Any]:
         "schema": RELEASE_SCHEMA,
         "mode": config.MODE,
         "output_commit_sha256": output_commit_sha256,
-        "packet": sealer.seal(directory),
+        "packet": sealer.seal(directory, owner_key=owner_key),
     }
     with (directory / sealer.RELEASE_FILE).open("x", encoding="utf-8") as stream:
         stream.write(v3.canonical(release) + "\n")
@@ -606,6 +630,7 @@ def main() -> None:
     rel = sub.add_parser("release", help="release gold for exactly one output commitment")
     rel.add_argument("protected_directory", type=Path)
     rel.add_argument("--commit-sha256", required=True)
+    rel.add_argument("--owner-key", type=Path)
     run = sub.add_parser("score", help="score a committed run and decide")
     run.add_argument("blind_directory", type=Path)
     run.add_argument("committed_outputs", type=Path)
@@ -616,9 +641,10 @@ def main() -> None:
     run.add_argument("--release-sha256", required=True)
     run.add_argument("--bundle-archive-sha256", required=True)
     run.add_argument("--tokenizer", type=Path, required=True)
+    run.add_argument("--owner-key", type=Path)
     args = parser.parse_args()
     if args.command == "release":
-        write_release(args.protected_directory, args.commit_sha256)
+        write_release(args.protected_directory, args.commit_sha256, owner_key=args.owner_key)
         path = args.protected_directory / sealer.RELEASE_FILE
         print(v3.canonical({"release_sha256": v3.sha256(path.read_bytes())}))
         return
@@ -644,6 +670,7 @@ def main() -> None:
         args.release_sha256,
         load_pinned_tokenizer(args.tokenizer),
         bundle_archive_sha256=args.bundle_archive_sha256,
+        owner_key=args.owner_key,
     )
     target = prospective.restricted(args.report.parent) / args.report.name
     with target.open("xb") as stream:

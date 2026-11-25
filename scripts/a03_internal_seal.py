@@ -26,6 +26,7 @@ from scripts import a02_v3_score as historical_score
 from scripts import a02_v3_synthetic as synthetic
 from scripts import a03_benchmark_seal as prospective_sealer
 from scripts import a03_internal_config as config
+from scripts import a03_internal_owner as owner
 from scripts import a03_internal_replay as replay
 from scripts.research_scenarios import (
     CATALOGUE,
@@ -37,6 +38,7 @@ from scripts.research_scenarios import (
 SCHEMA = "DYNAMISLM_A03_INTERNAL_PACKET_V1"
 ATTESTATION_SCHEMA = "DYNAMISLM_A03_INTERNAL_ATTESTATION_V1"
 FILES = ("scenarios.jsonl", "requests.jsonl", "gold.jsonl", "attestation.json")
+V2_FILES = (*FILES, owner.PROVENANCE, owner.SIGNATURE)
 BLIND_FILES = ("blind-scenarios.jsonl", "blind-requests.jsonl")
 RELEASE_FILE = "gold-release.json"
 RES69 = RES69_ABSOLUTE_CHANGE_OPERATION.stable_id
@@ -249,16 +251,22 @@ def _signature(judgment: dict[str, Any], families: list[str]) -> str:
     return v3.canonical([actions, judgment["allowed_claims"], sorted(families)])
 
 
-def _read(directory: Path) -> dict[str, bytes]:
+def _read(directory: Path, *, for_approval: bool = False) -> dict[str, bytes]:
     if not directory.is_dir() or directory.is_symlink():
         raise refuse("packet must be a regular directory")
     present = {p.name for p in directory.iterdir() if p.name not in (*BLIND_FILES, RELEASE_FILE)}
-    if present != set(FILES):
-        raise refuse(f"packet files differ: {sorted(present ^ set(FILES))}")
-    for name in FILES:
+    files: tuple[str, ...] = (
+        V2_FILES if present & {owner.PROVENANCE, owner.SIGNATURE} or for_approval else FILES
+    )
+    if for_approval:
+        files = V2_FILES[:-1]
+        present.discard(owner.SIGNATURE)
+    if present != set(files):
+        raise refuse(f"packet files differ: {sorted(present ^ set(files))}")
+    for name in files:
         if (directory / name).is_symlink():
             raise refuse("packet files must not be symlinks")
-    return {name: (directory / name).read_bytes() for name in FILES}
+    return {name: (directory / name).read_bytes() for name in files}
 
 
 @cache
@@ -488,15 +496,43 @@ def support(
     return result
 
 
-def seal(directory: Path) -> dict[str, Any]:
+def seal(directory: Path, *, owner_key: Path | None = None) -> dict[str, Any]:
     """Refuse an invalid packet whole. Return the sealed manifest, which excludes all gold."""
+    return _seal(directory, _read(directory), owner_key)
+
+
+def _seal(directory: Path, content: dict[str, bytes], owner_key: Path | None) -> dict[str, Any]:
     cfg = config.load_config()
-    content = _read(directory)
-    attestation = _attestation(content)
+    version = 2 if owner.PROVENANCE in content else 1
+    authorship = {}
+    if version == 2:
+        try:
+            attestation = owner.attestation(content)
+            key_sha256 = owner.verify_signature(
+                directory, content, attestation["owner_id"], owner_key
+            )
+        except (OSError, ValueError) as exc:
+            raise refuse(str(exc)) from exc
+        authorship = {"authorship": config.AUTHORSHIP, "owner_key_sha256": key_sha256}
+    else:
+        if owner_key is not None:
+            raise refuse("R3 owner key supplied for a v1 packet")
+        attestation = _attestation(content)
     clusters = _clusters(cfg, content)
     _distinct_clusters(cfg, clusters)
     items = _items(cfg, clusters, content)
     judgments = _gold(cfg, clusters, items, content, attestation["owner_id"])
+    if version == 2:
+        try:
+            owner.validate_provenance(
+                content,
+                {
+                    row["item_id"]: {"judgment": row["judgment"], "rationale": row["rationale"]}
+                    for row in _json_lines(content["gold.jsonl"])
+                },
+            )
+        except ValueError as exc:
+            raise refuse(str(exc)) from exc
     design = cfg["design"]
     strata = {name: 0 for name in cfg["strata"]}
     for data in clusters.values():
@@ -521,8 +557,9 @@ def seal(directory: Path) -> dict[str, Any]:
         ):
             raise refuse(f"insufficient family support for {family}")
     return {
-        "schema": SCHEMA,
-        **config.identity(),
+        "schema": "DYNAMISLM_A03_INTERNAL_PACKET_V2" if version == 2 else SCHEMA,
+        **config.identity(version),
+        **authorship,
         "owner_id": attestation["owner_id"],
         "clusters": len(clusters),
         "items": len(items),
@@ -534,7 +571,10 @@ def seal(directory: Path) -> dict[str, Any]:
 
 def blind_export(directory: Path) -> dict[str, bytes]:
     """Gold-free runner inputs. Identifiers are opaque and the order carries no authoring order."""
-    content = _read(directory)
+    return _blind_export(_read(directory))
+
+
+def _blind_export(content: dict[str, bytes]) -> dict[str, bytes]:
     scenarios = {row["cluster_id"]: row for row in _json_lines(content["scenarios.jsonl"])}
     requests = sorted(_json_lines(content["requests.jsonl"]), key=lambda row: row["item_id"])
     used = sorted({scenarios[row["cluster_id"]]["scenario_id"] for row in requests})
@@ -564,11 +604,21 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("packet", type=Path)
     parser.add_argument("--blind-out", type=Path)
+    parser.add_argument("--owner-key", type=Path)
+    parser.add_argument("--approval-payload", action="store_true")
     args = parser.parse_args()
-    manifest = seal(args.packet)
+    if args.approval_payload:
+        if args.blind_out is not None or args.owner_key is not None:
+            parser.error("--approval-payload cannot be combined with export or verification")
+        content = _read(args.packet, for_approval=True)
+        owner.attestation(content)
+        print(owner.payload(content).decode(), end="")
+        return 0
+    content = _read(args.packet)
+    manifest = _seal(args.packet, content, args.owner_key)
     output: dict[str, Any] = {"manifest": manifest, "packet_sha256": packet_sha256(manifest)}
     if args.blind_out is not None:
-        exported = blind_export(args.packet)
+        exported = _blind_export(content)
         if args.blind_out.exists() and any(args.blind_out.iterdir()):
             raise ValueError("blind export directory must be new or empty")
         args.blind_out.mkdir(parents=True, exist_ok=True, mode=0o700)
