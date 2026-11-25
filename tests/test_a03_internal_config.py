@@ -142,3 +142,24 @@ def test_prospective_sources_and_schemas_are_unchanged() -> None:
     assert prospective_seal.MIN_CLUSTERS == 48 and prospective_seal.MIN_AUTHORS == 2
     assert prospective_run.PROSPECTIVE == "PROSPECTIVE"
     assert config.MODE != prospective_run.PROSPECTIVE
+
+
+def test_degenerate_interval_treatment_and_pending_dispositions_are_prospectively_frozen() -> None:
+    cfg = config.load_config()
+    degenerate = cfg["statistics"]["degenerate_interval"]
+    assert degenerate["applies_when"] == "RAW_PERCENTILE_INTERVAL_ZERO_WIDTH"
+    assert degenerate["method"] == "HOEFFDING_RELATIVE_ENTROPY_FALLBACK"
+    assert degenerate["alpha_one_sided"] == 0.025
+    assert degenerate["assumptions"] == ["INDEPENDENT_CLUSTERS", "CLUSTER_SCORES_IN_UNIT_INTERVAL"]
+    assert "zero_width_interval" not in cfg["statistics"]
+    assert cfg["thresholds"] == {"min_point": 0.80, "min_lower_95": 0.70}
+    # The agent cannot approve D5 interpretations. They stay pending until the owner records them.
+    assert cfg["owner_disposition_pending"] == [
+        "R1_ZERO_WIDTH_INTERVAL_FALLBACK",
+        "R2_TWO_POINT_SERIES_SCREEN",
+    ]
+    assert cfg["distinctness"]["two_point_policy"] == "NUMERICAL_DUPLICATE_SCREEN_ONLY"
+    assert cfg["distinctness"]["two_point_decimals"] == 6
+    protocol = config.PROTOCOL_PATH.read_text()
+    assert "pending owner disposition" in protocol
+    assert "does not establish shape independence" in protocol

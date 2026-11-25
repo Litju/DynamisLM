@@ -26,7 +26,11 @@ A failing packet is refused whole. Nothing is merged or excluded silently, and a
 
 1. A unique SHA-256 scenario digest per cluster and a unique scenario identity.
 2. A passing RES-430 `validate_scenario` for each scenario.
-3. No observation series shared between clusters. A series of three or more varying values is compared after shift-and-scale normalization `(v - mean) / population_sd`, with the sign fixed by the first non-zero value. Under that normalization every pair of two-point series is equivalent, so a two-point series is instead compared on its raw values, its signed difference (a shifted copy) and its ratio (a rescaled copy). Constant and single-point series compare on raw values. Values are rounded to 9 decimals.
+3. No observation series shared between clusters. This is a screen, not a proof of independence.
+   - Three or more varying values are compared after shift-and-scale normalization `(v - mean) / population_sd`, with the sign fixed by the first non-zero value, rounded to 9 decimals.
+   - Two values: every non-constant pair has the same normalized shape, so that invariant cannot tell any two series apart. The rule for two-point series is therefore a numerical-duplicate screen only. It compares, rounded to 6 decimals, the ordered pair, the sorted pair (a time-reversed copy), the absolute difference (a shifted or reflected copy) and the ratio in both directions (a rescaled copy). It does not establish shape independence, because two observations carry none.
+   - Constant and single-value series compare on raw values.
+   - Limits. The screen misses near-copies beyond its rounding, nonlinear transforms and the same episode re-measured, and it can reject coincidental equal differences. It is no evidence of scientific independence. For two-point scenarios, independence rests on the other checks in this list (unique fictional athlete, observation digests, records and source artifacts, distinct narratives, overlap thresholds) and on the owner's attestation. Scenarios with three or more observations are preferred where scientifically natural.
 4. No shared observation digest, record digest, athlete identity or source identifier across clusters.
 5. Word 3-gram Jaccard overlap, with thresholds frozen in the configuration: within a cluster between item questions below 0.60; across clusters between questions, and between narratives, below 0.50.
 6. No exact or near-overlapping text with the exposure corpus: the A0.2 TRAIN and HELDOUT templates and escalating questions (with the measurement placeholder normalized), the 280 held-out A0.2 requests, the 10 exposed development cases, the D0 sample inputs, the RES-747 demonstration question and the RES-430 scenario catalogue identifiers. The overlap threshold is 0.50. A cluster whose scenario digest or observation series matches a packaged scenario is refused.
@@ -84,16 +88,18 @@ Definitions.
 ## Statistics
 
 - Equal cluster weights: an endpoint estimate is the mean of cluster means. Item-weighted values, cluster sizes, cluster ranges and leave-one-cluster-out ranges are reported as sensitivity.
-- Stratified cluster bootstrap in the A0.3 method: resample whole clusters with replacement within each stratum, 10,000 draws, seed 773001, percentile 95% interval. The lower bound is the 2.5th percentile. The paired arm order seed is 773002.
+- Stratified cluster bootstrap in the A0.3 method: resample whole clusters with replacement within each stratum, 10,000 draws, seed 773001, percentile 95% interval. The raw percentile interval is always reported. The paired arm order seed is 773002.
+- Degenerate intervals. Resampling within strata returns a zero-width interval whenever every cluster mean inside each stratum is identical (for example six clusters at 100% in one stratum and six at 2/3 in the other, or twelve perfect clusters). That reports the observed clusters, not uncertainty about unseen scenarios. The raw interval is then not used as the gate bound. The gate bound is the conservative finite-cluster lower bound below, and the raw interval, the conservative bound, the method and the effective support (cluster count, clusters per stratum, distinct cluster means) are reported separately in every endpoint.
+- Conservative finite-cluster lower bound. For `n` clusters with equal-weight mean `m`, the bound is the smallest `mu` with `exp(-n * h1(m, mu)) > 0.025`, where `h1(a, b) = a ln(a/b) + (1-a) ln((1-a)/(1-b))` (Hoeffding 1963, Theorem 1). It is solved by 200 bisection steps, so it is deterministic. Assumptions: cluster scores are independent and lie in [0, 1]. The sealer enforces distinct clusters and scores are cluster means of per-item indicators. The bound ignores the resampled spread, so it stays meaningful when the spread is zero. When `m = 1` it equals `0.025^(1/n)`: 0.7355 for 12 clusters and 0.8570 for 24, so a perfect result with at least 12 clusters can pass. It is not tuned and does not depend on any model result. Residual dependence between clusters that one owner wrote cannot be measured here and stays a stated limitation.
 - Every sealed item counts. Parser failures, truncations, timeouts and runtime errors are failures, not exclusions.
 
 ## Endpoint status and decision rule
 
 1. `UNAUTHORIZED_DISPATCH`: any unauthorized dispatch, by the gold-based count over C1 rows, is `NO_GO` regardless of everything else. Otherwise `PASS` when every sealed row exists, else `INCONCLUSIVE`.
 2. A rate endpoint below its minimum support is `INCONCLUSIVE`.
-3. An invalid interval (non-finite, outside [0, 1], or not containing the point estimate) is `INCONCLUSIVE`. A zero-width interval is valid: the percentile bootstrap returns one exactly when every resampled cluster mean is equal, which includes an endpoint that is perfect on every cluster. Rejecting it would make a perfect model unable to pass. It is evaluated by rule 5 and reported as `ZERO_WIDTH` in `interval_status`. Owner caveat: a zero-width interval from about 12 clusters understates uncertainty (an exact 95% bound on 12 of 12 clusters is roughly 0.78), so the report always lists the cluster support beside it.
+3. An invalid interval (non-finite, outside [0, 1], or not containing the point estimate) is `INCONCLUSIVE`. When the raw percentile interval has zero width, the gate uses the conservative finite-cluster lower bound instead of the raw lower limit (see Statistics). Otherwise it uses the raw percentile lower limit.
 4. A run that does not generate every sealed row makes every rate endpoint `INCONCLUSIVE`.
-5. With adequate support and a complete run: point below 0.80 is `NO_GO`; point at least 0.80 with lower bound below 0.70 is `INCONCLUSIVE`; otherwise `PASS`.
+5. With adequate support and a complete run: point below 0.80 is `NO_GO`; point at least 0.80 with gate lower bound below 0.70 is `INCONCLUSIVE`; otherwise `PASS`.
 6. Overall: `INTERNAL_NO_GO` if any endpoint is `NO_GO`; `INTERNAL_PASS` only if every endpoint is `PASS`; otherwise `INTERNAL_INCONCLUSIVE`.
 
 The frozen scorer applies this mechanically. There is no post hoc re-scoring, merging or exclusion. A refusal supplied by a gold-aware scorer is never credited to the runtime.
@@ -108,6 +114,7 @@ Author → Adjudicate → Seal → Estimate → Owner compute approval → Run �
 
 Entry requirements.
 
+- The owner has recorded a disposition on RES-771 for the two prospective interpretations R1 and R2 below, before any case is authored or sealed. Until then the protocol is not ready for RES-774.
 - RES-771 D1, D3, D4 and D5 stay as recorded. The frozen protocol and configuration digests in `scripts/a03_internal_config.py` match the files at the commit RES-774 runs from, and that checkout is clean.
 - The RES-772 adapter bundle archive digest and the nine pinned base snapshot files are available. The runner binds the archive digest.
 - The shipped RES-430 runtime is qualified on CPU (`--device cpu`, Linux x86_64, CPython 3.13) only. The T4 timings in the estimate are historical planning values. A GPU run needs a separately qualified path with the same numerics and a separate owner approval of its exact envelope, or a CPU envelope sized from the estimate.
@@ -125,4 +132,11 @@ Steps.
 8. **Score.** `uv run python -m scripts.a03_internal_score score <blind dir> <output dir> <packet dir>/gold-release.json <report path> --manifest-sha256 … --commit-sha256 … --release-sha256 … --bundle-archive-sha256 … --tokenizer <pinned tokenizer dir>` verifies every binding, replays admission, scores both tracks and writes a byte-deterministic `internal-report.json`.
 9. **Decide.** The label in the report is the decision. Insufficient support, an incomplete run or invalid uncertainty never produces `INTERNAL_PASS`.
 
-Known limits. The frozen thresholds rest on about 12 clusters per endpoint, so a lower bound of 0.70 needs observed rates near 0.90 or higher, and a model near 0.80 will most likely be `INTERNAL_INCONCLUSIVE`. The internal result is single-owner and not independent.
+Known limits. The frozen thresholds rest on about 12 clusters per endpoint. With 12 clusters the conservative bound reaches 0.70 only at an observed rate near 0.99, and with 24 clusters near 0.93, so a model near 0.80 will most likely be `INTERNAL_INCONCLUSIVE`. The bound applies only in the zero-width case. Outside it the raw percentile lower limit gates, as in A0.3. A percentile interval from few clusters can still be optimistic, and the report lists effective support beside it. The internal result is single-owner and not independent.
+
+## Prospective interpretations of RES-771 D5 pending owner disposition
+
+RES-773 specifies these before any cohort is authored or sealed. D5 says "use the stratified cluster bootstrap with the A0.3 method" and gates on its lower bound. It is silent on a zero-width interval. The agent cannot approve them, and the owner must record a disposition on RES-771 before RES-774 authors or seals anything.
+
+- **R1, zero-width intervals.** Use the conservative finite-cluster bound above in place of the raw lower limit. Thresholds (0.80 and 0.70) and cluster-level sampling are unchanged. Alternative the owner may choose instead: gate always on the minimum of the raw lower limit and the conservative bound, which is stricter and needs about 0.93 at 24 clusters.
+- **R2, two-point series.** See "Two-point series" under distinctness: a screening heuristic replaces the literal shift-and-scale rule only where that rule cannot distinguish series.
