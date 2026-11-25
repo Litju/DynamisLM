@@ -18,6 +18,9 @@ ROOT = Path(__file__).resolve().parents[1]
 # Expensive integration and full-workload integrity qualification: the complete 581-item
 # campaign, real bounded subprocess children and complete CPU pipelines.
 INTEGRATION = (
+    "test_a03_internal_run.py",
+    "test_a03_internal_score.py",
+    "test_a03_internal_seal.py",
     "test_res402_sft.py",
     "test_res541_a02_pipeline_rehearsal.py",
     "test_res541_a02_v3_bootstrap_integration.py",
