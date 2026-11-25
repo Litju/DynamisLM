@@ -462,7 +462,9 @@ def install_memoization(monkeypatch: Any) -> None:
             assert permit_dispatch(operation), "memoization only supports permissive permits"
         return decision
 
-    def cached_seal(directory: Path) -> Any:
+    def cached_seal(directory: Path, *, owner_key: Path | None = None) -> Any:
+        if owner_key is not None or (directory / "provenance.json").exists():
+            return real_seal(directory, owner_key=owner_key)
         key = tuple(
             (name, v3.sha256((directory / name).read_bytes())) for name in seal_module.FILES
         )

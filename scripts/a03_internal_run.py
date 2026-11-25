@@ -34,7 +34,7 @@ from scripts.research_scenarios import SyntheticScenario
 SCHEMA = "DYNAMISLM_A03_INTERNAL_RUN_V1"
 ARMS = ("N", "C1")
 COMMIT_STATUSES = ("COMMITTED", "EXHAUSTED", "STOPPED")
-PACKET_FILES = frozenset(sealer.FILES)
+PACKET_FILES = frozenset(sealer.V2_FILES)
 
 
 class Backend(Protocol):
@@ -138,13 +138,14 @@ def run_manifest(
     packet_sha256: str,
     bundle_archive_sha256: str,
     source: dict[str, str] | None = None,
+    protocol_version: int = 1,
 ) -> dict[str, Any]:
     items = load_blind(requests, scenarios)
     prospective_sealer._digest(bundle_archive_sha256)
     prospective_sealer._digest(packet_sha256)
     return {
         "schema": SCHEMA,
-        **config.identity(),
+        **config.identity(protocol_version),
         "source": source if source is not None else source_identity(),
         "packet_sha256": packet_sha256,
         "bundle_archive_sha256": bundle_archive_sha256,
@@ -164,15 +165,21 @@ def verify_manifest(
     bundle_archive_sha256: str,
     verify_source: bool = True,
 ) -> list[BlindItem]:
+    mismatch = "run manifest, source, inputs, protocol or bundle digest differ"
+    try:
+        protocol_version = config.version_for(manifest)
+    except ValueError as exc:
+        raise ValueError(mismatch) from exc
     expected = run_manifest(
         requests,
         scenarios,
         packet_sha256=manifest.get("packet_sha256", ""),
         bundle_archive_sha256=bundle_archive_sha256,
         source=None if verify_source else manifest.get("source"),
+        protocol_version=protocol_version,
     )
     if manifest != expected:
-        raise ValueError("run manifest, source, inputs, protocol or bundle digest differ")
+        raise ValueError(mismatch)
     return load_blind(requests, scenarios)
 
 
@@ -341,7 +348,7 @@ def run(
 
 
 def write_manifest(
-    blind: Path, *, packet_sha256: str, bundle_archive_sha256: str
+    blind: Path, *, packet_sha256: str, bundle_archive_sha256: str, protocol_version: int = 1
 ) -> dict[str, Any]:
     """Create `run.json` beside the blinded export. Binds the clean source checkout."""
     directory = prospective.restricted(blind)
@@ -351,6 +358,7 @@ def write_manifest(
         scenarios,
         packet_sha256=packet_sha256,
         bundle_archive_sha256=bundle_archive_sha256,
+        protocol_version=protocol_version,
     )
     d0.write(directory / "run.json", manifest)
     return manifest
@@ -363,6 +371,7 @@ def main() -> None:
     make.add_argument("blind_directory", type=Path)
     make.add_argument("--packet-sha256", required=True)
     make.add_argument("--bundle-archive-sha256", required=True)
+    make.add_argument("--protocol-version", type=int, choices=(1, 2), default=1)
     go = sub.add_parser("run", help="run the shipped ask pipeline over the blinded export")
     go.add_argument("blind_directory", type=Path)
     go.add_argument("output_directory", type=Path)
@@ -384,6 +393,7 @@ def main() -> None:
             blind,
             packet_sha256=args.packet_sha256,
             bundle_archive_sha256=args.bundle_archive_sha256,
+            protocol_version=args.protocol_version,
         )
         print(v3.canonical({"manifest_sha256": d0.digest(blind / "run.json"), **manifest}))
         return

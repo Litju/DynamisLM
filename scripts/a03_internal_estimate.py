@@ -79,7 +79,12 @@ def envelope(calls: int, per_call: float, compute: dict[str, Any], setup: float)
 
 
 def estimate(
-    requests: bytes, scenarios: bytes, tokenizer: Any, timing: bytes | None = None
+    requests: bytes,
+    scenarios: bytes,
+    tokenizer: Any,
+    timing: bytes | None = None,
+    *,
+    protocol_version: int = 1,
 ) -> dict[str, Any]:
     compute = config.load_config()["compute"]
     items = runner.load_blind(requests, scenarios)
@@ -93,7 +98,7 @@ def estimate(
     setup = model["setup_teardown_seconds"]
     return {
         "schema": SCHEMA,
-        **config.identity(),
+        **config.identity(protocol_version),
         "authorizes": "NOTHING",
         "device_note": DEVICE_NOTE,
         "inputs": {
@@ -131,7 +136,11 @@ def verify(
     """Independently recompute the estimate from the blinded inputs and require identical bytes."""
     parsed = v3.json_object(artifact.decode("utf-8"))
     claimed = parsed.get("estimate_sha256")
-    if render(estimate(requests, scenarios, tokenizer, timing)) != artifact or (
+    if render(
+        estimate(
+            requests, scenarios, tokenizer, timing, protocol_version=config.version_for(parsed)
+        )
+    ) != artifact or (
         v3.sha256(
             v3.canonical({k: v for k, v in parsed.items() if k != "estimate_sha256"}).encode()
         )
@@ -147,6 +156,7 @@ def main() -> None:
     parser.add_argument("output_directory", type=Path)
     parser.add_argument("--tokenizer", type=Path, required=True)
     parser.add_argument("--timing-evidence", type=Path)
+    parser.add_argument("--protocol-version", type=int, choices=(1, 2), default=1)
     args = parser.parse_args()
     from scripts import a03_d0_runtime as d0
     from scripts import a03_prospective_run as prospective
@@ -158,7 +168,15 @@ def main() -> None:
         args.tokenizer, d0.MODEL_FILES | v3.load_profile()["tokenizer"]["files"]
     )
     timing = args.timing_evidence.read_bytes() if args.timing_evidence else None
-    data = render(estimate(requests, scenarios, load_pinned_tokenizer(args.tokenizer), timing))
+    data = render(
+        estimate(
+            requests,
+            scenarios,
+            load_pinned_tokenizer(args.tokenizer),
+            timing,
+            protocol_version=args.protocol_version,
+        )
+    )
     target = prospective.restricted(args.output_directory) / "compute-estimate.json"
     with target.open("xb") as stream:
         stream.write(data)
