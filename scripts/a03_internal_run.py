@@ -165,16 +165,21 @@ def verify_manifest(
     bundle_archive_sha256: str,
     verify_source: bool = True,
 ) -> list[BlindItem]:
+    mismatch = "run manifest, source, inputs, protocol or bundle digest differ"
+    try:
+        protocol_version = config.version_for(manifest)
+    except ValueError as exc:
+        raise ValueError(mismatch) from exc
     expected = run_manifest(
         requests,
         scenarios,
         packet_sha256=manifest.get("packet_sha256", ""),
         bundle_archive_sha256=bundle_archive_sha256,
         source=None if verify_source else manifest.get("source"),
-        protocol_version=config.version_for(manifest),
+        protocol_version=protocol_version,
     )
     if manifest != expected:
-        raise ValueError("run manifest, source, inputs, protocol or bundle digest differ")
+        raise ValueError(mismatch)
     return load_blind(requests, scenarios)
 
 
