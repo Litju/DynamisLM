@@ -138,6 +138,11 @@ def build_scenario(scenario_id: str, key: str, series: tuple[float, ...]) -> Syn
     return scenario
 
 
+def two_point(index: int) -> tuple[float, float]:
+    rng = random.Random(index * 104729 + 7)
+    return round(rng.uniform(0.15, 0.35), 6), round(rng.uniform(0.36, 0.6), 6)
+
+
 LAYOUT = {
     "FAMILIAR_INTENT": ((EXEC, ()), (OBSERVE, ())),
     "NOVEL_LANGUAGE": ((EXEC, ()), (OBSERVE, ())),
@@ -190,8 +195,11 @@ class Packet:
         return next(g for g in self.gold if g["item_id"] == item)
 
 
-def valid_packet() -> Packet:
-    """Forty-eight owner-style clusters, twelve per stratum, 108 items. Fresh on every call."""
+def valid_packet(points: int = 3) -> Packet:
+    """Forty-eight owner-style clusters, twelve per stratum, 108 items. Fresh on every call.
+
+    `points=2` builds every scenario from two observations, the shape the two-point screen covers.
+    """
     words = Words()
     packet = Packet(
         attestation={
@@ -206,7 +214,7 @@ def valid_packet() -> Packet:
     index = 0
     for stratum in STRATA:
         for _ in range(12):
-            scenario_id, text = scenario_text(index)
+            scenario_id, text = scenario_text(index, two_point(index) if points == 2 else None)
             cluster = f"cluster-{index:02d}"
             packet.scenarios.append(
                 {

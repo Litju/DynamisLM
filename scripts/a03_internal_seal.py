@@ -85,27 +85,41 @@ def jaccard(left: frozenset[tuple[str, ...]], right: frozenset[tuple[str, ...]])
     return len(left & right) / len(union) if union else 0.0
 
 
-def series_keys(values: list[float], decimals: int) -> frozenset[tuple[Any, ...]]:
-    """Identity keys that make shifted, rescaled or reflected copies of a series collide.
+def series_keys(
+    values: list[float], decimals: int, two_point_decimals: int = 6
+) -> frozenset[tuple[Any, ...]]:
+    """Screening keys: two clusters whose series share a key are treated as one series.
 
-    Three or more varying points compare after shift-and-scale normalization. Two points are
-    equivalent under that normalization for every pair, so they compare on the raw values, the
-    signed difference (a shifted copy) and the ratio (a rescaled copy). Constant or single
-    points compare on raw values.
+    This screens for numerical duplicates. It does not prove that two series are independent.
+    - Three or more varying points: shift-and-scale normalized shape, sign fixed.
+    - Two points: every non-constant pair has the same affine-normalized shape, so that
+      invariant cannot distinguish them. The screen uses the ordered pair, the sorted pair
+      (time reversal), the absolute difference (shifted or reflected copy) and the ratio in
+      both directions (rescaled copy), at `two_point_decimals`. It has false negatives
+      (near-copies beyond the rounding, nonlinear transforms, a re-measured episode) and false
+      positives (coincidental equal differences), and it establishes no shape independence.
+    - Constant or single-point series: raw values.
     """
     if not values:
         return frozenset()
     if any(not math.isfinite(v) for v in values):
         return frozenset({("NONFINITE", tuple(map(str, values)))})
-    raw = ("RAW", tuple(round(v, decimals) for v in values))
-    if len(values) == 2:
-        keys = {raw, ("DELTA", round(values[1] - values[0], decimals))}
-        if values[0] != 0:
-            keys.add(("RATIO", round(values[1] / values[0], decimals)))
+    if len(values) == 2 and values[0] != values[1]:
+        first, second = values
+        rounded = [round(v, two_point_decimals) + 0.0 for v in values]
+        keys: set[tuple[Any, ...]] = {
+            ("RAW", tuple(rounded)),
+            ("SORTED", tuple(sorted(rounded))),
+            ("ABSDELTA", round(abs(second - first), two_point_decimals) + 0.0),
+        }
+        for numerator, denominator in ((second, first), (first, second)):
+            if denominator != 0:
+                keys.add(("RATIO", round(numerator / denominator, two_point_decimals) + 0.0))
         return frozenset(keys)
+    raw = ("RAW", tuple(round(v, decimals) + 0.0 for v in values))
     mean = fmean(values)
     spread = math.sqrt(fmean((v - mean) ** 2 for v in values))
-    if len(values) < 2 or spread < 10 ** (-decimals):
+    if len(values) < 3 or spread < 10 ** (-decimals):
         return frozenset({raw})
     scaled = [(v - mean) / spread for v in values]
     sign = -1.0 if next(s for s in scaled if abs(s) > 10 ** (-decimals)) < 0 else 1.0
@@ -156,15 +170,15 @@ def _numeric_series(value: object) -> list[float] | None:
 
 
 @cache
-def exposure_series(decimals: int) -> frozenset[tuple[Any, ...]]:
+def exposure_series(decimals: int, two_point_decimals: int = 6) -> frozenset[tuple[Any, ...]]:
     requests = [row["request"] for row in historical.heldout_examples(historical.load_protocol())]
     requests.extend(case["request"] for case in historical_score._cases().values())
     keys: set[tuple[Any, ...]] = set()
     for request in requests:
         if (values := _numeric_series(request.get("observations"))) is not None:
-            keys |= series_keys(values, decimals)
+            keys |= series_keys(values, decimals, two_point_decimals)
     for name in CATALOGUE:
-        keys |= series_keys(scenario_series(packaged_scenario(name)), decimals)
+        keys |= series_keys(scenario_series(packaged_scenario(name)), decimals, two_point_decimals)
     return frozenset(keys)
 
 
@@ -292,12 +306,12 @@ def _distinct_clusters(cfg: dict[str, Any], clusters: dict[str, dict[str, Any]])
     text = cfg["distinctness"]
     seen: dict[str, dict[Any, str]] = defaultdict(dict)
     shape = text["series_decimals"]
-    exposed = exposure_series(shape)
+    exposed = exposure_series(shape, text["two_point_decimals"])
     packaged = {canonical_hash(packaged_scenario(name)) for name in CATALOGUE}
     for cluster, data in sorted(clusters.items()):
         if data["digest"] in packaged:
             raise refuse("cluster reuses a packaged RES-430 scenario")
-        keys = series_keys(data["series"], shape)
+        keys = series_keys(data["series"], shape, text["two_point_decimals"])
         if keys & exposed:
             raise refuse("cluster reuses an exposed A0.2 or packaged observation series")
         groups: list[tuple[str, Iterable[Any]]] = [

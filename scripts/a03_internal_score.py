@@ -251,7 +251,7 @@ def conservative_lower_bound(mean: float, clusters: int, alpha: float) -> float:
     if mean == 0:
         return 0.0
     if mean == 1:
-        return alpha ** (1 / clusters)
+        return float(alpha ** (1 / clusters))
     target = math.log(1 / alpha) / clusters
     low, high = 0.0, mean
     for _ in range(200):

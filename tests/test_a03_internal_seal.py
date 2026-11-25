@@ -429,3 +429,86 @@ def test_execution_gold_that_the_engine_cannot_execute_is_refused(tmp_path: Path
     gold["acceptable_actions"] = [action(ids=("observation-1",))]
     gold["preferred_action"] = gold["acceptable_actions"][0]
     refused(packet, tmp_path, "not executable by the engine")
+
+
+# ------------------------------------------------------------------ two-point screen (P1 review)
+
+
+def collide(left: list[float], right: list[float]) -> bool:
+    return bool(sealer.series_keys(left, 9, 6) & sealer.series_keys(right, 9, 6))
+
+
+def test_two_point_rule_is_a_documented_numerical_duplicate_screen() -> None:
+    cfg = config.load_config()["distinctness"]
+    assert cfg["two_point_policy"] == "NUMERICAL_DUPLICATE_SCREEN_ONLY"
+    assert cfg["two_point_decimals"] == 6
+    protocol = config.PROTOCOL_PATH.read_text()
+    assert "does not establish shape independence" in protocol
+    assert "no evidence of scientific independence" in protocol
+    base = [0.30, 0.45]
+    assert collide(base, base)
+    assert collide(base, [0.45, 0.30])  # time-reversed copy
+    assert collide(base, [-0.30, -0.45])  # reflected copy
+    assert collide(base, [0.40, 0.55])  # shifted copy (same difference)
+    assert collide(base, [0.60, 0.90])  # rescaled copy (same ratio)
+    assert collide(base, [0.45, 0.675])  # ratio read in the other direction (1.5 and 2/3)
+    assert collide(base, [0.30000004, 0.45000004])  # inside the 6-decimal rounding
+    assert not collide(base, [0.31, 0.52])
+    assert not collide(base, [0.30, 0.46])
+
+
+def test_two_point_screen_limits_are_false_negatives_beyond_rounding_and_nonlinear_copies() -> None:
+    base = [0.30, 0.45]
+    assert not collide(base, [0.3001, 0.4502])  # near-copy beyond the rounding is not caught
+    assert not collide(base, [0.30**2, 0.45**2])  # a nonlinear transform is not caught
+    assert collide([0.0, 2.0], [0.0, 5.0])  # a zero value makes all rescalings equal (a rejection)
+
+
+def test_constant_single_and_nonfinite_series_are_screened_on_raw_values() -> None:
+    assert not collide([0.3, 0.3], [0.5, 0.5])
+    assert collide([0.3, 0.3], [0.3, 0.3])
+    assert not collide([0.3], [0.5]) and collide([0.3], [0.3])
+    assert sealer.series_keys([0.3, float("nan")], 9, 6) == {("NONFINITE", ("0.3", "nan"))}
+    keys = sealer.series_keys([0.3, 0.45], 9, 6)
+    assert {kind for kind, *_ in keys} == {"RAW", "SORTED", "ABSDELTA", "RATIO"}
+
+
+def test_a_forty_eight_cluster_two_point_cohort_is_sealable(tmp_path: Path) -> None:
+    manifest = sealed(valid_packet(points=2), tmp_path)
+    assert manifest["clusters"] == 48 and manifest["independence"] == "NONE"
+
+
+@pytest.mark.parametrize(
+    "transform",
+    [
+        lambda a, b: (b, a),  # reversed
+        lambda a, b: (a + 0.1, b + 0.1),  # shifted
+        lambda a, b: (3 * a, 3 * b),  # rescaled
+        lambda a, b: (-a, -b),  # reflected
+        lambda a, b: (a + 1e-8, b + 1e-8),  # numerical near-duplicate
+    ],
+    ids=["reversed", "shifted", "rescaled", "reflected", "near_duplicate"],
+)
+def test_two_point_copies_across_clusters_are_refused(tmp_path: Path, transform: Any) -> None:
+    from a03_internal_fixtures import two_point
+
+    packet = valid_packet(points=2)
+    copy = transform(*two_point(3))
+    replace_scenario(packet, 11, 700, values=copy)
+    refused(packet, tmp_path, "series is shared")
+
+
+def test_two_point_clusters_still_need_unique_identity_observations_records_and_provenance(
+    tmp_path: Path,
+) -> None:
+    from dataclasses import replace
+
+    from scripts.research_scenarios import SyntheticScenario
+
+    from dynamislm.serialization import from_canonical_json
+
+    packet = valid_packet(points=2)
+    original = from_canonical_json(packet.scenarios[2]["scenario"], SyntheticScenario)
+    clone = replace(original, scenario_id="eval-" + "c" * 12)
+    packet.scenarios[8].update(scenario_id=clone.scenario_id, scenario=canonical_json(clone))
+    refused(packet, tmp_path, "shared between clusters")
