@@ -39,6 +39,8 @@ SCHEMA = "DYNAMISLM_A03_INTERNAL_PACKET_V1"
 ATTESTATION_SCHEMA = "DYNAMISLM_A03_INTERNAL_ATTESTATION_V1"
 FILES = ("scenarios.jsonl", "requests.jsonl", "gold.jsonl", "attestation.json")
 V2_FILES = (*FILES, owner.PROVENANCE, owner.SIGNATURE)
+V3_FILES = (*FILES, owner.PROVENANCE, owner.RECEIPT)
+APPROVAL_FILES = {1: FILES, 2: (*FILES, owner.PROVENANCE), 3: V3_FILES}
 BLIND_FILES = ("blind-scenarios.jsonl", "blind-requests.jsonl")
 RELEASE_FILE = "gold-release.json"
 RES69 = RES69_ABSOLUTE_CHANGE_OPERATION.stable_id
@@ -251,16 +253,25 @@ def _signature(judgment: dict[str, Any], families: list[str]) -> str:
     return v3.canonical([actions, judgment["allowed_claims"], sorted(families)])
 
 
-def _read(directory: Path, *, for_approval: bool = False) -> dict[str, bytes]:
+def _read(
+    directory: Path, *, for_approval: bool = False, for_receipt: bool = False
+) -> dict[str, bytes]:
     if not directory.is_dir() or directory.is_symlink():
         raise refuse("packet must be a regular directory")
     present = {p.name for p in directory.iterdir() if p.name not in (*BLIND_FILES, RELEASE_FILE)}
-    files: tuple[str, ...] = (
-        V2_FILES if present & {owner.PROVENANCE, owner.SIGNATURE} or for_approval else FILES
-    )
-    if for_approval:
-        files = V2_FILES[:-1]
+    if owner.RECEIPT in present:
+        if for_approval or for_receipt:
+            raise refuse("approval receipt already exists")
+        files: tuple[str, ...] = V3_FILES
+    elif for_receipt:
+        files = (*FILES, owner.PROVENANCE)
+    elif for_approval:
+        files = (*FILES, owner.PROVENANCE)
         present.discard(owner.SIGNATURE)
+    elif owner.SIGNATURE in present or owner.PROVENANCE in present:
+        files = V2_FILES
+    else:
+        files = FILES
     if present != set(files):
         raise refuse(f"packet files differ: {sorted(present ^ set(files))}")
     for name in files:
@@ -496,16 +507,47 @@ def support(
     return result
 
 
-def seal(directory: Path, *, owner_key: Path | None = None) -> dict[str, Any]:
+def seal(
+    directory: Path, *, owner_key: Path | None = None, prior_payload: Path | None = None
+) -> dict[str, Any]:
     """Refuse an invalid packet whole. Return the sealed manifest, which excludes all gold."""
-    return _seal(directory, _read(directory), owner_key)
+    return _seal(directory, _read(directory), owner_key, prior_payload)
 
 
-def _seal(directory: Path, content: dict[str, bytes], owner_key: Path | None) -> dict[str, Any]:
+def _seal(
+    directory: Path,
+    content: dict[str, bytes],
+    owner_key: Path | None,
+    prior_payload: Path | None = None,
+) -> dict[str, Any]:
     cfg = config.load_config()
-    version = 2 if owner.PROVENANCE in content else 1
+    if owner.RECEIPT in content:
+        version = 3
+    elif owner.PROVENANCE in content:
+        version = 2
+    else:
+        version = 1
     authorship = {}
-    if version == 2:
+    if version == 3:
+        if owner_key is not None:
+            raise refuse("v3 uses the recorded owner approval, not an owner key")
+        try:
+            attestation = owner.attestation(content)
+            prior = prior_payload.read_bytes() if prior_payload is not None else None
+            receipt = owner.verify_receipt(content, attestation["owner_id"], prior=prior)
+        except (OSError, ValueError) as exc:
+            raise refuse(str(exc)) from exc
+        authorship = {
+            "authorship": config.AUTHORSHIP,
+            "approval": {
+                "authority": receipt["authentication"],
+                "cryptographic": False,
+                "decision": receipt["decision"],
+                "receipt_sha256": v3.sha256(content[owner.RECEIPT]),
+                "supersedes_payload_sha256": receipt["supersedes"]["payload_sha256"],
+            },
+        }
+    elif version == 2:
         try:
             attestation = owner.attestation(content)
             key_sha256 = owner.verify_signature(
@@ -522,7 +564,7 @@ def _seal(directory: Path, content: dict[str, bytes], owner_key: Path | None) ->
     _distinct_clusters(cfg, clusters)
     items = _items(cfg, clusters, content)
     judgments = _gold(cfg, clusters, items, content, attestation["owner_id"])
-    if version == 2:
+    if version in (2, 3):
         try:
             owner.validate_provenance(
                 content,
@@ -557,7 +599,11 @@ def _seal(directory: Path, content: dict[str, bytes], owner_key: Path | None) ->
         ):
             raise refuse(f"insufficient family support for {family}")
     return {
-        "schema": "DYNAMISLM_A03_INTERNAL_PACKET_V2" if version == 2 else SCHEMA,
+        "schema": {
+            1: SCHEMA,
+            2: "DYNAMISLM_A03_INTERNAL_PACKET_V2",
+            3: "DYNAMISLM_A03_INTERNAL_PACKET_V3",
+        }[version],
         **config.identity(version),
         **authorship,
         "owner_id": attestation["owner_id"],
@@ -605,17 +651,35 @@ def main() -> int:
     parser.add_argument("packet", type=Path)
     parser.add_argument("--blind-out", type=Path)
     parser.add_argument("--owner-key", type=Path)
+    parser.add_argument("--prior-payload", type=Path)
     parser.add_argument("--approval-payload", action="store_true")
+    parser.add_argument("--receipt-payload", action="store_true")
     args = parser.parse_args()
+    if args.receipt_payload:
+        if (
+            args.blind_out is not None
+            or args.owner_key is not None
+            or args.prior_payload is not None
+            or args.approval_payload
+        ):
+            parser.error("--receipt-payload cannot be combined with export or verification")
+        content = _read(args.packet, for_receipt=True)
+        owner.attestation(content)
+        print(owner.payload_v3(content).decode(), end="")
+        return 0
     if args.approval_payload:
-        if args.blind_out is not None or args.owner_key is not None:
+        if (
+            args.blind_out is not None
+            or args.owner_key is not None
+            or args.prior_payload is not None
+        ):
             parser.error("--approval-payload cannot be combined with export or verification")
         content = _read(args.packet, for_approval=True)
         owner.attestation(content)
         print(owner.payload(content).decode(), end="")
         return 0
     content = _read(args.packet)
-    manifest = _seal(args.packet, content, args.owner_key)
+    manifest = _seal(args.packet, content, args.owner_key, args.prior_payload)
     output: dict[str, Any] = {"manifest": manifest, "packet_sha256": packet_sha256(manifest)}
     if args.blind_out is not None:
         exported = _blind_export(content)

@@ -179,3 +179,29 @@ def test_v2_identity_extends_the_exact_v1_policy(tmp_path: Path) -> None:
     modified.write_bytes(config.V2_CONFIG.read_bytes() + b"\n")
     with pytest.raises(ValueError, match="pinned identity"):
         config.load_amendment(modified)
+
+
+def test_v3_identity_records_owner_approval_without_changing_science(tmp_path: Path) -> None:
+    v1, v2, v3 = config.identity(1), config.identity(2), config.identity(3)
+    approval = config.load_approval()
+    assert config.version_for(v3) == 3
+    assert v3["config_sha256"] == config.V3_CONFIG_SHA256
+    assert v3["protocol_sha256"] == config.V3_PROTOCOL_SHA256
+    assert {key: v3[key] for key in ("mode", "evidence_class", "independence")} == {
+        key: v1[key] for key in ("mode", "evidence_class", "independence")
+    }
+    assert v2["config_sha256"] != v3["config_sha256"]
+    assert approval["schema"] == "DYNAMISLM_A03_INTERNAL_CONFIG_V3"
+    assert approval["owner_decision"] == {
+        "issue": "RES-771",
+        "comment_id": "33488998-98dd-45f4-9934-9591a85b5b08",
+        "recorded_at": "2026-11-26",
+        "attribution": "AGENT_TRANSCRIBED_AT_OWNER_INSTRUCTION",
+    }
+    assert approval["authentication"] == "RECORDED_LINEAR_OWNER_APPROVAL"
+    assert approval["cryptographic_signature"] is False
+    assert approval["independence"] == "NONE"
+    modified = tmp_path / "config.json"
+    modified.write_bytes(config.V3_CONFIG.read_bytes() + b"\n")
+    with pytest.raises(ValueError, match="pinned identity"):
+        config.load_approval(modified)
