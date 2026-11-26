@@ -167,4 +167,8 @@ packaging/research-cli.toml	configuration	-	Standalone synthetic CLI candidate p
 experiments/a03/runner.md	documentation	-	Operational invocation and custody handoff for the RES-746 prospective evaluator
 docs/operations/ALPHA-ADAPTER-BUNDLE.md	documentation	-	RES-772 offline adapter packaging and verification runbook; no model artifacts stored in Git
 docs/operations/RESEARCH-ASK.md	documentation	-	RES-430 installed research inference operations and claim boundaries
+docs/release/README.md	documentation	-	Research Alpha 0.1 NO_GO release index and non-publication boundary
+docs/release/ALPHA-0.1-CLAIM-BOUNDARY.md	documentation	-	Supported and unsupported Research Alpha 0.1 claims; no independent-validation claim
+docs/release/ALPHA-0.1-EXPERIMENTAL-REPORT.md	documentation	-	Full RES-774 internal evaluation report, failure attribution and evidence digests
+docs/release/ALPHA-0.1-RELEASE-DECISION.json	configuration	-	Digest-bound NO_GO release decision; no publication authorization
 packaging/research-model-constraints.txt	configuration	-	RES-430 pinned CPython 3.13 CPU inference dependency versions
