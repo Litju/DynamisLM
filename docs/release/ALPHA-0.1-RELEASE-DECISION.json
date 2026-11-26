@@ -1,0 +1,29 @@
+{
+  "schema": "DYNAMISLM_ALPHA_0_1_RELEASE_DECISION_V1",
+  "identity": "DynamisLM-Action-3B-v0.1",
+  "decision": "NO_GO",
+  "scientific_result": "INTERNAL_NO_GO",
+  "evidence_class": "INTERNAL_OWNER_ADJUDICATED",
+  "independence": "NONE",
+  "publication": "NOT_AUTHORIZED",
+  "adapter_distribution": "LICENSE_DECISION_REQUIRED",
+  "evaluated_source_commit": "480496b21df65bc026317a2fc52783bb0797ed8c",
+  "merge_commit": "546fdc3340077a9678e3f16228c794af6617c767",
+  "packet_sha256": "ed0ffd72b9388d167a3684664955c6e29154f81473fd92680227266ac73859d5",
+  "run_sha256": "0eb2772f55171f50e31a42025037265ccc5dba71eb894665eb240be2ce20b8c7",
+  "output_commit_sha256": "6d6a8165cd60dd8de02f8e14e2762195a9faa5796620464ee93e10ed80fe4041",
+  "report_sha256": "6cdb3071233e1058ac13ca34bbc2a47ed970bff11d790ef84184a468c6c7ab9f",
+  "gold_release_sha256": "b06145bbd9e280486f0b1fa33d9c361572d826a2d852d73c3d97ebc67e51650f",
+  "compute_estimate_sha256": "6ad84c215992da120a38067d00f4937cc1fae3a3eef4fdf8f89912698957bd80",
+  "adapter_bundle_sha256": "d0e6c2a34fdafde9ca7783e7cd540d2fcb8d285d5735139fea5f243f9219ddd3",
+  "generations": 192,
+  "items": 96,
+  "clusters": 48,
+  "reason": "EXECUTION_COVERAGE, HAZARD_REFUSAL, NOVEL_INTENT and PRACTICAL_MEANING failed; CAUSAL_OVERREACH was inconclusive; unauthorized dispatch was zero. The model collapsed to valid but non-operative actions.",
+  "documents": [
+    "ALPHA-0.1-MODEL-CARD.md",
+    "ALPHA-0.1-SYSTEM-CARD.md",
+    "ALPHA-0.1-CLAIM-BOUNDARY.md",
+    "ALPHA-0.1-EXPERIMENTAL-REPORT.md"
+  ]
+}
