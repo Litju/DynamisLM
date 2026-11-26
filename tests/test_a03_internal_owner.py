@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -315,3 +316,29 @@ def test_recorded_v3_receipt_cannot_cover_changed_inputs(
         file.write(b" ")
     with pytest.raises(sealer.PacketRefusalError, match="protected-input digest"):
         sealer.seal(packet)
+
+
+def test_seal_cli_materializes_the_recorded_approval_once(
+    recorded: tuple[Path, Path, dict[str, Any]],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    source, prior, receipt = recorded
+    packet = Path(shutil.copytree(source, tmp_path / "packet"))
+    (packet / owner.RECEIPT).unlink()
+    (packet / sealer.RELEASE_FILE).unlink(missing_ok=True)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["a03_internal_seal", str(packet), "--prior-payload", str(prior), "--write-receipt"],
+    )
+    assert sealer.main() == 0
+    printed = json.loads(capsys.readouterr().out)
+    assert printed == {
+        "receipt_sha256": v3.sha256((packet / owner.RECEIPT).read_bytes()),
+        "payload_sha256": receipt["payload_sha256"],
+    }
+    assert json.loads((packet / owner.RECEIPT).read_text()) == receipt
+    with pytest.raises(sealer.PacketRefusalError, match="already exists"):
+        sealer.main()

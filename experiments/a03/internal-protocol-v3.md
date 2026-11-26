@@ -62,14 +62,19 @@ provenance row is a scientific change and cannot be migrated by this receipt.
 
 ## Sealing and release
 
-Write the v2 payload once, then materialize the receipt from it. Print the v3
-payload digest and record the exact input digests with the protected evidence.
-Seal without any owner key:
+Write the v2 payload once, then materialize the receipt from it and seal
+without any owner key:
 
 ```sh
 uv run python -m scripts.a03_internal_seal "$packet" \
+  --prior-payload "$v2_payload" --write-receipt
+uv run python -m scripts.a03_internal_seal "$packet" \
   --prior-payload "$v2_payload" --blind-out "$blind"
 ```
+
+`--write-receipt` refuses an existing receipt and any changed protected input.
+Print the v3 payload digest and record the exact input digests with the
+protected evidence.
 
 The sealer refuses a missing, malformed, altered or mismatched receipt, a
 receipt that claims independence or cryptographic authentication, an input

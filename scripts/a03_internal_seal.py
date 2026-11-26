@@ -654,7 +654,32 @@ def main() -> int:
     parser.add_argument("--prior-payload", type=Path)
     parser.add_argument("--approval-payload", action="store_true")
     parser.add_argument("--receipt-payload", action="store_true")
+    parser.add_argument("--write-receipt", action="store_true")
     args = parser.parse_args()
+    if args.write_receipt:
+        if (
+            args.blind_out is not None
+            or args.owner_key is not None
+            or args.approval_payload
+            or args.receipt_payload
+            or args.prior_payload is None
+        ):
+            parser.error("--write-receipt requires exactly --prior-payload")
+        content = _read(args.packet, for_receipt=True)
+        owner.attestation(content)
+        receipt = owner.build_receipt(content, args.prior_payload.read_bytes())
+        target = args.packet / owner.RECEIPT
+        with target.open("x", encoding="utf-8") as stream:
+            stream.write(v3.canonical(receipt) + "\n")
+        print(
+            v3.canonical(
+                {
+                    "receipt_sha256": v3.sha256(target.read_bytes()),
+                    "payload_sha256": receipt["payload_sha256"],
+                }
+            )
+        )
+        return 0
     if args.receipt_payload:
         if (
             args.blind_out is not None
