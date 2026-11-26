@@ -15,7 +15,19 @@ from scripts import a03_internal_config as config
 ATTESTATION_SCHEMA = "DYNAMISLM_A03_INTERNAL_ATTESTATION_V2"
 PROVENANCE = "provenance.json"
 SIGNATURE = "owner-approval.sig"
+RECEIPT = "owner-approval-receipt.json"
 NAMESPACE = "dynamislm-a03-owner-v2"
+APPROVAL_SCHEMA_V2 = "DYNAMISLM_A03_INTERNAL_OWNER_APPROVAL_V2"
+APPROVAL_SCHEMA_V3 = "DYNAMISLM_A03_INTERNAL_OWNER_APPROVAL_V3"
+RECEIPT_SCHEMA = "DYNAMISLM_A03_INTERNAL_OWNER_APPROVAL_RECEIPT_V3"
+AUTHENTICATION = "RECORDED_LINEAR_OWNER_APPROVAL"
+PROTECTED_INPUTS = (
+    "attestation.json",
+    "gold.jsonl",
+    "provenance.json",
+    "requests.jsonl",
+    "scenarios.jsonl",
+)
 
 
 def attestation(content: dict[str, bytes]) -> dict[str, Any]:
@@ -49,6 +61,131 @@ def payload(content: dict[str, bytes]) -> bytes:
         )
         + "\n"
     ).encode()
+
+
+def approval_files(content: dict[str, bytes]) -> dict[str, str]:
+    extra = set(content) - set(PROTECTED_INPUTS) - {RECEIPT}
+    if not set(PROTECTED_INPUTS).issubset(content) or extra:
+        raise ValueError("approval payload requires exactly the five protected inputs")
+    return {name: v3.sha256(content[name]) for name in PROTECTED_INPUTS}
+
+
+def payload_v3(content: dict[str, bytes]) -> bytes:
+    return (
+        v3.canonical(
+            {
+                "schema": APPROVAL_SCHEMA_V3,
+                **config.identity(3),
+                "files": approval_files(content),
+            }
+        )
+        + "\n"
+    ).encode()
+
+
+def _prior_payload(prior: bytes, content: dict[str, bytes]) -> dict[str, Any]:
+    row = schema._fields(
+        v3.json_object(prior.decode("utf-8")),
+        "schema config_sha256 evidence_class files independence mode protocol_sha256",
+    )
+    if row["schema"] != APPROVAL_SCHEMA_V2 or {
+        key: row[key] for key in config.identity(2)
+    } != config.identity(2):
+        raise ValueError("superseded payload is not the registered v2 approval")
+    if prior != (v3.canonical(row) + "\n").encode():
+        raise ValueError("superseded payload is not canonical")
+    files = approval_files(content)
+    recorded = row["files"]
+    if not isinstance(recorded, dict) or set(recorded) != set(PROTECTED_INPUTS):
+        raise ValueError("superseded payload does not cover the protected inputs")
+    for name in PROTECTED_INPUTS:
+        schema._digest(recorded[name])
+        if recorded[name] != files[name]:
+            raise ValueError("protected scientific inputs changed since v2 approval")
+    return {
+        "schema": APPROVAL_SCHEMA_V2,
+        "config_sha256": config.V2_CONFIG_SHA256,
+        "protocol_sha256": config.V2_PROTOCOL_SHA256,
+        "payload_sha256": v3.sha256(prior),
+        "files": files,
+        "scientific_inputs_equal": True,
+    }
+
+
+def build_receipt(content: dict[str, bytes], prior: bytes) -> dict[str, Any]:
+    """Materialize the v3 receipt from the exact accepted v2 payload bytes."""
+    approval = config.load_approval()
+    return {
+        "schema": RECEIPT_SCHEMA,
+        "owner_id": attestation(content)["owner_id"],
+        "decision": dict(approval["owner_decision"]),
+        "scope": approval["scope"],
+        "attribution": approval["authorship"],
+        "authentication": approval["authentication"],
+        "cryptographic_signature": False,
+        "independence": approval["independence"],
+        "payload_sha256": v3.sha256(payload_v3(content)),
+        "files": approval_files(content),
+        "supersedes": _prior_payload(prior, content),
+    }
+
+
+def verify_receipt(
+    content: dict[str, bytes], owner_id: str, prior: bytes | None = None
+) -> dict[str, Any]:
+    """Accept only the recorded owner approval bound to unchanged reviewed inputs."""
+    approval = config.load_approval()
+    row = schema._fields(
+        v3.json_object(content[RECEIPT].decode("utf-8")),
+        "schema owner_id decision scope attribution authentication cryptographic_signature "
+        "independence payload_sha256 files supersedes",
+    )
+    if row["schema"] != RECEIPT_SCHEMA or row["owner_id"] != owner_id:
+        raise ValueError("missing or mismatched v3 owner approval receipt")
+    decision = schema._fields(row["decision"], "issue comment_id recorded_at attribution")
+    if decision != approval["owner_decision"]:
+        raise ValueError("approval receipt decision differs from the recorded owner decision")
+    if (
+        row["scope"] != approval["scope"]
+        or row["attribution"] != approval["authorship"]
+        or row["authentication"] != AUTHENTICATION
+        or row["cryptographic_signature"] is not False
+        or row["independence"] != approval["independence"]
+    ):
+        raise ValueError("approval receipt claims unsupported scope or authentication")
+    files = approval_files(content)
+    recorded = row["files"]
+    if not isinstance(recorded, dict) or set(recorded) != set(PROTECTED_INPUTS):
+        raise ValueError("approval receipt does not cover the protected inputs")
+    for name in PROTECTED_INPUTS:
+        schema._digest(recorded[name])
+        if recorded[name] != files[name]:
+            raise ValueError("approval receipt protected-input digest differs")
+    schema._digest(row["payload_sha256"])
+    if row["payload_sha256"] != v3.sha256(payload_v3(content)):
+        raise ValueError("approval receipt payload digest differs")
+    supersedes = schema._fields(
+        row["supersedes"],
+        "schema config_sha256 protocol_sha256 payload_sha256 files scientific_inputs_equal",
+    )
+    if (
+        supersedes["schema"] != APPROVAL_SCHEMA_V2
+        or supersedes["config_sha256"] != config.V2_CONFIG_SHA256
+        or supersedes["protocol_sha256"] != config.V2_PROTOCOL_SHA256
+        or supersedes["scientific_inputs_equal"] is not True
+    ):
+        raise ValueError("approval receipt does not supersede the registered v2 payload")
+    schema._digest(supersedes["payload_sha256"])
+    prior_files = supersedes["files"]
+    if not isinstance(prior_files, dict) or set(prior_files) != set(PROTECTED_INPUTS):
+        raise ValueError("superseded approval does not cover the protected inputs")
+    for name in PROTECTED_INPUTS:
+        schema._digest(prior_files[name])
+        if prior_files[name] != files[name]:
+            raise ValueError("protected scientific inputs changed since v2 approval")
+    if prior is not None and _prior_payload(prior, content) != supersedes:
+        raise ValueError("superseded payload bytes differ from the recorded v2 approval")
+    return row
 
 
 def verify_signature(

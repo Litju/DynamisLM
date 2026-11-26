@@ -156,7 +156,7 @@ def main() -> None:
     parser.add_argument("output_directory", type=Path)
     parser.add_argument("--tokenizer", type=Path, required=True)
     parser.add_argument("--timing-evidence", type=Path)
-    parser.add_argument("--protocol-version", type=int, choices=(1, 2), default=1)
+    parser.add_argument("--protocol-version", type=int, choices=(1, 2, 3), default=1)
     args = parser.parse_args()
     from scripts import a03_d0_runtime as d0
     from scripts import a03_prospective_run as prospective

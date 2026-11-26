@@ -388,7 +388,7 @@ def _released_packet(
     identity = config.identity(version)
     if any(packet.get(key) != value for key, value in identity.items()):
         raise ValueError("released packet protocol differs from the run")
-    for name in sealer.V2_FILES if version == 2 else sealer.FILES:
+    for name in sealer.APPROVAL_FILES[version]:
         prospective.verified_bytes(protected / name, packet["files"][name])
     if sealer.seal(protected, owner_key=owner_key) != packet:
         raise ValueError("released packet does not reproduce its seal")

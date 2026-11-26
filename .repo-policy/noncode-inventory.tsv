@@ -157,8 +157,10 @@ experiments/a02/native-cache-execution-v1.md	documentation	8adf9f834b246ea3baf89
 experiments/a02/preparation-successor-v1.md	documentation	2794f1454dc05caae6c500c1fe0f1a08bdb883d44338435d9056611a5e711238	RES-541 prospective baseline-only preparation recovery; explicit successor approval required, predecessor evidence and original budget preserved
 experiments/a03/internal-config-v1.json	configuration	-	Canonical frozen RES-771 D5 internal evaluation configuration; digest-pinned in scripts/a03_internal_config.py and verified by tests
 experiments/a03/internal-config-v2.json	configuration	-	Digest-pinned R3 authorship amendment extending the frozen v1 configuration
+experiments/a03/internal-config-v3.json	configuration	-	Digest-pinned recorded owner-approval amendment replacing the mandatory v2 signature gate; no scientific values changed
 experiments/a03/internal-protocol-v1.md	documentation	-	Versioned INTERNAL_OWNER_ADJUDICATED evaluation protocol and RES-774 workflow; digest-bound by the internal configuration
 experiments/a03/internal-protocol-v2.md	documentation	-	Prospective R3 authorship and owner adjudication amendment
+experiments/a03/internal-protocol-v3.md	documentation	-	Versioned recorded Linear owner approval replacing mandatory cryptographic signing; evidential limits disclosed, science unchanged
 experiments/a03/prospective-protocol.md	documentation	-	Prospective A0.3 experimental design and protected benchmark schema instructions
 docs/operations/RES-747-RESEARCH-CLI.md	documentation	-	Synthetic research CLI build, operation, reproduction and release limitations
 packaging/research-cli.toml	configuration	-	Standalone synthetic CLI candidate packaging without modifying frozen A0.2 build files

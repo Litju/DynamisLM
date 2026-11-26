@@ -34,7 +34,7 @@ from scripts.research_scenarios import SyntheticScenario
 SCHEMA = "DYNAMISLM_A03_INTERNAL_RUN_V1"
 ARMS = ("N", "C1")
 COMMIT_STATUSES = ("COMMITTED", "EXHAUSTED", "STOPPED")
-PACKET_FILES = frozenset(sealer.V2_FILES)
+PACKET_FILES = frozenset(sealer.V3_FILES)
 
 
 class Backend(Protocol):
@@ -371,7 +371,7 @@ def main() -> None:
     make.add_argument("blind_directory", type=Path)
     make.add_argument("--packet-sha256", required=True)
     make.add_argument("--bundle-archive-sha256", required=True)
-    make.add_argument("--protocol-version", type=int, choices=(1, 2), default=1)
+    make.add_argument("--protocol-version", type=int, choices=(1, 2, 3), default=1)
     go = sub.add_parser("run", help="run the shipped ask pipeline over the blinded export")
     go.add_argument("blind_directory", type=Path)
     go.add_argument("output_directory", type=Path)
