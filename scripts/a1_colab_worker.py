@@ -305,6 +305,8 @@ def _error() -> dict[str, Any] | None:
 
 
 def evidence() -> None:
+    if EVIDENCE.exists():
+        EVIDENCE.unlink()
     with tarfile.open(EVIDENCE, "w") as archive:
         for path in sorted(WORK.rglob("*")):
             if not path.is_file() or path == EVIDENCE or path.name == ".writer.lock":
@@ -313,12 +315,52 @@ def evidence() -> None:
                 continue
             if path.is_relative_to(WORK / "adapter-work"):
                 continue
+            if path.name == "resume.tar":
+                continue
             archive.add(path, arcname=path.relative_to(WORK).as_posix())
+
+
+def evidence_phase() -> dict[str, Any]:
+    """Package run files so partial progress survives a session boundary."""
+    if not OUT.is_dir():
+        raise ValueError("no run directory exists yet")
+    evidence()
+    return {
+        "evidence_sha256": sha256(EVIDENCE),
+        "arms": {
+            path.stem: len([line for line in path.read_bytes().split(b"\n") if line])
+            for path in sorted(OUT.glob("*.jsonl"))
+        },
+    }
+
+
+def resume_phase() -> dict[str, Any]:
+    """Unpack a prior evidence archive into the run directory of a fresh session."""
+    archive = WORK / "resume.tar"
+    if not archive.is_file():
+        raise ValueError("resume archive is missing")
+    OUT.mkdir(mode=0o700, parents=True, exist_ok=True)
+    with tarfile.open(archive) as source:
+        for member in source.getmembers():
+            if not member.isfile() or not member.name.startswith("runs/"):
+                continue
+            name = Path(member.name).name
+            if not name.endswith(".jsonl"):
+                continue
+            handle = source.extractfile(member)
+            if handle is None:
+                continue
+            (OUT / name).write_bytes(handle.read())
+    write(WORK / "phase.json", {"phase": "RESUME_COMPLETE"})
+    return status()
 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("phase", choices=("bootstrap", "download", "run", "status", "cleanup"))
+    parser.add_argument(
+        "phase",
+        choices=("bootstrap", "resume", "download", "run", "status", "evidence", "cleanup"),
+    )
     parser.add_argument("--seconds", type=float, default=0)
     args = parser.parse_args()
     started = time.monotonic()
@@ -335,6 +377,10 @@ def main() -> int:
             run_phase(args.seconds)
         elif args.phase == "status":
             print(json.dumps(status(), sort_keys=True))
+        elif args.phase == "resume":
+            print(json.dumps(resume_phase(), sort_keys=True))
+        elif args.phase == "evidence":
+            print(json.dumps(evidence_phase(), sort_keys=True))
         else:
             shutil.rmtree(WORK)
             return 0
@@ -351,7 +397,7 @@ def main() -> int:
             },
         )
     finally:
-        if args.phase not in {"cleanup", "status"} and WORK.exists():
+        if args.phase not in {"cleanup", "status", "evidence", "resume"} and WORK.exists():
             try:
                 evidence()
             except Exception as exc:

@@ -75,3 +75,8 @@ Thumbs.db
 credentials.json
 .netrc
 .pypirc
+
+# A1 campaign working directories and raw generations
+experiments/a1/.campaign/
+experiments/a1/.runs/
+experiments/a1/.rehearsal/
