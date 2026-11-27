@@ -168,6 +168,9 @@ experiments/a03/runner.md	documentation	-	Operational invocation and custody han
 docs/operations/ALPHA-ADAPTER-BUNDLE.md	documentation	-	RES-772 offline adapter packaging and verification runbook; no model artifacts stored in Git
 docs/operations/RESEARCH-ASK.md	documentation	-	RES-430 installed research inference operations and claim boundaries
 docs/research/PROGRAM.md	documentation	-	Four-track research program, Track A dependency map and A0 historical study record; no historical result changed
+experiments/a1/cases-v1.json	authority	cb5217297ecbee454fcab9db76a46b62e6903ab082127b256f9c27b4af3a83cf	Frozen A1 diagnostic cohort: 48 synthetic cases in 24 contrastive clusters, mechanically derived gold and no reused historical phrasing
+experiments/a1/call-manifest-v1.json	authority	2082a62fdf8e80730a41f3e90794f0021121a1af6b82a94f86b37d5e70a335dd	Frozen A1 model-call manifest: 20 deduplicated conditions, 1,332 generations, exact prompt digests, sealed before any inference
+experiments/a1/system-action-corrected-v1.txt	authority	4edae6a8d3a66cd4ec40cc72ca81172aaf6a8f37ac83483ab072b3aba49023c9	D1 corrected system instruction: identical to the A0.2 prompt except that the objective sentence is removed
 docs/release/README.md	documentation	-	Research Alpha 0.1 NO_GO release index and non-publication boundary
 docs/release/ALPHA-0.1-MODEL-CARD.md	documentation	-	Experimental model card for DynamisLM-Action-3B-v0.1 with the actual INTERNAL_NO_GO result
 docs/release/ALPHA-0.1-SYSTEM-CARD.md	documentation	-	Experimental system card describing the model-proposes/Python-decides authority split
