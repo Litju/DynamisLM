@@ -108,6 +108,8 @@ def build_payload(directory: Path) -> tuple[Path, dict[str, Any]]:
     shutil.copyfile(bundle_src, bundle)
     alpha_adapter_bundle.verified_payload(bundle)
     payload = directory / "a1-payload.tar"
+    if payload.exists():
+        payload.unlink()
     with tarfile.open(payload, "x") as archive:
         for path in (source, sealed, bundle):
             archive.add(path, arcname=path.name)
