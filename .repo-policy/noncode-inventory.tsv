@@ -167,6 +167,7 @@ packaging/research-cli.toml	configuration	-	Standalone synthetic CLI candidate p
 experiments/a03/runner.md	documentation	-	Operational invocation and custody handoff for the RES-746 prospective evaluator
 docs/operations/ALPHA-ADAPTER-BUNDLE.md	documentation	-	RES-772 offline adapter packaging and verification runbook; no model artifacts stored in Git
 docs/operations/RESEARCH-ASK.md	documentation	-	RES-430 installed research inference operations and claim boundaries
+docs/research/PROGRAM.md	documentation	-	Four-track research program, Track A dependency map and A0 historical study record; no historical result changed
 docs/release/README.md	documentation	-	Research Alpha 0.1 NO_GO release index and non-publication boundary
 docs/release/ALPHA-0.1-MODEL-CARD.md	documentation	-	Experimental model card for DynamisLM-Action-3B-v0.1 with the actual INTERNAL_NO_GO result
 docs/release/ALPHA-0.1-SYSTEM-CARD.md	documentation	-	Experimental system card describing the model-proposes/Python-decides authority split
