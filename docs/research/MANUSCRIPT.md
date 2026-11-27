@@ -199,8 +199,23 @@ to an `objective` field that the deployed request does not contain.
 
 ## 5. Diagnosis (A1)
 
-*(Results are inserted from the executed campaign. The design is fixed and frozen in
-`experiments/a1/call-manifest-v1.json` before inference.)*
+### 5.0 Execution status
+
+The A1 factorial was frozen and sealed before inference
+(`experiments/a1/call-manifest-v1.json`, 20 deduplicated conditions, 1,332 generations). The
+execution attempt consumed all four authorized T4 sessions (272.3 s total, 0.925 modelled CU,
+exact-target teardown verified after every session) and produced **zero generations**. Every
+session failed at the same controller entrypoint defect before any inference: the phase was
+passed to the worker in an environment variable while the worker declared it as a required
+positional argument. The defect, its regression tests and the pre-allocation self-test that now
+prevents it are recorded in the branch history.
+
+No model-arm claim is made in this section. The scientific design below is frozen and ready;
+the execution did not occur. The authorized envelope is exhausted, and no additional session is
+authorized.
+
+The CPU baselines did execute on the same frozen cohort and are reported in Section 5.6. They are
+the only newly observed scientific evidence in this section.
 
 ### 5.1 Design corrections applied before observation
 
@@ -258,6 +273,8 @@ arms share one loaded base, with the adapter disabled through PEFT's own adapter
 weights, tokenizer, precision, attention implementation and generation settings are identical
 and only the adapter delta differs.
 
+This block did not execute. The dagger below marks every unexecuted arm in this section.
+
 ### 5.4 Diagnostic interventions
 
 D1 corrected system instruction (the objective sentence removed, nothing else changed); D2 the
@@ -281,6 +298,31 @@ labelled non-confirmatory, because items inside a cluster share their scenario. 
 validity, exact action match, per-field accuracy, observation-reference precision/recall/F1,
 claim preservation, refusal, abstention, restricted-input performance, output entropy and paired
 effects are reported separately.
+
+### 5.6 CPU baselines on the frozen cohort
+
+These ran on CPU and are independent of the unexecuted GPU factorial.
+
+| Baseline | Exact | Analysis class | Observation F1 |
+| --- | ---: | ---: | ---: |
+| Rule-based keyword map | 0.583 [0.417, 0.750] | 0.833 [0.708, 0.938] | 0.604 [0.438, 0.760] |
+| Conventional (A0.2 TF-IDF) | 0.021 [0.000, 0.062] | 0.146 [0.042, 0.271] | 0.590 [0.458, 0.715] |
+| Conventional, identity masked | 0.021 [0.000, 0.062] | 0.208 [0.083, 0.354] | 0.590 [0.458, 0.715] |
+| Restricted: question only | 0.292 [0.125, 0.458] | — | — |
+| Restricted: observations only | 0.292 [0.125, 0.458] | — | — |
+| Restricted: metadata only | 0.292 [0.125, 0.458] | — | — |
+
+Two things follow. First, analysis-family recognition is comparatively easy while observation
+binding is hard: the rule-based reader names the right class 0.833 of the time but binds the
+right observations only 0.604 of the time, and exact action match tracks the binding number, not
+the class number. Second, a supervised per-field model trained on the historical A0.2 split
+transfers almost nothing (0.021 exact), and masking measurement identity raises class accuracy
+without moving exact match. That localises the transfer failure to binding rather than to
+recognition.
+
+These are baselines, not findings about the language model. They establish that the task is not
+beyond simple methods, which constrains — without settling — a capacity-limited explanation of
+the historical failure.
 
 ## 6. Dataset intervention (A2) — prospective
 

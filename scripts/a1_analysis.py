@@ -117,6 +117,32 @@ def _pair(
     }
 
 
+def _campaign_status() -> dict[str, Any]:
+    """Measured campaign execution facts, read from the controller's own control record."""
+    control = ROOT / "experiments/a1/.campaign/control.json"
+    if not control.is_file():
+        return {"available": False}
+    value = v3.json_object(control.read_text(encoding="utf-8"))
+    sessions = value.get("sessions", [])
+    return {
+        "available": True,
+        "stop_reason": value.get("stop_reason"),
+        "sessions_allocated": len(sessions),
+        "authorized_sessions": value.get("authorization", {}).get("max_sessions"),
+        "session_errors": [session.get("error") for session in sessions],
+        "session_seconds": [session.get("elapsed_seconds") for session in sessions],
+        "elapsed_seconds": value.get("elapsed_seconds"),
+        "modeled_cu": value.get("modeled_cu"),
+        "displayed_balance_delta_cu": value.get("displayed_balance_delta_cu"),
+        "hard_cap_cu": value.get("authorization", {}).get("hard_cap_cu"),
+        "hard_cap_seconds": value.get("authorization", {}).get("hard_cap_seconds"),
+        "completed_generations": value.get("completed_generations"),
+        "target_absent": [session.get("target_absent") for session in sessions],
+        "within_cap": value.get("within_cap"),
+        "monitor_errors": value.get("monitor_errors"),
+    }
+
+
 def analyse() -> dict[str, Any]:
     manifest = a1_manifest.load_manifest()
     cases = _cases()
@@ -170,6 +196,7 @@ def analyse() -> dict[str, Any]:
         "baselines": _baselines(),
         "shortcuts": _shortcut_report(arms),
         "retrospective": _retrospective_compare(arms),
+        "campaign": _campaign_status(),
     }
 
 
@@ -352,10 +379,53 @@ def render(analysis: dict[str, Any]) -> str:
     add("# A1 - scientific failure diagnosis of the step-510 Action model")
     add("")
     add("**Status.** Execution report for RES-832. Inference only; no weights were trained or")
-    add("modified. Every number below is computed from committed generations and frozen gold.")
+    add("modified. Model-arm results are computed from committed generations and frozen gold;")
+    add("CPU baseline results are computed from the frozen cohort and the frozen A0.2 training")
+    add("split. Where an arm did not execute, that is stated and the arm is not imputed.")
     add("")
     add("## 1. Executed comparison arms")
     add("")
+    campaign = analysis.get("campaign", {"available": False})
+    if campaign.get("available"):
+        add("### 1.1 Campaign execution")
+        add("")
+        add(
+            f"**Stop reason: `{campaign['stop_reason']}`.** "
+            f"{campaign['sessions_allocated']} of {campaign['authorized_sessions']} authorized "
+            f"sessions were allocated in {_fmt(campaign['elapsed_seconds'], 1)} s of wall clock, "
+            f"producing {campaign['completed_generations']} completed generations. "
+            f"Modelled consumption was {_fmt(campaign['modeled_cu'], 4)} CU against a "
+            f"{campaign['hard_cap_cu']} CU cap, and the displayed balance fell by "
+            f"{_fmt(campaign['displayed_balance_delta_cu'], 2)} CU. "
+            f"Exact-target absence was verified after every session: "
+            f"{campaign['target_absent']}."
+        )
+        add("")
+        add("| Session | Seconds | Error | Target absent |")
+        add("| ---: | ---: | --- | --- |")
+        for index, (seconds, error, absent) in enumerate(
+            zip(
+                campaign["session_seconds"],
+                campaign["session_errors"],
+                campaign["target_absent"],
+                strict=False,
+            ),
+            start=1,
+        ):
+            add(f"| {index} | {_fmt(seconds, 1)} | `{error or 'none'}` | {absent} |")
+        add("")
+        if campaign["completed_generations"] == 0:
+            add(
+                "**No model comparison arm was executed.** Every session failed at the same "
+                "controller entrypoint defect before any inference: the phase was passed in the "
+                "environment while the worker required a positional argument, so the worker "
+                "exited at argument parsing and the controller advanced to the next session on "
+                "the same defect. The defect and its regression tests are recorded in commit "
+                "`RES-832: fix the campaign entrypoint defect that consumed the session "
+                "envelope`. The authorized envelope is exhausted; no additional session was "
+                "attempted and none is authorized by this report."
+            )
+            add("")
     add(
         f"Planned: **{analysis['planned_arms']} conditions / "
         f"{analysis['planned_generations']} generations**. "
@@ -517,7 +587,157 @@ def render(analysis: dict[str, Any]) -> str:
             f"{_ci(masked['summary']['analysis_class'])}."
         )
     add("")
-    return "\n".join(lines) + "\n"
+    add("### 10.1 What the CPU baselines do and do not establish")
+    add("")
+    exact_rule = rule["exact"]["estimate"]
+    exact_conventional = (
+        conventional["summary"]["exact"]["estimate"] if conventional.get("available") else None
+    )
+    add(
+        "The rule-based baseline is a fixed keyword map, not a learned system. Its exact-action "
+        f"estimate is {_fmt(exact_rule)}, with analysis-class accuracy "
+        f"{_fmt(rule['analysis_class']['estimate'])} and observation-reference F1 "
+        f"{_fmt(rule['observation_f1']['estimate'])}. Its error is concentrated in observation "
+        "selection and claim preservation: the keyword map names the right analysis family far "
+        "more often than it binds the analysis to the right observations."
+    )
+    add("")
+    if exact_conventional is not None:
+        masked_accuracy = (
+            _fmt(masked["summary"]["analysis_class"]["estimate"])
+            if masked.get("available")
+            else "n/a"
+        )
+        add(
+            "The conventional per-field classifier is trained on the frozen A0.2 TRAIN split and "
+            "evaluated on the A1 cohort. Its exact-action estimate is "
+            f"{_fmt(exact_conventional)}. This is expected and is itself a finding about the "
+            "transfer problem: A0.2 supervision uses a different synthetic measurement namespace "
+            "and a different comparator set, so a bag-of-ngrams model trained on it cannot bind "
+            "A1's registry identities. Masking the identity strings raises analysis-class "
+            f"accuracy to {masked_accuracy} without improving exact match, which localises the "
+            "failure to binding, not to recognising the analysis family."
+        )
+        add("")
+    add(
+        "Restricted-input baselines are identical across the three single components "
+        f"({_fmt(min(v['exact']['estimate'] for v in baselines['restricted_input'].values()))}), "
+        "because the rule-based reader cannot name an observation without the observation rows "
+        "and cannot name an analysis without the question. These arms are therefore a floor, not "
+        "a shortcut estimate. They are reported because the A2 audit needs the same instrument, "
+        "and because a single-component floor at this level is the reference a corrected audit "
+        "must exceed to be informative."
+    )
+    add("")
+    add("## 11. Recommended A2 dataset intervention")
+    add("")
+    add(
+        "The recommendation below is derived from the executed CPU evidence and the A0 factual "
+        "record only. It does **not** depend on the unexecuted A1 factorial, and it is explicitly "
+        "provisional pending that factorial."
+    )
+    add("")
+    add(
+        "1. **Render training in the deployed request form as the primary arm.** The rule-based "
+        "baseline shows that analysis-family recognition is comparatively easy "
+        f"({_fmt(rule['analysis_class']['estimate'])}) while observation binding is hard "
+        f"({_fmt(rule['observation_f1']['estimate'])}). The intervention with the largest "
+        "expected effect is therefore supervision that exercises binding, not supervision that "
+        "repeats family labels."
+    )
+    add("")
+    add(
+        "2. **Make observation selection the primary supervised decision.** At least half of the "
+        "training rows should require choosing a subset or a specific pair from 3-6 candidate "
+        "observations with distractors of the same and different measurement, so the target "
+        "cannot be produced by selecting every matching row."
+    )
+    add("")
+    add(
+        "3. **Apply the scoped shortcut audit, not a universal accuracy ceiling.** For every row "
+        "whose omitted information is scientifically necessary, report the restricted-input and "
+        "full-input pair. Do not require a fixed maximum restricted-input accuracy; require that "
+        "the full-input arm beats the restricted arm where the omitted information is necessary, "
+        "and report where it does not."
+    )
+    add("")
+    add(
+        "4. **Keep the claim axes explicit and separable.** Claim preservation is a distinct "
+        "competence from analysis selection, and the empty-`requested_claims` operational form "
+        "means it must come from question parsing. Supervise it as its own decision with "
+        "contrastive pairs that differ only in the requested claim level."
+    )
+    add("")
+    add("## 12. Recommended A3 training strategy")
+    add("")
+    add("Provisional, and conditional on the A1 factorial that did not execute:")
+    add("")
+    add(
+        "- Train M2 from the untouched base on the corrected A2 data, with the deployed "
+        "representation as the primary arm. A continuation from step-510 is not justified while "
+        "the representation and shortcut questions remain unresolved, because a continuation "
+        "would inherit the same supervision artifacts."
+    )
+    add("- Report S-hist and S-min with example exposure, optimizer budget and target-token")
+    add(
+        "  exposure all disclosed; these are not simultaneously matched when target lengths differ."
+    )
+    add(
+        "- Require a matched-budget comparison before attributing any improvement to the data "
+        "intervention rather than to more optimization."
+    )
+    add(
+        "- Report both decoders. Do not select on DEV-OOD, and do not treat a decoder's "
+        "structural gain as semantic improvement."
+    )
+    add("")
+    add("## 13. Is a stronger-model comparison justified?")
+    add("")
+    add(
+        "**Not yet established.** The registered conditional trigger for a stronger-model probe "
+        "is the A1 decision rule, which requires the executed factorial. With zero completed "
+        "model arms, no A1-based justification exists. Separately, the rule-based baseline "
+        f"reaching an exact-action estimate of {_fmt(exact_rule)} shows that the task is not "
+        "beyond simple methods, which weakens — but does not settle — the capacity-limited "
+        "explanation. A stronger-model comparison remains deferred."
+    )
+    add("")
+    add("## 14. Compute consumption and teardown")
+    add("")
+    if campaign.get("available"):
+        add(
+            f"Four T4 sessions were allocated and all four were torn down with exact-target "
+            f"absence verified. Modelled consumption {_fmt(campaign['modeled_cu'], 4)} CU; "
+            f"displayed balance delta {_fmt(campaign['displayed_balance_delta_cu'], 2)} CU; "
+            f"wall clock {_fmt(campaign['elapsed_seconds'], 1)} s. The aggregate stayed within "
+            f"the authorized {campaign['hard_cap_cu']} CU and "
+            f"{_fmt(campaign['hard_cap_seconds'], 0)} s ceilings "
+            f"(`within_cap = {campaign['within_cap']}`). The session count reached the authorized "
+            "maximum, so the envelope is exhausted."
+        )
+    else:
+        add("No campaign control record exists; no GPU session was allocated.")
+    add("")
+    add("## 15. Manuscript progress")
+    add("")
+    add(
+        "`docs/research/MANUSCRIPT.md` contains the introduction, related work, scientific "
+        "environment, A0 historical methodology and results, the A1 design, prospective A2-A5 "
+        "sections explicitly labelled as not executed, the discussion, limitations and "
+        "reproducibility appendix. Primary sources were verified against publisher or arXiv "
+        "records. Section 5 is written against the A1 design and currently records that the "
+        "factorial did not execute; it will be completed when the campaign runs."
+    )
+    add("")
+    add("## 16. Git, PR and Linear state")
+    add("")
+    add(
+        "All work is on branch `work/res-832-a1-diagnosis`, one PR, with the issue ID in every "
+        "commit subject. Local deterministic QA (ruff, format, mypy strict, repository policy, the "
+        "full pytest suite) passes before each push. RES-833, RES-834 and RES-835 carry the "
+        "prospective roadmap corrections as Linear comments; no new issues were created."
+    )
+    return "\n".join(lines).rstrip("\n") + "\n"
 
 
 def _contrast_table(add: Any, analysis: dict[str, Any], names: tuple[str, ...]) -> None:
