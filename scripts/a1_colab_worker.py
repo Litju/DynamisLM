@@ -359,10 +359,27 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "phase",
+        nargs="?",
         choices=("bootstrap", "resume", "download", "run", "status", "evidence", "cleanup"),
     )
-    parser.add_argument("--seconds", type=float, default=0)
+    parser.add_argument(
+        "--seconds", type=float, default=float(os.environ.get("A1_SECONDS", "0") or 0)
+    )
     args = parser.parse_args()
+    # `colab exec --file` runs the file with no positional arguments, so the phase arrives in the
+    # environment. Accept both forms and refuse an ambiguous or missing phase.
+    phase = args.phase or os.environ.get("A1_PHASE")
+    if phase not in {
+        "bootstrap",
+        "resume",
+        "download",
+        "run",
+        "status",
+        "evidence",
+        "cleanup",
+    }:
+        parser.error("phase must be given as an argument or in A1_PHASE")
+    args.phase = phase
     started = time.monotonic()
     status_code = 0
     try:

@@ -23,6 +23,7 @@ import argparse
 import hashlib
 import json
 import math
+import os
 import shutil
 import subprocess
 import sys
@@ -199,6 +200,40 @@ def _remote_status(client: ColabCLI) -> dict[str, Any]:
     return payload
 
 
+def check_worker() -> dict[str, Any]:
+    """Prove the worker starts and reports usage without a session.
+
+    The first A1 campaign attempt burned every authorized session because the controller passed
+    the phase in the environment while the worker required a positional argument. This check runs
+    the exact file locally with no arguments, so an entrypoint defect fails before allocation.
+    """
+    result = subprocess.run(
+        [sys.executable, str(WORKER)],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        timeout=60,
+        env={**os.environ, "PYTHONPATH": f"{ROOT / 'src'}:{ROOT}"},
+    )
+    if result.returncode != 2 or "phase must be given" not in result.stderr:
+        raise ControllerError(
+            "worker entrypoint self-test failed; refusing to allocate: "
+            f"rc={result.returncode} stderr={result.stderr[-400:]!r}"
+        )
+    status = subprocess.run(
+        [sys.executable, str(WORKER), "status"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        timeout=120,
+        env={**os.environ, "PYTHONPATH": f"{ROOT / 'src'}:{ROOT}"},
+    )
+    if status.returncode != 0:
+        raise ControllerError(f"worker status self-test failed: {status.stderr[-400:]}")
+    payload = json.loads(status.stdout.strip().splitlines()[-1])
+    return {"arguments_required": True, "status_ok": True, "status": payload}
+
+
 def campaign(directory: Path) -> dict[str, Any]:
     """Run the frozen campaign in as few T4 sessions as the envelope allows.
 
@@ -232,6 +267,7 @@ def campaign(directory: Path) -> dict[str, Any]:
         "baseline": before,
         "sessions": [],
         "started": time.time(),
+        "worker_self_test": check_worker(),
     }
     monitor_errors: list[str] = []
     observations: list[dict[str, Any]] = []
@@ -264,6 +300,8 @@ def campaign(directory: Path) -> dict[str, Any]:
                 control["stop_reason"] = "COMPLETE"
                 break
             if session.get("aborted"):
+                # A hard failure aborts the campaign: consuming further authorized sessions on the
+                # same defect spends the envelope without producing evidence.
                 control["stop_reason"] = session["aborted"]
                 break
             if session_index == MAX_SESSIONS:
@@ -329,6 +367,22 @@ def harvest(evidence: Path) -> dict[str, Any]:
             for path in target.glob("*.jsonl")
         ),
     }
+
+
+def _require_phase(session: dict[str, Any], phase: str, expected: str, client: ColabCLI) -> None:
+    """Fail closed on a phase error. A failed phase must never fall through to the next session."""
+    record = session["phases"][-1]
+    if record.get("returncode") != 0:
+        session["aborted"] = f"{phase.upper()}_PHASE_FAILED"
+        raise ControllerError(f"{phase} phase failed: {record.get('stderr', '')[-400:]}")
+    status = _remote_status(client)
+    session[f"{phase}_status"] = status
+    if status.get("error"):
+        session["aborted"] = f"{phase.upper()}_WORKER_ERROR"
+        raise ControllerError(f"{phase} worker error: {status['error']}")
+    if status.get("phase", {}).get("phase") != expected:
+        session["aborted"] = f"{phase.upper()}_NOT_COMPLETE"
+        raise ControllerError(f"{phase} did not reach {expected}: {status}")
 
 
 def _run_session(
@@ -399,21 +453,14 @@ def _run_session(
         session["phases"].append(
             _invoke(client, "bootstrap", 1200, {**env, "A1_PHASE": "bootstrap"})
         )
-        if session["phases"][-1]["returncode"] != 0:
-            raise ControllerError("bootstrap phase failed")
-        if _remote_status(client).get("phase", {}).get("phase") != "SETUP_COMPLETE":
-            raise ControllerError("bootstrap did not reach SETUP_COMPLETE")
+        _require_phase(session, "bootstrap", "SETUP_COMPLETE", client)
         if receipt["prior_evidence_arms"]:
             session["phases"].append(_invoke(client, "resume", 240, {**env, "A1_PHASE": "resume"}))
-            resumed = _remote_status(client)
-            session["resume"] = resumed
+            session["resume"] = _remote_status(client)
             if session["phases"][-1]["returncode"] != 0:
                 raise ControllerError("resume phase failed")
         session["phases"].append(_invoke(client, "download", 900, {**env, "A1_PHASE": "download"}))
-        if session["phases"][-1]["returncode"] != 0:
-            raise ControllerError("base download phase failed")
-        if _remote_status(client).get("phase", {}).get("phase") != "BASE_COMPLETE":
-            raise ControllerError("download did not reach BASE_COMPLETE")
+        _require_phase(session, "download", "BASE_COMPLETE", client)
 
         setup_elapsed = time.monotonic() - started
         generation_budget = remaining - setup_elapsed - CLEANUP_SECONDS - FETCH_SECONDS
