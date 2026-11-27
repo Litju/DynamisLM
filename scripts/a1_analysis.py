@@ -147,11 +147,11 @@ def analyse() -> dict[str, Any]:
     manifest = a1_manifest.load_manifest()
     cases = _cases()
     arms: dict[str, Any] = {}
-    for condition in manifest["conditions"]:
+    for condition in a1_manifest.all_conditions(manifest):
         scored = score_arm(condition["arm"], cases)
         if scored is not None:
             arms[condition["arm"]] = scored
-    planned = [condition["arm"] for condition in manifest["conditions"]]
+    planned = [condition["arm"] for condition in a1_manifest.all_conditions(manifest)]
     missing = [arm for arm in planned if arm not in arms]
     contrasts = {
         "adaptation_op_C1": _pair(arms.get("P-M1-R-op-C1"), arms.get("P-M0-R-op-C1")),
@@ -441,7 +441,7 @@ def render(analysis: dict[str, Any]) -> str:
         add("")
     add("| Arm | Role | Generations | Exact | Acceptable | Structured valid |")
     add("| --- | --- | ---: | ---: | ---: | ---: |")
-    conditions = {condition["arm"]: condition for condition in manifest["conditions"]}
+    conditions = {condition["arm"]: condition for condition in a1_manifest.all_conditions(manifest)}
     for arm, value in analysis["arms"].items():
         role = conditions[arm]["role"]
         summary = value["summary"]

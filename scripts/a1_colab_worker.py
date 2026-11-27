@@ -254,8 +254,9 @@ def run_phase(seconds: float) -> dict[str, Any]:
         **a1_backend.identity("cuda"),
         "runtime": real.runtime if hasattr(real, "runtime") else None,
     }
-    order = [c for c in manifest["conditions"] if c["role"] != "SHORTCUT_PROBE"]
-    order += [c for c in manifest["conditions"] if c["role"] == "SHORTCUT_PROBE"]
+    order_all = a1_manifest.all_conditions(manifest)
+    order = [c for c in order_all if c["role"] != "SHORTCUT_PROBE"]
+    order += [c for c in order_all if c["role"] == "SHORTCUT_PROBE"]
     OUT.mkdir(mode=0o700, exist_ok=True)
     deadline = time.monotonic() + seconds
     receipts = []

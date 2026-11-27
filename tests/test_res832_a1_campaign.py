@@ -23,13 +23,30 @@ from typing import Any
 
 import pytest
 from scripts import a02_v3_contract as v3
-from scripts import a1_baselines, a1_cases, a1_manifest, a1_rehearsal, a1_run, a1_score
+from scripts import (
+    a1_baselines,
+    a1_cases,
+    a1_manifest,
+    a1_rehearsal,
+    a1_retrospective,
+    a1_run,
+    a1_score,
+)
 from scripts import a1_representation as rep
 
 
 @pytest.fixture(scope="module")
 def manifest() -> dict[str, Any]:
     return a1_cases.load_manifest()
+
+
+# D6 and the shortcut comparison use the private RES-774 evidence root. That root lives outside
+# Git, so the tests that require it are skipped on hosted CI, exactly as the repository already
+# does for the sealed predecessor receipts. The CI-verifiable contract is covered separately.
+needs_evidence = pytest.mark.skipif(
+    not a1_retrospective.available(),
+    reason="private RES-774 evidence lives outside Git; verified locally, not on hosted CI",
+)
 
 
 def test_cohort_allocation_and_clusters(manifest: dict[str, Any]) -> None:
@@ -89,6 +106,7 @@ def test_gold_is_registry_derived_not_authored(manifest: dict[str, Any]) -> None
             assert gold["observation_ids"] == []
 
 
+@needs_evidence
 def test_no_case_reuses_a_historical_question(manifest: dict[str, Any]) -> None:
     from scripts import a02_v3_decision as decision
     from scripts import a1_retrospective
@@ -235,9 +253,17 @@ def test_restricted_projections_are_strictly_poorer(manifest: dict[str, Any]) ->
 def test_call_manifest_is_within_the_authorized_workload() -> None:
     sealed = a1_manifest.load_manifest()
     assert sealed["planned_generations"] <= 1336
-    assert sealed["planned_conditions"] == 20
+    assert sealed["planned_conditions"] == 18
     assert sealed["planned_generations"] == sum(
         len(condition["items"]) for condition in sealed["conditions"]
+    )
+    # The CI-verifiable manifest excludes D6, which needs the private evidence root. The declared
+    # total must still fit the authorized ceiling, and D6's fixed 192 calls are what fills it.
+    assert sealed["retrospective_planned_generations"] == 192
+    assert sealed["total_planned_generations"] <= 1336
+    assert (
+        sealed["total_planned_generations"]
+        == sealed["planned_generations"] + sealed["retrospective_planned_generations"]
     )
     principal = [
         condition
@@ -459,6 +485,7 @@ def test_shortcut_probe_removes_the_named_component() -> None:
     assert set(question) == {"question", "observations"}
 
 
+@needs_evidence
 def test_retrospective_cohort_is_the_exposed_a03_population() -> None:
     from scripts import a1_retrospective
 

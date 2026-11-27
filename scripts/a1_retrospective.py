@@ -38,8 +38,14 @@ def _jsonl(data: bytes) -> list[dict[str, Any]]:
     return [v3.json_object(line) for line in data.decode("utf-8").splitlines()]
 
 
+def available() -> bool:
+    """False when the private RES-774 evidence root is absent, as it is in hosted CI."""
+    return (BLIND / "blind-scenarios.jsonl").is_file() and (PROTECTED / "gold.jsonl").is_file()
+
+
 @functools.lru_cache(maxsize=1)
 def cohort_request() -> tuple[dict[str, Any], ...]:
+    """Reconstruct the deployed requests. Requires the private evidence root."""
     from scripts import research_ask
     from scripts.a03_internal_run import load_blind, read_blind
 

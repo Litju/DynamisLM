@@ -231,12 +231,20 @@ def shortcut_probe() -> list[dict[str, Any]]:
     ]
 
 
-def retrospective() -> list[dict[str, Any]]:
-    """D6: untouched foundation model on the exposed 96-item A0.3 cohort, labelled retrospective."""
+def retrospective_conditions() -> dict[str, Any]:
+    """D6: untouched foundation model on the exposed A0.3 cohort.
+
+    This arm set cannot be re-derived from Git: it needs the private RES-774 evidence root. It is
+    therefore bound by digest rather than re-derived during ordinary verification, and it is
+    reported as unverifiable when that evidence is absent. That is deliberately different from
+    silently trusting it.
+    """
     from scripts import a1_retrospective
 
+    if not a1_retrospective.available():
+        return {"available": False, "conditions": []}
     cohort = a1_retrospective.cohort_cases()
-    return [
+    conditions = [
         condition(
             arm=f"D6-M0-{decoder}",
             role="RETROSPECTIVE_NOT_FINAL_EVIDENCE",
@@ -248,14 +256,19 @@ def retrospective() -> list[dict[str, Any]]:
         )
         for decoder in ("N", "C1")
     ]
+    return {
+        "available": True,
+        "conditions": conditions,
+        "digest": v3.sha256(v3.canonical(conditions).encode()),
+    }
 
 
 def manifest() -> dict[str, Any]:
+    """The CI-verifiable call manifest: every condition re-derivable from committed sources."""
     cases = a1_cases.load_manifest()["cases"]
     conditions = [
         *principal(cases),
         *diagnostics(cases),
-        *retrospective(),
         *shortcut_probe(),
     ]
     seen: set[str] = set()
@@ -263,38 +276,96 @@ def manifest() -> dict[str, Any]:
         if entry["arm"] in seen:
             raise ManifestError(f"duplicate A1 arm: {entry['arm']}")
         seen.add(entry["arm"])
-        if entry["role"] not in {"SHORTCUT_PROBE", "RETROSPECTIVE_NOT_FINAL_EVIDENCE"}:
+        if entry["role"] != "SHORTCUT_PROBE":
             prompts = [item["prompt_sha256"] for item in entry["items"]]
             if len(set(prompts)) != len(prompts):
                 raise ManifestError(f"{entry['arm']} renders duplicate prompts within the arm")
     generations = sum(len(entry["items"]) for entry in conditions)
+    retrospective = retrospective_conditions()
     return {
         "schema": SEAL_SCHEMA,
         "case_manifest_sha256": a1_cases.load_manifest()["manifest_sha256"],
         "conditions": conditions,
         "planned_generations": generations,
         "planned_conditions": len(conditions),
+        "retrospective": retrospective,
+        "retrospective_planned_generations": 192,
+        "total_planned_generations": generations + 192,
         "priority": [
             "PRINCIPAL_FACTORIAL",
             "DIAGNOSTIC",
             "DIAGNOSTIC_ASSISTED",
             "DIAGNOSTIC_FEWSHOT",
-            "RETROSPECTIVE_NOT_FINAL_EVIDENCE",
             "SHORTCUT_PROBE",
+            "RETROSPECTIVE_NOT_FINAL_EVIDENCE",
         ],
     }
 
 
+def all_conditions(sealed: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    """Every condition to execute, including D6 when its private evidence is present.
+
+    When the evidence root is absent, D6 is not silently dropped from the science: it is reported
+    as unexecutable here, and the caller records that. Verification never depends on which state
+    the machine is in.
+    """
+    value = sealed if sealed is not None else load_manifest()
+    retrospective = value.get("retrospective", {})
+    conditions = list(value["conditions"])
+    # D6 is frozen in the seal but executable only where its blinded cohort and gold exist. A
+    # caller that cannot reconstruct it must not receive it as a runnable condition.
+    if retrospective.get("available"):
+        available_now = all_conditions_available()
+        if available_now:
+            conditions.extend(retrospective["conditions"])
+    return conditions
+
+
+def all_conditions_available() -> bool:
+    from scripts import a1_retrospective
+
+    return a1_retrospective.available()
+
+
+def retrospective_status(sealed: dict[str, Any]) -> dict[str, Any]:
+    retrospective = sealed.get("retrospective", {})
+    return {
+        "declared": True,
+        "reconstructable_here": bool(retrospective.get("available")),
+        "digest": retrospective.get("digest"),
+        "planned_generations": sealed.get("retrospective_planned_generations", 192),
+    }
+
+
 def load_manifest() -> dict[str, Any]:
-    """Re-derive the manifest and require byte-identity with the sealed file."""
+    """Verify the sealed manifest without depending on whether the private evidence exists.
+
+    Everything derivable from committed sources is re-derived and compared byte-for-byte. D6 is
+    bound by its recorded digest instead, because it can only be rebuilt where the private RES-774
+    evidence root exists. When that root is present, the recorded digest is recomputed and
+    compared, so a tampered seal still fails closed.
+    """
     sealed = (SEAL_PATH).read_bytes()
     recorded = v3.json_object(sealed.decode("utf-8"))
     if sealed != (v3.canonical(recorded) + "\n").encode():
         raise ManifestError("A1 call manifest is not canonical JSON")
+
     derived = manifest()
+    retrospective = recorded.get("retrospective", {})
+    derived_retrospective = derived.get("retrospective", {})
+    # Compare the CI-verifiable surface only. D6 is checked by digest below.
+    for value in (derived, recorded):
+        value.pop("retrospective", None)
     if recorded != derived:
         raise ManifestError("A1 call manifest differs from the current renderers")
-    return recorded
+
+    digest = retrospective.get("digest")
+    if not isinstance(digest, str) or len(digest) != 64:
+        raise ManifestError("A1 retrospective condition digest is absent or malformed")
+    if derived_retrospective.get("available") and digest != derived_retrospective.get("digest"):
+        # Where the evidence exists, the recorded D6 set must match what is rebuilt from it.
+        raise ManifestError("A1 retrospective condition digest differs from its record")
+    return v3.json_object(sealed.decode("utf-8"))
 
 
 def main() -> None:

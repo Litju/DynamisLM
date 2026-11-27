@@ -105,12 +105,12 @@ class Backend(Protocol):
 
 
 def _cases_by_id() -> dict[str, dict[str, Any]]:
+    from scripts import a02_v3_decision as decision
     from scripts import a1_cases, a1_retrospective, a1_shortcut
 
     cases = {case["case_id"]: case for case in a1_cases.load_manifest()["cases"]}
-    cases.update({case["case_id"]: case for case in a1_retrospective.cohort_cases()})
-    from scripts import a02_v3_decision as decision
-
+    if a1_retrospective.available():
+        cases.update({case["case_id"]: case for case in a1_retrospective.cohort_cases()})
     examples = a1_shortcut.probe_examples(decision.load_protocol())
     for variant in a1_shortcut.VARIANTS:
         for case in a1_shortcut.probe_cases(examples, variant):
