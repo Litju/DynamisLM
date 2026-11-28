@@ -77,6 +77,27 @@ ATTEMPT_2 = {
         "existed."
     ),
 }
+# The second continuation attempt allocated four sessions. Every session reached the remote and
+# ran the bootstrap phase, but the worker's argparse consumed the IPython kernel's argv
+# ('-f .../kernel-<id>.json') as its positional phase and exited 2. The controller saw a zero
+# return code, could not parse a status payload, and treated each session as a transport error
+# rather than a deterministic defect, so it spent all four.
+ATTEMPT_3 = {
+    "modeled_cu": 1.0441,
+    "wall_clock_seconds": 532.1,
+    "sessions": 4,
+    "generations": 0,
+    "outcome": "KERNEL_ARGV_ENTRYPOINT_DEFECT",
+    "balance_delta_cu": 0.0,
+    "note": (
+        "All four sessions allocated a T4, uploaded the 39 MB payload and executed the bootstrap "
+        "phase in the remote kernel. No generation ran. The phase is now resolved from the "
+        "environment because that is the only authority under `colab exec --file`, a positional "
+        "phase is accepted only when it is an exact known phase, the controller self-test "
+        "reproduces the kernel argv, and an unparseable status is now a deterministic defect that "
+        "aborts further allocation."
+    ),
+}
 # A session must fit inside the independent watchdog and inside one exec invocation. 5,200 s per
 # session across 4 sessions is 20,800 s, inside the authorized 21,300 s (5 h 55 min) cap.
 SESSION_SECONDS = 5200
@@ -95,6 +116,16 @@ class ControllerError(RuntimeError):
 
 class DefectError(ControllerError):
     """A deterministic defect: further allocation is forbidden until it is repaired."""
+
+
+class StatusUnavailableError(DefectError):
+    """The remote did not return a parsable status payload.
+
+    ``colab exec`` returns 0 even when the executed file raises ``SystemExit(2)``, because the
+    kernel swallows it. A zero return code with no status payload therefore means the worker did
+    not run the phase at all. That is deterministic evidence, not a transport blip, and it must
+    abort the campaign instead of spending the next session on the same defect.
+    """
 
 
 def digest(path: Path) -> str:
@@ -198,34 +229,63 @@ def _remote_status(client: ColabCLI) -> dict[str, Any]:
         timeout=240,
     )
     lines = [line for line in result.stdout.splitlines() if line.strip()]
-    if result.returncode != 0 or not lines:
-        raise ControllerError("remote status is unavailable")
-    payload: dict[str, Any] = json.loads(lines[-1])
+    if not lines:
+        raise StatusUnavailableError("remote status returned no output; the worker did not run")
+    try:
+        payload = json.loads(lines[-1])
+    except json.JSONDecodeError as exc:
+        raise StatusUnavailableError(f"remote status is not JSON: {lines[-1][:200]!r}") from exc
+    if not isinstance(payload, dict) or "committed" not in payload:
+        raise StatusUnavailableError(f"remote status payload differs: {str(payload)[:200]}")
     return payload
 
 
 def check_worker() -> dict[str, Any]:
-    """Prove the worker starts, reports status and refuses a missing phase, before allocation.
+    """Prove the worker starts under the *real* remote invocation before allocating.
 
-    The first A1 campaign attempt burned every authorized session because the controller passed
-    the phase in the environment while the worker required a positional argument. This check runs
-    the exact file locally with no arguments, so an entrypoint defect fails before allocation.
+    ``colab exec --file`` never runs the file as a script: it execs the source inside a live
+    IPython kernel whose ``sys.argv`` is ``[... '-f', '.../kernel-<id>.json']``. Two authorized
+    sessions were lost to exactly that: the worker's argparse consumed the kernel path as its
+    positional phase and exited 2 while the phase was actually in the environment. The self-test
+    therefore reproduces the kernel argv, not an empty one.
     """
     env = {**os.environ, "PYTHONPATH": f"{ROOT / 'src'}:{ROOT}"}
-    result = subprocess.run(
-        [sys.executable, str(WORKER)],
+    env.pop("A1_PHASE", None)
+    kernel = (
+        "import sys, runpy\n"
+        "sys.argv = ['/usr/local/lib/python3.13/dist-packages/ipykernel_launcher.py',\n"
+        "            '-f', '/root/.local/share/jupyter/runtime/kernel-selftest.json']\n"
+        "runpy.run_path({path!r}, run_name='__main__')\n"
+    )
+    missing = subprocess.run(
+        [sys.executable, "-c", kernel.format(path=str(WORKER))],
         cwd=ROOT,
         capture_output=True,
         text=True,
-        timeout=60,
+        timeout=180,
         env=env,
     )
-    if result.returncode != 2 or "phase must be given" not in result.stderr:
+    if missing.returncode == 0 or "phase must be given" not in missing.stderr:
         raise DefectError(
-            "worker entrypoint self-test failed; refusing to allocate: "
-            f"rc={result.returncode} stderr={result.stderr[-400:]!r}"
+            "worker refuses to run under the remote kernel invocation; refusing to allocate: "
+            f"rc={missing.returncode} stderr={missing.stderr[-400:]!r}"
         )
     status = subprocess.run(
+        [sys.executable, "-c", kernel.format(path=str(WORKER))],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        timeout=180,
+        env={**env, "A1_PHASE": "status"},
+    )
+    if status.returncode != 0:
+        raise DefectError(
+            f"worker status self-test failed under the kernel: {status.stderr[-600:]}"
+        )
+    payload = json.loads(status.stdout.strip().splitlines()[-1])
+    if "committed" not in payload:
+        raise DefectError(f"worker status payload differs: {payload}")
+    plain = subprocess.run(
         [sys.executable, str(WORKER), "status"],
         cwd=ROOT,
         capture_output=True,
@@ -233,10 +293,14 @@ def check_worker() -> dict[str, Any]:
         timeout=180,
         env=env,
     )
-    if status.returncode != 0:
-        raise DefectError(f"worker status self-test failed: {status.stderr[-400:]}")
-    payload = json.loads(status.stdout.strip().splitlines()[-1])
-    return {"arguments_required": True, "status_ok": True, "status": payload}
+    if plain.returncode != 0:
+        raise DefectError(f"worker plain status self-test failed: {plain.stderr[-400:]}")
+    return {
+        "kernel_argv_refused": True,
+        "kernel_status_ok": True,
+        "status": payload,
+        "positional_status_ok": True,
+    }
 
 
 def harvest(evidence: Path) -> dict[str, Any]:
@@ -292,12 +356,21 @@ def committed_lines() -> int:
 
 
 def _require_phase(session: dict[str, Any], phase: str, expected: str, client: ColabCLI) -> None:
-    """Fail closed on a phase error, recording it as a deterministic defect."""
+    """Fail closed on a phase error, recording it as a deterministic defect.
+
+    A zero return code is not evidence that the phase ran: the remote kernel returns 0 even for a
+    failed ``SystemExit``. The phase record and the parsed status must both agree, so a worker
+    that never executed aborts the campaign instead of consuming the next session.
+    """
     record = session["phases"][-1]
+    output = f"{record.get('stdout') or ''}\n{record.get('stderr') or ''}"
     if record.get("returncode") != 0:
         session["defect"] = f"{phase.upper()}_PHASE_FAILED"
         detail = (record.get("stderr") or record.get("error") or "")[-600:]
         raise DefectError(f"{phase} phase failed: {detail}")
+    if "phase must be given" in output or "Traceback (most recent call last)" in output:
+        session["defect"] = f"{phase.upper()}_WORKER_DID_NOT_RUN"
+        raise StatusUnavailableError(f"{phase} ran no worker code: {output[-600:]}")
     status = _remote_status(client)
     session[f"{phase}_status"] = status
     if status.get("error"):
@@ -445,11 +518,15 @@ def _run_session(
         record = _invoke(client, "campaign", int(phase_budget) + 180, campaign_env)
         session["phases"].append(record)
         before_lines = int(session["prior_committed"])
-        status = _remote_status(client)
-        session["campaign_status"] = status
+        output = f"{record.get('stdout') or ''}\n{record.get('stderr') or ''}"
         if record.get("returncode") != 0:
             session["defect"] = "CAMPAIGN_PHASE_FAILED"
             raise DefectError(f"campaign phase failed: {(record.get('stderr') or '')[-600:]}")
+        if "phase must be given" in output or "Traceback (most recent call last)" in output:
+            session["defect"] = "CAMPAIGN_WORKER_DID_NOT_RUN"
+            raise StatusUnavailableError(f"campaign ran no worker code: {output[-600:]}")
+        status = _remote_status(client)
+        session["campaign_status"] = status
         if status.get("error"):
             session["defect"] = "CAMPAIGN_WORKER_ERROR"
             raise DefectError(f"campaign worker error: {status['error']}")
@@ -534,6 +611,7 @@ def campaign(directory: Path, record_name: str) -> dict[str, Any]:
         },
         "attempt_1": ATTEMPT_1,
         "attempt_2": ATTEMPT_2,
+        "attempt_3": ATTEMPT_3,
         "baseline": before,
         "sessions": [],
         "started": time.time(),
@@ -542,7 +620,9 @@ def campaign(directory: Path, record_name: str) -> dict[str, Any]:
     }
     monitor_errors: list[str] = []
     observations: list[dict[str, Any]] = []
-    prior_seconds = float(ATTEMPT_2["wall_clock_seconds"])
+    prior_seconds = float(ATTEMPT_2["wall_clock_seconds"] + ATTEMPT_3["wall_clock_seconds"])
+    prior_cu = float(ATTEMPT_2["modeled_cu"] + ATTEMPT_3["modeled_cu"])
+    prior_sessions = int(ATTEMPT_2["sessions"] + ATTEMPT_3["sessions"])
     total_seconds = 0.0
     cumulative_cu = 0.0
     completed = committed_lines()
@@ -604,20 +684,23 @@ def campaign(directory: Path, record_name: str) -> dict[str, Any]:
             control["displayed_balance_delta_cu"] = round(
                 float(before["balance"]) - float(after["balance"]), 4
             )
-        continuation_modeled = round(ATTEMPT_2["modeled_cu"] + cumulative_cu, 4)
+        continuation_modeled = round(prior_cu + cumulative_cu, 4)
         continuation_seconds = round(prior_seconds + total_seconds, 1)
-        continuation_sessions = ATTEMPT_2["sessions"] + len(control["sessions"])
+        continuation_sessions = prior_sessions + len(control["sessions"])
         control["continuation"] = {
             "wall_clock_seconds": continuation_seconds,
             "modeled_cu": continuation_modeled,
             "sessions": continuation_sessions,
             "attempts": [
-                {key: ATTEMPT_2[key] for key in ("modeled_cu", "wall_clock_seconds", "sessions")},
+                {key: row[key] for key in ("modeled_cu", "wall_clock_seconds", "sessions")}
+                for row in (ATTEMPT_2, ATTEMPT_3)
+            ]
+            + [
                 {
                     "modeled_cu": round(cumulative_cu, 4),
                     "wall_clock_seconds": round(total_seconds, 1),
                     "sessions": len(control["sessions"]),
-                },
+                }
             ],
             "within_cap": bool(
                 continuation_modeled <= HARD_CAP_CU

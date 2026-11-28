@@ -27,7 +27,6 @@ payload. The worker cannot read them: they were never uploaded.
 
 from __future__ import annotations
 
-import argparse
 import hashlib
 import json
 import os
@@ -645,54 +644,72 @@ def resume_phase() -> dict[str, Any]:
     return status()
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("phase", nargs="?", choices=PHASES)
-    parser.add_argument(
-        "--seconds", type=float, default=float(os.environ.get("A1_SECONDS", "0") or 0)
-    )
-    args = parser.parse_args()
-    # `colab exec --file` runs the file with no positional arguments, so the phase arrives in the
-    # environment. Accept both forms and refuse an ambiguous or missing phase.
-    phase = args.phase or os.environ.get("A1_PHASE")
+def _phase_and_seconds() -> tuple[str, float]:
+    """Resolve the phase and budget without trusting the host's ``sys.argv``.
+
+    ``colab exec --file`` does not run the file as a script: it hands the source to a running
+    IPython kernel. ``sys.argv`` there is the *kernel's* argv, which contains
+    ``-f /root/.local/share/jupyter/runtime/kernel-<id>.json``, so argparse saw a spurious
+    positional and exited 2 on every phase. That defect consumed two authorized sessions.
+
+    The environment is therefore authoritative. A positional phase is accepted only when it is
+    an exact known phase, which keeps local command-line use working without ever letting a
+    kernel path masquerade as one.
+    """
+    positional = [arg for arg in sys.argv[1:] if arg in PHASES]
+    unknown = [arg for arg in sys.argv[1:] if arg not in PHASES and not arg.startswith("-")]
+    phase = os.environ.get("A1_PHASE") or (positional[0] if len(positional) == 1 else None)
     if phase not in PHASES:
-        parser.error("phase must be given as an argument or in A1_PHASE")
-    args.phase = phase
+        raise SystemExit(
+            "usage: a1_colab_worker.py [phase]   # or set A1_PHASE\n"
+            f"phase must be given as an argument or in A1_PHASE (saw {unknown[:3]!r})"
+        )
+    seconds = float(os.environ.get("A1_SECONDS", "0") or 0)
+    for index, arg in enumerate(sys.argv[1:]):
+        if arg == "--seconds" and index + 2 <= len(sys.argv[1:]):
+            seconds = float(sys.argv[1:][index + 1])
+        elif arg.startswith("--seconds="):
+            seconds = float(arg.split("=", 1)[1])
+    return phase, seconds
+
+
+def main() -> int:
+    phase, seconds = _phase_and_seconds()
     started = time.monotonic()
     status_code = 0
     try:
-        if args.phase == "bootstrap":
+        if phase == "bootstrap":
             write(WORK / "payload.json", verify_payload())
             write(WORK / "environment.json", install_environment())
             write(WORK / "phase.json", {"phase": "SETUP_COMPLETE"})
-        elif args.phase == "download":
+        elif phase == "download":
             write(WORK / "base.json", download_base())
             write(WORK / "phase.json", {"phase": "BASE_COMPLETE"})
-        elif args.phase == "verify":
+        elif phase == "verify":
             verify_requests()
-        elif args.phase == "smoke":
+        elif phase == "smoke":
             write(WORK / "smoke-summary.json", smoke_phase(open_backend("smoke")))
-        elif args.phase == "run":
-            if args.seconds <= 0:
+        elif phase == "run":
+            if seconds <= 0:
                 raise ValueError("run phase requires a positive A1_SECONDS budget")
-            print(json.dumps(run_phase(open_backend("run"), args.seconds), sort_keys=True))
-        elif args.phase == "campaign":
-            if args.seconds <= 0:
+            print(json.dumps(run_phase(open_backend("run"), seconds), sort_keys=True))
+        elif phase == "campaign":
+            if seconds <= 0:
                 raise ValueError("campaign phase requires a positive A1_SECONDS budget")
             print(
                 json.dumps(
-                    campaign_phase(args.seconds, os.environ.get("A1_SMOKE", "1") != "0"),
+                    campaign_phase(seconds, os.environ.get("A1_SMOKE", "1") != "0"),
                     sort_keys=True,
                 )
             )
-        elif args.phase == "status":
+        elif phase == "status":
             print(json.dumps(status(), sort_keys=True))
-        elif args.phase == "resume":
+        elif phase == "resume":
             print(json.dumps(resume_phase(), sort_keys=True))
-        elif args.phase == "evidence":
+        elif phase == "evidence":
             print(json.dumps(evidence_phase(), sort_keys=True))
         else:
-            shutil.rmtree(WORK)
+            shutil.rmtree(WORK, ignore_errors=True)
             return 0
     except Exception as exc:
         status_code = 1
@@ -700,14 +717,14 @@ def main() -> int:
         write(
             WORK / "error.json",
             {
-                "phase": args.phase,
+                "phase": phase,
                 "error_type": type(exc).__name__,
                 "message": str(exc)[:4000],
                 "elapsed_seconds": round(time.monotonic() - started, 3),
             },
         )
     finally:
-        if args.phase not in {"cleanup", "status", "evidence", "resume"} and WORK.exists():
+        if phase not in {"cleanup", "status", "evidence", "resume"} and WORK.exists():
             try:
                 evidence()
             except Exception as exc:

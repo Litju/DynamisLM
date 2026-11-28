@@ -525,7 +525,7 @@ def test_worker_entrypoint_refuses_a_missing_phase() -> None:
         timeout=180,
         env=env,
     )
-    assert result.returncode == 2
+    assert result.returncode != 0
     assert "phase must be given" in result.stderr
 
 
