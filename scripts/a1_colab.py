@@ -380,28 +380,24 @@ def _run_session(
         _require_phase(session, "download", "BASE_COMPLETE", client)
 
         setup_elapsed = time.monotonic() - started
-        reserved = CLEANUP_SECONDS + FETCH_SECONDS + 240
-        generation_budget = session_budget - setup_elapsed - reserved
-        if generation_budget < MIN_GENERATION_SECONDS:
+        reserved = CLEANUP_SECONDS + FETCH_SECONDS + 180
+        phase_budget = session_budget - setup_elapsed - reserved
+        if phase_budget < MIN_GENERATION_SECONDS:
             session["defect"] = "INSUFFICIENT_GENERATION_BUDGET"
             raise DefectError("session has no usable generation budget")
-        session["generation_budget_seconds"] = int(generation_budget)
+        # One budget covers verify, model load, smoke and the frozen run, so the exec timeout,
+        # the phase deadline and the generation deadline cannot disagree.
+        session["phase_budget_seconds"] = int(phase_budget)
         smoke_already = session.get("prior_smoke_complete") is True
         campaign_env = {
             **env,
             "A1_PHASE": "campaign",
-            "A1_SECONDS": str(int(generation_budget)),
+            "A1_SECONDS": str(int(phase_budget)),
             "A1_SMOKE": "0" if smoke_already else "1",
         }
-        record = _invoke(client, "campaign", int(generation_budget) + 240, campaign_env)
-        before_lines = int(session["prior_committed"])
-        record = _invoke(
-            client,
-            "campaign",
-            int(generation_budget) + 180,
-            {**env, "A1_PHASE": "campaign", "A1_SECONDS": str(int(generation_budget))},
-        )
+        record = _invoke(client, "campaign", int(phase_budget) + 180, campaign_env)
         session["phases"].append(record)
+        before_lines = int(session["prior_committed"])
         status = _remote_status(client)
         session["campaign_status"] = status
         if record.get("returncode") != 0:

@@ -62,8 +62,10 @@ PHASES = (
     "evidence",
     "cleanup",
 )
-# Teardown and evidence packaging are reserved out of the generation budget by the controller.
-MIN_GENERATION_SECONDS = 60.0
+# Teardown and evidence packaging are reserved out of this whole phase by the controller.
+MIN_GENERATION_SECONDS = 300.0
+# Reserved at the end of the campaign phase for evidence packaging inside the worker.
+CAMPAIGN_RESERVE_SECONDS = 60.0
 
 
 def _use_source() -> None:
@@ -488,10 +490,14 @@ def run_phase(backend: Any, seconds: float) -> dict[str, Any]:
 def campaign_phase(seconds: float, run_smoke: bool) -> dict[str, Any]:
     """Verify the frozen requests, then smoke (first session only) and run the work order.
 
-    The four smoke generations are authorized exactly once. A later session starts from a fresh
-    filesystem and receives this session's committed chains in its payload, so it skips the smoke
-    and resumes the frozen order directly.
+    ``seconds`` is the budget for this whole phase, measured from phase entry. Verification,
+    model load, smoke and the frozen run all draw from it, so the exec timeout and the generation
+    deadline cannot disagree. The four smoke generations are authorized exactly once: a later
+    session starts from a fresh filesystem and receives the smoke receipt in its payload, so it
+    skips the smoke and resumes the frozen order directly.
     """
+    started = time.monotonic()
+    phase_deadline = started + seconds
     verify = verify_requests()
     previous_smoke: dict[str, Any] | None = None
     if (WORK / "smoke-receipt.json").is_file():
@@ -503,10 +509,10 @@ def campaign_phase(seconds: float, run_smoke: bool) -> dict[str, Any]:
         smoke = previous_smoke
     else:
         raise ValueError("campaign phase requires a smoke receipt in a later session")
-    started = time.monotonic()
-    if seconds <= 0:
-        raise ValueError("campaign phase requires a positive generation budget")
-    run = run_phase(backend, seconds)
+    remaining = phase_deadline - time.monotonic() - CAMPAIGN_RESERVE_SECONDS
+    if remaining < MIN_GENERATION_SECONDS:
+        raise ValueError("campaign phase has no generation budget after setup and smoke")
+    run = run_phase(backend, remaining)
     write(
         WORK / "campaign-receipt.json",
         {
@@ -519,6 +525,8 @@ def campaign_phase(seconds: float, run_smoke: bool) -> dict[str, Any]:
                 "executed_this_session": run_smoke,
             },
             "run": run,
+            "budget_seconds": seconds,
+            "run_budget_seconds": round(remaining, 1),
             "setup_seconds": backend.setup_seconds,
             "phase_seconds": round(time.monotonic() - started, 3),
             "measurements": backend.measurements(),
@@ -531,6 +539,7 @@ def campaign_phase(seconds: float, run_smoke: bool) -> dict[str, Any]:
         "committed": run["committed"],
         "planned": run["planned"],
         "complete": run["complete"],
+        "phase_seconds": round(time.monotonic() - started, 3),
     }
 
 
