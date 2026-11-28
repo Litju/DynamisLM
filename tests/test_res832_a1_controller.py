@@ -197,19 +197,28 @@ def test_session_allowance_subtracts_sessions_already_consumed() -> None:
     bound was the original maximum rather than the remaining allowance. Attempts already recorded
     must reduce the bound, and an exhausted envelope must allocate nothing at all.
     """
-    already = a1_colab.ATTEMPT_2["sessions"] + a1_colab.ATTEMPT_3["sessions"]
+    already = sum(row.sessions for row in a1_colab.CONTINUATION_ATTEMPTS)
     assert already >= a1_colab.MAX_SESSIONS
     assert a1_colab.MAX_SESSIONS - already <= 0
 
 
 def test_controller_records_every_allocation_it_spent() -> None:
-    for attempt in (a1_colab.ATTEMPT_2, a1_colab.ATTEMPT_3):
-        assert attempt["sessions"] >= 1
-        assert attempt["generations"] == 0
-        assert attempt["modeled_cu"] >= 0
-        assert attempt["wall_clock_seconds"] > 0
-        assert attempt["outcome"]
-        assert attempt["note"]
+    for attempt in a1_colab.CONTINUATION_ATTEMPTS:
+        assert attempt.sessions >= 1
+        assert attempt.generations == 0
+        assert attempt.modeled_cu >= 0
+        assert attempt.wall_clock_seconds > 0
+        assert attempt.outcome
+        assert attempt.note
+        assert set(attempt.record()) == {
+            "name",
+            "modeled_cu",
+            "wall_clock_seconds",
+            "sessions",
+            "generations",
+            "outcome",
+            "note",
+        }
 
 
 def test_historical_attempt_1_is_untouched() -> None:

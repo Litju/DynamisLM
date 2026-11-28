@@ -38,6 +38,7 @@ import sys
 import tarfile
 import threading
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -58,38 +59,64 @@ HARD_CAP_SECONDS = 5 * 3600 + 55 * 60
 MAX_SESSIONS = 4
 MAX_RATE_CU_PER_HOUR = 1.65
 RESERVE_CU = 0.20
+
+
+@dataclass(frozen=True)
+class AttemptRecord:
+    """One continuation allocation attempt, counted against the authorized session envelope."""
+
+    name: str
+    modeled_cu: float
+    wall_clock_seconds: float
+    sessions: int
+    generations: int
+    outcome: str
+    note: str
+
+    def record(self) -> dict[str, Any]:
+        return {
+            "name": self.name,
+            "modeled_cu": self.modeled_cu,
+            "wall_clock_seconds": self.wall_clock_seconds,
+            "sessions": self.sessions,
+            "generations": self.generations,
+            "outcome": self.outcome,
+            "note": self.note,
+        }
+
+
 # Historical attempt record. Never modified; reported separately and added to the totals.
 ATTEMPT_1 = {"modeled_cu": 0.925, "wall_clock_seconds": 272.3, "sessions": 4, "generations": 0}
-# Continuation attempts that allocated nothing. Each one is a real allocation counted against the
-# four-session envelope; recording them keeps the accounting honest.
-ATTEMPT_2 = {
-    "modeled_cu": 0.0,
-    "wall_clock_seconds": 160.0,
-    "sessions": 1,
-    "generations": 0,
-    "outcome": "ALLOCATION_TRANSPORT_TIMEOUT",
-    "balance_delta_cu": 0.0,
-    "note": (
+# Continuation attempts. Each one is a real allocation counted against the four-session envelope;
+# recording them keeps the accounting honest.
+ATTEMPT_2 = AttemptRecord(
+    name="attempt-2",
+    modeled_cu=0.0,
+    wall_clock_seconds=160.0,
+    sessions=1,
+    generations=0,
+    outcome="ALLOCATION_TRANSPORT_TIMEOUT",
+    note=(
         "Stopped in the allocation command before any target endpoint was bound or any payload "
         "was uploaded. The provider reported no active session or assignment afterwards and the "
         "balance was unchanged. Repairs: the allocation bound widens to 420 s, and an unsent "
         "allocation is now verified by reserved-name absence instead of an endpoint that never "
         "existed."
     ),
-}
+)
 # The second continuation attempt allocated four sessions. Every session reached the remote and
 # ran the bootstrap phase, but the worker's argparse consumed the IPython kernel's argv
 # ('-f .../kernel-<id>.json') as its positional phase and exited 2. The controller saw a zero
 # return code, could not parse a status payload, and treated each session as a transport error
 # rather than a deterministic defect, so it spent all four.
-ATTEMPT_3 = {
-    "modeled_cu": 1.0441,
-    "wall_clock_seconds": 532.1,
-    "sessions": 4,
-    "generations": 0,
-    "outcome": "KERNEL_ARGV_ENTRYPOINT_DEFECT",
-    "balance_delta_cu": 0.0,
-    "note": (
+ATTEMPT_3 = AttemptRecord(
+    name="attempt-3",
+    modeled_cu=1.0441,
+    wall_clock_seconds=532.1,
+    sessions=4,
+    generations=0,
+    outcome="KERNEL_ARGV_ENTRYPOINT_DEFECT",
+    note=(
         "All four sessions allocated a T4, uploaded the 39 MB payload and executed the bootstrap "
         "phase in the remote kernel. No generation ran. The phase is now resolved from the "
         "environment because that is the only authority under `colab exec --file`, a positional "
@@ -97,7 +124,8 @@ ATTEMPT_3 = {
         "reproduces the kernel argv, and an unparseable status is now a deterministic defect that "
         "aborts further allocation."
     ),
-}
+)
+CONTINUATION_ATTEMPTS = (ATTEMPT_2, ATTEMPT_3)
 # A session must fit inside the independent watchdog and inside one exec invocation. 5,200 s per
 # session across 4 sessions is 20,800 s, inside the authorized 21,300 s (5 h 55 min) cap.
 SESSION_SECONDS = 5200
@@ -146,29 +174,25 @@ def exact_live(snapshot: dict[str, Any], name: str, endpoint: str) -> bool:
     )
 
 
-class _Timeouts:
-    """Reviewed V2 command bounds, with a longer allocation bound for the A1 continuation.
+class A1Colab(ColabCLI):
+    """The reviewed CLI, with one deliberate change: a wider allocation bound.
 
-    The first continuation attempt lost a session to a transient 120 s `colab new` timeout: the
-    provider was still creating the target when the client gave up. Allocation is the one call
-    that must not be abandoned early, so it gets a bound wide enough for a slow provider queue and
-    the name-absence check below still proves what happened.
+    Allocation is the one provider command that must not be abandoned while the provider is still
+    creating the target. The first continuation attempt lost a session to a transient 120 s
+    ``colab new`` timeout, so this subclass raises only that bound.
     """
 
-    def __init__(self, module: Any) -> None:
-        self._module = module
-        self.NEW_TIMEOUT_SECONDS = 420
-
-    def __getattr__(self, name: str) -> Any:
-        return getattr(self._module, name)
-
-
-class A1Colab(ColabCLI):
     watchdog_seconds = WATCHDOG_SECONDS
+    ALLOCATION_TIMEOUT_SECONDS = 420
 
-    def __init__(self) -> None:
-        super().__init__()
-        self._timeouts = _Timeouts(self._timeouts)
+    def new(self, name: str) -> bool:
+        command = ["colab", "--auth=oauth2", "new", "--session", name, "--gpu", "T4"]
+        try:
+            return self._run(command, timeout=self.ALLOCATION_TIMEOUT_SECONDS).returncode == 0
+        except Exception:
+            # The caller distinguishes "not allocated" from "unknown"; an unresolved allocation is
+            # verified by reserved-name absence rather than an endpoint that may never exist.
+            return False
 
 
 def build_payload(directory: Path) -> tuple[Path, dict[str, Any]]:
@@ -610,8 +634,8 @@ def campaign(directory: Path, record_name: str) -> dict[str, Any]:
             "scope": "continuation campaign after the infrastructure failure",
         },
         "attempt_1": ATTEMPT_1,
-        "attempt_2": ATTEMPT_2,
-        "attempt_3": ATTEMPT_3,
+        "attempt_2": ATTEMPT_2.record(),
+        "attempt_3": ATTEMPT_3.record(),
         "baseline": before,
         "sessions": [],
         "started": time.time(),
@@ -620,9 +644,9 @@ def campaign(directory: Path, record_name: str) -> dict[str, Any]:
     }
     monitor_errors: list[str] = []
     observations: list[dict[str, Any]] = []
-    prior_seconds = float(ATTEMPT_2["wall_clock_seconds"] + ATTEMPT_3["wall_clock_seconds"])
-    prior_cu = float(ATTEMPT_2["modeled_cu"] + ATTEMPT_3["modeled_cu"])
-    prior_sessions = int(ATTEMPT_2["sessions"] + ATTEMPT_3["sessions"])
+    prior_seconds = sum(row.wall_clock_seconds for row in CONTINUATION_ATTEMPTS)
+    prior_cu = sum(row.modeled_cu for row in CONTINUATION_ATTEMPTS)
+    prior_sessions = sum(row.sessions for row in CONTINUATION_ATTEMPTS)
     # Sessions already consumed by earlier continuation attempts count against the same envelope.
     # The loop bound must be the *remaining* allowance, never the original maximum: the earlier
     # version restarted the count at one each launch and so could spend four more sessions on top
@@ -704,8 +728,12 @@ def campaign(directory: Path, record_name: str) -> dict[str, Any]:
             "modeled_cu": continuation_modeled,
             "sessions": continuation_sessions,
             "attempts": [
-                {key: row[key] for key in ("modeled_cu", "wall_clock_seconds", "sessions")}
-                for row in (ATTEMPT_2, ATTEMPT_3)
+                {
+                    "modeled_cu": row.modeled_cu,
+                    "wall_clock_seconds": row.wall_clock_seconds,
+                    "sessions": row.sessions,
+                }
+                for row in CONTINUATION_ATTEMPTS
             ]
             + [
                 {
