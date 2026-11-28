@@ -620,3 +620,54 @@ def test_historical_cpu_record_is_preserved() -> None:
     )
     for value in record["baselines"]["restricted_input"].values():
         assert value["exact"]["estimate"] == pytest.approx(0.2916666666666667)
+
+
+def test_allocation_ledger_records_every_performed_allocation() -> None:
+    """The control record must carry a mechanical ledger, not a prose summary."""
+    path = ROOT / "experiments/a1/.campaign/campaign-2-control.json"
+    if not path.is_file():
+        pytest.skip("no continuation control record on this machine")
+    control = json.loads(path.read_text())
+    ledger = control.get("allocation_ledger")
+    assert ledger is not None, "the continuation control record has no allocation ledger"
+    assert ledger["schema"] == "DYNAMISLM_A1_ALLOCATION_LEDGER_V1"
+    rows = ledger["allocations"]
+    assert ledger["totals"]["allocations"] == len(rows)
+    assert ledger["totals"]["seconds"] == pytest.approx(
+        round(sum(row["elapsed_seconds"] for row in rows), 1)
+    )
+    assert ledger["totals"]["modeled_cu"] == pytest.approx(
+        round(sum(row["modeled_cu"] for row in rows), 4)
+    )
+    assert ledger["totals"]["generations"] == 0
+    # The breach is recorded arithmetically against the authorized session count.
+    authorized = ledger["authorization"]["additional_sessions"]
+    assert ledger["breach"]["sessions_over_authorization"] == len(rows) - authorized
+    # Every attempt-3 row must match the session it derives from.
+    sessions = {session["index"]: session for session in control["sessions"]}
+    for row in rows:
+        if row["id"].startswith("attempt-3/"):
+            session = sessions[row["session"]]
+            assert row["elapsed_seconds"] == session["elapsed_seconds"]
+            assert row["modeled_cu"] == (session.get("modeled_cu") or 0.0)
+            assert row["endpoint_bound"] == bool(session.get("target_endpoint"))
+
+
+def test_report_does_not_impute_an_unexecuted_arm() -> None:
+    """No arm may carry a fabricated estimate while no generation exists."""
+    report = (ROOT / "docs/research/A1-REPORT.md").read_text(encoding="utf-8")
+    analysis = json.loads((ROOT / "reports/a1/analysis-v1.json").read_text())
+    assert analysis["completed_generations"] == 0
+    assert analysis["completed_arms"] == 0
+    assert analysis["planned_generations"] == 1332
+    for name in ("H1", "H2", "H5"):
+        assert analysis["hypotheses"][name]["status"] == "NOT_EVALUABLE"
+    assert "not estimable" in report
+    assert "NOT_EVALUABLE" in report
+
+
+def test_report_discloses_the_session_breach() -> None:
+    """The overrun must be stated in the published report, not only in the control record."""
+    report = (ROOT / "docs/research/A1-REPORT.md").read_text(encoding="utf-8")
+    assert "Envelope breach disclosure" in report
+    assert "exceeded by 2" in report

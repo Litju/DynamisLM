@@ -30,9 +30,19 @@ Continuation total: 5 sessions, 692.1 s, 1.0441 CU modelled. Attempt 1 is preser
 
 ### 1.3 Envelope breach disclosure
 
-The continuation authorization allowed **4 additional sessions**. The continuation actually performed **6 T4 allocations**: one allocation command abandoned client-side at its 120 s bound before an endpoint was bound (attempt 2), one interactive allocation used only to reproduce that timeout locally, and four controller sessions in attempt 3. The session ceiling was therefore **exceeded by 2**, and the campaign is reported as a genuine bounded experimental limitation rather than as an authorized completion.
+The continuation authorization allowed **4 additional sessions**. The mechanical allocation ledger records **6 T4 allocations**, of which 4 bound an endpoint. The session ceiling was therefore **exceeded by 2**, and the campaign is reported as a genuine bounded experimental limitation rather than as an authorized completion.
 
-The cause is an accounting defect in the controller, not a scientific choice: the loop bound was the original maximum session count rather than the remaining allowance, so each launch restarted the count. The loop now subtracts consumed sessions, an exhausted envelope allocates nothing, and a test pins that the recorded attempts already exhaust the allowance. The CU ceiling (1.0441 of 11.0 modelled) and the wall-clock ceiling (692.1 of 21,300 s) were **not** exceeded.
+| Allocation | Endpoint | Seconds | Modelled CU | Generations | Outcome |
+| --- | --- | ---: | ---: | ---: | --- |
+| `attempt-2/session-1` | False | 160.0 | 0.0000 | 0 | allocation command abandoned at its client-side bound; no endpoint, no payload |
+| `diagnostic/alloc-probe` | True | 3.0 | 0.0000 | 0 | interactive T4 created to measure the allocation bound, then stopped |
+| `attempt-3/session-1` | False | 208.5 | 0.2956 | 0 | allocation not confirmed; teardown verified by reserved-name absence |
+| `attempt-3/session-2` | True | 84.3 | 0.2387 | 0 | bootstrap ran; worker exited on the kernel-argv defect |
+| `attempt-3/session-3` | True | 137.1 | 0.2629 | 0 | bootstrap ran; worker exited on the kernel-argv defect |
+| `attempt-3/session-4` | True | 102.2 | 0.2469 | 0 | bootstrap ran; worker exited on the kernel-argv defect |
+| **total** | | **695.1** | **1.0441** | **0** | |
+
+The cause is an accounting defect in the controller, not a scientific choice: the loop bound was the original maximum session count rather than the remaining allowance, so each launch restarted the count. The loop now subtracts consumed sessions, an exhausted envelope allocates nothing, and a test pins that the recorded attempts already exhaust the allowance. The CU ceiling (1.0441 of 11.0 modelled) and the wall-clock ceiling (692.1 of 21300 s) were **not** exceeded.
 No further allocation is performed by this work. Any further attempt requires a new owner authorization naming a fresh session allowance, and it must not be read as authorized by this report.
 
 Planned: **20 conditions / 1332 generations**. Completed: **0 conditions / 0 generations**.

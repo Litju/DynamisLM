@@ -171,6 +171,7 @@ def _attempt_record(path: Path, label: str) -> dict[str, Any] | None:
         "attempt_2": value.get("attempt_2"),
         "attempt_3": value.get("attempt_3"),
         "continuation": value.get("continuation"),
+        "allocation_ledger": value.get("allocation_ledger"),
         "session_allowance": value.get("session_allowance")
         or _derived_allowance(value.get("attempt_2"), value.get("attempt_3")),
     }
@@ -547,24 +548,54 @@ def render(analysis: dict[str, Any]) -> str:
             add("")
             add("### 1.3 Envelope breach disclosure")
             add("")
-            add(
-                "The continuation authorization allowed **4 additional sessions**. The "
-                "continuation actually performed **6 T4 allocations**: one allocation command "
-                "abandoned client-side at its 120 s bound before an endpoint was bound (attempt "
-                "2), one interactive allocation used only to reproduce that timeout locally, and "
-                "four controller sessions in attempt 3. The session ceiling was therefore "
-                "**exceeded by 2**, and the campaign is reported as a genuine bounded "
-                "experimental limitation rather than as an authorized completion."
-            )
-            add("")
+            ledger = second.get("allocation_ledger") or {}
+            totals = ledger.get("totals") or {}
+            allowance = second.get("session_allowance") or {}
+            authorized = allowance.get("authorized", "n/a")
+            if totals:
+                add(
+                    f"The continuation authorization allowed **{authorized} additional "
+                    f"sessions**. The mechanical allocation ledger records "
+                    f"**{totals.get('allocations')} T4 allocations**, of which "
+                    f"{totals.get('endpoint_bound')} bound an endpoint. The session ceiling was "
+                    f"therefore **exceeded by {ledger['breach']['sessions_over_authorization']}**, "
+                    "and the campaign is reported as a genuine bounded experimental limitation "
+                    "rather than as an authorized completion."
+                )
+                add("")
+                add("| Allocation | Endpoint | Seconds | Modelled CU | Generations | Outcome |")
+                add("| --- | --- | ---: | ---: | ---: | --- |")
+                for row in ledger.get("allocations", []):
+                    add(
+                        f"| `{row['id']}` | {row['endpoint_bound']} | "
+                        f"{_fmt(row['elapsed_seconds'], 1)} | {_fmt(row['modeled_cu'], 4)} | "
+                        f"{row['generations']} | {row['outcome']} |"
+                    )
+                add(
+                    f"| **total** | | **{_fmt(totals.get('seconds'), 1)}** | "
+                    f"**{_fmt(totals.get('modeled_cu'), 4)}** | "
+                    f"**{totals.get('generations')}** | |"
+                )
+                add("")
+            else:
+                add(
+                    f"The continuation authorization allowed **{authorized} additional "
+                    "sessions**. Six T4 allocations were performed, so the session ceiling was "
+                    "exceeded by 2. The mechanical ledger is not present in this control record."
+                )
+                add("")
             add(
                 "The cause is an accounting defect in the controller, not a scientific choice: "
                 "the loop bound was the original maximum session count rather than the remaining "
                 "allowance, so each launch restarted the count. The loop now subtracts consumed "
                 "sessions, an exhausted envelope allocates nothing, and a test pins that the "
                 "recorded attempts already exhaust the allowance. The CU ceiling "
-                "(1.0441 of 11.0 modelled) and the wall-clock ceiling (692.1 of 21,300 s) were "
-                "**not** exceeded."
+                f"({_fmt((second.get('continuation') or {}).get('modeled_cu'), 4)} of "
+                f"{second.get('hard_cap_cu')} modelled) and the wall-clock ceiling "
+                f"({_fmt((second.get('continuation') or {}).get('wall_clock_seconds'), 1)} of "
+                f"{_fmt(second.get('hard_cap_seconds'), 0)} s recorded by the controller, "
+                f"{_fmt(totals.get('seconds'), 1)} s including the interactive diagnostic "
+                "allocation) were **not** exceeded."
             )
             add(
                 "No further allocation is performed by this work. Any further attempt requires a "
