@@ -32,7 +32,6 @@ from typing import Any, Protocol
 
 from scripts import a02_v3_contract as v3
 from scripts import a1_chain
-from scripts import a1_representation as rep
 
 ROOT = Path(__file__).resolve().parents[1]
 GEN_ROOT = ROOT / "experiments/a1/.runs"
@@ -99,7 +98,12 @@ def prompt_ids(backend: TokenizingBackend, messages: list[dict[str, str]]) -> tu
 def _item_inputs(
     item: dict[str, Any], condition: dict[str, Any], work: dict[str, Any] | None
 ) -> tuple[dict[str, Any], list[dict[str, str]]]:
-    """The exact request and messages for one frozen call, verified against the manifest."""
+    """The exact request and messages for one frozen call, verified against the manifest.
+
+    A transported run needs only canonical hashing, which ``a02_v3_contract`` provides; it never
+    imports the local renderers or the authored cohort. A local run re-derives the request, which
+    is the only mode allowed to reach evaluation inputs.
+    """
     if work is not None:
         entry = work.get(item["case_id"])
         if entry is None:
@@ -108,13 +112,14 @@ def _item_inputs(
             )
         request = entry["request"]
         messages = entry["messages"]
-        if rep.request_sha256(request) != item["request_sha256"]:
+        if v3.sha256(v3.canonical(request).encode()) != item["request_sha256"]:
             raise GenerationError(f"{condition['arm']}: request digest drift at {item['case_id']}")
         if v3.sha256(v3.canonical(messages).encode()) != item["prompt_sha256"]:
             raise GenerationError(f"{condition['arm']}: prompt differs from the sealed manifest")
         return request, messages
     if condition.get("role") == "SMOKE":
         raise GenerationError("A1 smoke conditions require their transported messages")
+    from scripts import a1_representation as rep
 
     case = _local_cases()[item["case_id"]]
     request = rep.request_for(condition["representation"], case)
