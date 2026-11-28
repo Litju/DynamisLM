@@ -493,36 +493,13 @@ def render(analysis: dict[str, Any]) -> str:
                 f"{second['completed_generations']} of {second['planned_generations']} frozen "
                 f"generations committed. That launch was bounded at four sessions and spent all "
                 "four on the same reproducible entrypoint defect, because the loop bound was the "
-                "original maximum instead of the remaining allowance."
-            )
-            add("")
-            add(
-                "Authorized additional sessions: "
-                f"{allowance.get('authorized', 'n/a')}. Consumed before the final launch: "
-                f"{allowance.get('consumed_before_launch', 'n/a')}. Remaining at that launch: "
-                f"{allowance.get('remaining_at_launch', 'n/a')}."
+                "original maximum instead of the remaining allowance. Every allocation is "
+                "itemised in Section 1.3 and totalled in Section 14."
             )
             add("")
             attempt_2 = second.get("attempt_2") or {}
-            attempt_3 = second.get("attempt_3") or {}
             continuation = second.get("continuation") or {}
-            add("| Allocation | Sessions | Seconds | Modelled CU | Generations | Outcome |")
-            add("| --- | ---: | ---: | ---: | ---: | --- |")
-            for row in (attempt_2, attempt_3):
-                if row:
-                    add(
-                        f"| {row.get('outcome')} | {row.get('sessions')} | "
-                        f"{_fmt(row.get('wall_clock_seconds'), 1)} | "
-                        f"{_fmt(row.get('modeled_cu'), 4)} | {row.get('generations')} | "
-                        f"{row.get('note', '')} |"
-                    )
-            add(
-                f"| Final launch | {second['sessions_allocated']} | "
-                f"{_fmt(second['elapsed_seconds'], 1)} | "
-                f"{_fmt(second.get('modeled_cu'), 4)} | "
-                f"{second['completed_generations']} | `{second['stop_reason']}` |"
-            )
-            add("")
+            ledger = second.get("allocation_ledger") or {}
             if continuation:
                 attempt_1_seconds = first["elapsed_seconds"] if first else None
                 attempt_1_cu = first["modeled_cu"] if first else None
@@ -532,11 +509,22 @@ def render(analysis: dict[str, Any]) -> str:
                     f"{_fmt(continuation.get('modeled_cu'), 4)} CU modelled. "
                     f"Attempt 1 is preserved separately at "
                     f"{_fmt(attempt_1_cu, 4)} CU and "
-                    f"{_fmt(attempt_1_seconds, 1)} s. Every allocation, including the "
-                    "interactive diagnostic one, is itemised in Section 1.3 and totalled in "
-                    "Section 14."
+                    f"{_fmt(attempt_1_seconds, 1)} s."
                 )
                 add("")
+                if attempt_2.get("outcome"):
+                    add(
+                        f"The first continuation attempt is recorded as "
+                        f"`{attempt_2['outcome']}`: {attempt_2.get('note', '')}"
+                    )
+                    add("")
+                if ledger.get("allocations"):
+                    add(
+                        "The second continuation attempt is recorded in the allocation ledger "
+                        "below as four sessions that reached the remote and ran the bootstrap "
+                        "phase without producing a generation."
+                    )
+                    add("")
             add(
                 "**No model comparison generation was produced by any continuation allocation.** "
                 "Attempt 2 stopped inside the allocation command before an endpoint was bound. "

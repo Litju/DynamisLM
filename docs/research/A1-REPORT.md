@@ -15,16 +15,13 @@ Attempt 1 failed at the controller entrypoint before any inference: the phase wa
 
 ### 1.2 Continuation allocations
 
-Stop reason `SESSION_LIMIT`. 4 sessions allocated in the final launch, 532.1 s wall clock in that launch, 0 of 1332 frozen generations committed. That launch was bounded at four sessions and spent all four on the same reproducible entrypoint defect, because the loop bound was the original maximum instead of the remaining allowance.
+Stop reason `SESSION_LIMIT`. 4 sessions allocated in the final launch, 532.1 s wall clock in that launch, 0 of 1332 frozen generations committed. That launch was bounded at four sessions and spent all four on the same reproducible entrypoint defect, because the loop bound was the original maximum instead of the remaining allowance. Every allocation is itemised in Section 1.3 and totalled in Section 14.
 
-Authorized additional sessions: 4. Consumed before the final launch: 1. Remaining at that launch: 3.
+Continuation total: 5 controller sessions, 692.1 s, 1.0441 CU modelled. Attempt 1 is preserved separately at 0.9250 CU and 272.3 s.
 
-| Allocation | Sessions | Seconds | Modelled CU | Generations | Outcome |
-| --- | ---: | ---: | ---: | ---: | --- |
-| ALLOCATION_TRANSPORT_TIMEOUT | 1 | 160.0 | 0.0000 | 0 | Stopped in the allocation command before any target endpoint was bound or any payload was uploaded. The provider reported no active session or assignment afterwards and the balance was unchanged. Repairs: the allocation bound widens to 420 s, and an unsent allocation is now verified by reserved-name absence instead of an endpoint that never existed. |
-| Final launch | 4 | 532.1 | 1.0441 | 0 | `SESSION_LIMIT` |
+The first continuation attempt is recorded as `ALLOCATION_TRANSPORT_TIMEOUT`: Stopped in the allocation command before any target endpoint was bound or any payload was uploaded. The provider reported no active session or assignment afterwards and the balance was unchanged. Repairs: the allocation bound widens to 420 s, and an unsent allocation is now verified by reserved-name absence instead of an endpoint that never existed.
 
-Continuation total: 5 controller sessions, 692.1 s, 1.0441 CU modelled. Attempt 1 is preserved separately at 0.9250 CU and 272.3 s. Every allocation, including the interactive diagnostic one, is itemised in Section 1.3 and totalled in Section 14.
+The second continuation attempt is recorded in the allocation ledger below as four sessions that reached the remote and ran the bootstrap phase without producing a generation.
 
 **No model comparison generation was produced by any continuation allocation.** Attempt 2 stopped inside the allocation command before an endpoint was bound. Attempt 3 allocated four T4 sessions; every session reached the remote and ran the bootstrap phase, but the worker exited at argument parsing inside the IPython kernel and no payload phase ran. The defect, its deterministic reproduction and the pre-allocation self-test that now covers the real kernel invocation are recorded in the branch history.
 
