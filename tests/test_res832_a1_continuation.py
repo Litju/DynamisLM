@@ -288,6 +288,57 @@ def test_payload_exposes_no_gold_or_adjudication_metadata() -> None:
     assert a1_cases.CASES_PATH.name not in text
 
 
+def test_runner_reuses_one_case_across_representations(tmp_path: Path) -> None:
+    """The same case id appears in R-hist and R-op with different requests.
+
+    A work order keyed only by case id silently served the wrong request and failed the digest
+    gate. Each transported item must carry its own request and messages.
+    """
+    order = a1_payload.work_order(None)
+    by_arm = {condition["arm"]: condition for condition in order["conditions"]}
+    hist = by_arm["P-M1-R-hist-C1"]["items"][0]
+    op = by_arm["P-M1-R-op-C1"]["items"][0]
+    assert hist["case_id"] == op["case_id"]
+    assert hist["request"] != op["request"]
+    assert hist["request_sha256"] != op["request_sha256"]
+    for item in (hist, op):
+        assert v3.sha256(v3.canonical(item["request"]).encode()) == item["request_sha256"]
+
+
+def test_transported_items_drive_the_runner_without_local_cases(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A transported item must be executable with the local cohort made unreachable."""
+    order = a1_payload.work_order(None)
+    condition = next(c for c in order["conditions"] if c["arm"] == "P-M1-R-op-C1")
+    condition = {**condition, "items": condition["items"][:2]}
+    restore = a1_rehearsal.use_stub_prompts()
+
+    def forbidden(*args: Any, **kwargs: Any) -> None:
+        raise AssertionError("a transported run must not build a local case inventory")
+
+    monkeypatch.setattr(a1_run, "_local_cases", forbidden)
+    try:
+        receipt = a1_run.run_arm(
+            a1_rehearsal.StubBackend(), condition, identity={}, root=tmp_path, deadline_seconds=60
+        )
+    finally:
+        restore()
+    assert receipt["committed"] == 2
+    assert receipt["complete"] is True
+
+
+def test_local_case_ids_are_rejected_by_the_transport_boundary() -> None:
+    """The authored cohort must not be reconstructable from the transported work order."""
+    order = a1_payload.work_order(None)
+    text = v3.canonical(order)
+    for case in a1_cases.load_manifest()["cases"]:
+        # Frozen case ids do appear in the principal arms, but the authored fields never do.
+        for field in ("question_text", "novel_phrasing", "subset_selection", "stated_measurement"):
+            assert f'"{field}"' not in text
+        assert f'"contrast":"{case["contrast"]}"' not in text
+
+
 def test_payload_source_set_cannot_reach_evaluation_material() -> None:
     inventory = a1_payload.source_inventory()
     assert inventory["paths"] == len(a1_payload.SOURCE_PATHS)
