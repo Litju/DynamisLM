@@ -623,13 +623,20 @@ def campaign(directory: Path, record_name: str) -> dict[str, Any]:
     prior_seconds = float(ATTEMPT_2["wall_clock_seconds"] + ATTEMPT_3["wall_clock_seconds"])
     prior_cu = float(ATTEMPT_2["modeled_cu"] + ATTEMPT_3["modeled_cu"])
     prior_sessions = int(ATTEMPT_2["sessions"] + ATTEMPT_3["sessions"])
+    # Sessions already consumed by earlier continuation attempts count against the same envelope.
+    # The loop bound must be the *remaining* allowance, never the original maximum: the earlier
+    # version restarted the count at one each launch and so could spend four more sessions on top
+    # of sessions already spent.
+    session_allowance = MAX_SESSIONS - prior_sessions
     total_seconds = 0.0
     cumulative_cu = 0.0
     completed = committed_lines()
     smoke_complete = False
     planned = 1332
     try:
-        for session_index in range(1, MAX_SESSIONS + 1):
+        if session_allowance <= 0:
+            control["stop_reason"] = "SESSION_ENVELOPE_EXHAUSTED"
+        for session_index in range(1, max(0, session_allowance) + 1):
             remaining = HARD_CAP_SECONDS - prior_seconds - total_seconds
             if remaining < SETUP_RESERVE_SECONDS + MIN_GENERATION_SECONDS + CLEANUP_SECONDS:
                 control["stop_reason"] = "WALL_CLOCK_ENVELOPE"
@@ -660,7 +667,7 @@ def campaign(directory: Path, record_name: str) -> dict[str, Any]:
             if completed >= planned:
                 control["stop_reason"] = "COMPLETE"
                 break
-            if session_index == MAX_SESSIONS:
+            if session_index == session_allowance:
                 control["stop_reason"] = "SESSION_LIMIT"
         else:
             control["stop_reason"] = control.get("stop_reason", "SESSION_LIMIT")
@@ -687,6 +694,11 @@ def campaign(directory: Path, record_name: str) -> dict[str, Any]:
         continuation_modeled = round(prior_cu + cumulative_cu, 4)
         continuation_seconds = round(prior_seconds + total_seconds, 1)
         continuation_sessions = prior_sessions + len(control["sessions"])
+        control["session_allowance"] = {
+            "authorized": MAX_SESSIONS,
+            "consumed_before_launch": prior_sessions,
+            "remaining_at_launch": max(0, session_allowance),
+        }
         control["continuation"] = {
             "wall_clock_seconds": continuation_seconds,
             "modeled_cu": continuation_modeled,

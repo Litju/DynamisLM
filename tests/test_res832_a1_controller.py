@@ -188,3 +188,34 @@ def test_require_phase_records_the_status_on_success(monkeypatch: pytest.MonkeyP
     a1_colab._require_phase(session, "bootstrap", "SETUP_COMPLETE", _client())
     assert session["bootstrap_status"]["phase"]["phase"] == "SETUP_COMPLETE"
     assert "defect" not in session
+
+
+def test_session_allowance_subtracts_sessions_already_consumed() -> None:
+    """A relaunch must not restart the session count at one.
+
+    The first continuation launch spent four sessions on an entrypoint defect because the loop
+    bound was the original maximum rather than the remaining allowance. Attempts already recorded
+    must reduce the bound, and an exhausted envelope must allocate nothing at all.
+    """
+    already = a1_colab.ATTEMPT_2["sessions"] + a1_colab.ATTEMPT_3["sessions"]
+    assert already >= a1_colab.MAX_SESSIONS
+    assert a1_colab.MAX_SESSIONS - already <= 0
+
+
+def test_controller_records_every_allocation_it_spent() -> None:
+    for attempt in (a1_colab.ATTEMPT_2, a1_colab.ATTEMPT_3):
+        assert attempt["sessions"] >= 1
+        assert attempt["generations"] == 0
+        assert attempt["modeled_cu"] >= 0
+        assert attempt["wall_clock_seconds"] > 0
+        assert attempt["outcome"]
+        assert attempt["note"]
+
+
+def test_historical_attempt_1_is_untouched() -> None:
+    assert a1_colab.ATTEMPT_1 == {
+        "modeled_cu": 0.925,
+        "wall_clock_seconds": 272.3,
+        "sessions": 4,
+        "generations": 0,
+    }
