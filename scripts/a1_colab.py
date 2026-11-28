@@ -60,9 +60,11 @@ MAX_RATE_CU_PER_HOUR = 1.65
 RESERVE_CU = 0.20
 # Historical attempt record. Never modified; reported separately and added to the totals.
 ATTEMPT_1 = {"modeled_cu": 0.925, "wall_clock_seconds": 272.3, "sessions": 4, "generations": 0}
-# A session must fit inside the independent watchdog and inside one exec invocation.
-SESSION_SECONDS = 5400
-WATCHDOG_SECONDS = 2 * SESSION_SECONDS
+# A session must fit inside the independent watchdog and inside one exec invocation. 5,200 s per
+# session across 4 sessions is 20,800 s, inside the authorized 21,300 s (5 h 55 min) cap.
+SESSION_SECONDS = 5200
+# The watchdog duration is fixed by the successor policy set {3420, 7020, 14220}.
+WATCHDOG_SECONDS = 7020
 SETUP_RESERVE_SECONDS = 720
 CLEANUP_SECONDS = 120
 FETCH_SECONDS = 300
@@ -200,14 +202,22 @@ def check_worker() -> dict[str, Any]:
 
 
 def harvest(evidence: Path) -> dict[str, Any]:
-    """Extract committed arm files from an evidence archive into the local run directory."""
+    """Extract committed arm files and the smoke receipt from an evidence archive."""
     RUNS.mkdir(parents=True, exist_ok=True)
     restored = 0
     with tarfile.open(evidence) as archive:
         for member in archive.getmembers():
-            if not member.isfile() or not member.name.startswith("runs/"):
+            if not member.isfile():
                 continue
             name = Path(member.name).name
+            if member.name == "smoke-receipt.json":
+                handle = archive.extractfile(member)
+                if handle is not None:
+                    WORK.mkdir(parents=True, exist_ok=True)
+                    (WORK / "smoke-receipt.json").write_bytes(handle.read())
+                continue
+            if not member.name.startswith("runs/"):
+                continue
             if not name.endswith(".jsonl"):
                 continue
             handle = archive.extractfile(member)
@@ -232,6 +242,7 @@ def harvest(evidence: Path) -> dict[str, Any]:
             len([line for line in path.read_bytes().split(b"\n") if line])
             for path in RUNS.glob("*.jsonl")
         ),
+        "smoke_receipt": (WORK / "smoke-receipt.json").is_file(),
     }
 
 
@@ -286,6 +297,7 @@ def _run_session(
     before: dict[str, Any],
     monitor_errors: list[str],
     observations: list[dict[str, Any]],
+    *,
     smoke_done: bool,
 ) -> dict[str, Any]:
     payload, receipt = build_payload(directory)
@@ -295,6 +307,7 @@ def _run_session(
         "index": session_index,
         "payload": receipt,
         "budget_seconds": round(session_budget, 1),
+        "prior_smoke_complete": smoke_done,
         "phases": [],
         "attempted": False,
         "prior_committed": committed_lines(),
@@ -365,8 +378,6 @@ def _run_session(
                 raise DefectError("resume phase failed")
         session["phases"].append(_invoke(client, "download", 1200, {**env, "A1_PHASE": "download"}))
         _require_phase(session, "download", "BASE_COMPLETE", client)
-        session["phases"].append(_invoke(client, "verify", 900, {**env, "A1_PHASE": "verify"}))
-        _require_phase(session, "verify", "VERIFY_COMPLETE", client)
 
         setup_elapsed = time.monotonic() - started
         reserved = CLEANUP_SECONDS + FETCH_SECONDS + 240
@@ -375,6 +386,14 @@ def _run_session(
             session["defect"] = "INSUFFICIENT_GENERATION_BUDGET"
             raise DefectError("session has no usable generation budget")
         session["generation_budget_seconds"] = int(generation_budget)
+        smoke_already = session.get("prior_smoke_complete") is True
+        campaign_env = {
+            **env,
+            "A1_PHASE": "campaign",
+            "A1_SECONDS": str(int(generation_budget)),
+            "A1_SMOKE": "0" if smoke_already else "1",
+        }
+        record = _invoke(client, "campaign", int(generation_budget) + 240, campaign_env)
         before_lines = int(session["prior_committed"])
         record = _invoke(
             client,
@@ -476,6 +495,7 @@ def campaign(directory: Path, record_name: str) -> dict[str, Any]:
     total_seconds = 0.0
     cumulative_cu = 0.0
     completed = committed_lines()
+    smoke_complete = False
     planned = 1332
     try:
         for session_index in range(1, MAX_SESSIONS + 1):
@@ -493,15 +513,15 @@ def campaign(directory: Path, record_name: str) -> dict[str, Any]:
                 before,
                 monitor_errors,
                 observations,
-                smoke_done=any(
-                    (session.get("campaign_status") or {}).get("smoke", {}).get("complete")
-                    for session in control["sessions"]
-                ),
+                smoke_done=smoke_complete,
             )
             control["sessions"].append(session)
             total_seconds += session.get("elapsed_seconds", 0.0)
             cumulative_cu += session.get("modeled_cu", 0.0)
             completed = committed_lines()
+            campaign_status = session.get("campaign_status") or {}
+            if (campaign_status.get("smoke") or {}).get("present"):
+                smoke_complete = bool((campaign_status.get("smoke") or {}).get("complete"))
             if session.get("defect"):
                 control["stop_reason"] = session["defect"]
                 control["stop_detail"] = session.get("error")

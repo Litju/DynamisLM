@@ -488,11 +488,24 @@ def run_phase(backend: Any, seconds: float) -> dict[str, Any]:
     return {"receipts": receipts, "commitments": counts, "complete": complete}
 
 
-def campaign_phase(seconds: float) -> dict[str, Any]:
-    """Verify, smoke if needed, then run the frozen order under one model load and deadline."""
+def campaign_phase(seconds: float, run_smoke: bool) -> dict[str, Any]:
+    """Verify the frozen requests, then smoke (first session only) and run the work order.
+
+    The four smoke generations are authorized exactly once. A later session starts from a fresh
+    filesystem and receives this session's committed chains in its payload, so it skips the smoke
+    and resumes the frozen order directly.
+    """
     verify = verify_requests()
+    previous_smoke: dict[str, Any] | None = None
+    if (WORK / "smoke-receipt.json").is_file():
+        previous_smoke = json.loads((WORK / "smoke-receipt.json").read_text())
     backend = open_backend("smoke")
-    smoke = smoke_phase(backend)
+    if run_smoke:
+        smoke = smoke_phase(backend)
+    elif previous_smoke is not None:
+        smoke = previous_smoke
+    else:
+        raise ValueError("campaign phase requires a smoke receipt in a later session")
     started = time.monotonic()
     if seconds <= 0:
         raise ValueError("campaign phase requires a positive generation budget")
@@ -505,7 +518,8 @@ def campaign_phase(seconds: float) -> dict[str, Any]:
             "smoke": {
                 "complete": smoke["complete"],
                 "arms": smoke["arms"],
-                "distinct_outputs": smoke["distinct_outputs"],
+                "distinct_outputs": smoke.get("distinct_outputs"),
+                "executed_this_session": run_smoke,
             },
             "run": run,
             "setup_seconds": backend.setup_seconds,
@@ -516,6 +530,7 @@ def campaign_phase(seconds: float) -> dict[str, Any]:
     return {
         "verify": verify["complete"],
         "smoke": smoke["complete"],
+        "smoke_executed": run_smoke,
         "committed": run["committed"],
         "planned": run["planned"],
         "complete": run["complete"],
@@ -594,30 +609,33 @@ def evidence_phase() -> dict[str, Any]:
 
 
 def resume_phase() -> dict[str, Any]:
-    """Unpack a prior evidence archive into the run directory of a fresh session."""
-    archive = WORK / "resume.tar"
-    if not archive.is_file():
-        raise ValueError("resume archive is missing")
-    OUT.mkdir(mode=0o700, parents=True, exist_ok=True)
-    restored = 0
-    with tarfile.open(archive) as source:
-        for member in source.getmembers():
-            if not member.isfile():
-                continue
-            parts = Path(member.name).parts
-            if len(parts) != 2 or parts[0] not in {"runs", "smoke"}:
-                continue
-            name = parts[1]
-            if not name.endswith(".jsonl"):
-                continue
-            handle = source.extractfile(member)
-            if handle is None:
-                continue
-            target = OUT / name if parts[0] == "runs" else SMOKE_OUT / name
-            target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-            target.write_bytes(handle.read())
-            restored += 1
-    write(WORK / "phase.json", {"phase": "RESUME_COMPLETE", "arms": restored})
+    """Verify the committed chains a fresh session received in its payload.
+
+    Each session starts with a fresh filesystem, so continuation is carried *by the payload*: the
+    controller includes the already-harvested arm files, and extraction places them directly in
+    the run directories. This phase therefore verifies those chains against the frozen item order
+    instead of unpacking a second archive. A chain that does not correspond to the frozen next
+    item fails closed before any generation.
+    """
+    _use_source()
+    from scripts import a1_chain
+
+    order = work_order()
+    items = {condition["arm"]: condition["items"] for condition in order["conditions"]}
+    verified: dict[str, int] = {}
+    for arm, expected in items.items():
+        path = a1_chain.arm_path(arm, OUT)
+        if not path.is_file():
+            continue
+        state = a1_chain.read_arm(path, arm, expected)
+        if state["torn_tail_discarded"]:
+            a1_chain.truncate_torn_tail(path)
+            state = a1_chain.read_arm(path, arm, expected)
+        verified[arm] = len(state["entries"])
+    write(
+        WORK / "phase.json",
+        {"phase": "RESUME_COMPLETE", "arms": len(verified), "committed": sum(verified.values())},
+    )
     return status()
 
 
@@ -655,7 +673,12 @@ def main() -> int:
         elif args.phase == "campaign":
             if args.seconds <= 0:
                 raise ValueError("campaign phase requires a positive A1_SECONDS budget")
-            print(json.dumps(campaign_phase(args.seconds), sort_keys=True))
+            print(
+                json.dumps(
+                    campaign_phase(args.seconds, os.environ.get("A1_SMOKE", "1") != "0"),
+                    sort_keys=True,
+                )
+            )
         elif args.phase == "status":
             print(json.dumps(status(), sort_keys=True))
         elif args.phase == "resume":

@@ -298,11 +298,17 @@ def build(directory: Path) -> tuple[Path, dict[str, Any]]:
 
     alpha_adapter_bundle.verified_payload(bundle)
     prior = sorted((ROOT / "experiments/a1/.runs").glob("*.jsonl"))
+    # A continuation session must not re-run the four authorized smoke generations, so the smoke
+    # receipt travels with the payload once the first session has produced it.
+    smoke_receipt = ROOT / "experiments/a1/.campaign/smoke-receipt.json"
+    smoke = smoke_receipt if smoke_receipt.is_file() else None
     payload = directory / "a1-payload.tar"
     payload.unlink(missing_ok=True)
     with tarfile.open(payload, "x") as archive:
         for path in (source, order_path, bundle):
             archive.add(path, arcname=path.name)
+        if smoke is not None:
+            archive.add(smoke, arcname="smoke-receipt.json")
         for path in prior:
             archive.add(path, arcname=f"runs/{path.name}")
     receipt = {
@@ -319,6 +325,7 @@ def build(directory: Path) -> tuple[Path, dict[str, Any]]:
         "planned_conditions": order["planned_conditions"],
         "principal_generations": order["principal_generations"],
         "smoke_conditions": len(order["smoke"]["conditions"]),
+        "smoke_receipt_included": smoke is not None,
         "prior_evidence_arms": len(prior),
         "prior_evidence_lines": sum(
             len([line for line in path.read_bytes().split(b"\n") if line]) for path in prior
