@@ -52,7 +52,7 @@ def test_worker_accepts_the_phase_from_the_environment() -> None:
     result = _run([], {"A1_PHASE": "status"})
     assert result.returncode == 0, result.stderr[-800:]
     payload = json.loads(result.stdout.strip().splitlines()[-1])
-    assert set(payload) == {"arms", "phase", "error"}
+    assert set(payload) == {"arms", "committed", "smoke", "phase", "error", "work_tree"}
 
 
 def test_worker_accepts_the_phase_as_an_argument() -> None:
@@ -89,9 +89,9 @@ def test_controller_self_test_returns_a_status_payload() -> None:
 
 def test_require_phase_aborts_on_a_failed_phase(monkeypatch: pytest.MonkeyPatch) -> None:
     session: dict[str, Any] = {"phases": [{"returncode": 2, "stderr": "argparse error"}]}
-    with pytest.raises(a1_colab.ControllerError):
+    with pytest.raises(a1_colab.DefectError):
         a1_colab._require_phase(session, "bootstrap", "SETUP_COMPLETE", _client())
-    assert session["aborted"] == "BOOTSTRAP_PHASE_FAILED"
+    assert session["defect"] == "BOOTSTRAP_PHASE_FAILED"
 
 
 def test_require_phase_aborts_on_a_worker_error(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -99,9 +99,9 @@ def test_require_phase_aborts_on_a_worker_error(monkeypatch: pytest.MonkeyPatch)
     monkeypatch.setattr(
         a1_colab, "_remote_status", lambda client: {"error": {"error_type": "ValueError"}}
     )
-    with pytest.raises(a1_colab.ControllerError):
+    with pytest.raises(a1_colab.DefectError):
         a1_colab._require_phase(session, "bootstrap", "SETUP_COMPLETE", _client())
-    assert session["aborted"] == "BOOTSTRAP_WORKER_ERROR"
+    assert session["defect"] == "BOOTSTRAP_WORKER_ERROR"
 
 
 def test_require_phase_aborts_when_the_expected_phase_is_absent(
@@ -109,9 +109,9 @@ def test_require_phase_aborts_when_the_expected_phase_is_absent(
 ) -> None:
     session: dict[str, Any] = {"phases": [{"returncode": 0}]}
     monkeypatch.setattr(a1_colab, "_remote_status", lambda client: {"phase": {"phase": "OTHER"}})
-    with pytest.raises(a1_colab.ControllerError):
+    with pytest.raises(a1_colab.DefectError):
         a1_colab._require_phase(session, "bootstrap", "SETUP_COMPLETE", _client())
-    assert session["aborted"] == "BOOTSTRAP_NOT_COMPLETE"
+    assert session["defect"] == "BOOTSTRAP_NOT_COMPLETE"
 
 
 def test_require_phase_records_the_status_on_success(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -123,4 +123,4 @@ def test_require_phase_records_the_status_on_success(monkeypatch: pytest.MonkeyP
     )
     a1_colab._require_phase(session, "bootstrap", "SETUP_COMPLETE", _client())
     assert session["bootstrap_status"]["phase"]["phase"] == "SETUP_COMPLETE"
-    assert "aborted" not in session
+    assert "defect" not in session

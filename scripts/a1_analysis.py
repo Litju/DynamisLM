@@ -39,7 +39,15 @@ def _cases() -> dict[str, dict[str, Any]]:
     from scripts import a1_retrospective
 
     cases = {case["case_id"]: case for case in a1_cases.load_manifest()["cases"]}
-    cases.update({case["case_id"]: case for case in a1_retrospective.cohort_cases()})
+    if a1_retrospective.available():
+        cases.update({case["case_id"]: case for case in a1_retrospective.cohort_cases()})
+    from scripts import a02_v3_decision as decision
+    from scripts import a1_shortcut
+
+    examples = a1_shortcut.probe_examples(decision.load_protocol())
+    for variant in a1_shortcut.VARIANTS:
+        for case in a1_shortcut.probe_cases(examples, variant):
+            cases[case["case_id"]] = case
     return cases
 
 
@@ -73,14 +81,7 @@ def score_arm(arm: str, cases: dict[str, dict[str, Any]]) -> dict[str, Any] | No
         case = cases.get(record["case_id"])
         if case is None:
             raise ValueError(f"{arm}: unknown case {record['case_id']}")
-        request = rep.request_for(
-            "D7-probe"
-            if record["case_id"].startswith("d7-")
-            else "D6-retrospective"
-            if record["case_id"].startswith("d6-")
-            else "R-op",
-            case,
-        )
+        request = _frozen_request(record, case)
         rows.append(
             a1_score.score_row(
                 case=case,
@@ -97,6 +98,19 @@ def score_arm(arm: str, cases: dict[str, dict[str, Any]]) -> dict[str, Any] | No
         "distribution": a1_score.output_distribution(rows),
         "generations": len(rows),
     }
+
+
+def _frozen_request(record: dict[str, Any], case: dict[str, Any]) -> dict[str, Any]:
+    """The exact request the generation validated against.
+
+    The committed line records the representation arm it ran under. Re-deriving the request from
+    the frozen case must reproduce the committed request digest; scoring never invents a request
+    that the generation did not see.
+    """
+    request = rep.request_for(record["representation"], case)
+    if rep.request_sha256(request) != record["request_sha256"]:
+        raise ValueError(f"{record['arm']}: scored request differs from the committed one")
+    return request
 
 
 def _pair(
@@ -117,29 +131,58 @@ def _pair(
     }
 
 
-def _campaign_status() -> dict[str, Any]:
-    """Measured campaign execution facts, read from the controller's own control record."""
-    control = ROOT / "experiments/a1/.campaign/control.json"
-    if not control.is_file():
-        return {"available": False}
-    value = v3.json_object(control.read_text(encoding="utf-8"))
+def _attempt_record(path: Path, label: str) -> dict[str, Any] | None:
+    """One campaign execution record, read from the controller's own control file."""
+    if not path.is_file():
+        return None
+    value = v3.json_object(path.read_text(encoding="utf-8"))
     sessions = value.get("sessions", [])
     return {
+        "record": label,
         "available": True,
         "stop_reason": value.get("stop_reason"),
+        "stop_detail": value.get("stop_detail"),
         "sessions_allocated": len(sessions),
         "authorized_sessions": value.get("authorization", {}).get("max_sessions"),
         "session_errors": [session.get("error") for session in sessions],
         "session_seconds": [session.get("elapsed_seconds") for session in sessions],
-        "elapsed_seconds": value.get("elapsed_seconds"),
-        "modeled_cu": value.get("modeled_cu"),
+        "session_targets_absent": [session.get("target_absent") for session in sessions],
+        "elapsed_seconds": value.get("elapsed_seconds", value.get("continuation_seconds")),
+        "modeled_cu": value.get("modeled_cu", value.get("continuation_modeled_cu")),
         "displayed_balance_delta_cu": value.get("displayed_balance_delta_cu"),
         "hard_cap_cu": value.get("authorization", {}).get("hard_cap_cu"),
         "hard_cap_seconds": value.get("authorization", {}).get("hard_cap_seconds"),
         "completed_generations": value.get("completed_generations"),
-        "target_absent": [session.get("target_absent") for session in sessions],
-        "within_cap": value.get("within_cap"),
+        "planned_generations": value.get("planned_generations"),
+        "target_absent": all(session.get("target_absent") for session in sessions),
+        "within_cap": value.get(
+            "within_cap", (value.get("combined") or {}).get("within_continuation_cap")
+        ),
         "monitor_errors": value.get("monitor_errors"),
+        "smoke": [
+            (session.get("campaign_status") or {}).get("smoke")
+            for session in sessions
+            if session.get("campaign_status")
+        ],
+        "harvest": [session.get("harvest") for session in sessions],
+        "combined": value.get("combined"),
+        "attempt_1": value.get("attempt_1"),
+    }
+
+
+def _campaign_status() -> dict[str, Any]:
+    """Measured campaign execution facts, both attempts, read from the control records.
+
+    The first attempt is a historical execution record and is never rewritten. The continuation
+    attempt is read from its own record. Neither is inferred from the case manifest.
+    """
+    first = _attempt_record(ROOT / "experiments/a1/.campaign/control.json", "attempt-1")
+    second = _attempt_record(ROOT / "experiments/a1/.campaign/campaign-2-control.json", "attempt-2")
+    if first is None and second is None:
+        return {"available": False}
+    return {
+        "available": True,
+        "attempts": [record for record in (first, second) if record is not None],
     }
 
 
@@ -387,44 +430,62 @@ def render(analysis: dict[str, Any]) -> str:
     add("")
     campaign = analysis.get("campaign", {"available": False})
     if campaign.get("available"):
-        add("### 1.1 Campaign execution")
-        add("")
-        add(
-            f"**Stop reason: `{campaign['stop_reason']}`.** "
-            f"{campaign['sessions_allocated']} of {campaign['authorized_sessions']} authorized "
-            f"sessions were allocated in {_fmt(campaign['elapsed_seconds'], 1)} s of wall clock, "
-            f"producing {campaign['completed_generations']} completed generations. "
-            f"Modelled consumption was {_fmt(campaign['modeled_cu'], 4)} CU against a "
-            f"{campaign['hard_cap_cu']} CU cap, and the displayed balance fell by "
-            f"{_fmt(campaign['displayed_balance_delta_cu'], 2)} CU. "
-            f"Exact-target absence was verified after every session: "
-            f"{campaign['target_absent']}."
-        )
-        add("")
-        add("| Session | Seconds | Error | Target absent |")
-        add("| ---: | ---: | --- | --- |")
-        for index, (seconds, error, absent) in enumerate(
-            zip(
-                campaign["session_seconds"],
-                campaign["session_errors"],
-                campaign["target_absent"],
-                strict=False,
-            ),
-            start=1,
-        ):
-            add(f"| {index} | {_fmt(seconds, 1)} | `{error or 'none'}` | {absent} |")
-        add("")
-        if campaign["completed_generations"] == 0:
+        attempts = campaign.get("attempts", [])
+        first = next((row for row in attempts if row["record"] == "attempt-1"), None)
+        second = next((row for row in attempts if row["record"] == "attempt-2"), None)
+        if first is not None:
+            add("### 1.1 Attempt 1 - infrastructure failure (historical record)")
+            add("")
             add(
-                "**No model comparison arm was executed.** Every session failed at the same "
-                "controller entrypoint defect before any inference: the phase was passed in the "
-                "environment while the worker required a positional argument, so the worker "
-                "exited at argument parsing and the controller advanced to the next session on "
-                "the same defect. The defect and its regression tests are recorded in commit "
-                "`RES-832: fix the campaign entrypoint defect that consumed the session "
-                "envelope`. The authorized envelope is exhausted; no additional session was "
-                "attempted and none is authorized by this report."
+                f"Stop reason `{first['stop_reason']}`. "
+                f"{first['sessions_allocated']} of {first['authorized_sessions']} sessions, "
+                f"{_fmt(first['elapsed_seconds'], 1)} s wall clock, "
+                f"{_fmt(first['modeled_cu'], 4)} CU modelled, "
+                f"{first['completed_generations']} completed generations. "
+                f"Exact-target absence verified after every session: "
+                f"{first['session_targets_absent']}. Errors: "
+                f"{sorted({str(error) for error in first['session_errors'] if error})}."
             )
+            add("")
+            add(
+                "Attempt 1 failed at the controller entrypoint before any inference: the phase "
+                "was passed in the environment while the worker required a positional argument. "
+                "It is preserved unchanged as an execution record and is not a scientific result."
+            )
+            add("")
+        if second is not None:
+            add("### 1.2 Attempt 2 - continuation campaign")
+            add("")
+            add(
+                f"Stop reason `{second['stop_reason']}`. "
+                f"{second['sessions_allocated']} of {second['authorized_sessions']} additional "
+                f"sessions, {_fmt(second['elapsed_seconds'], 1)} s additional wall clock, "
+                f"{_fmt(second['modeled_cu'], 4)} CU additional modelled spend, "
+                f"{second['completed_generations']} of {second['planned_generations']} frozen "
+                f"generations committed. Exact-target absence verified after every session: "
+                f"{second['session_targets_absent']}."
+            )
+            add("")
+            if second.get("stop_detail"):
+                add(f"Stop detail: `{second['stop_detail']}`")
+                add("")
+            add("| Session | Seconds | Committed | Error | Target absent |")
+            add("| ---: | ---: | ---: | --- | --- |")
+            for index, (seconds, error, absent) in enumerate(
+                zip(
+                    second["session_seconds"],
+                    second["session_errors"],
+                    second["session_targets_absent"],
+                    strict=False,
+                ),
+                start=1,
+            ):
+                harvest = (second.get("harvest") or [None] * index)[index - 1]
+                committed = harvest.get("lines") if isinstance(harvest, dict) else "n/a"
+                add(
+                    f"| {index} | {_fmt(seconds, 1)} | {committed} | "
+                    f"`{error or 'none'}` | {absent} |"
+                )
             add("")
     add(
         f"Planned: **{analysis['planned_arms']} conditions / "
@@ -560,10 +621,38 @@ def render(analysis: dict[str, Any]) -> str:
         return "\n".join(lines) + "\n"
     rule = baselines["rule_based"]
     add(
-        f"Rule-based: exact {_ci(rule['exact'])}, acceptable {_ci(rule['acceptable'])}, "
-        f"analysis class {_ci(rule['analysis_class'])}."
+        f"Corrected rule-based baseline (model-visible request only): exact "
+        f"{_ci(rule['exact'])}, acceptable {_ci(rule['acceptable'])}, analysis class "
+        f"{_ci(rule['analysis_class'])}."
     )
     add("")
+    audit = baselines.get("auxiliary_audit") or {}
+    if audit:
+        add("### 10.1 Auxiliary-information correction")
+        add("")
+        add(
+            f"The frozen cases carry an authored `stated_measurement` field that is **not** part "
+            f"of the model-visible request (verified: `in_model_visible_request = "
+            f"{audit['in_model_visible_request']}`). The earlier rule baseline passed it into "
+            f"`rule_action` as a measurement-selection hint, and the restricted-input variants "
+            f"received it too, even though those variants are defined to withhold the component "
+            f"that names the measurement. The corrected baseline reads no auxiliary field, and "
+            f"the difference is mechanical: {audit['differing_cases']} of {audit['cases']} cases "
+            f"change action."
+        )
+        add("")
+        if audit["differences"]:
+            add("| Case | Historical (with auxiliary hint) | Corrected |")
+            add("| --- | --- | --- |")
+            for row in audit["differences"]:
+                add(f"| `{row['case_id']}` | `{row['historical']}` | `{row['corrected']}` |")
+            add("")
+        add(
+            "The historical CPU result is preserved unchanged in "
+            "`reports/a1/cpu-baseline-history-v1.json` and is reported as a separate record. The "
+            "corrected result above is the one this report uses for scientific interpretation."
+        )
+        add("")
     add("| Restricted input | Exact | Acceptable |")
     add("| --- | ---: | ---: |")
     for key, value in baselines["restricted_input"].items():
@@ -587,19 +676,26 @@ def render(analysis: dict[str, Any]) -> str:
             f"{_ci(masked['summary']['analysis_class'])}."
         )
     add("")
-    add("### 10.1 What the CPU baselines do and do not establish")
+    add("### 10.2 What the CPU baselines do and do not establish")
     add("")
     exact_rule = rule["exact"]["estimate"]
     exact_conventional = (
         conventional["summary"]["exact"]["estimate"] if conventional.get("available") else None
     )
     add(
-        "The rule-based baseline is a fixed keyword map, not a learned system. Its exact-action "
-        f"estimate is {_fmt(exact_rule)}, with analysis-class accuracy "
+        "The rule-based baseline is a fixed keyword map, not a learned system. Its corrected "
+        f"exact-action estimate is {_fmt(exact_rule)}, with analysis-class accuracy "
         f"{_fmt(rule['analysis_class']['estimate'])} and observation-reference F1 "
         f"{_fmt(rule['observation_f1']['estimate'])}. Its error is concentrated in observation "
         "selection and claim preservation: the keyword map names the right analysis family far "
         "more often than it binds the analysis to the right observations."
+    )
+    add("")
+    add(
+        "**This is not evidence about the language model.** A rule baseline that binds some "
+        "observations from question text says nothing about whether observation binding causes "
+        "the adapted model's failure. That question is answered only by the model arms, and it is "
+        "left unresolved while they are unexecuted."
     )
     add("")
     if exact_conventional is not None:

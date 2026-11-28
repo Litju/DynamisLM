@@ -1,20 +1,29 @@
 """Allocate one qualified T4, run the frozen A1 campaign, retain evidence, tear down (RES-832).
 
-Owner authorization recorded in RES-832, restated here as the code's hard limits:
+Owner authorization for the continuation campaign is restated here as the code's hard limits:
 
 * accelerators: one qualified Tesla T4 only, never a different one;
-* cumulative GPU wall clock: at most 6 hours across all sessions;
-* cumulative spend: at most 12 existing compute units;
-* sessions: at most 4, counting retries;
+* additional cumulative GPU wall clock: at most 5 h 55 min (21,300 s);
+* additional cumulative spend: at most 11.0 existing compute units;
+* additional sessions: at most 4, counting retries;
+* provider rate ceiling: 1.65 CU/h;
 * no purchases, subscriptions or paid upgrades.
 
 The controller allocates nothing until it has verified an idle authenticated account, a positive
 balance, an unused exact target and a live T4 quote inside the authorized rate. It stops the
 session and verifies exact-target absence on every path, including exceptions.
 
+Failure policy
+--------------
+A deterministic worker, setup, generation or evidence-harvesting failure aborts the campaign: no
+further session is allocated on the same defect. A normal time-slice interruption that committed
+verified progress is not a failure; it is resumed by the next session from the harvested chains.
+The distinction is made from the worker's own phase record and from the committed line count, not
+from a wall-clock guess.
+
 Resumption is a property of the frozen work order, not of the controller: the worker appends to
-per-arm hash-chained files, so a second session continues exactly where the first stopped and
-never regenerates a committed call.
+per-arm hash-chained files, so a later session continues exactly where the previous one stopped
+and never regenerates a committed call.
 """
 
 from __future__ import annotations
@@ -24,7 +33,6 @@ import hashlib
 import json
 import math
 import os
-import shutil
 import subprocess
 import sys
 import tarfile
@@ -41,25 +49,33 @@ from scripts import a02_v3_supervision as supervision  # noqa: E402
 from scripts.a02_v3_execution import ColabCLI  # noqa: E402
 
 WORK = ROOT / "experiments/a1/.campaign"
+RUNS = ROOT / "experiments/a1/.runs"
 WORKER = ROOT / "scripts/a1_colab_worker.py"
 NAME = "dynamislm-res832-a1"
-HARD_CAP_CU = 12.0
-HARD_CAP_SECONDS = 6 * 3600
+# Continuation envelope (RES-832 owner authorization, 2026-11-28).
+HARD_CAP_CU = 11.0
+HARD_CAP_SECONDS = 5 * 3600 + 55 * 60
 MAX_SESSIONS = 4
 MAX_RATE_CU_PER_HOUR = 1.65
 RESERVE_CU = 0.20
-# Approved watchdog durations are fixed by the successor policy; 7020 s is the shortest that can
-# hold more than one 1800 s generation slice plus setup, evidence fetch and teardown.
-WATCHDOG_SECONDS = 7020
-SLICE_SECONDS = 1800
-SESSION_GENERATION_SECONDS = 3 * SLICE_SECONDS
+# Historical attempt record. Never modified; reported separately and added to the totals.
+ATTEMPT_1 = {"modeled_cu": 0.925, "wall_clock_seconds": 272.3, "sessions": 4, "generations": 0}
+# A session must fit inside the independent watchdog and inside one exec invocation.
+SESSION_SECONDS = 5400
+WATCHDOG_SECONDS = 2 * SESSION_SECONDS
+SETUP_RESERVE_SECONDS = 720
 CLEANUP_SECONDS = 120
 FETCH_SECONDS = 300
-SETUP_SECONDS = 1500
+MIN_GENERATION_SECONDS = 300
+PROGRESS_POLL_SECONDS = 20
 
 
 class ControllerError(RuntimeError):
     pass
+
+
+class DefectError(ControllerError):
+    """A deterministic defect: further allocation is forbidden until it is repaired."""
 
 
 def digest(path: Path) -> str:
@@ -67,10 +83,9 @@ def digest(path: Path) -> str:
         return hashlib.file_digest(stream, "sha256").hexdigest()
 
 
-def model_cost(before: dict[str, Any], after: dict[str, Any], elapsed: float) -> float:
-    rate_time = elapsed * MAX_RATE_CU_PER_HOUR / 3600
-    balance_delta = max(0.0, float(before["balance"]) - float(after["balance"])) + 0.01
-    return math.ceil((max(rate_time, balance_delta) + RESERVE_CU) * 10000) / 10000
+def model_cost(elapsed: float, rate: float = MAX_RATE_CU_PER_HOUR) -> float:
+    """Conservative modelled spend: elapsed time at the authorized ceiling rate plus a reserve."""
+    return math.ceil((elapsed * rate / 3600 + RESERVE_CU) * 10000) / 10000
 
 
 def exact_live(snapshot: dict[str, Any], name: str, endpoint: str) -> bool:
@@ -86,61 +101,10 @@ class A1Colab(ColabCLI):
 
 
 def build_payload(directory: Path) -> tuple[Path, dict[str, Any]]:
-    """Assemble the upload: clean HEAD source archive, frozen manifest, verified adapter bundle.
+    """Assemble the upload: minimal gold-free source, verified work order, adapter bundle."""
+    from scripts import a1_payload
 
-    Previously committed arm files are included so a new Colab session resumes instead of
-    regenerating. Each session starts with a fresh filesystem, so continuation is carried by the
-    payload and harvested back from the evidence archive.
-    """
-    from scripts import a1_manifest, alpha_adapter_bundle
-
-    if subprocess.check_output(
-        ["git", "status", "--porcelain", "--untracked-files=no"], cwd=ROOT, text=True
-    ):
-        raise ControllerError("A1 requires the exact clean committed source")
-    head = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
-    manifest = a1_manifest.load_manifest()
-    directory.mkdir(parents=True, exist_ok=True)
-    source = directory / "source.tar"
-    subprocess.run(
-        ["git", "archive", "--format=tar", f"--output={source}", head], cwd=ROOT, check=True
-    )
-    sealed = directory / "call-manifest.json"
-    shutil.copyfile(a1_manifest.SEAL_PATH, sealed)
-    bundle_src = Path(
-        "/home/litju/.local/share/dynamislm-evidence/RES-772-adapter-bundle/first.tar"
-    )
-    if not bundle_src.is_file():
-        raise ControllerError("verified adapter bundle is unavailable")
-    bundle = directory / "bundle.tar"
-    shutil.copyfile(bundle_src, bundle)
-    alpha_adapter_bundle.verified_payload(bundle)
-    prior = sorted((ROOT / "experiments/a1/.runs").glob("*.jsonl"))
-    payload = directory / "a1-payload.tar"
-    if payload.exists():
-        payload.unlink()
-    with tarfile.open(payload, "x") as archive:
-        for path in (source, sealed, bundle):
-            archive.add(path, arcname=path.name)
-        for path in prior:
-            archive.add(path, arcname=f"runs/{path.name}")
-    receipt = {
-        "source_commit": head,
-        "source_tar_sha256": digest(source),
-        "call_manifest_sha256": digest(sealed),
-        "bundle_tar_sha256": digest(bundle),
-        "payload_sha256": digest(payload),
-        "planned_generations": manifest["planned_generations"],
-        "planned_conditions": manifest["planned_conditions"],
-        "prior_evidence_arms": len(prior),
-        "prior_evidence_lines": sum(
-            len([line for line in path.read_bytes().split(b"\n") if line]) for path in prior
-        ),
-    }
-    (directory / "payload-receipt.json").write_text(
-        json.dumps(receipt, indent=2, sort_keys=True) + "\n"
-    )
-    return payload, receipt
+    return a1_payload.build(directory)
 
 
 def _invoke(client: ColabCLI, phase: str, timeout: int, env: dict[str, str]) -> dict[str, Any]:
@@ -153,13 +117,13 @@ def _invoke(client: ColabCLI, phase: str, timeout: int, env: dict[str, str]) -> 
         "--file",
         str(WORKER),
         "--timeout",
-        str(timeout + 60),
+        str(timeout + 120),
     ]
     for key, value in env.items():
         command += ["--env", f"{key}={value}"]
     started = time.monotonic()
     try:
-        result = client._run(command, timeout=timeout + 120)
+        result = client._run(command, timeout=timeout + 180)
         return {
             "phase": phase,
             "returncode": result.returncode,
@@ -187,11 +151,11 @@ def _remote_status(client: ColabCLI) -> dict[str, Any]:
             "--file",
             str(WORKER),
             "--timeout",
-            "120",
+            "180",
             "--env",
             "A1_PHASE=status",
         ],
-        timeout=180,
+        timeout=240,
     )
     lines = [line for line in result.stdout.splitlines() if line.strip()]
     if result.returncode != 0 or not lines:
@@ -201,22 +165,23 @@ def _remote_status(client: ColabCLI) -> dict[str, Any]:
 
 
 def check_worker() -> dict[str, Any]:
-    """Prove the worker starts and reports usage without a session.
+    """Prove the worker starts, reports status and refuses a missing phase, before allocation.
 
     The first A1 campaign attempt burned every authorized session because the controller passed
     the phase in the environment while the worker required a positional argument. This check runs
     the exact file locally with no arguments, so an entrypoint defect fails before allocation.
     """
+    env = {**os.environ, "PYTHONPATH": f"{ROOT / 'src'}:{ROOT}"}
     result = subprocess.run(
         [sys.executable, str(WORKER)],
         cwd=ROOT,
         capture_output=True,
         text=True,
         timeout=60,
-        env={**os.environ, "PYTHONPATH": f"{ROOT / 'src'}:{ROOT}"},
+        env=env,
     )
     if result.returncode != 2 or "phase must be given" not in result.stderr:
-        raise ControllerError(
+        raise DefectError(
             "worker entrypoint self-test failed; refusing to allocate: "
             f"rc={result.returncode} stderr={result.stderr[-400:]!r}"
         )
@@ -225,117 +190,18 @@ def check_worker() -> dict[str, Any]:
         cwd=ROOT,
         capture_output=True,
         text=True,
-        timeout=120,
-        env={**os.environ, "PYTHONPATH": f"{ROOT / 'src'}:{ROOT}"},
+        timeout=180,
+        env=env,
     )
     if status.returncode != 0:
-        raise ControllerError(f"worker status self-test failed: {status.stderr[-400:]}")
+        raise DefectError(f"worker status self-test failed: {status.stderr[-400:]}")
     payload = json.loads(status.stdout.strip().splitlines()[-1])
     return {"arguments_required": True, "status_ok": True, "status": payload}
 
 
-def campaign(directory: Path) -> dict[str, Any]:
-    """Run the frozen campaign in as few T4 sessions as the envelope allows.
-
-    Each session is self-contained: allocate, upload, set up, download, run, package evidence,
-    harvest, stop. A session that runs out of wall clock or slice budget before the frozen
-    workload completes is followed by another session that resumes from the harvested evidence.
-    Sessions are capped at MAX_SESSIONS and at HARD_CAP_SECONDS in aggregate.
-    """
-    directory.mkdir(parents=True, exist_ok=True)
-    control_path = directory / "control.json"
-    client = A1Colab()
-    before = client.snapshot()
-    if (
-        before["active_assignment_count"] != 0
-        or before["usage_rate_cu_per_hour"] != 0
-        or before["balance"] < HARD_CAP_CU
-        or not client.verify_absent(NAME, allocation_attempted=False)
-    ):
-        raise ControllerError("provider is not idle, funded or free of the exact target")
-    control: dict[str, Any] = {
-        "name": NAME,
-        "authorization": {
-            "issue": "RES-832",
-            "accelerator": "T4 only",
-            "hard_cap_cu": HARD_CAP_CU,
-            "hard_cap_seconds": HARD_CAP_SECONDS,
-            "max_sessions": MAX_SESSIONS,
-            "max_rate_cu_per_hour": MAX_RATE_CU_PER_HOUR,
-            "no_purchase": True,
-        },
-        "baseline": before,
-        "sessions": [],
-        "started": time.time(),
-        "worker_self_test": check_worker(),
-    }
-    monitor_errors: list[str] = []
-    observations: list[dict[str, Any]] = []
-    total_seconds = 0.0
-    cumulative_cu = 0.0
-    completed = 0
-    try:
-        for session_index in range(1, MAX_SESSIONS + 1):
-            remaining = HARD_CAP_SECONDS - total_seconds
-            if remaining < SETUP_SECONDS + SLICE_SECONDS + CLEANUP_SECONDS + FETCH_SECONDS:
-                control["stop_reason"] = "WALL_CLOCK_ENVELOPE"
-                break
-            session = _run_session(
-                client,
-                directory,
-                session_index,
-                remaining,
-                cumulative_cu,
-                before,
-                monitor_errors,
-                observations,
-            )
-            control["sessions"].append(session)
-            total_seconds += session.get("elapsed_seconds", 0.0)
-            cumulative_cu += session.get("modeled_cu", 0.0)
-            harvest_info = session.get("harvest") or {}
-            completed = harvest_info.get("lines", completed)
-            planned = session.get("proof", {}).get("planned_generations")
-            if planned is not None and completed >= planned:
-                control["stop_reason"] = "COMPLETE"
-                break
-            if session.get("aborted"):
-                # A hard failure aborts the campaign: consuming further authorized sessions on the
-                # same defect spends the envelope without producing evidence.
-                control["stop_reason"] = session["aborted"]
-                break
-            if session_index == MAX_SESSIONS:
-                control["stop_reason"] = "SESSION_LIMIT"
-        else:
-            control["stop_reason"] = control.get("stop_reason", "SESSION_LIMIT")
-    finally:
-        after = client.snapshot()
-        control.update(
-            after=after,
-            elapsed_seconds=round(total_seconds, 1),
-            completed_generations=completed,
-            monitor_errors=monitor_errors,
-            live_observations=len(observations),
-        )
-        if after["active_assignment_count"] == 0:
-            control["modeled_cu"] = round(cumulative_cu, 4)
-            control["displayed_balance_delta_cu"] = round(
-                float(before["balance"]) - float(after["balance"]), 4
-            )
-        control["within_cap"] = bool(
-            control.get("modeled_cu", HARD_CAP_CU) <= HARD_CAP_CU
-            and total_seconds <= HARD_CAP_SECONDS
-            and len(control["sessions"]) <= MAX_SESSIONS
-        )
-        control_path.write_text(json.dumps(control, indent=2, sort_keys=True) + "\n")
-    print(json.dumps(control, indent=2, sort_keys=True))
-    return control
-
-
 def harvest(evidence: Path) -> dict[str, Any]:
     """Extract committed arm files from an evidence archive into the local run directory."""
-    target = ROOT / "experiments/a1/.runs"
-    target.mkdir(parents=True, exist_ok=True)
+    RUNS.mkdir(parents=True, exist_ok=True)
     restored = 0
     with tarfile.open(evidence) as archive:
         for member in archive.getmembers():
@@ -348,7 +214,7 @@ def harvest(evidence: Path) -> dict[str, Any]:
             if handle is None:
                 continue
             data = handle.read()
-            path = target / name
+            path = RUNS / name
             existing = path.read_bytes() if path.is_file() else b""
             if existing:
                 if data.startswith(existing):
@@ -360,71 +226,108 @@ def harvest(evidence: Path) -> dict[str, Any]:
                 path.write_bytes(data)
                 restored += 1
     return {
-        "arms": len(list(target.glob("*.jsonl"))),
+        "arms": len(list(RUNS.glob("*.jsonl"))),
         "restored": restored,
         "lines": sum(
             len([line for line in path.read_bytes().split(b"\n") if line])
-            for path in target.glob("*.jsonl")
+            for path in RUNS.glob("*.jsonl")
         ),
     }
 
 
+def committed_lines() -> int:
+    return sum(
+        len([line for line in path.read_bytes().split(b"\n") if line])
+        for path in RUNS.glob("*.jsonl")
+    )
+
+
 def _require_phase(session: dict[str, Any], phase: str, expected: str, client: ColabCLI) -> None:
-    """Fail closed on a phase error. A failed phase must never fall through to the next session."""
+    """Fail closed on a phase error, recording it as a deterministic defect."""
     record = session["phases"][-1]
     if record.get("returncode") != 0:
-        session["aborted"] = f"{phase.upper()}_PHASE_FAILED"
-        raise ControllerError(f"{phase} phase failed: {record.get('stderr', '')[-400:]}")
+        session["defect"] = f"{phase.upper()}_PHASE_FAILED"
+        detail = (record.get("stderr") or record.get("error") or "")[-600:]
+        raise DefectError(f"{phase} phase failed: {detail}")
     status = _remote_status(client)
     session[f"{phase}_status"] = status
     if status.get("error"):
-        session["aborted"] = f"{phase.upper()}_WORKER_ERROR"
-        raise ControllerError(f"{phase} worker error: {status['error']}")
-    if status.get("phase", {}).get("phase") != expected:
-        session["aborted"] = f"{phase.upper()}_NOT_COMPLETE"
-        raise ControllerError(f"{phase} did not reach {expected}: {status}")
+        session["defect"] = f"{phase.upper()}_WORKER_ERROR"
+        raise DefectError(f"{phase} worker error: {status['error']}")
+    observed = status.get("phase", {}).get("phase")
+    if observed != expected:
+        session["defect"] = f"{phase.upper()}_NOT_COMPLETE"
+        raise DefectError(f"{phase} did not reach {expected}: {observed}")
+
+
+def _require_progress(session: dict[str, Any], before: int, status: dict[str, Any]) -> None:
+    """A time-slice interruption must show verified progress; silence is a defect."""
+    phase = status.get("phase", {}).get("phase")
+    after = int(status.get("committed") or 0)
+    session["progress"] = {"before": before, "after": after, "phase": phase}
+    if phase == "RUN_COMPLETE":
+        return
+    if phase != "RUN_PARTIAL":
+        session["defect"] = "RUN_PHASE_NOT_RECORDED"
+        raise DefectError(f"run phase recorded {phase!r}, not a resumable interruption")
+    if after <= before:
+        session["defect"] = "RUN_PHASE_NO_PROGRESS"
+        raise DefectError(
+            f"run phase interrupted without progress ({before} -> {after}); refusing to resume"
+        )
 
 
 def _run_session(
     client: A1Colab,
     directory: Path,
     session_index: int,
-    remaining: float,
+    session_budget: float,
     prior_cu: float,
     before: dict[str, Any],
     monitor_errors: list[str],
     observations: list[dict[str, Any]],
+    smoke_done: bool,
 ) -> dict[str, Any]:
     payload, receipt = build_payload(directory)
+    if receipt["planned_generations"] != 1332:
+        raise DefectError("payload does not carry the full frozen work order")
     session: dict[str, Any] = {
         "index": session_index,
         "payload": receipt,
+        "budget_seconds": round(session_budget, 1),
         "phases": [],
         "attempted": False,
-        "proof": {"planned_generations": receipt["planned_generations"]},
+        "prior_committed": committed_lines(),
     }
     watchdog = client.start_watchdog(NAME, directory / f"watchdog-{session_index}.json")
     stop_monitor = threading.Event()
     started = time.monotonic()
+    breach: list[str] = []
 
     def monitor() -> None:
-        while not stop_monitor.wait(20):
+        failures = 0
+        while not stop_monitor.wait(PROGRESS_POLL_SECONDS):
             try:
                 state = client.snapshot()
-                observations.append(state)
-                projected = prior_cu + model_cost(
-                    before, state, time.monotonic() - started + CLEANUP_SECONDS
-                )
-                if (
-                    state["usage_rate_cu_per_hour"] > MAX_RATE_CU_PER_HOUR
-                    or projected > HARD_CAP_CU
-                    or time.monotonic() - started > remaining
-                ):
-                    monitor_errors.append(f"live envelope breach: projected {projected:.3f} CU")
+            except Exception as exc:
+                failures += 1
+                monitor_errors.append(f"{type(exc).__name__}: {exc}")
+                if failures >= 3:
+                    breach.append("provider snapshot unavailable")
                     client.stop(NAME)
                     return
-            except Exception as exc:
-                monitor_errors.append(f"{type(exc).__name__}: {exc}")
+                continue
+            failures = 0
+            observations.append(state)
+            projected = prior_cu + model_cost(time.monotonic() - started + CLEANUP_SECONDS)
+            if (
+                state["usage_rate_cu_per_hour"] > MAX_RATE_CU_PER_HOUR
+                or projected > HARD_CAP_CU
+                or time.monotonic() - started > session_budget
+            ):
+                breach.append(f"live envelope breach: projected {projected:.3f} CU")
+                monitor_errors.append(breach[-1])
+                client.stop(NAME)
                 return
 
     evidence = directory / f"evidence-{session_index}.tar"
@@ -448,46 +351,63 @@ def _run_session(
             raise ControllerError("worker upload failed")
         env = {
             "A1_PAYLOAD_SHA256": receipt["payload_sha256"],
-            "A1_MANIFEST_SHA256": receipt["call_manifest_sha256"],
+            "A1_WORK_ORDER_SHA256": receipt["work_order_sha256"],
         }
         session["phases"].append(
-            _invoke(client, "bootstrap", 1200, {**env, "A1_PHASE": "bootstrap"})
+            _invoke(client, "bootstrap", 1500, {**env, "A1_PHASE": "bootstrap"})
         )
         _require_phase(session, "bootstrap", "SETUP_COMPLETE", client)
-        if receipt["prior_evidence_arms"]:
-            session["phases"].append(_invoke(client, "resume", 240, {**env, "A1_PHASE": "resume"}))
+        if receipt["prior_evidence_arms"] or session["prior_committed"]:
+            session["phases"].append(_invoke(client, "resume", 300, {**env, "A1_PHASE": "resume"}))
             session["resume"] = _remote_status(client)
             if session["phases"][-1]["returncode"] != 0:
-                raise ControllerError("resume phase failed")
-        session["phases"].append(_invoke(client, "download", 900, {**env, "A1_PHASE": "download"}))
+                session["defect"] = "RESUME_PHASE_FAILED"
+                raise DefectError("resume phase failed")
+        session["phases"].append(_invoke(client, "download", 1200, {**env, "A1_PHASE": "download"}))
         _require_phase(session, "download", "BASE_COMPLETE", client)
+        session["phases"].append(_invoke(client, "verify", 900, {**env, "A1_PHASE": "verify"}))
+        _require_phase(session, "verify", "VERIFY_COMPLETE", client)
 
         setup_elapsed = time.monotonic() - started
-        generation_budget = remaining - setup_elapsed - CLEANUP_SECONDS - FETCH_SECONDS
-        generation_budget = min(generation_budget, SESSION_GENERATION_SECONDS)
-        if generation_budget < 300:
-            session["aborted"] = "INSUFFICIENT_GENERATION_BUDGET"
-        else:
-            record = _invoke(
-                client,
-                "run",
-                int(generation_budget) + 300,
-                {**env, "A1_PHASE": "run", "A1_SECONDS": str(int(generation_budget))},
-            )
-            session["phases"].append(record)
-            session["generation_budget_seconds"] = int(generation_budget)
-            session["proof"]["worker"] = _remote_status(client)
+        reserved = CLEANUP_SECONDS + FETCH_SECONDS + 240
+        generation_budget = session_budget - setup_elapsed - reserved
+        if generation_budget < MIN_GENERATION_SECONDS:
+            session["defect"] = "INSUFFICIENT_GENERATION_BUDGET"
+            raise DefectError("session has no usable generation budget")
+        session["generation_budget_seconds"] = int(generation_budget)
+        before_lines = int(session["prior_committed"])
+        record = _invoke(
+            client,
+            "campaign",
+            int(generation_budget) + 180,
+            {**env, "A1_PHASE": "campaign", "A1_SECONDS": str(int(generation_budget))},
+        )
+        session["phases"].append(record)
+        status = _remote_status(client)
+        session["campaign_status"] = status
+        if record.get("returncode") != 0:
+            session["defect"] = "CAMPAIGN_PHASE_FAILED"
+            raise DefectError(f"campaign phase failed: {(record.get('stderr') or '')[-600:]}")
+        if status.get("error"):
+            session["defect"] = "CAMPAIGN_WORKER_ERROR"
+            raise DefectError(f"campaign worker error: {status['error']}")
+        _require_progress(session, before_lines, status)
         session["phases"].append(_invoke(client, "evidence", 300, {**env, "A1_PHASE": "evidence"}))
         if client.download(NAME, "/content/a1/evidence.tar", evidence):
             session["evidence_sha256"] = digest(evidence)
             session["harvest"] = harvest(evidence)
         else:
-            session["evidence_error"] = "download failed"
+            session["defect"] = "EVIDENCE_DOWNLOAD_FAILED"
+            raise DefectError("evidence download failed; the committed work is not retained")
         session["cleanup"] = _invoke(client, "cleanup", 180, {**env, "A1_PHASE": "cleanup"})
+    except DefectError as exc:
+        session["error"] = f"{type(exc).__name__}: {exc}"
     except Exception as exc:
         session["error"] = f"{type(exc).__name__}: {exc}"
     finally:
         stop_monitor.set()
+        if breach:
+            session["monitor_breach"] = list(breach)
         termination = supervision.terminate_until_absent(
             client,
             NAME,
@@ -499,7 +419,11 @@ def _run_session(
         )
         verified = termination.absent
         client.finish_watchdog(watchdog, verified)
-        after = client.snapshot()
+        try:
+            after = client.snapshot()
+        except Exception as exc:
+            after = {"error": f"{type(exc).__name__}: {exc}", "active_assignment_count": 1}
+            monitor_errors.append(f"final snapshot: {type(exc).__name__}: {exc}")
         elapsed = time.monotonic() - started
         session.update(
             target_absent=verified,
@@ -507,19 +431,131 @@ def _run_session(
             teardown=getattr(client, "teardown_receipt", {}),
             after=after,
             elapsed_seconds=round(elapsed, 1),
-            probe_window_hours=round(elapsed / 3600, 4),
         )
-        if verified and after["active_assignment_count"] == 0:
-            session["modeled_cu"] = model_cost(before, after, elapsed)
+        if verified and after.get("active_assignment_count") == 0:
+            session["modeled_cu"] = model_cost(elapsed)
         if not verified:
-            session["aborted"] = "TEARDOWN_UNVERIFIED"
+            session["defect"] = "TEARDOWN_UNVERIFIED"
     return session
+
+
+def campaign(directory: Path, record_name: str) -> dict[str, Any]:
+    """Run the frozen campaign in as few T4 sessions as the envelope allows."""
+    directory.mkdir(parents=True, exist_ok=True)
+    control_path = directory / record_name
+    client = A1Colab()
+    before = client.snapshot()
+    if (
+        before["active_assignment_count"] != 0
+        or before["usage_rate_cu_per_hour"] != 0
+        or before["balance"] < HARD_CAP_CU
+        or not client.verify_absent(NAME, allocation_attempted=False)
+    ):
+        raise ControllerError("provider is not idle, funded or free of the exact target")
+    control: dict[str, Any] = {
+        "name": NAME,
+        "authorization": {
+            "issue": "RES-832",
+            "accelerator": "T4 only",
+            "hard_cap_cu": HARD_CAP_CU,
+            "hard_cap_seconds": HARD_CAP_SECONDS,
+            "max_sessions": MAX_SESSIONS,
+            "max_rate_cu_per_hour": MAX_RATE_CU_PER_HOUR,
+            "no_purchase": True,
+            "scope": "continuation campaign after the infrastructure failure",
+        },
+        "attempt_1": ATTEMPT_1,
+        "baseline": before,
+        "sessions": [],
+        "started": time.time(),
+        "worker_self_test": check_worker(),
+        "prior_committed_generations": committed_lines(),
+    }
+    monitor_errors: list[str] = []
+    observations: list[dict[str, Any]] = []
+    total_seconds = 0.0
+    cumulative_cu = 0.0
+    completed = committed_lines()
+    planned = 1332
+    try:
+        for session_index in range(1, MAX_SESSIONS + 1):
+            remaining = HARD_CAP_SECONDS - total_seconds
+            if remaining < SETUP_RESERVE_SECONDS + MIN_GENERATION_SECONDS + CLEANUP_SECONDS:
+                control["stop_reason"] = "WALL_CLOCK_ENVELOPE"
+                break
+            budget = min(SESSION_SECONDS, remaining)
+            session = _run_session(
+                client,
+                directory,
+                session_index,
+                budget,
+                cumulative_cu,
+                before,
+                monitor_errors,
+                observations,
+                smoke_done=any(
+                    (session.get("campaign_status") or {}).get("smoke", {}).get("complete")
+                    for session in control["sessions"]
+                ),
+            )
+            control["sessions"].append(session)
+            total_seconds += session.get("elapsed_seconds", 0.0)
+            cumulative_cu += session.get("modeled_cu", 0.0)
+            completed = committed_lines()
+            if session.get("defect"):
+                control["stop_reason"] = session["defect"]
+                control["stop_detail"] = session.get("error")
+                break
+            if completed >= planned:
+                control["stop_reason"] = "COMPLETE"
+                break
+            if session_index == MAX_SESSIONS:
+                control["stop_reason"] = "SESSION_LIMIT"
+        else:
+            control["stop_reason"] = control.get("stop_reason", "SESSION_LIMIT")
+    finally:
+        try:
+            after = client.snapshot()
+        except Exception as exc:
+            after = {"error": f"{type(exc).__name__}: {exc}", "active_assignment_count": 1}
+            monitor_errors.append(f"post-campaign snapshot: {type(exc).__name__}: {exc}")
+        control.update(
+            after=after,
+            continuation_seconds=round(total_seconds, 1),
+            completed_generations=completed,
+            planned_generations=planned,
+            monitor_errors=monitor_errors,
+            live_observations=len(observations),
+            target_absent=all(session.get("target_absent") for session in control["sessions"]),
+        )
+        if after.get("active_assignment_count") == 0:
+            control["continuation_modeled_cu"] = round(cumulative_cu, 4)
+            control["displayed_balance_delta_cu"] = round(
+                float(before["balance"]) - float(after["balance"]), 4
+            )
+        control["combined"] = {
+            "wall_clock_seconds": round(ATTEMPT_1["wall_clock_seconds"] + total_seconds, 1),
+            "modeled_cu": round(ATTEMPT_1["modeled_cu"] + cumulative_cu, 4),
+            "sessions": ATTEMPT_1["sessions"] + len(control["sessions"]),
+            "authorized_cu": HARD_CAP_CU,
+            "authorized_seconds": HARD_CAP_SECONDS,
+            "authorized_sessions": MAX_SESSIONS,
+            "within_continuation_cap": bool(
+                cumulative_cu <= HARD_CAP_CU
+                and total_seconds <= HARD_CAP_SECONDS
+                and len(control["sessions"]) <= MAX_SESSIONS
+            ),
+        }
+        control_path.write_text(json.dumps(control, indent=2, sort_keys=True) + "\n")
+    print(json.dumps(control, indent=2, sort_keys=True))
+    return control
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("action", choices=("preflight", "launch", "status"))
     parser.add_argument("--directory", type=Path, default=WORK)
+    parser.add_argument("--record", default="campaign-2-control.json")
     args = parser.parse_args()
     if args.action == "preflight":
         _payload, receipt = build_payload(args.directory)
@@ -528,7 +564,7 @@ def main() -> int:
     if args.action == "status":
         print(json.dumps(_remote_status(A1Colab()), indent=2, sort_keys=True))
         return 0
-    control = campaign(args.directory)
+    control = campaign(args.directory, args.record)
     return 0 if control.get("target_absent") else 1
 
 
