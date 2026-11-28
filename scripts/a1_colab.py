@@ -60,6 +60,23 @@ MAX_RATE_CU_PER_HOUR = 1.65
 RESERVE_CU = 0.20
 # Historical attempt record. Never modified; reported separately and added to the totals.
 ATTEMPT_1 = {"modeled_cu": 0.925, "wall_clock_seconds": 272.3, "sessions": 4, "generations": 0}
+# Continuation attempts that allocated nothing. Each one is a real allocation counted against the
+# four-session envelope; recording them keeps the accounting honest.
+ATTEMPT_2 = {
+    "modeled_cu": 0.0,
+    "wall_clock_seconds": 160.0,
+    "sessions": 1,
+    "generations": 0,
+    "outcome": "ALLOCATION_TRANSPORT_TIMEOUT",
+    "balance_delta_cu": 0.0,
+    "note": (
+        "Stopped in the allocation command before any target endpoint was bound or any payload "
+        "was uploaded. The provider reported no active session or assignment afterwards and the "
+        "balance was unchanged. Repairs: the allocation bound widens to 420 s, and an unsent "
+        "allocation is now verified by reserved-name absence instead of an endpoint that never "
+        "existed."
+    ),
+}
 # A session must fit inside the independent watchdog and inside one exec invocation. 5,200 s per
 # session across 4 sessions is 20,800 s, inside the authorized 21,300 s (5 h 55 min) cap.
 SESSION_SECONDS = 5200
@@ -98,8 +115,29 @@ def exact_live(snapshot: dict[str, Any], name: str, endpoint: str) -> bool:
     )
 
 
+class _Timeouts:
+    """Reviewed V2 command bounds, with a longer allocation bound for the A1 continuation.
+
+    The first continuation attempt lost a session to a transient 120 s `colab new` timeout: the
+    provider was still creating the target when the client gave up. Allocation is the one call
+    that must not be abandoned early, so it gets a bound wide enough for a slow provider queue and
+    the name-absence check below still proves what happened.
+    """
+
+    def __init__(self, module: Any) -> None:
+        self._module = module
+        self.NEW_TIMEOUT_SECONDS = 420
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._module, name)
+
+
 class A1Colab(ColabCLI):
     watchdog_seconds = WATCHDOG_SECONDS
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._timeouts = _Timeouts(self._timeouts)
 
 
 def build_payload(directory: Path) -> tuple[Path, dict[str, Any]]:
@@ -348,8 +386,17 @@ def _run_session(
         if not client.watchdog_alive(watchdog):
             raise ControllerError("independent watchdog is unavailable")
         session["attempted"] = True
-        if not client.new(NAME) or client.hardware(NAME) != "T4":
-            raise ControllerError("exact T4 allocation failed")
+        try:
+            allocated = client.new(NAME)
+        except Exception as exc:
+            # A transport timeout during allocation does not prove the target was not created.
+            # Record it; teardown then establishes name absence rather than endpoint absence.
+            allocated = False
+            session["allocation_error"] = f"{type(exc).__name__}: {exc}"
+        if not allocated:
+            raise ControllerError("exact T4 allocation failed or was not confirmed")
+        if client.hardware(NAME) != "T4":
+            raise ControllerError("exact T4 allocation returned different hardware")
         endpoint = client.target_endpoint
         live = client.snapshot()
         if not endpoint or not exact_live(live, NAME, endpoint):
@@ -423,11 +470,17 @@ def _run_session(
         stop_monitor.set()
         if breach:
             session["monitor_breach"] = list(breach)
+        # When allocation never bound an endpoint, exact-endpoint absence is unprovable by
+        # construction. The reserved session name is the correct target: prove it absent in both
+        # authenticated inventories.
+        bound = bool(session.get("target_endpoint"))
+        if not bound:
+            client.teardown_receipt = {}
         termination = supervision.terminate_until_absent(
             client,
             NAME,
             supervision.SessionLifecycle(),
-            allocation_attempted=session["attempted"],
+            allocation_attempted=bound,
             rounds=3,
             call_timeout=45,
             backoff=5,
@@ -480,6 +533,7 @@ def campaign(directory: Path, record_name: str) -> dict[str, Any]:
             "scope": "continuation campaign after the infrastructure failure",
         },
         "attempt_1": ATTEMPT_1,
+        "attempt_2": ATTEMPT_2,
         "baseline": before,
         "sessions": [],
         "started": time.time(),
@@ -488,6 +542,7 @@ def campaign(directory: Path, record_name: str) -> dict[str, Any]:
     }
     monitor_errors: list[str] = []
     observations: list[dict[str, Any]] = []
+    prior_seconds = float(ATTEMPT_2["wall_clock_seconds"])
     total_seconds = 0.0
     cumulative_cu = 0.0
     completed = committed_lines()
@@ -495,7 +550,7 @@ def campaign(directory: Path, record_name: str) -> dict[str, Any]:
     planned = 1332
     try:
         for session_index in range(1, MAX_SESSIONS + 1):
-            remaining = HARD_CAP_SECONDS - total_seconds
+            remaining = HARD_CAP_SECONDS - prior_seconds - total_seconds
             if remaining < SETUP_RESERVE_SECONDS + MIN_GENERATION_SECONDS + CLEANUP_SECONDS:
                 control["stop_reason"] = "WALL_CLOCK_ENVELOPE"
                 break
@@ -549,18 +604,36 @@ def campaign(directory: Path, record_name: str) -> dict[str, Any]:
             control["displayed_balance_delta_cu"] = round(
                 float(before["balance"]) - float(after["balance"]), 4
             )
+        continuation_modeled = round(ATTEMPT_2["modeled_cu"] + cumulative_cu, 4)
+        continuation_seconds = round(prior_seconds + total_seconds, 1)
+        continuation_sessions = ATTEMPT_2["sessions"] + len(control["sessions"])
+        control["continuation"] = {
+            "wall_clock_seconds": continuation_seconds,
+            "modeled_cu": continuation_modeled,
+            "sessions": continuation_sessions,
+            "attempts": [
+                {key: ATTEMPT_2[key] for key in ("modeled_cu", "wall_clock_seconds", "sessions")},
+                {
+                    "modeled_cu": round(cumulative_cu, 4),
+                    "wall_clock_seconds": round(total_seconds, 1),
+                    "sessions": len(control["sessions"]),
+                },
+            ],
+            "within_cap": bool(
+                continuation_modeled <= HARD_CAP_CU
+                and continuation_seconds <= HARD_CAP_SECONDS
+                and continuation_sessions <= MAX_SESSIONS
+            ),
+        }
         control["combined"] = {
-            "wall_clock_seconds": round(ATTEMPT_1["wall_clock_seconds"] + total_seconds, 1),
-            "modeled_cu": round(ATTEMPT_1["modeled_cu"] + cumulative_cu, 4),
-            "sessions": ATTEMPT_1["sessions"] + len(control["sessions"]),
+            "wall_clock_seconds": round(ATTEMPT_1["wall_clock_seconds"] + continuation_seconds, 1),
+            "modeled_cu": round(ATTEMPT_1["modeled_cu"] + continuation_modeled, 4),
+            "sessions": ATTEMPT_1["sessions"] + continuation_sessions,
+            "generations": completed,
             "authorized_cu": HARD_CAP_CU,
             "authorized_seconds": HARD_CAP_SECONDS,
             "authorized_sessions": MAX_SESSIONS,
-            "within_continuation_cap": bool(
-                cumulative_cu <= HARD_CAP_CU
-                and total_seconds <= HARD_CAP_SECONDS
-                and len(control["sessions"]) <= MAX_SESSIONS
-            ),
+            "within_continuation_cap": control["continuation"]["within_cap"],
         }
         control_path.write_text(json.dumps(control, indent=2, sort_keys=True) + "\n")
     print(json.dumps(control, indent=2, sort_keys=True))
