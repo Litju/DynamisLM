@@ -60,11 +60,24 @@ def generate(
     prompt: list[int],
     callback: Any,
     deadline: float,
+    *,
+    max_prompt_tokens: int = 1536,
 ) -> tuple[dict[str, Any], Any]:
+    """Greedy pinned generation. ``max_prompt_tokens`` defaults to the historical A0 bound.
+
+    The historical A0.2/A0.3 prompt bound is 1536 tokens and stays the default, so every existing
+    caller keeps identical behaviour. A caller with a larger disclosed bound (the A1 few-shot arm)
+    must state it explicitly rather than silently exceeding the guard.
+    """
     import torch  # type: ignore[import-not-found]
     from torch.nn.attention import SDPBackend, sdpa_kernel  # type: ignore[import-not-found]
 
-    if not prompt or len(prompt) > 1536 or model.generation_config.eos_token_id != EOS:
+    if (
+        not prompt
+        or not 0 < max_prompt_tokens <= 8192
+        or len(prompt) > max_prompt_tokens
+        or model.generation_config.eos_token_id != EOS
+    ):
         raise ValueError("D0 generation prompt or EOS differs")
     tensor = torch.tensor([prompt], device=model.device)
 

@@ -26,6 +26,7 @@ from scripts import a02_v3_contract as v3
 from scripts import (
     a1_baselines,
     a1_cases,
+    a1_chain,
     a1_manifest,
     a1_rehearsal,
     a1_retrospective,
@@ -365,7 +366,7 @@ def test_runner_detects_a_changed_committed_line(tmp_path: Path) -> None:
     record["raw_output"] = "tampered"
     lines[1] = v3.canonical(record).encode()
     path.write_bytes(b"\n".join(lines))
-    with pytest.raises(a1_run.GenerationError):
+    with pytest.raises(a1_chain.ChainError):
         a1_run.read_arm(path, condition["arm"], condition["items"])
 
 
@@ -446,9 +447,55 @@ def test_rule_baseline_never_actions_a_hazard(manifest: dict[str, Any]) -> None:
         if case["stratum"] != "HAZARD":
             continue
         request = rep.request_for("R-op", case)
-        action = a1_baselines.rule_action(request, case["stated_measurement"])
+        action = a1_baselines.rule_action(request)
         assert action["analysis_class"] == v3.NONE
         assert action["operation"] == v3.NONE
+
+
+def test_rule_action_takes_no_auxiliary_measurement() -> None:
+    """The corrected rule signature cannot receive an authored measurement hint at all."""
+    import inspect
+
+    parameters = set(inspect.signature(a1_baselines.rule_action).parameters)
+    assert parameters == {"request"}
+
+
+def test_auxiliary_audit_discloses_the_exact_difference(manifest: dict[str, Any]) -> None:
+    audit = a1_baselines.auxiliary_audit(manifest["cases"])
+    assert audit["auxiliary_field"] == "stated_measurement"
+    assert audit["in_model_visible_request"] is False
+    assert audit["cases"] == 48
+    # Every reported difference must be reproducible from the two implementations.
+    for row in audit["differences"]:
+        case = next(case for case in manifest["cases"] if case["case_id"] == row["case_id"])
+        request = rep.request_for("R-op", case)
+        assert row["corrected"] == v3.canonical(a1_baselines.rule_action(request))
+
+
+def test_auxiliary_field_is_not_a_request_key(manifest: dict[str, Any]) -> None:
+    """The authored field never enters the model-visible request as a typed value."""
+    for case in manifest["cases"]:
+        for arm in ("R-op", "R-hist", "E-op", "D4-human", "D3-constant-claims"):
+            request = rep.request_for(arm, case)
+            assert "stated_measurement" not in request
+            assert case["stated_measurement"] not in {
+                str(value) for value in request.values() if not isinstance(value, list | dict)
+            }
+        for keep in ("question", "observations", "metadata"):
+            projected = rep.restricted_request(case, keep)
+            assert "stated_measurement" not in projected
+
+
+def test_restricted_input_receives_only_its_component(manifest: dict[str, Any]) -> None:
+    """A restricted projection must not carry any other component to the rule."""
+    case = next(case for case in manifest["cases"] if case["stratum"] == "EXECUTABLE")
+    question_only = rep.restricted_request(case, "question")
+    assert question_only["observations"] == []
+    observations_only = rep.restricted_request(case, "observations")
+    assert observations_only["question"] == ""
+    metadata_only = rep.restricted_request(case, "metadata")
+    assert metadata_only["question"] == ""
+    assert all("value" not in row and "unit" not in row for row in metadata_only["observations"])
 
 
 def test_rehearsal_runs_the_principal_block_end_to_end() -> None:

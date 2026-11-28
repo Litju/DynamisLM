@@ -5,8 +5,8 @@ quantify how much of the action is recoverable from a single field. They run on 
 
 1. **Rule-based.** A fixed keyword-to-analysis-class map plus measurement-matched observation
    selection and the *same* registry authority the model gold uses
-   (``a02_v3_contract.operation_for``). It uses no learned parameters and sees the same request
-   the model sees.
+   (``a02_v3_contract.operation_for``). It uses no learned parameters and sees only the
+   model-visible request.
 
 2. **Conventional.** Per-field supervised classifiers (multinomial logistic regression over
    word/character TF-IDF of the rendered request, one model per action field) fitted on the
@@ -14,13 +14,26 @@ quantify how much of the action is recoverable from a single field. They run on 
    A1 or on any evaluation cohort.
 
 3. **Restricted input.** The strongest signal available from one component only
-   (question-only, observations-only, metadata-only), evaluated on A0.2 HELDOUT and on the A1
-   cohort. Restricted-input accuracy is a *diagnostic*, never a requirement: the A2 shortcut
-   audit asks for evidence of shortcut dependence where the omitted information is scientifically
-   necessary, not for a universal accuracy ceiling.
+   (question-only, observations-only, metadata-only), evaluated on the A1 cohort. Restricted-input
+   accuracy is a *diagnostic*, never a requirement.
 
-No baseline is tuned on an evaluation cohort, and no baseline result is used to select an A1
-arm.
+Auxiliary-information disclosure
+--------------------------------
+An earlier revision of this module passed the frozen ``stated_measurement`` field into
+``rule_action`` as a hint for which measurement to select. That field is authored case metadata:
+it is **not** part of the model-visible request, so it is auxiliary information the model never
+receives. Passing it into a restricted-input projection was worse than auxiliary: those
+projections exist precisely to withhold the component that names the measurement.
+
+The corrected implementation never receives ``stated_measurement``. Measurement identity is
+recovered from the request text only, using the same one-to-one human labels the historical arm
+uses. The original numbers are preserved as a historical record in
+``reports/a1/cpu-baseline-history-v1.json``; the corrected numbers are reported separately and are
+the ones this module returns.
+
+No baseline is tuned on an evaluation cohort, and no baseline result is used to select an A1 arm.
+A CPU baseline result is never evidence about a language model: it cannot show that observation
+binding causes a model failure. That question is answered only by the model arms.
 """
 
 from __future__ import annotations
@@ -100,7 +113,33 @@ def _question(request: dict[str, Any]) -> str:
     return value if isinstance(value, str) else ""
 
 
-def rule_action(request: dict[str, Any], stated: str | None = None) -> dict[str, Any]:
+def _label_key(stable_id: str) -> str:
+    """Human label for a registry metric identity, or the bare identity when unlabelled."""
+    key = stable_id.split(":")[-1].split("@")[0]
+    return rep.METRIC_LABEL.get(key, key.replace("-", " "))
+
+
+def _named_measurement(text: str, grouped: dict[str, list[str]]) -> str | None:
+    """Select the measurement the question names, from the request alone.
+
+    Only the question text is used. The match is a label containment test in either direction,
+    which is how the historical baseline resolved "isometric peak force" to the registry metric.
+    A tie is resolved by the longest matching label, then by request order, so the result is
+    deterministic and never depends on authored metadata.
+    """
+    haystack = text.casefold()
+    matches: list[tuple[int, int, str]] = []
+    for order, key in enumerate(grouped):
+        label = _label_key(key).casefold()
+        if label and (label in haystack or haystack.strip() in label):
+            matches.append((-len(label), order, key))
+    if not matches:
+        return None
+    return sorted(matches)[0][2]
+
+
+def rule_action(request: dict[str, Any]) -> dict[str, Any]:
+    """Fixed rule over the model-visible request only. No auxiliary field is read."""
     text = _question(request).casefold()
     for cue in HAZARD:
         if cue in text:
@@ -109,13 +148,6 @@ def rule_action(request: dict[str, Any], stated: str | None = None) -> dict[str,
         if cue in text:
             return _none()
     grouped = _ids_by_measurement(request)
-    measurement = None
-    if stated is not None:
-        for key in grouped:
-            candidate = key.split(":")[-1].split("@")[0].replace("-", " ")
-            if stated.replace("-", " ") in candidate or candidate in stated.replace("-", " "):
-                measurement = key
-                break
     analysis = None
     for name, cues in TRIGGERS:
         if any(cue in text for cue in cues):
@@ -123,6 +155,7 @@ def rule_action(request: dict[str, Any], stated: str | None = None) -> dict[str,
             break
     if analysis is None:
         return _none()
+    measurement = _named_measurement(_question(request), grouped)
     if measurement is None:
         candidates = [key for key, ids in grouped.items() if len(ids) >= 2]
         if not candidates:
@@ -189,7 +222,7 @@ def rule_scores(cases: list[dict[str, Any]]) -> dict[str, Any]:
     rows = []
     for case in cases:
         request = rep.request_for("R-op", case)
-        raw = v3.format_action(rule_action(request, case["stated_measurement"]))
+        raw = v3.format_action(rule_action(request))
         rows.append(
             a1_score.score_row(
                 case=case,
@@ -205,7 +238,12 @@ def rule_scores(cases: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def restricted_scores(cases: list[dict[str, Any]]) -> dict[str, Any]:
-    """Question-only, observations-only and metadata-only rule baselines on the A1 cohort."""
+    """Question-only, observations-only and metadata-only rule baselines on the A1 cohort.
+
+    Each projection removes the components the restricted variant is defined not to see, and the
+    rule receives no other input. Nothing from the withheld components, and no authored case
+    metadata, reaches the rule.
+    """
     from scripts import a1_score
 
     result: dict[str, Any] = {}
@@ -214,8 +252,7 @@ def restricted_scores(cases: list[dict[str, Any]]) -> dict[str, Any]:
         for case in cases:
             request = rep.request_for("R-op", case)
             projected = rep.restricted_request(case, keep)
-            # The rule reads only the surviving component; gold is unchanged.
-            action = rule_action(projected, case["stated_measurement"])
+            action = rule_action(projected)
             rows.append(
                 a1_score.score_row(
                     case=case,
@@ -226,6 +263,84 @@ def restricted_scores(cases: list[dict[str, Any]]) -> dict[str, Any]:
             )
         result[keep] = a1_score.arm_summary(rows)
     return result
+
+
+def auxiliary_audit(cases: list[dict[str, Any]]) -> dict[str, Any]:
+    """Record exactly what the historical auxiliary argument changed, item by item.
+
+    The audit is mechanical: it runs the old call shape with the authored ``stated_measurement``
+    and the corrected call shape without it, and reports the item-level differences. This is the
+    disclosure the mission requires, and it is reproducible without trusting a claim.
+    """
+
+    def historical(case: dict[str, Any], request: dict[str, Any]) -> dict[str, Any]:
+        """The historical call shape: a stated-measurement hint selects the metric."""
+        text = _question(request).casefold()
+        for cue in (*HAZARD, *ABSTAIN):
+            if cue in text:
+                return _none()
+        grouped = _ids_by_measurement(request)
+        stated = case["stated_measurement"]
+        measurement = None
+        for key in grouped:
+            candidate = key.split(":")[-1].split("@")[0].replace("-", " ")
+            if stated.replace("-", " ") in candidate or candidate in stated.replace("-", " "):
+                measurement = key
+                break
+        analysis = None
+        for name, cues in TRIGGERS:
+            if any(cue in text for cue in cues):
+                analysis = name
+                break
+        if analysis is None:
+            return _none()
+        if measurement is None:
+            candidates = [key for key, ids in grouped.items() if len(ids) >= 2]
+            if not candidates:
+                return _none()
+            measurement = candidates[0]
+        ids = grouped.get(measurement, [])
+        if len(ids) < 2:
+            return _none()
+        chosen = [ids[0], ids[-1]]
+        operation = v3.operation_for(analysis, len(chosen))
+        action = {
+            "analysis_class": analysis,
+            "observation_ids": chosen,
+            "operation": operation,
+            "target_claims": _claims_from_text(text),
+        }
+        if operation == v3.NONE:
+            action["observation_ids"] = []
+        return v3.normalize_action(action)
+
+    differing = []
+    for case in cases:
+        request = rep.request_for("R-op", case)
+        old = historical(case, request)
+        new = rule_action(request)
+        if old != new:
+            differing.append(
+                {
+                    "case_id": case["case_id"],
+                    "historical": v3.canonical(old),
+                    "corrected": v3.canonical(new),
+                    "gold": v3.canonical(a1_cases.gold_action(case)),
+                }
+            )
+    return {
+        "auxiliary_field": "stated_measurement",
+        "in_model_visible_request": False,
+        "cases": len(cases),
+        "differing_cases": len(differing),
+        "differences": differing,
+        "disclosure": (
+            "The frozen cases carry an authored stated_measurement used to build the synthetic "
+            "request; it is not part of the model-visible request. The historical rule baseline "
+            "received it as a selection hint. The corrected baseline does not, and the restricted "
+            "projections never do."
+        ),
+    }
 
 
 # --------------------------------------------------------------------------- conventional
@@ -370,9 +485,11 @@ def _valid(action: dict[str, Any], request: dict[str, Any]) -> bool:
 
 def run_all() -> dict[str, Any]:
     cases = a1_cases.load_manifest()["cases"]
+    audit = auxiliary_audit(cases)
     return {
         "rule_based": rule_scores(cases),
         "restricted_input": restricted_scores(cases),
         "conventional": conventional_scores(cases),
         "conventional_identity_masked": conventional_scores(cases, mask_identities=True),
+        "auxiliary_audit": audit,
     }

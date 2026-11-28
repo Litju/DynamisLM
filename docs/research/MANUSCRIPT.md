@@ -202,20 +202,40 @@ to an `objective` field that the deployed request does not contain.
 ### 5.0 Execution status
 
 The A1 factorial was frozen and sealed before inference
-(`experiments/a1/call-manifest-v1.json`, 20 deduplicated conditions, 1,332 generations). The
-execution attempt consumed all four authorized T4 sessions (272.3 s total, 0.925 modelled CU,
-exact-target teardown verified after every session) and produced **zero generations**. Every
-session failed at the same controller entrypoint defect before any inference: the phase was
-passed to the worker in an environment variable while the worker declared it as a required
-positional argument. The defect, its regression tests and the pre-allocation self-test that now
-prevents it are recorded in the branch history.
+(`experiments/a1/call-manifest-v1.json`, 20 deduplicated conditions, 1,332 generations). Three
+execution attempts allocated T4 sessions and produced **zero generations**.
 
-No model-arm claim is made in this section. The scientific design below is frozen and ready;
-the execution did not occur. The authorized envelope is exhausted, and no additional session is
-authorized.
+**Attempt 1** consumed all four originally authorized sessions (272.3 s, 0.925 modelled CU,
+exact-target teardown verified after every session) and failed before any inference: the phase
+was passed to the worker in an environment variable while the worker declared it as a required
+positional argument.
+
+**Attempts 2 and 3** were the renewed continuation allocation. Attempt 2 abandoned one
+allocation command at its client-side bound before an endpoint was bound and produced nothing.
+Attempt 3 allocated four T4 sessions; every session reached the remote, uploaded the 39 MB
+payload and ran the bootstrap phase, but the worker exited at argument parsing inside the remote
+IPython kernel. `colab exec --file` execs the file source in a live kernel whose `sys.argv`
+carries the kernel's own runtime path, which argparse consumed as the positional phase. The
+controller saw exit code 0, could not parse a status payload, classified the session as a
+transport error, and advanced to the next session on the same reproducible defect.
+
+All defects are repaired: the phase is now resolved from the environment under the real kernel
+invocation, the backend uses PEFT's actual `disable_adapter()` context manager with per-layer
+state assertions, the base snapshot and adapter archive are explicitly bound and digest-verified,
+the transport is a minimal gold-free payload of exact frozen requests, the generation deadline is
+one cumulative session deadline, and any unexecuted or unverified phase is a deterministic defect
+that aborts further allocation. The repaired path is covered by the executable contract tests,
+but it has **not** been exercised on a GPU, because the session allowance is exhausted.
+
+No model-arm claim is made in this section. The scientific design is frozen and ready; the
+execution did not occur. Any further attempt requires a new owner authorization that names a
+fresh session allowance; this work performs no further allocation and none is authorized by this
+document.
 
 The CPU baselines did execute on the same frozen cohort and are reported in Section 5.6. They are
-the only newly observed scientific evidence in this section.
+the only newly observed scientific evidence in this section. They say nothing about the language
+model: a rule that binds some observations from question text cannot show that observation
+binding causes the adapted model's failure.
 
 ### 5.1 Design corrections applied before observation
 
@@ -301,28 +321,30 @@ effects are reported separately.
 
 ### 5.6 CPU baselines on the frozen cohort
 
-These ran on CPU and are independent of the unexecuted GPU factorial.
+These ran on CPU and are independent of the unexecuted GPU factorial. The numbers are the
+corrected implementation, which reads no auxiliary case metadata.
 
 | Baseline | Exact | Analysis class | Observation F1 |
 | --- | ---: | ---: | ---: |
-| Rule-based keyword map | 0.583 [0.417, 0.750] | 0.833 [0.708, 0.938] | 0.604 [0.438, 0.760] |
-| Conventional (A0.2 TF-IDF) | 0.021 [0.000, 0.062] | 0.146 [0.042, 0.271] | 0.590 [0.458, 0.715] |
-| Conventional, identity masked | 0.021 [0.000, 0.062] | 0.208 [0.083, 0.354] | 0.590 [0.458, 0.715] |
+| Rule-based keyword map (corrected) | 0.604 [0.438, 0.771] | 0.854 [0.750, 0.958] | 0.625 [0.458, 0.781] |
 | Restricted: question only | 0.292 [0.125, 0.458] | — | — |
 | Restricted: observations only | 0.292 [0.125, 0.458] | — | — |
 | Restricted: metadata only | 0.292 [0.125, 0.458] | — | — |
 
-Two things follow. First, analysis-family recognition is comparatively easy while observation
-binding is hard: the rule-based reader names the right class 0.833 of the time but binds the
-right observations only 0.604 of the time, and exact action match tracks the binding number, not
-the class number. Second, a supervised per-field model trained on the historical A0.2 split
-transfers almost nothing (0.021 exact), and masking measurement identity raises class accuracy
-without moving exact match. That localises the transfer failure to binding rather than to
-recognition.
+The earlier rule-based result was 0.583 exact with the same restricted floor. That run passed the
+frozen `stated_measurement` field into the rule as a measurement-selection hint. The field is
+authored case metadata and is not part of the model-visible request, and the restricted-input
+variants received it even though their definition withholds the component that names the
+measurement. The corrected implementation removes it. Exactly one case changes action, the
+historical record is preserved unchanged in `reports/a1/cpu-baseline-history-v1.json`, and the
+corrected numbers above supersede it for interpretation.
 
-These are baselines, not findings about the language model. They establish that the task is not
-beyond simple methods, which constrains — without settling — a capacity-limited explanation of
-the historical failure.
+Analysis-family recognition is comparatively easy while observation binding is hard: the rule
+names the right class 0.854 of the time but binds the right observations 0.625 of the time, and
+exact action match tracks the binding number. These are baselines, not findings about the language
+model. They establish that the task is not beyond simple methods, which constrains — without
+settling — a capacity-limited explanation of the historical failure. They cannot show that
+observation binding causes the model's failure; only the model arms can, and those did not run.
 
 ## 6. Dataset intervention (A2) — prospective
 

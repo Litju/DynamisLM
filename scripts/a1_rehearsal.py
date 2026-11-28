@@ -64,10 +64,7 @@ def _match_case(request: dict[str, Any]) -> dict[str, Any] | None:
     return None
 
 
-def _stub_prompt_ids(
-    backend: Any, request: dict[str, Any], system: str, fewshot: str
-) -> tuple[list[int], str]:
-    messages = rep.render_messages(request, system, fewshot)
+def _stub_prompt_ids(backend: Any, messages: list[dict[str, str]]) -> tuple[list[int], str]:
     digest = v3.sha256(v3.canonical(messages).encode())
     ids = [int(digest[index : index + 2], 16) for index in range(0, 60, 2)]
     return ids, "stub-rendered-prompt"
