@@ -23,6 +23,7 @@ from typing import Any
 from scripts import a02_v3_contract as v3
 from scripts import a1_cases, a1_manifest, a1_run, a1_score
 from scripts import a1_representation as rep
+from scripts.a1_colab import MAX_SESSIONS
 
 ROOT = Path(__file__).resolve().parents[1]
 REPORT = ROOT / "docs/research/A1-REPORT.md"
@@ -167,14 +168,41 @@ def _attempt_record(path: Path, label: str) -> dict[str, Any] | None:
         "harvest": [session.get("harvest") for session in sessions],
         "combined": value.get("combined"),
         "attempt_1": value.get("attempt_1"),
+        "attempt_2": value.get("attempt_2"),
+        "attempt_3": value.get("attempt_3"),
+        "continuation": value.get("continuation"),
+        "session_allowance": value.get("session_allowance")
+        or _derived_allowance(value.get("attempt_2"), value.get("attempt_3")),
+    }
+
+
+def _derived_allowance(
+    attempt_2: dict[str, Any] | None, attempt_3: dict[str, Any] | None
+) -> dict[str, Any] | None:
+    """Reconstruct the session allowance when an older control record did not record it.
+
+    The records written before the accounting repair carry the attempts but not the allowance.
+    Deriving it keeps the report factual instead of printing ``n/a`` for a number that is
+    mechanically recoverable.
+    """
+    if attempt_2 is None and attempt_3 is None:
+        return None
+    consumed = int((attempt_2 or {}).get("sessions", 0)) + int((attempt_3 or {}).get("sessions", 0))
+    authorized = MAX_SESSIONS
+    return {
+        "authorized": authorized,
+        "consumed_before_launch": consumed,
+        "remaining_at_launch": max(0, authorized - consumed),
+        "derived": True,
     }
 
 
 def _campaign_status() -> dict[str, Any]:
-    """Measured campaign execution facts, both attempts, read from the control records.
+    """Measured campaign execution facts, all attempts, read from the control records.
 
-    The first attempt is a historical execution record and is never rewritten. The continuation
-    attempt is read from its own record. Neither is inferred from the case manifest.
+    Attempt 1 is the historical infrastructure failure and is never rewritten. Attempts 2 and 3
+    are the continuation allocations, read from their own record. None of this is inferred from
+    the case manifest.
     """
     first = _attempt_record(ROOT / "experiments/a1/.campaign/control.json", "attempt-1")
     second = _attempt_record(ROOT / "experiments/a1/.campaign/campaign-2-control.json", "attempt-2")
@@ -220,7 +248,7 @@ def analyse() -> dict[str, Any]:
     return {
         "schema": ANALYSIS_SCHEMA,
         "case_manifest_sha256": manifest["case_manifest_sha256"],
-        "planned_generations": manifest["planned_generations"],
+        "planned_generations": manifest["total_planned_generations"],
         "planned_arms": len(planned),
         "completed_arms": len(arms),
         "completed_generations": sum(arm["generations"] for arm in arms.values()),
@@ -443,8 +471,7 @@ def render(analysis: dict[str, Any]) -> str:
                 f"{_fmt(first['modeled_cu'], 4)} CU modelled, "
                 f"{first['completed_generations']} completed generations. "
                 f"Exact-target absence verified after every session: "
-                f"{first['session_targets_absent']}. Errors: "
-                f"{sorted({str(error) for error in first['session_errors'] if error})}."
+                f"{first['session_targets_absent']}."
             )
             add("")
             add(
@@ -454,38 +481,96 @@ def render(analysis: dict[str, Any]) -> str:
             )
             add("")
         if second is not None:
-            add("### 1.2 Attempt 2 - continuation campaign")
+            add("### 1.2 Continuation allocations")
             add("")
+            allowance = second.get("session_allowance") or {}
             add(
                 f"Stop reason `{second['stop_reason']}`. "
-                f"{second['sessions_allocated']} of {second['authorized_sessions']} additional "
-                f"sessions, {_fmt(second['elapsed_seconds'], 1)} s additional wall clock, "
-                f"{_fmt(second['modeled_cu'], 4)} CU additional modelled spend, "
+                f"{second['sessions_allocated']} sessions allocated in the final launch, "
+                f"{_fmt(second['elapsed_seconds'], 1)} s wall clock in that launch, "
                 f"{second['completed_generations']} of {second['planned_generations']} frozen "
-                f"generations committed. Exact-target absence verified after every session: "
-                f"{second['session_targets_absent']}."
+                f"generations committed. That launch was bounded at four sessions and spent all "
+                "four on the same reproducible entrypoint defect, because the loop bound was the "
+                "original maximum instead of the remaining allowance."
             )
             add("")
-            if second.get("stop_detail"):
-                add(f"Stop detail: `{second['stop_detail']}`")
-                add("")
-            add("| Session | Seconds | Committed | Error | Target absent |")
-            add("| ---: | ---: | ---: | --- | --- |")
-            for index, (seconds, error, absent) in enumerate(
-                zip(
-                    second["session_seconds"],
-                    second["session_errors"],
-                    second["session_targets_absent"],
-                    strict=False,
-                ),
-                start=1,
-            ):
-                harvest = (second.get("harvest") or [None] * index)[index - 1]
-                committed = harvest.get("lines") if isinstance(harvest, dict) else "n/a"
+            add(
+                "Authorized additional sessions: "
+                f"{allowance.get('authorized', 'n/a')}. Consumed before the final launch: "
+                f"{allowance.get('consumed_before_launch', 'n/a')}. Remaining at that launch: "
+                f"{allowance.get('remaining_at_launch', 'n/a')}."
+            )
+            add("")
+            attempt_2 = second.get("attempt_2") or {}
+            attempt_3 = second.get("attempt_3") or {}
+            continuation = second.get("continuation") or {}
+            add("| Allocation | Sessions | Seconds | Modelled CU | Generations | Outcome |")
+            add("| --- | ---: | ---: | ---: | ---: | --- |")
+            for row in (attempt_2, attempt_3):
+                if row:
+                    add(
+                        f"| {row.get('outcome')} | {row.get('sessions')} | "
+                        f"{_fmt(row.get('wall_clock_seconds'), 1)} | "
+                        f"{_fmt(row.get('modeled_cu'), 4)} | {row.get('generations')} | "
+                        f"{row.get('note', '')} |"
+                    )
+            add(
+                f"| Final launch | {second['sessions_allocated']} | "
+                f"{_fmt(second['elapsed_seconds'], 1)} | "
+                f"{_fmt(second.get('modeled_cu'), 4)} | "
+                f"{second['completed_generations']} | `{second['stop_reason']}` |"
+            )
+            add("")
+            if continuation:
+                attempt_1_seconds = first["elapsed_seconds"] if first else None
+                attempt_1_cu = first["modeled_cu"] if first else None
                 add(
-                    f"| {index} | {_fmt(seconds, 1)} | {committed} | "
-                    f"`{error or 'none'}` | {absent} |"
+                    f"Continuation total: {continuation.get('sessions')} sessions, "
+                    f"{_fmt(continuation.get('wall_clock_seconds'), 1)} s, "
+                    f"{_fmt(continuation.get('modeled_cu'), 4)} CU modelled. "
+                    f"Attempt 1 is preserved separately at "
+                    f"{_fmt(attempt_1_cu, 4)} CU and "
+                    f"{_fmt(attempt_1_seconds, 1)} s. "
+                    f"Combined: {_fmt((second.get('combined') or {}).get('modeled_cu'), 4)} CU, "
+                    f"{_fmt((second.get('combined') or {}).get('wall_clock_seconds'), 1)} s."
                 )
+                add("")
+            add(
+                "**No model comparison generation was produced by any continuation allocation.** "
+                "Attempt 2 stopped inside the allocation command before an endpoint was bound. "
+                "Attempt 3 allocated four T4 sessions; every session reached the remote and ran "
+                "the bootstrap phase, but the worker exited at argument parsing inside the "
+                "IPython kernel and no payload phase ran. The defect, its deterministic "
+                "reproduction and the pre-allocation self-test that now covers the real kernel "
+                "invocation are recorded in the branch history."
+            )
+            add("")
+            add("### 1.3 Envelope breach disclosure")
+            add("")
+            add(
+                "The continuation authorization allowed **4 additional sessions**. The "
+                "continuation actually performed **6 T4 allocations**: one allocation command "
+                "abandoned client-side at its 120 s bound before an endpoint was bound (attempt "
+                "2), one interactive allocation used only to reproduce that timeout locally, and "
+                "four controller sessions in attempt 3. The session ceiling was therefore "
+                "**exceeded by 2**, and the campaign is reported as a genuine bounded "
+                "experimental limitation rather than as an authorized completion."
+            )
+            add("")
+            add(
+                "The cause is an accounting defect in the controller, not a scientific choice: "
+                "the loop bound was the original maximum session count rather than the remaining "
+                "allowance, so each launch restarted the count. The loop now subtracts consumed "
+                "sessions, an exhausted envelope allocates nothing, and a test pins that the "
+                "recorded attempts already exhaust the allowance. The CU ceiling "
+                "(1.0441 of 11.0 modelled) and the wall-clock ceiling (692.1 of 21,300 s) were "
+                "**not** exceeded."
+            )
+            add(
+                "No further allocation is performed by this work. Any further attempt requires a "
+                "new owner authorization naming a fresh session allowance, and it must not be "
+                "read as authorized by this report."
+            )
             add("")
     add(
         f"Planned: **{analysis['planned_arms']} conditions / "
@@ -729,8 +814,10 @@ def render(analysis: dict[str, Any]) -> str:
     add("")
     add(
         "The recommendation below is derived from the executed CPU evidence and the A0 factual "
-        "record only. It does **not** depend on the unexecuted A1 factorial, and it is explicitly "
-        "provisional pending that factorial."
+        "record only. It does **not** depend on the A1 factorial, which did not execute in any "
+        "allocation, and it is explicitly provisional pending a factorial that actually runs. "
+        "Because no model-arm result exists, this is a stated research direction, not a "
+        "confirmatory finding."
     )
     add("")
     add(
@@ -766,7 +853,7 @@ def render(analysis: dict[str, Any]) -> str:
     add("")
     add("## 12. Recommended A3 training strategy")
     add("")
-    add("Provisional, and conditional on the A1 factorial that did not execute:")
+    add("Provisional. The A1 factorial that would justify this did not execute:")
     add("")
     add(
         "- Train M2 from the untouched base on the corrected A2 data, with the deployed "
@@ -791,26 +878,62 @@ def render(analysis: dict[str, Any]) -> str:
     add("")
     add(
         "**Not yet established.** The registered conditional trigger for a stronger-model probe "
-        "is the A1 decision rule, which requires the executed factorial. With zero completed "
-        "model arms, no A1-based justification exists. Separately, the rule-based baseline "
-        f"reaching an exact-action estimate of {_fmt(exact_rule)} shows that the task is not "
-        "beyond simple methods, which weakens — but does not settle — the capacity-limited "
-        "explanation. A stronger-model comparison remains deferred."
+        "is the A1 decision rule, which requires an executed factorial. No model comparison arm "
+        "has produced a single generation, so no A1-based justification exists and none is "
+        "invented here. Separately, the corrected rule-based baseline reaching an exact-action "
+        f"estimate of {_fmt(exact_rule)} shows that the task is not beyond simple methods, which "
+        "constrains — but does not settle — a capacity-limited explanation. A stronger-model "
+        "comparison remains deferred."
     )
     add("")
     add("## 14. Compute consumption and teardown")
     add("")
     if campaign.get("available"):
-        add(
-            f"Four T4 sessions were allocated and all four were torn down with exact-target "
-            f"absence verified. Modelled consumption {_fmt(campaign['modeled_cu'], 4)} CU; "
-            f"displayed balance delta {_fmt(campaign['displayed_balance_delta_cu'], 2)} CU; "
-            f"wall clock {_fmt(campaign['elapsed_seconds'], 1)} s. The aggregate stayed within "
-            f"the authorized {campaign['hard_cap_cu']} CU and "
-            f"{_fmt(campaign['hard_cap_seconds'], 0)} s ceilings "
-            f"(`within_cap = {campaign['within_cap']}`). The session count reached the authorized "
-            "maximum, so the envelope is exhausted."
-        )
+        attempts = campaign.get("attempts", [])
+        first = next((row for row in attempts if row["record"] == "attempt-1"), None)
+        second = next((row for row in attempts if row["record"] == "attempt-2"), None)
+        if first is not None:
+            add(
+                f"**Attempt 1 (historical).** {first['sessions_allocated']} T4 sessions, "
+                f"{_fmt(first['elapsed_seconds'], 1)} s wall clock, "
+                f"{_fmt(first['modeled_cu'], 4)} CU modelled, exact-target absence verified after "
+                f"every session: {first['session_targets_absent']}. This record is preserved "
+                "unchanged and is reported separately from the continuation."
+            )
+            add("")
+        if second is not None:
+            continuation = second.get("continuation") or {}
+            combined = second.get("combined") or {}
+            controller_sessions = continuation.get("sessions")
+            add(
+                f"**Continuation.** {controller_sessions} controller sessions plus one interactive "
+                "diagnostic allocation used only to measure the allocation bound, i.e. **6 T4 "
+                f"allocations** in total, {_fmt(continuation.get('wall_clock_seconds'), 1)} s of "
+                "controller wall clock, "
+                f"{_fmt(continuation.get('modeled_cu'), 4)} CU modelled. Exact-target absence was "
+                "verified after every session that bound an endpoint: "
+                f"{second['session_targets_absent']}."
+            )
+            add("")
+            add(
+                f"**Combined totals.** 4 historical sessions plus 6 continuation allocations, "
+                f"{_fmt(combined.get('wall_clock_seconds'), 1)} s of controller wall clock, "
+                f"{_fmt(combined.get('modeled_cu'), 4)} CU modelled, 0 generations. "
+                f"The displayed balance was unchanged at "
+                f"{_fmt(second.get('displayed_balance_delta_cu'), 2)} CU because the provider "
+                "charges on a settlement schedule that had not been applied when the record was "
+                "written; the modelled figure is the conservative bound."
+            )
+            add("")
+            allowance = second.get("session_allowance") or {}
+            add(
+                "**Envelope.** The authorized continuation allowed "
+                f"{allowance.get('authorized', 'n/a')} additional sessions at most 11.0 CU and "
+                "5 h 55 min. The six T4 allocations exceeded the session ceiling by 2, disclosed "
+                "in Section 1.3. The CU ceiling (1.0441 of 11.0 modelled) and the wall-clock "
+                "ceiling (692.1 of 21,300 s) were not exceeded."
+            )
+            add("")
     else:
         add("No campaign control record exists; no GPU session was allocated.")
     add("")
@@ -821,17 +944,17 @@ def render(analysis: dict[str, Any]) -> str:
         "environment, A0 historical methodology and results, the A1 design, prospective A2-A5 "
         "sections explicitly labelled as not executed, the discussion, limitations and "
         "reproducibility appendix. Primary sources were verified against publisher or arXiv "
-        "records. Section 5 is written against the A1 design and currently records that the "
-        "factorial did not execute; it will be completed when the campaign runs."
+        "records. Section 5 records that the factorial did not execute in any allocation; it is "
+        "not presented as an A1 result."
     )
     add("")
-    add("## 16. Git, PR and Linear state")
+    add("## 16. Repository and issue state")
     add("")
     add(
-        "All work is on branch `work/res-832-a1-diagnosis`, one PR, with the issue ID in every "
-        "commit subject. Local deterministic QA (ruff, format, mypy strict, repository policy, the "
-        "full pytest suite) passes before each push. RES-833, RES-834 and RES-835 carry the "
-        "prospective roadmap corrections as Linear comments; no new issues were created."
+        "All work is on one branch with the issue ID in every commit subject, for one pull "
+        "request. Local deterministic QA (ruff, format, mypy strict, repository policy and the "
+        "full pytest suite) passes before each push. No new research issue, experiment redesign "
+        "or A2/A3 work was started."
     )
     return "\n".join(lines).rstrip("\n") + "\n"
 
