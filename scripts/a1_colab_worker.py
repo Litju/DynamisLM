@@ -360,6 +360,8 @@ def smoke_phase(backend: Any) -> dict[str, Any]:
     item = {
         "case_id": "smoke-development-only",
         "cluster": "smoke-development-only",
+        "request": smoke["request"],
+        "messages": smoke["messages"],
         "prompt_sha256": smoke["prompt_sha256"],
         "request_sha256": smoke["request_sha256"],
     }
@@ -381,7 +383,6 @@ def smoke_phase(backend: Any) -> dict[str, Any]:
             identity=ident,
             root=SMOKE_OUT,
             deadline_seconds=180.0,
-            work={"smoke-development-only": smoke},
         )
         receipts.append(receipt)
     entries = {
@@ -446,9 +447,6 @@ def run_phase(backend: Any, seconds: float) -> dict[str, Any]:
     deadline = start + seconds
     ident = _identity("run")
     OUT.mkdir(mode=0o700, exist_ok=True)
-    work = {
-        item["case_id"]: item for condition in order["conditions"] for item in condition["items"]
-    }
     receipts = []
     for condition in order["conditions"]:
         if deadline - time.monotonic() < a1_run.MIN_CALL_SECONDS:
@@ -459,7 +457,6 @@ def run_phase(backend: Any, seconds: float) -> dict[str, Any]:
             identity=ident,
             root=OUT,
             deadline_seconds=max(0.0, deadline - time.monotonic()),
-            work=work,
             session_deadline=deadline,
         )
         receipts.append(receipt)

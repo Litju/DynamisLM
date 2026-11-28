@@ -96,22 +96,18 @@ def prompt_ids(backend: TokenizingBackend, messages: list[dict[str, str]]) -> tu
 
 
 def _item_inputs(
-    item: dict[str, Any], condition: dict[str, Any], work: dict[str, Any] | None
+    item: dict[str, Any], condition: dict[str, Any]
 ) -> tuple[dict[str, Any], list[dict[str, str]]]:
     """The exact request and messages for one frozen call, verified against the manifest.
 
-    A transported run needs only canonical hashing, which ``a02_v3_contract`` provides; it never
-    imports the local renderers or the authored cohort. A local run re-derives the request, which
-    is the only mode allowed to reach evaluation inputs.
+    A transported item carries its own request and rendered messages, so the remote needs only
+    canonical hashing from ``a02_v3_contract`` and never imports the local renderers, the authored
+    cohort or the gold. A local item has no request, so the runner re-derives it from the frozen
+    cases; that is the only mode allowed to reach evaluation inputs.
     """
-    if work is not None:
-        entry = work.get(item["case_id"])
-        if entry is None:
-            raise GenerationError(
-                f"{condition['arm']}: {item['case_id']} is absent from the work order"
-            )
-        request = entry["request"]
-        messages = entry["messages"]
+    if "request" in item and "messages" in item:
+        request = item["request"]
+        messages = item["messages"]
         if v3.sha256(v3.canonical(request).encode()) != item["request_sha256"]:
             raise GenerationError(f"{condition['arm']}: request digest drift at {item['case_id']}")
         if v3.sha256(v3.canonical(messages).encode()) != item["prompt_sha256"]:
@@ -138,7 +134,6 @@ def run_arm(
     identity: dict[str, Any],
     root: Path | None = None,
     deadline_seconds: float = 3600.0,
-    work: dict[str, Any] | None = None,
     session_deadline: float | None = None,
     model_factory: Any = None,
 ) -> dict[str, Any]:
@@ -173,7 +168,7 @@ def run_arm(
             if remaining <= reserve:
                 stopped_early = True
                 break
-            request, messages = _item_inputs(item, condition, work)
+            request, messages = _item_inputs(item, condition)
             ids, rendered = prompt_ids(backend, messages)
             if not 0 < len(ids) <= MAX_PROMPT:
                 raise GenerationError(f"{arm}: prompt outside the disclosed token bound")
