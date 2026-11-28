@@ -197,6 +197,14 @@ Provisional. The A1 factorial that would justify this did not execute:
 
 **Not yet established.** The registered conditional trigger for a stronger-model probe is the A1 decision rule, which requires an executed factorial. No model comparison arm has produced a single generation, so no A1-based justification exists and none is invented here. Separately, the corrected rule-based baseline reaching an exact-action estimate of 0.604 shows that the task is not beyond simple methods, which constrains — but does not settle — a capacity-limited explanation. A stronger-model comparison remains deferred.
 
+## 13a. Established experimental limitation
+
+This campaign did not produce interpretable evidence about why the step-510 model fails. The limitation is execution, not design: the frozen cohort, conditions, digests, gold and hypotheses are intact, and the repaired execution path is covered by deterministic contract tests, but no generation was ever produced on a GPU. Three distinct infrastructure defects were found and repaired in sequence, and the continuation's session allowance was exhausted before a fourth attempt could exercise the repaired path.
+
+The honest statement of scientific status is therefore: **the frozen model comparisons have not executed.** No adaptation, representation, decoder, interaction, counterfactual-sensitivity or cluster-aware model estimate exists, and none is reported. The CPU baselines are real executed evidence about a fixed rule system, not about a language model.
+
+A future attempt needs only a fresh session allowance. The remaining risk is low and specific: the payload verification, smoke wiring and generation loop have been exercised end to end with a stub backend over all 1,332 frozen calls, and with the real tokenizer over all 1,332 preserved messages, so the first remaining unknown is the actual T4 model load and decode.
+
 ## 14. Compute consumption and teardown
 
 **Attempt 1 (historical).** 4 T4 sessions, 272.3 s wall clock, 0.9250 CU modelled, exact-target absence verified after every session: [True, True, True, True]. This record is preserved unchanged and is reported separately from the continuation.

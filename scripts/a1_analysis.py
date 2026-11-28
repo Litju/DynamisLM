@@ -906,6 +906,34 @@ def render(analysis: dict[str, Any]) -> str:
         "comparison remains deferred."
     )
     add("")
+    add("## 13a. Established experimental limitation")
+    add("")
+    add(
+        "This campaign did not produce interpretable evidence about why the step-510 model fails. "
+        "The limitation is execution, not design: the frozen cohort, conditions, digests, gold and "
+        "hypotheses are intact, and the repaired execution path is covered by deterministic "
+        "contract tests, but no generation was ever produced on a GPU. Three distinct "
+        "infrastructure defects were found and repaired in sequence, and the continuation's "
+        "session allowance was exhausted before a fourth attempt could exercise the repaired "
+        "path."
+    )
+    add("")
+    add(
+        "The honest statement of scientific status is therefore: **the frozen model comparisons "
+        "have not executed.** No adaptation, representation, decoder, interaction, "
+        "counterfactual-sensitivity or cluster-aware model estimate exists, and none is reported. "
+        "The CPU baselines are real executed evidence about a fixed rule system, not about a "
+        "language model."
+    )
+    add("")
+    add(
+        "A future attempt needs only a fresh session allowance. The remaining risk is low and "
+        "specific: the payload verification, smoke wiring and generation loop have been exercised "
+        "end to end with a stub backend over all 1,332 frozen calls, and with the real tokenizer "
+        "over all 1,332 preserved messages, so the first remaining unknown is the actual T4 model "
+        "load and decode."
+    )
+    add("")
     add("## 14. Compute consumption and teardown")
     add("")
     if campaign.get("available"):
