@@ -24,7 +24,7 @@ Authorized additional sessions: 4. Consumed before the final launch: 1. Remainin
 | ALLOCATION_TRANSPORT_TIMEOUT | 1 | 160.0 | 0.0000 | 0 | Stopped in the allocation command before any target endpoint was bound or any payload was uploaded. The provider reported no active session or assignment afterwards and the balance was unchanged. Repairs: the allocation bound widens to 420 s, and an unsent allocation is now verified by reserved-name absence instead of an endpoint that never existed. |
 | Final launch | 4 | 532.1 | 1.0441 | 0 | `SESSION_LIMIT` |
 
-Continuation total: 5 sessions, 692.1 s, 1.0441 CU modelled. Attempt 1 is preserved separately at 0.9250 CU and 272.3 s. Combined: 1.9691 CU, 964.4 s.
+Continuation total: 5 controller sessions, 692.1 s, 1.0441 CU modelled. Attempt 1 is preserved separately at 0.9250 CU and 272.3 s. Every allocation, including the interactive diagnostic one, is itemised in Section 1.3 and totalled in Section 14.
 
 **No model comparison generation was produced by any continuation allocation.** Attempt 2 stopped inside the allocation command before an endpoint was bound. Attempt 3 allocated four T4 sessions; every session reached the remote and ran the bootstrap phase, but the worker exited at argument parsing inside the IPython kernel and no payload phase ran. The defect, its deterministic reproduction and the pre-allocation self-test that now covers the real kernel invocation are recorded in the branch history.
 
@@ -42,7 +42,7 @@ The continuation authorization allowed **4 additional sessions**. The mechanical
 | `attempt-3/session-4` | True | 102.2 | 0.2469 | 0 | bootstrap ran; worker exited on the kernel-argv defect |
 | **total** | | **695.1** | **1.0441** | **0** | |
 
-The cause is an accounting defect in the controller, not a scientific choice: the loop bound was the original maximum session count rather than the remaining allowance, so each launch restarted the count. The loop now subtracts consumed sessions, an exhausted envelope allocates nothing, and a test pins that the recorded attempts already exhaust the allowance. The CU ceiling (1.0441 of 11.0 modelled) and the wall-clock ceiling (692.1 of 21300 s) were **not** exceeded.
+The cause is an accounting defect in the controller, not a scientific choice: the loop bound was the original maximum session count rather than the remaining allowance, so each launch restarted the count. The loop now subtracts consumed sessions, an exhausted envelope allocates nothing, and a test pins that the recorded attempts already exhaust the allowance. The CU ceiling (1.0441 of 11.0 modelled) and the wall-clock ceiling (692.1 of 21300 s recorded by the controller, 695.1 s including the interactive diagnostic allocation) were **not** exceeded.
 No further allocation is performed by this work. Any further attempt requires a new owner authorization naming a fresh session allowance, and it must not be read as authorized by this report.
 
 Planned: **20 conditions / 1332 generations**. Completed: **0 conditions / 0 generations**.
@@ -206,7 +206,7 @@ Provisional. The A1 factorial that would justify this did not execute:
 
 **Continuation.** 5 controller sessions plus one interactive diagnostic allocation used only to measure the allocation bound, i.e. **6 T4 allocations** in total, 692.1 s of controller wall clock, 1.0441 CU modelled. Exact-target absence was verified after every session that bound an endpoint: [True, True, True, True].
 
-**Combined totals.** 4 historical sessions plus 6 continuation allocations, 964.4 s of controller wall clock, 1.9691 CU modelled, 0 generations. The displayed balance was unchanged at 0.00 CU because the provider charges on a settlement schedule that had not been applied when the record was written; the modelled figure is the conservative bound.
+**Combined totals.** 4 historical sessions plus every allocation in the mechanical ledger, 10 allocations in total, 967.4 s of recorded wall clock, 1.9691 CU modelled, 0 generations. The displayed balance was unchanged at 0.00 CU because the provider charges on a settlement schedule that had not been applied when the record was written; the modelled figure is the conservative bound.
 
 **Envelope.** The authorized continuation allowed 4 additional sessions at most 11.0 CU and 5 h 55 min. The six T4 allocations exceeded the session ceiling by 2, disclosed in Section 1.3. The CU ceiling (1.0441 of 11.0 modelled) and the wall-clock ceiling (692.1 of 21,300 s) were not exceeded.
 

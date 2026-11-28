@@ -172,6 +172,7 @@ def _attempt_record(path: Path, label: str) -> dict[str, Any] | None:
         "attempt_3": value.get("attempt_3"),
         "continuation": value.get("continuation"),
         "allocation_ledger": value.get("allocation_ledger"),
+        "combined_including_diagnostics": value.get("combined_including_diagnostics"),
         "session_allowance": value.get("session_allowance")
         or _derived_allowance(value.get("attempt_2"), value.get("attempt_3")),
     }
@@ -526,14 +527,14 @@ def render(analysis: dict[str, Any]) -> str:
                 attempt_1_seconds = first["elapsed_seconds"] if first else None
                 attempt_1_cu = first["modeled_cu"] if first else None
                 add(
-                    f"Continuation total: {continuation.get('sessions')} sessions, "
+                    f"Continuation total: {continuation.get('sessions')} controller sessions, "
                     f"{_fmt(continuation.get('wall_clock_seconds'), 1)} s, "
                     f"{_fmt(continuation.get('modeled_cu'), 4)} CU modelled. "
                     f"Attempt 1 is preserved separately at "
                     f"{_fmt(attempt_1_cu, 4)} CU and "
-                    f"{_fmt(attempt_1_seconds, 1)} s. "
-                    f"Combined: {_fmt((second.get('combined') or {}).get('modeled_cu'), 4)} CU, "
-                    f"{_fmt((second.get('combined') or {}).get('wall_clock_seconds'), 1)} s."
+                    f"{_fmt(attempt_1_seconds, 1)} s. Every allocation, including the "
+                    "interactive diagnostic one, is itemised in Section 1.3 and totalled in "
+                    "Section 14."
                 )
                 add("")
             add(
@@ -934,8 +935,8 @@ def render(analysis: dict[str, Any]) -> str:
             add("")
         if second is not None:
             continuation = second.get("continuation") or {}
-            combined = second.get("combined") or {}
             controller_sessions = continuation.get("sessions")
+            combined_all = second.get("combined_including_diagnostics") or {}
             add(
                 f"**Continuation.** {controller_sessions} controller sessions plus one interactive "
                 "diagnostic allocation used only to measure the allocation bound, i.e. **6 T4 "
@@ -947,13 +948,15 @@ def render(analysis: dict[str, Any]) -> str:
             )
             add("")
             add(
-                f"**Combined totals.** 4 historical sessions plus 6 continuation allocations, "
-                f"{_fmt(combined.get('wall_clock_seconds'), 1)} s of controller wall clock, "
-                f"{_fmt(combined.get('modeled_cu'), 4)} CU modelled, 0 generations. "
-                f"The displayed balance was unchanged at "
-                f"{_fmt(second.get('displayed_balance_delta_cu'), 2)} CU because the provider "
-                "charges on a settlement schedule that had not been applied when the record was "
-                "written; the modelled figure is the conservative bound."
+                "**Combined totals.** 4 historical sessions plus every allocation in the "
+                "mechanical ledger, "
+                f"{_fmt(combined_all.get('sessions'), 0)} allocations in total, "
+                f"{_fmt(combined_all.get('wall_clock_seconds'), 1)} s of recorded wall clock, "
+                f"{_fmt(combined_all.get('modeled_cu'), 4)} CU modelled, "
+                f"{combined_all.get('generations')} generations. The displayed balance was "
+                f"unchanged at {_fmt(second.get('displayed_balance_delta_cu'), 2)} CU because the "
+                "provider charges on a settlement schedule that had not been applied when the "
+                "record was written; the modelled figure is the conservative bound."
             )
             add("")
             allowance = second.get("session_allowance") or {}

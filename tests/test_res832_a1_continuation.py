@@ -671,3 +671,26 @@ def test_report_discloses_the_session_breach() -> None:
     report = (ROOT / "docs/research/A1-REPORT.md").read_text(encoding="utf-8")
     assert "Envelope breach disclosure" in report
     assert "exceeded by 2" in report
+
+
+def test_report_totals_equal_the_mechanical_ledger() -> None:
+    """The published totals must be the ledger totals, not a separate hand-kept number."""
+    path = ROOT / "experiments/a1/.campaign/campaign-2-control.json"
+    if not path.is_file():
+        pytest.skip("no continuation control record on this machine")
+    control = json.loads(path.read_text())
+    ledger = control["allocation_ledger"]
+    combined = control["combined_including_diagnostics"]
+    report = (ROOT / "docs/research/A1-REPORT.md").read_text(encoding="utf-8")
+    # Combined sessions: attempt 1 plus every ledger row.
+    assert combined["sessions"] == control["attempt_1"]["sessions"] + len(ledger["allocations"])
+    assert combined["wall_clock_seconds"] == pytest.approx(
+        round(control["attempt_1"]["wall_clock_seconds"] + ledger["totals"]["seconds"], 1)
+    )
+    assert combined["modeled_cu"] == pytest.approx(
+        round(control["attempt_1"]["modeled_cu"] + ledger["totals"]["modeled_cu"], 4)
+    )
+    # The report must state those exact totals.
+    assert f"{combined['sessions']} allocations in total" in report
+    assert f"{combined['wall_clock_seconds']:.1f} s of recorded wall clock" in report
+    assert f"{combined['modeled_cu']:.4f} CU modelled" in report
